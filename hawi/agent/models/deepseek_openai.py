@@ -1,4 +1,4 @@
-"""DeepSeek API 兼容性适配器
+"""DeepSeek OpenAI API 兼容性适配器
 
 解决的问题:
 1. DeepSeek API 的 tool 消息 content 字段只接受字符串，不接受数组格式
@@ -6,11 +6,14 @@
 2. DeepSeek Reasoner 模型(thinking mode)的特殊参数限制
 3. DeepSeek Reasoner 的 reasoning_content 在多轮对话中的处理
 
+基于 OpenAI API 格式，使用 base_url=https://api.deepseek.com
+
 参考资料:
 - https://github.com/marimo-team/marimo/issues/7036
 - https://github.com/microsoft/vscode-ai-toolkit/issues/264
 - https://github.com/cline/cline/issues/230
 - https://api-docs.deepseek.com/guides/thinking_mode
+- https://api-docs.deepseek.com/guides/openai_api
 """
 
 import json
@@ -39,8 +42,8 @@ ERROR_REASONER_PARAMS = {
 }
 
 
-class DeepSeekModel(OpenAIModel):
-    """DeepSeek API 兼容模型
+class DeepSeekOpenAIModel(OpenAIModel):
+    """DeepSeek OpenAI API 兼容模型
 
     基于 OpenAIModel，但修复了消息格式兼容性问题，并支持 Thinking Mode。
 
@@ -55,7 +58,7 @@ class DeepSeekModel(OpenAIModel):
 
     使用示例:
         # 普通模型
-        model = DeepSeekModel(
+        model = DeepSeekOpenAIModel(
             client_args={
                 "api_key": "sk-...",
                 "base_url": "https://api.deepseek.com",
@@ -65,7 +68,7 @@ class DeepSeekModel(OpenAIModel):
         )
 
         # Reasoner 模型 (Thinking Mode) - 工具调用场景需回传 reasoning_content
-        model = DeepSeekModel(
+        model = DeepSeekOpenAIModel(
             client_args={
                 "api_key": "sk-...",
                 "base_url": "https://api.deepseek.com",
@@ -112,7 +115,8 @@ class DeepSeekModel(OpenAIModel):
                 text_parts.append(str(content))
 
         # 合并所有文本内容
-        combined_content = "\n".join(text_parts) if text_parts else ""
+        # DeepSeek API 不接受空的 content，所以至少返回一个空格
+        combined_content = "\n".join(text_parts) if text_parts else " "
 
         return {
             "role": "tool",
@@ -346,18 +350,18 @@ def create_deepseek_model(
     api_key: str,
     model_id: str = "deepseek-chat",
     **kwargs
-) -> DeepSeekModel:
+) -> DeepSeekOpenAIModel:
     """创建 DeepSeek 模型实例
 
     Args:
         api_key: DeepSeek API key
         model_id: 模型 ID，默认为 "deepseek-chat"
-        **kwargs: 其他参数传递给 DeepSeekModel
+        **kwargs: 其他参数传递给 DeepSeekOpenAIModel
 
     Returns:
-        DeepSeekModel 实例
+        DeepSeekOpenAIModel 实例
     """
-    return DeepSeekModel(
+    return DeepSeekOpenAIModel(
         client_args={
             "api_key": api_key,
             "base_url": "https://api.deepseek.com",
@@ -372,7 +376,7 @@ def create_deepseek_reasoner(
     api_key: str,
     include_reasoning_in_context: bool = True,
     **kwargs
-) -> DeepSeekModel:
+) -> DeepSeekOpenAIModel:
     """创建 DeepSeek Reasoner 模型实例 (Thinking Mode)
 
     注意: Reasoner 模型不支持 temperature, top_p 等参数
@@ -381,10 +385,10 @@ def create_deepseek_reasoner(
         api_key: DeepSeek API key
         include_reasoning_in_context: 是否在多轮对话中回传 reasoning_content。
             默认为 True（与工具调用场景兼容）。普通对话可设为 False。
-        **kwargs: 其他参数传递给 DeepSeekModel (建议只设置 max_tokens)
+        **kwargs: 其他参数传递给 DeepSeekOpenAIModel (建议只设置 max_tokens)
 
     Returns:
-        DeepSeekModel 实例 (model_id="deepseek-reasoner")
+        DeepSeekOpenAIModel 实例 (model_id="deepseek-reasoner")
     """
     # 检查并警告不支持的参数
     params = kwargs.get("params", {})
@@ -394,7 +398,7 @@ def create_deepseek_reasoner(
                 "DeepSeek Reasoner 不支持 '%s' 参数，已自动忽略", param
             )
 
-    return DeepSeekModel(
+    return DeepSeekOpenAIModel(
         client_args={
             "api_key": api_key,
             "base_url": "https://api.deepseek.com",
@@ -403,3 +407,7 @@ def create_deepseek_reasoner(
         include_reasoning_in_context=include_reasoning_in_context,
         **kwargs
     )
+
+
+# 向后兼容：DeepSeekModel 是 DeepSeekOpenAIModel 的别名
+DeepSeekModel = DeepSeekOpenAIModel

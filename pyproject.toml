@@ -1,7 +1,7 @@
 [project]
-name = "agent"
+name = "hawi"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI Agent framework with model compatibility layers"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,13 +9,26 @@ dependencies = [
     "httpx[socks]>=0.28.1",
     "openai>=2.16.0",
     "prompt-toolkit>=3.0.52",
+    "pytest>=9.0.2",
     "pyyaml>=6.0.3",
     "rich>=14.3.1",
     "strands-agents>=1.24.0",
     "strands-agents-tools>=0.2.19",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.25.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hawi*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.uv.workspace]
+members = [
 ]

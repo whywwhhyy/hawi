@@ -14,11 +14,7 @@ import shutil
 from typing import Optional,TypedDict,Dict
 from threading import Lock
 
-# 导入退出处理器
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.exit_handler import ExitHandler, exit_scope
+from hawi.utils.lifecycle import ExitHandler, exit_scope
 
 
 class ExecutionResult(TypedDict):
@@ -28,7 +24,7 @@ class ExecutionResult(TypedDict):
     success: bool        # 是否执行成功
 
 
-class PythonExecutor:
+class PythonInterpreter:
     """
     持久化子进程Python解释器
 
@@ -166,7 +162,7 @@ while True:
         def cleanup_wrapper():
             if not self._closed:
                 self.close()
-        self._exit_handler.register(cleanup_wrapper, priority=10, name=f"PythonExecutor_{id(self)}")
+        self._exit_handler.register(cleanup_wrapper, priority=10, name=f"PythonInterpreter_{id(self)}")
     
     def get_tools(self):
         return [
@@ -335,6 +331,10 @@ while True:
         """
         在子进程中执行Python代码
 
+        **重要提示：解释器会保留之前运行过的结果。**
+        所有变量、函数定义、导入的模块等都会在多次执行之间保持状态。
+        如果需要清空状态重新开始，请调用 restart_server()。
+
         Args:
             code: 要执行的Python代码
             timeout: 超时时间（秒），None表示不超时
@@ -363,7 +363,12 @@ while True:
             self._start_server()
 
     def restart_server(self) -> ExecutionResult:
-        """重启子进程服务器，清空所有状态"""
+        """
+        重启子进程服务器，清空所有状态
+
+        **注意：此操作会清空解释器中保留的所有变量、函数定义和导入的模块。**
+        执行此函数后，解释器将回到初始状态，如同新创建时一样。
+        """
         self.restart()
         return ExecutionResult(
             output="Server restarted successfully",
@@ -464,6 +469,10 @@ while True:
     def execute_script(self, script_name: str, timeout: Optional[float] = None) -> ExecutionResult:
         """
         执行脚本目录中的脚本
+
+        **重要提示：解释器会保留之前运行过的结果。**
+        脚本执行时可以看到之前代码执行中定义的变量和导入的模块。
+        如果需要清空状态重新开始，请调用 restart_server()。
 
         Args:
             script_name: 脚本文件名

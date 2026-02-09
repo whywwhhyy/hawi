@@ -1,23 +1,18 @@
 from typing import Optional,TypedDict,Dict
 from threading import Lock
 
-from .python_interpreter import PythonExecutor,ExecutionResult
+from hawi.utils.lifecycle import ExitHandler, exit_scope
+from hawi.agent_tools.python_interpreter import PythonInterpreter,ExecutionResult
 
-# 导入退出处理器
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.exit_handler import ExitHandler, exit_scope
-
-class MultiPythonExecutor:
+class MultiPythonInterpreter:
     class Instance:
         def __init__(self, *args, **kwargs):
             self.lock = Lock()
-            self.executor = PythonExecutor(*args, **kwargs)
+            self.executor = PythonInterpreter(*args, **kwargs)
 
     def __init__(self):
         self.lock = Lock()
-        self.interpreters:Dict[str,MultiPythonExecutor.Instance] = {}
+        self.interpreters:Dict[str,MultiPythonInterpreter.Instance] = {}
         self._closed = False
         
         # 注册退出处理函数，确保在程序退出时正确清理所有解释器
@@ -26,7 +21,7 @@ class MultiPythonExecutor:
         def cleanup_wrapper():
             if not self._closed:
                 self.close()
-        self._exit_handler.register(cleanup_wrapper, priority=5, name=f"MultiPythonExecutor_{id(self)}")
+        self._exit_handler.register(cleanup_wrapper, priority=5, name=f"MultiPythonInterpreter_{id(self)}")
     
     def get_tools(self):
         return [
@@ -42,7 +37,7 @@ class MultiPythonExecutor:
             self.execute,
         ]
 
-    def get_interpreter(self, interpreter_name: str) -> "MultiPythonExecutor.Instance":
+    def get_interpreter(self, interpreter_name: str) -> "MultiPythonInterpreter.Instance":
         """获取指定名称的解释器实例，不存在则抛出 KeyError"""
         with self.lock:
             if interpreter_name not in self.interpreters:
@@ -71,7 +66,7 @@ class MultiPythonExecutor:
                     interpreter_name = None
             if interpreter_name in self.interpreters:
                 return f"Interpreter '{interpreter_name}' already exists!"
-            self.interpreters[interpreter_name] = MultiPythonExecutor.Instance(work_dir)
+            self.interpreters[interpreter_name] = MultiPythonInterpreter.Instance(work_dir)
             return f"Created interpreter '{interpreter_name}'"
 
     def remove_interpreter(self, interpreter_name: str) -> str:
@@ -117,7 +112,9 @@ class MultiPythonExecutor:
         """
         重启指定的 Python 解释器实例
 
-        重启会清空解释器的所有状态（变量、导入等），通常在安装新依赖后使用
+        **注意：此操作会清空解释器中保留的所有变量、函数定义和导入的模块。**
+        执行此函数后，解释器将回到初始状态，如同新创建时一样。
+        通常在安装新依赖后或需要清除状态时使用。
 
         Args:
             interpreter_name: 解释器实例名称
@@ -132,6 +129,10 @@ class MultiPythonExecutor:
     def execute(self, interpreter_name: str, code: str, timeout: Optional[float] = None) -> ExecutionResult:
         """
         在指定解释器实例中执行 Python 代码
+
+        **重要提示：解释器会保留之前运行过的结果。**
+        所有变量、函数定义、导入的模块等都会在多次执行之间保持状态。
+        如果需要清空状态重新开始，请调用 restart_server()。
 
         Args:
             interpreter_name: 解释器实例名称
@@ -165,6 +166,10 @@ class MultiPythonExecutor:
     def execute_script(self, interpreter_name: str, script_name: str, timeout: Optional[float] = None) -> ExecutionResult:
         """
         执行指定解释器脚本目录中的脚本
+
+        **重要提示：解释器会保留之前运行过的结果。**
+        脚本执行时可以看到之前代码执行中定义的变量和导入的模块。
+        如果需要清空状态重新开始，请调用 restart_server()。
 
         Args:
             interpreter_name: 解释器实例名称

@@ -65,7 +65,7 @@ class ExitHandler:
     _seq_counter: int = 0
     _seq_lock: threading.Lock = threading.Lock()
     _system_exiting: bool = False
-    
+
     # Instance attributes (for type checking)
     _handlers: list[_HandlerEntry] = None  # type: ignore
     _handlers_lock: threading.RLock = None  # type: ignore

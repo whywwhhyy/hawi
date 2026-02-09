@@ -8,12 +8,13 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-from strands import Agent, tool
-from utils.cli_ui import user_select
-from utils.cache_point_hook import CachePointHook
+from strands import tool
+from hawi.utils.terminal import user_select
 
 # 使用 model_compatibility 模块中的 DeepSeekModel
-from model_compatibility import DeepSeekModel, KimiAnthropicModel, KimiOpenAIModel
+from hawi.agent.models import DeepSeekModel, KimiOpenAIModel, KimiAnthropicModel
+from hawi.agent import Agent,CachePointHook
+from hawi.agent_tools.python_interpreter import PythonInterpreter
 
 ds_model = DeepSeekModel(
     client_args={
@@ -71,8 +72,7 @@ LLM_PROVIDERS = {
 }
 
 def create_agent(llm_provider:str) -> Agent:
-    from tool.python_interpreter import PythonExecutor
-    executor = PythonExecutor(work_dir=".python_vm")
+    executor = PythonInterpreter(work_dir=".python_vm")
     model = LLM_PROVIDERS.get(llm_provider, ds_model)
 
     return Agent(

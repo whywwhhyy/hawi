@@ -167,28 +167,28 @@ class KimiAnthropicModel(AnthropicModel):
         """序列化引用字段"""
         result: dict[str, Any] = {}
 
-        if hasattr(citation, "type"):
+        if hasattr(citation, "type") and citation.type is not None:
             result["type"] = citation.type
 
-        if hasattr(citation, "cited_text"):
+        if hasattr(citation, "cited_text") and citation.cited_text is not None:
             result["cited_text"] = citation.cited_text
 
-        if hasattr(citation, "document_index"):
+        if hasattr(citation, "document_index") and citation.document_index is not None:
             result["document_index"] = citation.document_index
 
-        if hasattr(citation, "document_title"):
+        if hasattr(citation, "document_title") and citation.document_title is not None:
             result["document_title"] = citation.document_title
 
-        if hasattr(citation, "start_char_index"):
+        if hasattr(citation, "start_char_index") and citation.start_char_index is not None:
             result["start_char_index"] = citation.start_char_index
 
-        if hasattr(citation, "end_char_index"):
+        if hasattr(citation, "end_char_index") and citation.end_char_index is not None:
             result["end_char_index"] = citation.end_char_index
 
-        if hasattr(citation, "start_page_number"):
+        if hasattr(citation, "start_page_number") and citation.start_page_number is not None:
             result["start_page_number"] = citation.start_page_number
 
-        if hasattr(citation, "end_page_number"):
+        if hasattr(citation, "end_page_number") and citation.end_page_number is not None:
             result["end_page_number"] = citation.end_page_number
 
         return result
@@ -218,7 +218,7 @@ class KimiAnthropicModel(AnthropicModel):
         """序列化消息字段"""
         result: dict[str, Any] = {}
 
-        if hasattr(message, "stop_reason"):
+        if hasattr(message, "stop_reason") and message.stop_reason is not None:
             result["stop_reason"] = message.stop_reason
 
         return result
