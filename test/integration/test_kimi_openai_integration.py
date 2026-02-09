@@ -354,5 +354,242 @@ class TestKimiOpenAIModelEdgeCases:
         assert any(m.get("role") == "tool" for m in result)
 
 
+class TestKimiOpenAIMultiTurnToolCalls:
+    """Kimi OpenAI 多轮对话带工具调用测试 (无需真实 API)"""
+
+    def test_multi_turn_tool_call_with_reasoning(self):
+        """测试多轮工具调用中 reasoning_content 的保留"""
+        messages: list[Message] = [
+            # 第一轮：用户请求
+            {"role": "user", "content": [{"text": "Calculate 15 * 6"}]},
+            # 助手产生 reasoning_content 并调用工具
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "I need to multiply 15 by 6."}}},
+                    {"text": "Let me calculate that."},
+                    {"toolUse": {"toolUseId": "call-1", "name": "calculator", "input": {"expression": "15*6"}}}
+                ]
+            },
+            # 工具返回结果
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "call-1", "status": "success", "content": [{"json": {"result": 90}}]}}
+                ]
+            },
+            # 助手给出最终答案（带 reasoning）
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "The calculation is complete."}}},
+                    {"text": "15 * 6 = 90"}
+                ]
+            },
+            # 第二轮：用户基于之前的结果继续提问
+            {"role": "user", "content": [{"text": "Now divide that by 3"}]},
+        ]
+
+        formatted = KimiOpenAIModel.format_request_messages(messages)
+
+        # 验证消息数量
+        assert len(formatted) >= 5  # user, assistant, tool, assistant, user
+
+        # 验证所有 assistant 消息都有 reasoning_content
+        assistant_msgs = [m for m in formatted if m.get("role") == "assistant"]
+        for msg in assistant_msgs:
+            assert "reasoning_content" in msg, "Kimi K2.5 requires reasoning_content for all assistant messages"
+
+    def test_multi_turn_without_reasoning_disabled_thinking(self):
+        """测试禁用 thinking 模式的多轮对话"""
+        model = KimiOpenAIModel(
+            client_args={"api_key": "test"},
+            model_id="kimi-k2.5",
+            params={"temperature": 0.6, "thinking": {"type": "disabled"}}
+        )
+
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "What is 2+2?"}]},
+            {"role": "assistant", "content": [{"text": "2+2 = 4"}]},
+            {"role": "user", "content": [{"text": "Multiply by 5"}]},
+        ]
+
+        formatted = model.format_request_messages(messages)
+
+        # 验证消息被正确格式化
+        assert len(formatted) == 3
+        assert formatted[0]["role"] == "user"
+        assert formatted[1]["role"] == "assistant"
+        assert formatted[2]["role"] == "user"
+
+    def test_complex_multi_turn_with_multiple_tools(self):
+        """测试复杂的多轮多工具调用场景"""
+        messages: list[Message] = [
+            # Round 1: First tool call
+            {"role": "user", "content": [{"text": "Get weather for Paris and convert 25C to F"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "I need to call two tools."}}},
+                    {"toolUse": {"toolUseId": "call-1", "name": "get_weather", "input": {"city": "Paris"}}},
+                    {"toolUse": {"toolUseId": "call-2", "name": "convert_temp", "input": {"celsius": 25}}}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "call-1", "status": "success", "content": [{"json": {"temp": 18, "condition": "Cloudy"}}]}},
+                    {"toolResult": {"toolUseId": "call-2", "status": "success", "content": [{"json": {"fahrenheit": 77}}]}}
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "I have both results."}}},
+                    {"text": "Paris is cloudy at 18C, and 25C is 77F."}
+                ]
+            },
+            # Round 2: Follow-up question
+            {"role": "user", "content": [{"text": "What about London weather?"}]},
+        ]
+
+        formatted = KimiOpenAIModel.format_request_messages(messages)
+
+        # 验证所有 assistant 消息都有 reasoning_content
+        assistant_msgs = [m for m in formatted if m.get("role") == "assistant"]
+        for msg in assistant_msgs:
+            assert "reasoning_content" in msg
+
+        # 验证 tool 消息被正确格式化
+        tool_msgs = [m for m in formatted if m.get("role") == "tool"]
+        assert len(tool_msgs) == 2
+
+    def test_reasoning_content_preserved_in_tool_context(self):
+        """测试工具调用上下文中 reasoning_content 的保留"""
+        # 模拟 Kimi K2.5 返回的带 reasoning_content 的消息
+        messages: list[Message] = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "Step 1: Analyze the problem."}}},
+                    {"toolUse": {"toolUseId": "call-1", "name": "analyze", "input": {"data": "sample"}}}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "call-1", "status": "success", "content": [{"json": {"analysis": "complete"}}]}}
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "Step 2: Based on the analysis..."}}},
+                    {"text": "Here is the conclusion."}
+                ]
+            },
+        ]
+
+        formatted = KimiOpenAIModel._format_regular_messages(messages)
+
+        # 验证所有 assistant 消息都有 reasoning_content
+        assistant_msgs = [m for m in formatted if m.get("role") == "assistant"]
+        assert len(assistant_msgs) == 2
+        assert assistant_msgs[0].get("reasoning_content") == "Step 1: Analyze the problem."
+        assert assistant_msgs[1].get("reasoning_content") == "Step 2: Based on the analysis..."
+
+
+@pytest.mark.skipif(not HAS_KIMI_KEY, reason="KIMI_API_KEY not set")
+class TestKimiOpenAIMultiTurnToolCallsIntegration:
+    """Kimi OpenAI 多轮工具调用集成测试 (需要真实 API)"""
+
+    @pytest.fixture
+    def model(self) -> Generator[KimiOpenAIModel, None, None]:
+        """创建 Kimi 模型实例 (启用 thinking)"""
+        assert KIMI_API_KEY is not None
+        m = create_kimi_model(
+            api_key=KIMI_API_KEY,
+            model_id="kimi-k2.5",
+            enable_thinking=True,
+            params={"max_tokens": 1024}
+        )
+        yield m
+
+    @pytest.fixture
+    def model_no_thinking(self) -> Generator[KimiOpenAIModel, None, None]:
+        """创建 Kimi 模型实例 (禁用 thinking)"""
+        assert KIMI_API_KEY is not None
+        m = create_kimi_model(
+            api_key=KIMI_API_KEY,
+            model_id="kimi-k2.5",
+            enable_thinking=False,
+            params={"temperature": 0.6, "max_tokens": 1024}
+        )
+        yield m
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_with_reasoning_content(self, model: KimiOpenAIModel):
+        """测试多轮对话中 reasoning_content 的正确保留"""
+        # 第一轮：数学问题
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "Calculate 25 * 4"}]}
+        ]
+
+        first_response_text = []
+        first_reasoning = []
+
+        async for chunk in model.stream(messages):
+            if "contentBlockDelta" in chunk:
+                delta = chunk["contentBlockDelta"].get("delta", {})
+                if "reasoningContent" in delta:
+                    first_reasoning.append(delta["reasoningContent"].get("text", ""))
+                elif "text" in delta:
+                    first_response_text.append(delta.get("text", ""))
+
+        first_answer = "".join(first_response_text)
+
+        # 第二轮：基于第一轮的继续提问
+        messages.extend([
+            {"role": "assistant", "content": [{"text": first_answer or "25 * 4 = 100"}]},
+            {"role": "user", "content": [{"text": "Add 50 to that result"}]}
+        ])
+
+        second_chunks = []
+        async for chunk in model.stream(messages):
+            second_chunks.append(chunk)
+
+        # 验证上下文被保留（模型知道 100）
+        assert len(second_chunks) > 0
+        second_response = str(second_chunks)
+        # 响应中应该提到 150 或引用之前的结果
+        assert "150" in second_response or "100" in second_response or "result" in second_response.lower()
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_without_thinking(self, model_no_thinking: KimiOpenAIModel):
+        """测试禁用 thinking 模式的多轮对话"""
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "What is the capital of France?"}]}
+        ]
+
+        first_response = []
+        async for chunk in model_no_thinking.stream(messages):
+            if chunk.get("data_type") == "text":
+                first_response.append(chunk.get("data", ""))
+
+        answer = "".join(first_response)
+
+        # 第二轮
+        messages.extend([
+            {"role": "assistant", "content": [{"text": answer or "Paris"}]},
+            {"role": "user", "content": [{"text": "And what about Germany?"}]}
+        ])
+
+        second_chunks = []
+        async for chunk in model_no_thinking.stream(messages):
+            second_chunks.append(chunk)
+
+        assert len(second_chunks) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

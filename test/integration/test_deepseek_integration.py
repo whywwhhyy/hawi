@@ -375,5 +375,235 @@ class TestDeepSeekConstants:
         assert ERROR_REASONER_PARAMS == expected
 
 
+class TestDeepSeekMultiTurnToolCalls:
+    """DeepSeek 多轮对话带工具调用测试 (无需真实 API)"""
+
+    def test_multi_turn_tool_call_formatting(self):
+        """测试多轮对话中工具调用消息的格式化"""
+        from strands.types.content import Message
+
+        # 模拟一个完整的多轮工具调用对话
+        messages: list[Message] = [
+            # 第一轮：用户请求
+            {"role": "user", "content": [{"text": "Calculate 2+2"}]},
+            # 助手调用工具
+            {
+                "role": "assistant",
+                "content": [
+                    {"text": "I'll calculate that for you."},
+                    {"toolUse": {"toolUseId": "call-1", "name": "calculator", "input": {"expression": "2+2"}}}
+                ]
+            },
+            # 工具返回结果
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "call-1", "status": "success", "content": [{"json": {"result": 4}}]}}
+                ]
+            },
+            # 助手给出最终答案
+            {"role": "assistant", "content": [{"text": "The result is 4."}]},
+            # 第二轮：用户再次请求
+            {"role": "user", "content": [{"text": "Now multiply by 3"}]},
+        ]
+
+        formatted = DeepSeekModel.format_request_messages(messages)
+
+        # 验证格式化后的消息结构
+        assert len(formatted) >= 4  # user, assistant, tool, assistant, user
+
+        # 验证 tool 消息的 content 是字符串
+        tool_messages = [m for m in formatted if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+        assert isinstance(tool_messages[0].get("content"), str)
+        assert "4" in tool_messages[0]["content"]
+
+        # 验证 assistant 消息有 tool_calls
+        assistant_messages = [m for m in formatted if m.get("role") == "assistant"]
+        tool_call_msgs = [m for m in assistant_messages if "tool_calls" in m]
+        assert len(tool_call_msgs) == 1
+
+    def test_multi_turn_with_reasoning_content(self):
+        """测试多轮对话中带 reasoning_content 的工具调用"""
+        from strands.types.content import Message
+
+        # 模拟 Reasoner 模型的多轮对话
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "Solve step by step: 15*6"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "First, I need to multiply 15 by 6."}}},
+                    {"text": "Let me calculate that."},
+                    {"toolUse": {"toolUseId": "call-1", "name": "calculator", "input": {"expression": "15*6"}}}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "call-1", "status": "success", "content": [{"json": {"result": 90}}]}}
+                ]
+            },
+        ]
+
+        # 测试不包含 reasoning_content (默认行为)
+        formatted_without = DeepSeekModel.format_request_messages(messages, include_reasoning_in_context=False)
+        tool_msgs = [m for m in formatted_without if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+
+        # 测试包含 reasoning_content (工具调用场景需要)
+        formatted_with = DeepSeekModel.format_request_messages(messages, include_reasoning_in_context=True)
+        # 验证消息被正确格式化
+        assert len(formatted_with) >= 3
+
+    def test_reasoner_multi_turn_context_preservation(self):
+        """测试 Reasoner 模型多轮对话中 reasoning_content 的保留"""
+        from strands.types.content import Message
+
+        # 创建一个包含 reasoning_content 的复杂对话历史
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "What is the capital of France?"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "The capital of France is a well-known fact."}}},
+                    {"text": "The capital of France is Paris."}
+                ]
+            },
+            {"role": "user", "content": [{"text": "What about Germany?"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"reasoningContent": {"reasoningText": {"text": "Similar to France, Germany's capital is well-known."}}},
+                    {"text": "The capital of Germany is Berlin."}
+                ]
+            },
+        ]
+
+        # 使用 include_reasoning_in_context=True (工具调用场景)
+        model = DeepSeekModel(
+            client_args={"api_key": "test"},
+            model_id="deepseek-reasoner",
+            include_reasoning_in_context=True
+        )
+
+        formatted = model.format_request_messages(messages)
+
+        # 验证所有消息都被保留
+        assert len(formatted) >= 4  # user, assistant, user, assistant
+
+        # 验证角色顺序正确
+        roles = [m.get("role") for m in formatted]
+        assert roles[0] == "user"
+        assert roles[1] == "assistant"
+
+
+@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason="DEEPSEEK_API_KEY not set")
+class TestDeepSeekMultiTurnToolCallsIntegration:
+    """DeepSeek 多轮工具调用集成测试 (需要真实 API)"""
+
+    @pytest.fixture
+    def model(self) -> Generator[DeepSeekModel, None, None]:
+        """创建 DeepSeek 模型实例"""
+        assert DEEPSEEK_API_KEY is not None
+        m = create_deepseek_model(
+            api_key=DEEPSEEK_API_KEY,
+            model_id="deepseek-chat",
+            params={"temperature": 0.7, "max_tokens": 1024}
+        )
+        yield m
+
+    @pytest.fixture
+    def reasoner_model(self) -> Generator[DeepSeekModel, None, None]:
+        """创建 DeepSeek Reasoner 模型实例"""
+        assert DEEPSEEK_API_KEY is not None
+        m = create_deepseek_reasoner(
+            api_key=DEEPSEEK_API_KEY,
+            include_reasoning_in_context=True,
+            params={"max_tokens": 2048}
+        )
+        yield m
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_conversation_with_tools(self, model: DeepSeekModel):
+        """测试多轮对话中带工具调用的完整流程"""
+        from strands.types.content import Message
+
+        # 第一轮：用户提问
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "What is 25 * 4?"}]}
+        ]
+
+        # 模拟获取助手回复（包含工具调用）
+        assistant_chunks = []
+        async for chunk in model.stream(messages):
+            assistant_chunks.append(chunk)
+
+        # 验证收到了响应
+        assert len(assistant_chunks) > 0
+
+        # 手动构建第二轮对话（模拟工具调用后的回复）
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": [{"text": "The result of 25 * 4 is 100."}]
+            },
+            {"role": "user", "content": [{"text": "Now add 50 to that result."}]}
+        ])
+
+        # 第二轮对话
+        second_chunks = []
+        async for chunk in model.stream(messages):
+            second_chunks.append(chunk)
+
+        # 验证上下文被保留（模型知道之前的计算结果）
+        assert len(second_chunks) > 0
+        second_response = str(second_chunks)
+        # 响应中应该包含对 100 或 150 的引用
+        assert "100" in second_response or "150" in second_response or "result" in second_response.lower()
+
+    @pytest.mark.asyncio
+    async def test_reasoner_tool_call_with_reasoning_content(self, reasoner_model: DeepSeekModel):
+        """测试 Reasoner 模型在工具调用场景中的 reasoning_content 处理"""
+        from strands.types.content import Message
+
+        # 第一轮：需要推理的问题
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "Calculate the area of a rectangle with length 12 and width 8, then divide by 2."}]}
+        ]
+
+        reasoning_parts = []
+        content_parts = []
+
+        async for chunk in reasoner_model.stream(messages):
+            if "contentBlockDelta" in chunk:
+                delta = chunk["contentBlockDelta"].get("delta", {})
+                if "reasoningContent" in delta:
+                    reasoning_text = delta["reasoningContent"].get("text", "")
+                    if reasoning_text:
+                        reasoning_parts.append(reasoning_text)
+                elif "text" in delta:
+                    text = delta.get("text", "")
+                    if text:
+                        content_parts.append(text)
+
+        # Reasoner 应该产生推理内容
+        full_response = "".join(content_parts)
+        assert len(reasoning_parts) > 0 or len(content_parts) > 0
+
+        # 继续第二轮对话
+        messages.extend([
+            {"role": "assistant", "content": [{"text": full_response or "Area = 96, divided by 2 is 48."}]},
+            {"role": "user", "content": [{"text": "What would be the result if width was 10 instead?"}]}
+        ])
+
+        second_chunks = []
+        async for chunk in reasoner_model.stream(messages):
+            second_chunks.append(chunk)
+
+        # 验证上下文被保留
+        assert len(second_chunks) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

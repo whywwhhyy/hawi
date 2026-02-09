@@ -177,11 +177,19 @@ class DeepSeekOpenAIModel(OpenAIModel):
                     "Set include_reasoning_in_context=True for tool call scenarios."
                 )
 
+            # 提取 reasoning_content（如果存在且需要保留）
+            reasoning_content = None
+            if include_reasoning:
+                for content in contents:
+                    if "reasoningContent" in content:
+                        reasoning_text = content["reasoningContent"].get("reasoningText", {})
+                        reasoning_content = reasoning_text.get("text", "")
+                        break
+
             formatted_contents = [
                 cls.format_request_message_content(content)
                 for content in contents
-                if not any(block_type in content for block_type in ["toolResult", "toolUse"])
-                and (include_reasoning or "reasoningContent" not in content)
+                if not any(block_type in content for block_type in ["toolResult", "toolUse", "reasoningContent"])
             ]
             formatted_tool_calls = [
                 cls.format_request_message_tool_call(content["toolUse"])
@@ -194,11 +202,15 @@ class DeepSeekOpenAIModel(OpenAIModel):
                 if "toolResult" in content
             ]
 
-            formatted_message = {
+            formatted_message: dict[str, Any] = {
                 "role": message["role"],
                 "content": formatted_contents,
                 **({"tool_calls": formatted_tool_calls} if formatted_tool_calls else {}),
             }
+
+            # 添加 reasoning_content（如果需要）
+            if reasoning_content is not None:
+                formatted_message["reasoning_content"] = reasoning_content
             formatted_messages.append(formatted_message)
 
             # 处理 tool 消息，提取图片到独立的 user 消息

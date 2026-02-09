@@ -423,5 +423,187 @@ class TestKimiAnthropicModelEdgeCases:
         assert result == {}
 
 
+class TestKimiAnthropicMultiTurnToolCalls:
+    """Kimi Anthropic 多轮对话带工具调用测试 (无需真实 API)"""
+
+    def test_multi_turn_conversation_formatting(self):
+        """测试多轮对话的消息格式化"""
+        from strands.types.content import Message
+
+        messages: list[Message] = [
+            # Round 1
+            {"role": "user", "content": [{"text": "What is 15 * 6?"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"text": "Let me calculate that for you."},
+                    {"toolUse": {"toolUseId": "call-1", "name": "calculator", "input": {"expression": "15*6"}}}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "call-1", "status": "success", "content": [{"json": {"result": 90}}]}}
+                ]
+            },
+            {"role": "assistant", "content": [{"text": "15 * 6 = 90"}]},
+            # Round 2
+            {"role": "user", "content": [{"text": "Now divide by 3"}]},
+        ]
+
+        # 使用 format_request 来格式化完整请求
+        model = KimiAnthropicModel(
+            client_args={"api_key": "test"},
+            model_id="kimi-k2.5",
+            max_tokens=1024
+        )
+
+        formatted = model.format_request(messages)
+
+        # 验证请求结构
+        assert "messages" in formatted
+        assert len(formatted["messages"]) >= 4
+
+    def test_tool_use_content_block_serialization(self):
+        """测试 tool_use 内容块的序列化（多轮场景）"""
+        model = KimiAnthropicModel(
+            client_args={"api_key": "test"},
+            model_id="kimi-k2.5",
+            max_tokens=1024
+        )
+
+        # 模拟 tool_use 内容块
+        mock_block = Mock()
+        mock_block.type = "tool_use"
+        mock_block.id = "tool_call_123"
+        mock_block.name = "calculator"
+        mock_block.input = {"expression": "15*6"}
+
+        result = model._serialize_content_block(mock_block)
+
+        assert result["type"] == "tool_use"
+        assert result["id"] == "tool_call_123"
+        assert result["name"] == "calculator"
+        assert result["input"] == {"expression": "15*6"}
+
+    def test_multi_turn_with_citations(self):
+        """测试多轮对话中带 citations 的内容处理"""
+        model = KimiAnthropicModel(
+            client_args={"api_key": "test"},
+            model_id="kimi-k2.5",
+            max_tokens=1024
+        )
+
+        # 模拟带 citation 的文本块（Kimi API 特有）
+        mock_citation = Mock()
+        mock_citation.type = "char_location"
+        mock_citation.cited_text = "According to the document..."
+        mock_citation.document_index = 0
+        mock_citation.document_title = "Reference Doc"
+
+        mock_block = Mock()
+        mock_block.type = "text"
+        mock_block.text = "Based on the reference, the answer is 42."
+        mock_block.citations = [mock_citation]
+
+        result = model._serialize_content_block(mock_block)
+
+        assert result["type"] == "text"
+        assert "citations" in result
+        assert len(result["citations"]) == 1
+        assert result["citations"][0]["document_title"] == "Reference Doc"
+
+    def test_stream_event_with_tool_use_delta(self):
+        """测试工具调用 delta 事件的序列化"""
+        model = KimiAnthropicModel(
+            client_args={"api_key": "test"},
+            model_id="kimi-k2.5",
+            max_tokens=1024
+        )
+
+        # 模拟 input_json_delta（工具参数增量）
+        mock_delta = Mock()
+        mock_delta.type = "input_json_delta"
+        mock_delta.partial_json = '{"expre'
+
+        result = model._serialize_delta(mock_delta)
+
+        assert result["type"] == "input_json_delta"
+        assert result["partial_json"] == '{"expre'
+
+
+@pytest.mark.skipif(not HAS_KIMI_ANTHROPIC_KEY, reason="KIMI_ANTHROPIC_API_KEY not set")
+class TestKimiAnthropicMultiTurnToolCallsIntegration:
+    """Kimi Anthropic 多轮工具调用集成测试 (需要真实 API)"""
+
+    @pytest.fixture
+    def model(self) -> Generator[KimiAnthropicModel, None, None]:
+        """创建 Kimi Anthropic 模型实例"""
+        m = KimiAnthropicModel(
+            client_args={
+                "api_key": KIMI_ANTHROPIC_API_KEY,
+                "base_url": "https://api.kimi.com/coding/",
+            },
+            model_id="kimi-k2.5",
+            max_tokens=1024
+        )
+        yield m
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_conversation(self, model: KimiAnthropicModel):
+        """测试多轮对话"""
+        from strands.types.content import Message
+
+        # 第一轮
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "What is 25 * 4?"}]}
+        ]
+
+        first_chunks = []
+        async for chunk in model.stream(messages):
+            first_chunks.append(chunk)
+
+        assert len(first_chunks) > 0
+
+        # 第二轮
+        messages.extend([
+            {"role": "assistant", "content": [{"text": "25 * 4 = 100"}]},
+            {"role": "user", "content": [{"text": "Add 50 to that result"}]}
+        ])
+
+        second_chunks = []
+        async for chunk in model.stream(messages):
+            second_chunks.append(chunk)
+
+        assert len(second_chunks) > 0
+
+    @pytest.mark.asyncio
+    async def test_stream_no_pydantic_warnings_multi_turn(self, model: KimiAnthropicModel):
+        """测试多轮对话不产生 Pydantic 警告"""
+        from strands.types.content import Message
+        import warnings
+
+        messages: list[Message] = [
+            {"role": "user", "content": [{"text": "Hello"}]},
+            {"role": "assistant", "content": [{"text": "Hi there!"}]},
+            {"role": "user", "content": [{"text": "How are you?"}]}
+        ]
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            chunks = []
+            async for chunk in model.stream(messages):
+                chunks.append(chunk)
+
+            pydantic_warnings = [
+                warning for warning in w
+                if "PydanticSerialization" in str(warning.category) or
+                   "UnexpectedValue" in str(warning.message)
+            ]
+
+            assert len(pydantic_warnings) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

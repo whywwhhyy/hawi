@@ -12,6 +12,7 @@ Kimi API (Moonshot) 兼容性适配器
 - https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart
 """
 
+import logging
 from collections.abc import AsyncGenerator
 from typing import Mapping, Any, override
 
@@ -23,6 +24,8 @@ from strands.types.tools import ToolSpec, ToolChoice
 from strands.types.content import Messages, ContentBlock, SystemContentBlock
 from strands.types.streaming import StreamEvent
 from strands.types.exceptions import ContextWindowOverflowException, ModelThrottledException
+
+logger = logging.getLogger(__name__)
 
 
 class KimiOpenAIModel(OpenAIModel):
@@ -157,6 +160,75 @@ class KimiOpenAIModel(OpenAIModel):
 
         return [message for message in formatted_messages if message["content"] or "tool_calls" in message]
 
+    def _is_thinking_disabled(self) -> bool:
+        """检查是否禁用了 thinking 模式
+
+        Returns:
+            True 如果 thinking 模式被禁用
+        """
+        params = self.config.get("params", {})
+        if isinstance(params, Mapping):
+            thinking_config = params.get("thinking", {})
+            return thinking_config.get("type") == "disabled"
+        return False
+
+    def _validate_kimi_k25_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """验证并修正 Kimi K2.5 模型的固定参数
+
+        根据官方文档，Kimi K2.5 有以下固定参数要求:
+        - temperature: thinking 模式为 1.0，非 thinking 模式为 0.6
+        - top_p: 固定为 0.95
+        - n: 固定为 1
+        - presence_penalty: 固定为 0.0
+        - frequency_penalty: 固定为 0.0
+
+        Args:
+            params: 原始参数字典
+
+        Returns:
+            修正后的参数字典
+        """
+        model_id = self.config.get("model_id", "")
+        if model_id not in ("kimi-k2.5", "kimi-k2-thinking", "kimi-k2-thinking-turbo"):
+            return params
+
+        validated = dict(params)
+
+        # 根据是否启用 thinking 模式强制设置 temperature
+        if self._is_thinking_disabled():
+            validated["temperature"] = 0.6
+        else:
+            validated["temperature"] = 1.0
+
+        # 强制设置其他固定参数
+        validated["top_p"] = 0.95
+        validated["n"] = 1
+        validated["presence_penalty"] = 0.0
+        validated["frequency_penalty"] = 0.0
+
+        logger.debug(
+            "Kimi K2.5 强制使用固定参数: temperature=%s, top_p=0.95, n=1",
+            validated["temperature"]
+        )
+
+        return validated
+
+    def _get_default_max_tokens(self, model_id: str) -> int:
+        """获取模型的默认 max_tokens 值
+
+        Args:
+            model_id: 模型 ID
+
+        Returns:
+            默认 max_tokens 值
+        """
+        defaults = {
+            "kimi-k2.5": 32768,
+            "kimi-k2-thinking": 64000,
+            "kimi-k2-thinking-turbo": 64000,
+        }
+        return defaults.get(model_id, 4096)
+
     @override
     def format_request(
         self,
@@ -168,7 +240,7 @@ class KimiOpenAIModel(OpenAIModel):
         system_prompt_content=None,
         **kwargs,
     ) -> dict[str, Any]:
-        """格式化请求，支持禁用 thinking 模式"""
+        """格式化请求，支持禁用 thinking 模式和 K2.5 固定参数"""
         request = super().format_request(
             messages,
             tool_specs,
@@ -178,17 +250,21 @@ class KimiOpenAIModel(OpenAIModel):
             **kwargs,
         )
 
-        # 检查是否禁用了 thinking 模式
-        params = self.config.get("params", {})
-        assert isinstance(params, Mapping)
-        thinking_config = params.get("thinking", {})
+        # 对 K2.5 模型应用固定参数
+        request = self._validate_kimi_k25_params(request)
 
-        if thinking_config.get("type") == "disabled":
+        # 检查是否禁用了 thinking 模式
+        if self._is_thinking_disabled():
             # 通过 extra_body 传递参数
             request["extra_body"] = {"thinking": {"type": "disabled"}}
             # 从 request 中移除 thinking 参数
             if "thinking" in request:
                 del request["thinking"]
+
+        # 设置默认 max_tokens（如果未指定）
+        model_id = self.config.get("model_id", "")
+        if "max_tokens" not in request:
+            request["max_tokens"] = self._get_default_max_tokens(model_id)
 
         return request
 

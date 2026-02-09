@@ -38,6 +38,14 @@ UNSUPPORTED_REASONER_PARAMS = {
     "temperature",
     "top_p",
     "top_k",
+    "presence_penalty",
+    "frequency_penalty",
+}
+
+# DeepSeek Reasoner 模型会报错的参数
+ERROR_REASONER_PARAMS = {
+    "logprobs",
+    "top_logprobs",
 }
 
 # DeepSeek 不支持的 Anthropic 特定参数
@@ -160,11 +168,19 @@ class DeepSeekAnthropicModel(AnthropicModel):
         """
         cleaned = dict(request)
 
+        # 检查并移除会报错的参数
+        for param in ERROR_REASONER_PARAMS:
+            if param in cleaned:
+                logger.warning(
+                    "DeepSeek Reasoner 不支持 '%s' 参数，已移除", param
+                )
+                del cleaned[param]
+
         # 检查并警告不支持的参数
         for param in UNSUPPORTED_REASONER_PARAMS:
             if param in cleaned:
                 logger.warning(
-                    "DeepSeek Reasoner 不支持 '%s' 参数，已自动忽略", param
+                    "DeepSeek Reasoner 不支持 '%s' 参数，设置无效", param
                 )
                 del cleaned[param]
 
@@ -176,6 +192,16 @@ class DeepSeekAnthropicModel(AnthropicModel):
                     "DeepSeek Reasoner 忽略 thinking.budget_tokens 参数"
                 )
             cleaned["thinking"] = thinking
+
+        # 处理 tool_choice 中的 disable_parallel_tool_use
+        if "tool_choice" in cleaned:
+            tool_choice = dict(cleaned["tool_choice"])
+            if "disable_parallel_tool_use" in tool_choice:
+                logger.debug(
+                    "DeepSeek Reasoner 忽略 tool_choice.disable_parallel_tool_use 参数"
+                )
+                del tool_choice["disable_parallel_tool_use"]
+            cleaned["tool_choice"] = tool_choice
 
         return cleaned
 
