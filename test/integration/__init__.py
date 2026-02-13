@@ -3,6 +3,11 @@ Integration test utilities for loading API keys.
 
 If apikey.yaml exists in the project root, API keys will be loaded from it.
 Otherwise, falls back to environment variables.
+
+Structure matches main.py implementation:
+- key: provider identifier
+- apikey: the API key string
+- model: list of model configurations
 """
 
 import os
@@ -18,29 +23,28 @@ def load_apikey_yaml() -> list[dict[str, Any]]:
     current_file = Path(__file__).resolve()
     # Go up from test/integration/__init__.py to project root
     project_root = current_file.parent.parent.parent
-    
+
     apikey_path = project_root / "apikey.yaml"
-    
+
     if apikey_path.exists():
         with open(apikey_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or []
-    
+
     return []
 
 
-def get_api_key(name: str, env_var: str | None = None, base_url: str | None = None) -> str | None:
+def get_api_key(provider_key: str, env_var: str | None = None) -> str | None:
     """
     Get API key from apikey.yaml or environment variable.
-    
+
     Priority:
     1. Environment variable (if set)
     2. apikey.yaml (if file exists and contains matching entry)
-    
+
     Args:
-        name: Provider name in apikey.yaml (e.g., "deepseek", "kimi-openai")
+        provider_key: Provider key in apikey.yaml (e.g., "deepseek", "moonshot", "kimi-code")
         env_var: Environment variable name to check first
-        base_url: Optional base_url to match (for providers with multiple endpoints)
-    
+
     Returns:
         API key string or None if not found
     """
@@ -49,15 +53,41 @@ def get_api_key(name: str, env_var: str | None = None, base_url: str | None = No
         key = os.environ.get(env_var)
         if key and key.strip():
             return key
-    
-    # Then, try apikey.yaml
+
+    # Then, try apikey.yaml - match by 'key' field (not 'name')
     configs = load_apikey_yaml()
     for config in configs:
-        if config.get("name") == name:
-            # If base_url is specified, match it
-            if base_url is None or config.get("base_url") == base_url:
-                return config.get("apikey")
-    
+        if config.get("key") == provider_key:
+            return config.get("apikey")
+
+    return None
+
+
+def find_model_config(provider_key: str, model_key: str | None = None) -> dict[str, Any] | None:
+    """
+    Find a specific model configuration from apikey.yaml.
+
+    Args:
+        provider_key: Provider key in apikey.yaml
+        model_key: Optional model key to select specific model config
+
+    Returns:
+        Model configuration dict or None if not found
+    """
+    configs = load_apikey_yaml()
+    for config in configs:
+        if config.get("key") == provider_key:
+            models = config.get("model", [])
+            if not models:
+                return None
+            # If model_key specified, find matching model
+            if model_key:
+                for model in models:
+                    if model.get("key") == model_key:
+                        return model
+                return None
+            # Otherwise return first model
+            return models[0]
     return None
 
 
@@ -68,8 +98,29 @@ def get_deepseek_api_key() -> str | None:
 
 
 def get_kimi_openai_api_key() -> str | None:
-    """Get Kimi OpenAI-compatible API key."""
-    return get_api_key("kimi-openai", env_var="KIMI_API_KEY")
+    """Get Kimi OpenAI-compatible API key (from moonshot or kimi-code provider)."""
+    # First check env var
+    key = os.environ.get("KIMI_API_KEY")
+    if key and key.strip():
+        return key
+
+    # Try moonshot provider (OpenAI compatible)
+    key = get_api_key("moonshot")
+    if key:
+        return key
+
+    # Try kimi-code provider
+    key = get_api_key("kimi-code")
+    if key:
+        return key
+
+    # Try siliconflow provider with kimi model
+    configs = load_apikey_yaml()
+    for config in configs:
+        if config.get("key") == "siliconflow":
+            return config.get("apikey")
+
+    return None
 
 
 def get_kimi_anthropic_api_key() -> str | None:
@@ -78,5 +129,16 @@ def get_kimi_anthropic_api_key() -> str | None:
     key = os.environ.get("KIMI_ANTHROPIC_API_KEY") or os.environ.get("KIMI_API_KEY")
     if key and key.strip():
         return key
-    # Then check apikey.yaml
-    return get_api_key("kimi-anthropic", base_url="https://api.kimi.com/coding/")
+
+    # Try kimi-code provider (uses anthropic API)
+    key = get_api_key("kimi-code")
+    if key:
+        return key
+
+    # Try siliconflow
+    configs = load_apikey_yaml()
+    for config in configs:
+        if config.get("key") == "siliconflow":
+            return config.get("apikey")
+
+    return None

@@ -4,8 +4,7 @@ import threading
 from typing import Any, Callable
 from pydantic import BaseModel
 
-from .base import Tool, ToolResult
-
+from .types import AgentTool
 
 class ToolRegistry:
     """Global tool registry supporting two-layer architecture:
@@ -22,7 +21,7 @@ class ToolRegistry:
     _base_cache: dict[str, Any] = {}  # name -> cached instance
 
     # Agent layer: name -> Tool instance
-    _agent_tools: dict[str, Tool] = {}
+    _agent_tools: dict[str, AgentTool] = {}
 
     def __new__(cls) -> "ToolRegistry":
         raise RuntimeError("Use ToolRegistry.instance()")
@@ -91,13 +90,13 @@ class ToolRegistry:
     # ===== Agent Layer: Instance-based =====
 
     @classmethod
-    def register_agent_tool(cls, tool: Tool) -> None:
+    def register_agent_tool(cls, tool: AgentTool) -> None:
         """Register an agent-facing tool instance."""
         with cls._lock:
             cls._agent_tools[tool.name] = tool
 
     @classmethod
-    def get_agent_tool(cls, name: str) -> Tool:
+    def get_agent_tool(cls, name: str) -> AgentTool:
         """Get agent tool by name."""
         with cls._lock:
             if name not in cls._agent_tools:
@@ -105,7 +104,7 @@ class ToolRegistry:
             return cls._agent_tools[name]
 
     @classmethod
-    def get_agent_tools(cls, names: list[str] | None = None) -> list[Tool]:
+    def get_agent_tools(cls, names: list[str] | None = None) -> list[AgentTool]:
         """Get agent tools, optionally filtered by names."""
         with cls._lock:
             if names is None:

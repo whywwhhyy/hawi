@@ -1,116 +1,225 @@
+"""Hawi Agent - Main entry point
+
+使用 Hawi 框架实现的 Agent 主程序
+"""
+
+import os
 import sys
 import warnings
+from pathlib import Path
+from typing import Any
+import yaml
 
-# 过滤 Anthropic SDK 内部的 Pydantic 序列化警告
+# Interactive REPL
+import readline
+
+# 过滤 Pydantic 警告
 warnings.filterwarnings(
     "ignore",
     message="PydanticSerializationUnexpectedValue.*",
     category=UserWarning,
 )
 
-from strands import tool
+
+def _supports_color() -> bool:
+    """检测当前终端是否支持 ANSI 颜色。"""
+    # 显式禁用颜色
+    if os.environ.get("NO_COLOR"):
+        return False
+
+    # 不是终端（管道/重定向）
+    if not sys.stdout.isatty():
+        return False
+
+    # TERM=dumb 表示不支持转义序列
+    term = os.environ.get("TERM", "")
+    if term == "dumb":
+        return False
+
+    # Windows 检测
+    if sys.platform == "win32":
+        # Windows 10+ 支持 ANSI，但需要启用
+        # 简化处理：如果没有 FORCE_COLOR，假设不支持
+        if not os.environ.get("FORCE_COLOR"):
+            return False
+
+    return True
+
+from hawi.agent import HawiAgent
+from hawi.agent.events import PlainPrinter, RichStreamingPrinter
+from hawi.agent.model import Model
+from hawi.agent.models.deepseek import DeepSeekModel
+from hawi.agent.models.kimi import KimiModel
+from hawi.plugin import HawiPlugin
 from hawi.utils.terminal import user_select
 
-# 使用 model_compatibility 模块中的 DeepSeekModel
-from hawi.agent.models import DeepSeekModel, KimiOpenAIModel, KimiAnthropicModel
-from hawi.agent import Agent,CachePointHook
-from hawi.agent_tools.python_interpreter import PythonInterpreter
+from hawi_plugins.python_interpreter import PythonInterpreter, MultiPythonInterpreter
 
-ds_model = DeepSeekModel(
-    client_args={
-        "api_key": "sk-22c80777f606402aa416fe3a325c1c66",
-        "base_url": "https://api.deepseek.com",
-    },
-    model_id="deepseek-chat",
-    params={
-        "temperature": 1,
-        "max_tokens": 4096,
-    },
-)
 
-# 使用 KimiOpenAIModel 修复 thinking 模式下的 tool calling 问题
+def load_apikey_yaml() -> list[dict[str, Any]]:
+    """Load apikey.yaml from project root if it exists."""
+    project_root = Path(__file__).parent
+    apikey_path = project_root / "apikey.yaml"
 
-# Kimi OpenAI API - 禁用 thinking 模式 (工具调用更稳定)
-kimi_openai_model = KimiOpenAIModel(
-    client_args={
-        "api_key": "sk-EIUw4OOpex1kaEDigO7SqT6avmP2h2EDXyAbIWQxz9VUpAdS",
-        "base_url": "https://api.moonshot.cn/v1",
-    },
-    model_id="kimi-k2.5",
-    params={
-        # 禁用 thinking 模式时，temperature 必须是 0.6
-        "temperature": 0.6,
-        "thinking": {"type": "disabled"},
-    },
-)
+    if apikey_path.exists():
+        with open(apikey_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or []
 
-# Kimi OpenAI API - 启用 thinking 模式 (会有 reasoning_content)
-kimi_openai_thinking_model = KimiOpenAIModel(
-    client_args={
-        "api_key": "sk-EIUw4OOpex1kaEDigO7SqT6avmP2h2EDXyAbIWQxz9VUpAdS",
-        "base_url": "https://api.moonshot.cn/v1",
-    },
-    model_id="kimi-k2.5",
-    # 默认启用 thinking 模式，不需要额外参数
-)
+    return []
 
-# 使用 KimiAnthropicModel 修复 Pydantic 序列化警告
-kimi_subscript_model = KimiAnthropicModel(
-    client_args={
-        "api_key": "sk-kimi-hU7a0PKq60BKCh5kiBLrVIeCH33s2AmB6E7ySGjW3bxDJzx6SHtmaRrcficPegVC",
-        "base_url": "https://api.kimi.com/coding/",
-    },
-    max_tokens=4096,
-    model_id="kimi-k2.5",
-)
+def create_model(argv:list[str]):
+    def take_item(name:str, items):
+        def select_from_argv_or_user(keys):
+            for key in keys:
+                if str(key) in argv:
+                    argv.remove(key)
+                    return key
+            key = user_select(keys, f"Select {name}:")
+            if key is None:
+                print("")
+                exit()
+            return key
 
-LLM_PROVIDERS = {
-    'deepseek': ds_model,
-    'kimi-oai': kimi_openai_model,
-    'kimi-oai-thinking': kimi_openai_thinking_model,
-    'kimi-subscript': kimi_subscript_model,
-}
+        if not isinstance(items, list):
+            return items
+        if len(items) == 1:
+            return items[0]
+        if all(not isinstance(item, dict) for item in items):
+            return select_from_argv_or_user(items)
+        items_dict = {item["key"]:item for item in items}
+        item_key = select_from_argv_or_user(list(items_dict.keys()))
+        return items_dict[item_key]
+    provider_config = take_item("provider", load_apikey_yaml())
 
-def create_agent(llm_provider:str) -> Agent:
-    executor = PythonInterpreter(work_dir=".python_vm")
-    model = LLM_PROVIDERS.get(llm_provider, ds_model)
+    get_by_key = lambda config, key: take_item(key, config[key])
+    apikey = get_by_key(provider_config, 'apikey')
+    model_config = get_by_key(provider_config, 'model')
+    adapter = get_by_key(model_config, 'adapter')
+    base_url = get_by_key(model_config, 'base_url')
+    api = get_by_key(model_config, 'api')
+    model_id = get_by_key(model_config, 'model_id')
+    if adapter == "DeepSeekModel":
+        model = DeepSeekModel(
+            base_url=base_url,
+            api_key=apikey,
+            model_id=model_id,
+            api=api,
+        )
+    elif adapter == "KimiModel":
+        model = KimiModel(
+            base_url=base_url,
+            api_key=apikey,
+            model_id=model_id,
+            api=api,
+        )
+    else:
+        raise Exception("unknown model adapter")
+    return provider_config['key'], model
 
-    return Agent(
-        name=llm_provider,
+def create_agent(model: Model) -> HawiAgent:
+    """Create a HawiAgent with the specified provider."""
+    plugin = PythonInterpreter(print_execution=False)
+    # print(model.get_balance())
+
+    return HawiAgent(
         model=model,
-        tools=[tool(t) for t in executor.get_tools()],
-        system_prompt="你是一个专门用来管理当前python环境的Agent，通过execute工具，你可以完成任何任务。你也可以使用restart_server重启解释器来清空状态，或使用install_dependency安装依赖包。",
-        hooks=[CachePointHook()],
+        plugins=[plugin],
+        system_prompt="""You are a helpful AI assistant with Python execution capabilities.
+
+You have access to a persistent Python interpreter through the following tools:
+- execute: Run Python code (variables persist between calls)
+- install_dependency: Install Python packages
+- restart_server: Clear interpreter state
+- save_script: Save code to a file
+- execute_script: Run a saved script
+- list_scripts: See available scripts
+
+Use these tools to help users with coding tasks, data analysis, calculations, etc.
+Always explain what you're doing before executing code.
+""",
+        max_iterations=10,
+        enable_streaming=True,   # Enable streaming for real-time output
     )
+
 
 def main():
     argv = sys.argv[1:]
-    for llm_provider in LLM_PROVIDERS:
-        if llm_provider in argv:
-            argv.remove(llm_provider)
-            llm_provider = llm_provider
-            break
-    else:
-        llm_provider = user_select(list(LLM_PROVIDERS.keys()), "Select a provider")
-    assert isinstance(llm_provider, str)
-    agent = create_agent(llm_provider)
-    
+
+    # Parse arguments
+    printer_type = "auto"  # auto, rich, text
+
+    # Parse printer type
+    if "--printer" in argv:
+        idx = argv.index("--printer")
+        argv.pop(idx)
+        if idx < len(argv):
+            printer_type = argv.pop(idx)
+
+    # Create agent
+    llm_provider, model = create_model(argv)
+
+    # Determine actual printer to use
+    use_rich = printer_type == "rich" or (printer_type == "auto" and _supports_color())
+    actual_printer = "rich" if use_rich else "plain"
+
+    agent = create_agent(model)
+    print(f"Using provider: {llm_provider}")
+    print(f"Model: {model.model_id}")
+    print(f"Printer: {actual_printer}" + (" (auto-detected)" if printer_type == "auto" else ""))
+    print("Type 'exit', 'quit', or 'q' to exit\n")
+
+    # Create printer based on mode
+    def create_printer():
+        if use_rich:
+            return RichStreamingPrinter(
+                show_reasoning=True,
+                show_tools=True,
+                text_style="green",
+            )
+        else:
+            return PlainPrinter(
+                show_reasoning=True,
+                show_tools=True,
+            )
+
+    # Execute prompt if provided
     if argv:
-        agent(argv[0])
-    else:
-        import readline
-        while True:
-            try:
-                prompt = input(">>> ")
-                if prompt.lower() in ['exit', 'quit', 'q']:
-                    break
-                agent(prompt)
-                print()
-            except EOFError:
+        # Use streaming mode with StreamingPrinter
+        import asyncio
+        printer = create_printer()
+
+        async def process_events():
+            async for event in agent.arun(argv[0], stream=True):
+                await printer.handle(event)
+
+        asyncio.run(process_events())
+        print()
+        return
+
+    while True:
+        try:
+            prompt = input(">>> ")
+            if not prompt.strip():
+                continue
+            if prompt.lower() in ['exit', 'quit', 'q']:
                 break
-            except KeyboardInterrupt:
-                print("\nExiting...")
-                break
+
+            # Use streaming mode with StreamingPrinter
+            import asyncio
+            printer = create_printer()
+
+            async def process_events():
+                async for event in agent.arun(prompt, stream=True):
+                    await printer.handle(event)
+
+            asyncio.run(process_events())
+            print()
+
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            break
 
 
 if __name__ == "__main__":
