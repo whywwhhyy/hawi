@@ -2,7 +2,6 @@
 
 import threading
 from typing import Any, Callable
-from pydantic import BaseModel
 
 from .types import AgentTool
 

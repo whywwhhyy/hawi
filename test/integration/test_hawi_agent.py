@@ -4,15 +4,14 @@ Tests the complete agent workflow with real API calls.
 Requires DEEPSEEK_API_KEY environment variable or apikey.yaml configuration.
 """
 
-import os
 import pytest
-from typing import Any
+from typing import cast
 
 from hawi.agent import HawiAgent
+from hawi.agent.model import Model
 from hawi.agent.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool, before_conversation, after_conversation
-from hawi.tool.types import ToolResult
 
 from test.integration.models import get_deepseek_api_key
 
@@ -75,7 +74,7 @@ class TestHawiAgentIntegration:
     """Integration tests requiring real DeepSeek API access."""
 
     @pytest.fixture
-    def model(self) -> DeepSeekModel:
+    def model(self) -> Model:
         """Create a DeepSeek model instance."""
         return DeepSeekModel(
             model_id="deepseek-chat",
@@ -88,7 +87,7 @@ class TestHawiAgentIntegration:
         return CalculatorPlugin()
 
     @pytest.fixture
-    def agent(self, model: DeepSeekModel, calculator_plugin: CalculatorPlugin) -> HawiAgent:
+    def agent(self, model: Model, calculator_plugin: CalculatorPlugin) -> HawiAgent:
         """Create a HawiAgent with calculator tools."""
         return HawiAgent(
             model=model,
@@ -120,14 +119,14 @@ class TestHawiAgentIntegration:
         assert len(result.tool_calls) >= 1
 
         # Find the calculator tool call
-        calc_calls = [tc for tc in result.tool_calls if tc.tool_name == "calculate"]
+        calc_calls = [tc for tc in result.tool_calls if tc.tool_name == "CalculatorPlugin__calculate"]
         assert len(calc_calls) >= 1
 
         # Verify the calculation was performed
         calc_call = calc_calls[0]
         assert "expression" in calc_call.arguments
         assert calc_call.result.success is True
-        assert "42" in calc_call.result.output  # 15 + 27 = 42
+        assert "42" in cast(str, calc_call.result.output)  # 15 + 27 = 42
 
     def test_multi_turn_conversation(self, agent: HawiAgent):
         """Test multi-turn conversation with context retention."""
@@ -162,7 +161,7 @@ class TestHawiAgentIntegration:
         cloned_result = cloned.run("What is the secret number?")
         assert "99" in cloned_result.text
 
-    def test_streaming_response(self, model: DeepSeekModel, calculator_plugin: CalculatorPlugin):
+    def test_streaming_response(self, model: Model, calculator_plugin: CalculatorPlugin):
         """Test streaming event generation."""
         agent = HawiAgent(
             model=model,
@@ -170,7 +169,7 @@ class TestHawiAgentIntegration:
             enable_streaming=True,  # Enable streaming
         )
 
-        events = list(agent.run("Count from 1 to 3."))
+        events = list(agent.run("Count from 1 to 3.", stream=True))
 
         # Should have start, message(s), and finish events
         event_types = [e.type for e in events]
@@ -178,7 +177,7 @@ class TestHawiAgentIntegration:
         assert "agent.run_stop" in event_types
         assert "model.content_block_delta" in event_types
 
-    def test_max_iterations_limit(self, model: DeepSeekModel, calculator_plugin: CalculatorPlugin):
+    def test_max_iterations_limit(self, model: Model, calculator_plugin: CalculatorPlugin):
         """Test max_iterations stops infinite loops."""
         agent = HawiAgent(
             model=model,

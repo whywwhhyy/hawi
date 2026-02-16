@@ -10,18 +10,19 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Iterator, List, Literal, TypedDict, Required
 
-from .messages import (
+from hawi.agent.message import (
     ContentPart,
     Message,
     MessageRequest,
     MessageResponse,
+    StreamPart,
     TextPart,
     ToolCallPart,
     ToolDefinition,
     ToolChoice,
 )
 
-__all__ = ["Model", "StreamEvent", "BalanceInfo", "ModelErrorType", "ModelFailurePolicy", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails"]
+__all__ = ["Model", "StreamPart", "BalanceInfo", "ModelErrorType", "ModelFailurePolicy", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails"]
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -90,171 +91,7 @@ class BalanceInfo:
         )
 
 
-# TypedDict 定义用于类型安全的 content_block 事件
-type BlockType = Literal["text", "thinking", "tool_use", "redacted_thinking"]
-type DeltaType = Literal["text", "thinking", "tool_input", "signature"]
 
-
-class ContentBlockStartEvent(TypedDict):
-    """内容块开始事件 - 保证 block_type 和 block_index 为有效值"""
-    type: Literal["content_block_start"]
-    block_type: Required[BlockType]
-    block_index: Required[int]
-    tool_call_id: str | None
-    tool_name: str | None
-
-
-class ContentBlockDeltaEvent(TypedDict):
-    """内容块增量事件 - 保证 delta_type, delta 和 block_index 为有效值"""
-    type: Literal["content_block_delta"]
-    delta_type: Required[DeltaType]
-    delta: Required[str]
-    block_index: Required[int]
-
-
-class ContentBlockStopEvent(TypedDict):
-    """内容块结束事件 - 保证 block_type 和 block_index 为有效值"""
-    type: Literal["content_block_stop"]
-    block_type: Required[BlockType]
-    block_index: Required[int]
-    full_content: str | None
-    tool_call_id: str | None
-    tool_name: str | None
-    tool_arguments: dict[str, Any] | None
-
-
-class StreamEvent:
-    """流式响应事件
-
-    使用工厂方法创建特定类型的事件以确保字段有效性:
-    - content_block_start: StreamEvent.content_block_start(...)
-    - content_block_delta: StreamEvent.content_block_delta(...)
-    - content_block_stop: StreamEvent.content_block_stop(...)
-
-    Attributes:
-        type: 事件类型
-        content: 文本内容（当 type="content" 时）
-        reasoning: 推理内容（当 type="reasoning" 时）
-        tool_call: 工具调用数据（当 type="tool_call" 时）
-        usage: Token 使用情况（当 type="usage" 时）
-        stop_reason: 停止原因（当 type="finish" 时）
-        # content_block_* 事件字段
-        block_type: 块类型 (text/thinking/tool_use) - 在 content_block 事件中为必需
-        block_index: 块索引 - 在 content_block 事件中为必需
-        delta_type: 增量类型 (text/thinking/tool_input)
-        delta: 增量内容
-        tool_call_id: 工具调用 ID
-        tool_name: 工具名称
-        tool_arguments: 工具参数
-        full_content: 完整内容
-    """
-
-    type: str
-    content: ContentPart | None
-    reasoning: str | None
-    tool_call: ToolCallPart | None
-    usage: dict[str, int] | None
-    stop_reason: str | None
-    block_type: BlockType | None
-    block_index: int | None
-    delta_type: DeltaType | None
-    delta: str | None
-    tool_call_id: str | None
-    tool_name: str | None
-    tool_arguments: dict[str, Any] | None
-    full_content: str | None
-
-    def __init__(
-        self,
-        type: str,
-        *,
-        content: ContentPart | None = None,
-        reasoning: str | None = None,
-        tool_call: ToolCallPart | None = None,
-        usage: dict[str, int] | None = None,
-        stop_reason: str | None = None,
-        block_type: BlockType | None = None,
-        block_index: int | None = None,
-        delta_type: DeltaType | None = None,
-        delta: str | None = None,
-        tool_call_id: str | None = None,
-        tool_name: str | None = None,
-        tool_arguments: dict[str, Any] | None = None,
-        full_content: str | None = None,
-    ):
-        self.type = type
-        self.content = content
-        self.reasoning = reasoning
-        self.tool_call = tool_call
-        self.usage = usage
-        self.stop_reason = stop_reason
-        self.block_type = block_type
-        self.block_index = block_index
-        self.delta_type = delta_type
-        self.delta = delta
-        self.tool_call_id = tool_call_id
-        self.tool_name = tool_name
-        self.tool_arguments = tool_arguments
-        self.full_content = full_content
-
-    def __repr__(self) -> str:
-        return f"StreamEvent(type={self.type}, block_index={self.block_index})"
-
-    # 工厂方法：确保 content_block 事件总是有有效值
-    @classmethod
-    def content_block_start(
-        cls,
-        block_type: BlockType,
-        block_index: int,
-        *,
-        tool_call_id: str | None = None,
-        tool_name: str | None = None,
-    ) -> StreamEvent:
-        """创建 content_block_start 事件，block_type 和 block_index 为必需"""
-        return cls(
-            type="content_block_start",
-            block_type=block_type,
-            block_index=block_index,
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-        )
-
-    @classmethod
-    def content_block_delta(
-        cls,
-        delta_type: DeltaType,
-        delta: str,
-        block_index: int,
-    ) -> StreamEvent:
-        """创建 content_block_delta 事件，delta_type, delta 和 block_index 为必需"""
-        return cls(
-            type="content_block_delta",
-            delta_type=delta_type,
-            delta=delta,
-            block_index=block_index,
-        )
-
-    @classmethod
-    def content_block_stop(
-        cls,
-        block_type: BlockType,
-        block_index: int,
-        *,
-        full_content: str | None = None,
-        tool_call_id: str | None = None,
-        tool_name: str | None = None,
-        tool_arguments: dict[str, Any] | None = None,
-    ) -> StreamEvent:
-        """创建 content_block_stop 事件，block_type 和 block_index 为必需"""
-        return cls(
-            type="content_block_stop",
-            block_type=block_type,
-            block_index=block_index,
-            full_content=full_content,
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            tool_arguments=tool_arguments,
-        )
 
 
 class Model(ABC):
@@ -317,8 +154,8 @@ class Model(ABC):
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
         **kwargs,
-    ) -> Iterator[StreamEvent]:
-        """同步流式调用模型"""
+    ) -> Iterator[StreamPart]:
+        """同步流式调用模型，生成内容增量块"""
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         yield from self._stream_impl(request)
 
@@ -345,11 +182,11 @@ class Model(ABC):
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
         **kwargs,
-    ) -> AsyncIterator[StreamEvent]:
-        """异步流式调用模型"""
+    ) -> AsyncIterator[StreamPart]:
+        """异步流式调用模型，生成内容增量块"""
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
-        async for event in self._astream_impl(request):
-            yield event
+        async for chunk in self._astream_impl(request):
+            yield chunk
 
     # ==========================================================================
     # 请求/响应转换 - 子类必须实现
@@ -387,32 +224,32 @@ class Model(ABC):
         with ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(pool, self._invoke_impl, request)
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamEvent]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
         """同步流式实现（默认不支持）"""
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncIterator[StreamEvent]:
+    async def _astream_impl(self, request: MessageRequest) -> AsyncIterator[StreamPart]:
         """异步流式实现（默认使用线程池）"""
         import asyncio
         from concurrent.futures import ThreadPoolExecutor
 
         loop = asyncio.get_event_loop()
-        queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+        queue: asyncio.Queue[StreamPart | None] = asyncio.Queue()
 
         def stream_in_thread():
             try:
-                for event in self._stream_impl(request):
-                    asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+                for chunk in self._stream_impl(request):
+                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop)
             finally:
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
         with ThreadPoolExecutor() as pool:
             pool.submit(stream_in_thread)
             while True:
-                event = await queue.get()
-                if event is None:
+                chunk = await queue.get()
+                if chunk is None:
                     break
-                yield event
+                yield chunk
 
     # ==========================================================================
     # 内部工具方法

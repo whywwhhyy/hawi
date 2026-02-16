@@ -11,12 +11,13 @@ from typing import Any, AsyncIterator, Iterator
 
 from openai import OpenAI, AsyncOpenAI
 
-from hawi.agent.model import Model, StreamEvent
-from hawi.agent.messages import (
+from hawi.agent.model import Model
+from hawi.agent.message import (
     MessageRequest,
     MessageResponse,
     TokenUsage,
     ContentPart,
+    StreamPart,
 )
 from ._converters import (
     prepare_request,
@@ -215,7 +216,7 @@ class OpenAIModel(Model):
         response = self.client.chat.completions.create(**req)
         return self._parse_response_impl(response.model_dump())
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamEvent]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
         """同步流式调用 OpenAI API"""
         req = self._prepare_request_impl(request)
         req["stream"] = True
@@ -235,7 +236,7 @@ class OpenAIModel(Model):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncIterator[StreamPart]:
         """异步流式调用 OpenAI API"""
         req = self._prepare_request_impl(request)
         req["stream"] = True

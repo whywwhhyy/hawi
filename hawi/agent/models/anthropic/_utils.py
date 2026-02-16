@@ -2,13 +2,10 @@
 Anthropic 模型辅助工具函数
 """
 
-import base64
 import logging
-from collections.abc import Mapping, Sequence
 from typing import Any,cast
 
-from hawi.agent.messages import (
-    Message,
+from hawi.agent.message import (
     ContentPart,
     TextPart
 )

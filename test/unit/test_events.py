@@ -1,35 +1,29 @@
 """Unit tests for Event system.
 
-Tests the Event class, EventBus, and ConversationPrinter.
+Tests the Event class, EventBus, and RichStreamingPrinter.
 """
 
 import asyncio
 import io
 import pytest
-from typing import Any
 
-from rich.console import Console
 
 from hawi.agent.events import (
     Event,
     EventBus,
-    ConversationPrinter,
-    create_event_printer,
     # Model events
     model_stream_start_event,
     model_stream_stop_event,
     model_content_block_start_event,
     model_content_block_delta_event,
     model_content_block_stop_event,
-    model_metadata_event,
-    # Agent events
     agent_run_start_event,
     agent_run_stop_event,
     agent_tool_call_event,
     agent_tool_result_event,
-    agent_message_added_event,
     agent_error_event,
 )
+from hawi.agent.printers import RichStreamingPrinter
 
 
 class TestEvent:
@@ -277,16 +271,16 @@ class TestEventBus:
 
 
 class TestConversationPrinter:
-    """Tests for ConversationPrinter class."""
+    """Tests for RichStreamingPrinter class."""
 
     @pytest.fixture
     def printer(self, monkeypatch):
-        """Create a ConversationPrinter with captured stdout for testing."""
+        """Create a RichStreamingPrinter with captured stdout for testing."""
         output = io.StringIO()
         # Patch sys.stdout for the printer module
-        import hawi.agent.events as events_module
-        monkeypatch.setattr(events_module, '_stdout', output)
-        printer = ConversationPrinter()
+        import hawi.agent.printers as printers_module
+        monkeypatch.setattr(printers_module, '_stdout', output)
+        printer = RichStreamingPrinter()
         printer._output = output  # Store reference for tests
         return printer
 
@@ -385,9 +379,9 @@ class TestConversationPrinter:
     async def test_hide_reasoning(self, monkeypatch):
         """Test hiding reasoning output."""
         output = io.StringIO()
-        import hawi.agent.events as events_module
-        monkeypatch.setattr(events_module, '_stdout', output)
-        printer = ConversationPrinter(show_reasoning=False)
+        import hawi.agent.printers as printers_module
+        monkeypatch.setattr(printers_module, '_stdout', output)
+        printer = RichStreamingPrinter(show_reasoning=False)
         event = model_content_block_delta_event(
             request_id="req-1",
             block_index=0,
@@ -402,9 +396,9 @@ class TestConversationPrinter:
     async def test_hide_tools(self, monkeypatch):
         """Test hiding tool output."""
         output = io.StringIO()
-        import hawi.agent.events as events_module
-        monkeypatch.setattr(events_module, '_stdout', output)
-        printer = ConversationPrinter(show_tools=False)
+        import hawi.agent.printers as printers_module
+        monkeypatch.setattr(printers_module, '_stdout', output)
+        printer = RichStreamingPrinter(show_tools=False)
         event = agent_tool_call_event(
             run_id="run-1",
             tool_name="calculate",
@@ -427,28 +421,27 @@ class TestConversationPrinter:
         # Error uses console.print, verify no exception
 
 
-class TestCreateEventPrinter:
-    """Tests for create_event_printer helper."""
+class TestRichStreamingPrinter:
+    """Tests for RichStreamingPrinter class."""
 
-    def test_returns_callable(self):
-        """Test that create_event_printer returns a callable."""
-        printer = create_event_printer()
-        assert callable(printer)
+    def test_has_handle_method(self):
+        """Test that RichStreamingPrinter has a handle method."""
+        printer = RichStreamingPrinter()
+        assert hasattr(printer, 'handle')
+        assert callable(printer.handle)
 
     @pytest.mark.asyncio
     async def test_printer_handles_events(self):
-        """Test that the created printer handles events."""
-        # Note: create_event_printer uses global console, so we just verify it doesn't crash
-        printer = create_event_printer()
+        """Test that the printer handles events correctly."""
+        printer = RichStreamingPrinter()
         event = model_content_block_delta_event(
             request_id="req-1",
             block_index=0,
             delta_type="text",
-            delta="Test\n",  # Add newline to trigger immediate output
+            delta="Test\n",
         )
-        await printer(event)
-        # The printer works - we can't easily capture output since it uses global console
-        # but we've verified it doesn't raise an exception
+        # Should not raise any exception
+        await printer.handle(event)
 
 
 class TestEventOrdering:

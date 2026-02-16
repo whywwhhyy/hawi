@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from hawi.agent.messages import Message, TokenUsage
+from hawi.agent.message import Message, TokenUsage
 from hawi.tool.types import ToolResult
 
 

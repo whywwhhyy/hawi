@@ -10,7 +10,7 @@ DeepSeek API 合规性测试
 import pytest
 from unittest.mock import patch
 
-from hawi.agent.messages import MessageRequest, Message
+from hawi.agent.message import MessageRequest, Message
 from hawi.agent.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
 from hawi.agent.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
 
@@ -214,6 +214,52 @@ class TestDeepSeekOpenAIAPILimits:
         assert "Part 1" in result["content"]
         assert "Part 2" in result["content"]
 
+    def test_top_k_removed(self):
+        """
+        测试: DeepSeek OpenAI API 不支持 top_k 参数
+        """
+        model = DeepSeekOpenAIModel(
+            model_id="deepseek-chat",
+            api_key="test-key",
+            top_k=40,
+        )
+
+        request = MessageRequest(messages=[{
+            "role": "user",
+            "content": [{"type": "text", "text": "Hello"}],
+            "name": None,
+            "tool_calls": None,
+            "tool_call_id": None,
+            "metadata": None,
+        }])
+
+        req = model._prepare_request_impl(request)
+
+        assert "top_k" not in req, "top_k 必须从 DeepSeek OpenAI 请求中移除"
+
+    def test_image_content_sanitized(self):
+        """
+        测试: DeepSeek OpenAI 不支持图片内容
+        """
+        model = DeepSeekOpenAIModel(api_key="test-key")
+
+        message: Message = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "See image"},
+                {"type": "image", "source": {"url": "https://example.com/test.png", "detail": "auto"}},
+            ],
+            "name": None,
+            "tool_calls": None,
+            "tool_call_id": None,
+            "metadata": None,
+        }
+
+        result = model._convert_message_to_openai(message)
+
+        assert isinstance(result["content"], list)
+        assert all(block.get("type") != "image_url" for block in result["content"])
+
     def test_error_params_removed_for_reasoner(self):
         """
         测试: Reasoner 模型的错误参数被移除
@@ -267,6 +313,74 @@ class TestDeepSeekAnthropicAPILimits:
         req = model._prepare_request_impl(request)
 
         assert "top_k" not in req, "top_k 必须从 DeepSeek Anthropic 请求中移除"
+
+    def test_parallel_tool_use_ignored(self):
+        """
+        测试: DeepSeek Anthropic API 忽略 parallel tool use
+        """
+        model = DeepSeekAnthropicModel(
+            model_id="deepseek-chat",
+            api_key="test-key",
+        )
+
+        request = MessageRequest(
+            messages=[{
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello"}],
+                "name": None,
+                "tool_calls": None,
+                "tool_call_id": None,
+                "metadata": None,
+            }],
+            tools=[{
+                "type": "function",
+                "name": "noop",
+                "description": "no-op",
+                "schema": {"type": "object", "properties": {}},
+            }],
+            tool_choice={"type": "auto", "name": None},
+            parallel_tool_calls=False,
+        )
+
+        req = model._prepare_request_impl(request)
+
+        assert "tool_choice" in req
+        assert "disable_parallel_tool_use" not in req["tool_choice"]
+
+    def test_images_documents_sanitized(self):
+        """
+        测试: DeepSeek Anthropic API 不支持图片和文档内容
+        """
+        model = DeepSeekAnthropicModel(
+            model_id="deepseek-chat",
+            api_key="test-key",
+        )
+
+        message: Message = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "See attachments"},
+                {"type": "image", "source": {"url": "data:image/png;base64,AA==", "detail": "auto"}},
+                {
+                    "type": "document",
+                    "source": {"url": "data:application/pdf;base64,AA==", "mime_type": "application/pdf"},
+                    "title": "Test Doc",
+                    "context": None,
+                },
+            ],
+            "name": None,
+            "tool_calls": None,
+            "tool_call_id": None,
+            "metadata": None,
+        }
+
+        request = MessageRequest(messages=[message])
+        req = model._prepare_request_impl(request)
+
+        content_blocks = req["messages"][0]["content"]
+        assert all(block.get("type") not in {"image", "document"} for block in content_blocks)
+        assert any(block.get("text") == "[图片内容]" for block in content_blocks)
+        assert any(block.get("text") == "[文档内容]" for block in content_blocks)
 
     def test_reasoner_error_params_removed(self):
         """

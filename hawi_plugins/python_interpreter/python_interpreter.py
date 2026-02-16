@@ -6,21 +6,19 @@
 import subprocess
 import json
 import struct
-import sys
 import select
 import os
 import tempfile
 import shutil
-from typing import Optional,TypedDict,Dict
+from typing import Optional
 from threading import Lock
 
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
 
 from hawi.tool import ToolResult
-from hawi.utils.lifecycle import ExitHandler, exit_scope
+from hawi.utils.lifecycle import ExitHandler
 from hawi.plugin import HawiPlugin
 import hawi.plugin as plugin
 
@@ -360,13 +358,13 @@ while True:
 
             # 构建结果文本
             result_text = Text()
-            result_text.append(f"状态: ", style="bold")
+            result_text.append("状态: ", style="bold")
             result_text.append(f"{status_emoji} {status_text}\n", style=f"bold {status_color}")
-            result_text.append(f"\n输出:\n", style="bold cyan")
+            result_text.append("\n输出:\n", style="bold cyan")
             result_text.append(output_text)
 
             if error_text:
-                result_text.append(f"\n\n错误:\n", style="bold red")
+                result_text.append("\n\n错误:\n", style="bold red")
                 result_text.append(error_text, style="red")
 
             # 使用 Group 组合内容

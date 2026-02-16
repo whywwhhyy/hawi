@@ -7,12 +7,9 @@ StrandsModel 适配器单元测试
 import pytest
 from typing import Any
 
-from hawi.agent.models.strands_adapter import StrandsModel
-from hawi.agent.messages import (
+from hawi.agent.models.strands import StrandsModel
+from hawi.agent.message import (
     Message,
-    TextPart,
-    ImagePart,
-    ToolCallPart,
     ToolDefinition,
     ToolChoice,
 )
@@ -280,12 +277,16 @@ class TestStreamConversion:
         adapter = StrandsModel(strands_model)
 
         event = {"type": "content", "content": {"text": "Hello"}}
-        result = list(adapter._convert_strands_event_to_hawi(event))
+        result = list(adapter._convert_strands_event_to_stream_part(event))
 
-        assert len(result) == 1
-        assert result[0].type == "content"
-        assert result[0].content is not None
-        assert result[0].content["type"] == "text"
+        # StreamPart 将 content 拆分为 start + delta + end
+        assert len(result) == 3
+        assert result[0]["type"] == "text_delta"
+        assert result[0]["is_start"] is True
+        assert result[1]["type"] == "text_delta"
+        assert result[1]["delta"] == "Hello"
+        assert result[2]["type"] == "text_delta"
+        assert result[2]["is_end"] is True
 
     def test_convert_finish_event(self):
         """测试转换 finish 事件"""
@@ -293,11 +294,12 @@ class TestStreamConversion:
         adapter = StrandsModel(strands_model)
 
         event = {"type": "finish", "stop_reason": "stop"}
-        result = list(adapter._convert_strands_event_to_hawi(event))
+        result = list(adapter._convert_strands_event_to_stream_part(event))
 
         assert len(result) == 1
-        assert result[0].type == "finish"
-        assert result[0].stop_reason == "stop"
+        assert result[0]["type"] == "finish"
+        # stop_reason 会被映射为 end_turn
+        assert result[0]["stop_reason"] == "end_turn"
 
 
 class TestIntegration:
@@ -344,10 +346,15 @@ class TestIntegration:
         # Verify strands model was called
         assert strands_model.last_call is not None
 
-        # Verify events
-        assert len(events) == 2
-        assert events[0].type == "content"
-        assert events[1].type == "finish"
+        # Verify events (start + delta + end + finish = 4 events)
+        assert len(events) == 4
+        assert events[0]["type"] == "text_delta"
+        assert events[0]["is_start"] is True
+        assert events[1]["type"] == "text_delta"
+        assert events[1]["delta"] == "Hello"
+        assert events[2]["type"] == "text_delta"
+        assert events[2]["is_end"] is True
+        assert events[3]["type"] == "finish"
 
 
 if __name__ == "__main__":

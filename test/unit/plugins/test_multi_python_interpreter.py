@@ -276,15 +276,15 @@ class TestMultiPythonInterpreter:
             """测试工具名称正确"""
             tools = multi.tools
             tool_names = [t.name for t in tools]
-            assert "create_interpreter" in tool_names
-            assert "remove_interpreters" in tool_names
-            assert "save_script" in tool_names
-            assert "execute_script" in tool_names
-            assert "delete_script" in tool_names
-            assert "list_scripts" in tool_names
-            assert "install_dependency" in tool_names
-            assert "restart_interpreter" in tool_names
-            assert "execute" in tool_names
+            assert "MultiPythonInterpreter__create_interpreter" in tool_names
+            assert "MultiPythonInterpreter__remove_interpreters" in tool_names
+            assert "MultiPythonInterpreter__save_script" in tool_names
+            assert "MultiPythonInterpreter__execute_script" in tool_names
+            assert "MultiPythonInterpreter__delete_script" in tool_names
+            assert "MultiPythonInterpreter__list_scripts" in tool_names
+            assert "MultiPythonInterpreter__install_dependency" in tool_names
+            assert "MultiPythonInterpreter__restart_interpreter" in tool_names
+            assert "MultiPythonInterpreter__execute" in tool_names
 
     class TestContextManager:
         """上下文管理器测试"""

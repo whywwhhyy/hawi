@@ -22,7 +22,7 @@ from typing import Any
 import httpx
 
 from hawi.agent.models.openai import OpenAIModel
-from hawi.agent.messages import MessageRequest, MessageResponse
+from hawi.agent.message import MessageResponse
 from hawi.agent.model import BalanceInfo
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 UNSUPPORTED_REASONER_PARAMS = {
     "temperature",
     "top_p",
+    "top_k",
     "presence_penalty",
     "frequency_penalty",
 }
@@ -116,6 +117,11 @@ class DeepSeekOpenAIModel(OpenAIModel):
         """准备请求，对 Reasoner 模型进行参数过滤"""
         req = super()._prepare_request_impl(request)
 
+        # DeepSeek OpenAI 端点不支持 top_k，需统一剔除
+        if "top_k" in req:
+            logger.debug("Removing unsupported param 'top_k' for DeepSeek")
+            del req["top_k"]
+
         # 对 Reasoner 模型进行参数校验
         if self.model_id == "deepseek-reasoner":
             req = self._filter_reasoner_params(req)
@@ -184,6 +190,11 @@ class DeepSeekOpenAIModel(OpenAIModel):
         """转换消息，处理 DeepSeek 特殊格式"""
         result = super()._convert_message_to_openai(message)
 
+        content = result.get("content")
+        if isinstance(content, list):
+            # DeepSeek 不支持 image_url 结构，替换为文本占位
+            result["content"] = self._sanitize_openai_content(content)
+
         # tool 消息特殊处理：确保 content 是字符串
         if result.get("role") == "tool":
             content = result.get("content", "")
@@ -196,6 +207,15 @@ class DeepSeekOpenAIModel(OpenAIModel):
 
         return result
 
+    def _sanitize_openai_content(self, content: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        sanitized: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                sanitized.append({"type": "text", "text": "[图片内容]"})
+            else:
+                sanitized.append(part)
+        return sanitized
+
     def _serialize_content_to_string(self, content: list) -> str:
         """将 ContentPart 列表序列化为字符串（DeepSeek 专用）"""
         texts = []
@@ -204,7 +224,7 @@ class DeepSeekOpenAIModel(OpenAIModel):
 
             if p_type == "text":
                 texts.append(part.get("text", ""))
-            elif p_type == "image":
+            elif p_type in {"image", "image_url"}:
                 # DeepSeek 不支持图片
                 logger.warning("DeepSeek API 不支持图片内容，已忽略")
                 texts.append("[图片内容]")
@@ -227,7 +247,7 @@ class DeepSeekOpenAIModel(OpenAIModel):
                 msg_response.reasoning_content = reasoning
                 # 将 reasoning_content 添加到 content 列表作为 ReasoningPart
                 # 这样 HawiAgent 可以正确处理并显示它
-                from hawi.agent.messages import ReasoningPart
+                from hawi.agent.message import ReasoningPart
                 reasoning_part: ReasoningPart = {
                     "type": "reasoning",
                     "reasoning": reasoning,
@@ -295,4 +315,3 @@ class DeepSeekOpenAIModel(OpenAIModel):
             )
 
         return result
-

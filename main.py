@@ -46,11 +46,13 @@ def _supports_color() -> bool:
     return True
 
 from hawi.agent import HawiAgent
-from hawi.agent.events import PlainPrinter, RichStreamingPrinter
+from hawi.agent.printers import (
+    PlainPrinter,
+    RichStreamingPrinter,
+    MarkdownStreamingPrinter,
+)
 from hawi.agent.model import Model
-from hawi.agent.models.deepseek import DeepSeekModel
-from hawi.agent.models.kimi import KimiModel
-from hawi.plugin import HawiPlugin
+from hawi.agent.models import get_model_class
 from hawi.utils.terminal import user_select
 
 from hawi_plugins.python_interpreter import PythonInterpreter, MultiPythonInterpreter
@@ -68,7 +70,7 @@ def load_apikey_yaml() -> list[dict[str, Any]]:
     return []
 
 def create_model(argv:list[str]):
-    def take_item(name:str, items):
+    def take_item(items, name:str):
         def select_from_argv_or_user(keys):
             for key in keys:
                 if str(key) in argv:
@@ -89,32 +91,22 @@ def create_model(argv:list[str]):
         items_dict = {item["key"]:item for item in items}
         item_key = select_from_argv_or_user(list(items_dict.keys()))
         return items_dict[item_key]
-    provider_config = take_item("provider", load_apikey_yaml())
+
+    provider_config = take_item(load_apikey_yaml(), "provider")
 
     get_by_key = lambda config, key: take_item(key, config[key])
-    apikey = get_by_key(provider_config, 'apikey')
-    model_config = get_by_key(provider_config, 'model')
-    adapter = get_by_key(model_config, 'adapter')
-    base_url = get_by_key(model_config, 'base_url')
-    api = get_by_key(model_config, 'api')
-    model_id = get_by_key(model_config, 'model_id')
-    if adapter == "DeepSeekModel":
-        model = DeepSeekModel(
-            base_url=base_url,
-            api_key=apikey,
-            model_id=model_id,
-            api=api,
-        )
-    elif adapter == "KimiModel":
-        model = KimiModel(
-            base_url=base_url,
-            api_key=apikey,
-            model_id=model_id,
-            api=api,
-        )
-    else:
-        raise Exception("unknown model adapter")
-    return provider_config['key'], model
+    apikey = take_item(provider_config['apikey'], 'apikey')
+    model_config = take_item(provider_config['model'], 'model')
+    adapter = take_item(model_config['adapter'], 'adapter')
+    model_params = {'api_key': apikey}
+    for key in model_config.keys():
+        if key in ('key', 'adapter'):
+            continue
+        model_params[key] = take_item(model_config[key], key)
+    model_class = get_model_class(adapter)
+    if not model_class:
+        raise Exception(f"unknown model adapter {adapter}")
+    return provider_config['key'], model_class(**model_params)
 
 def create_agent(model: Model) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
@@ -147,6 +139,7 @@ def main():
 
     # Parse arguments
     printer_type = "auto"  # auto, rich, text
+    loop = False
 
     # Parse printer type
     if "--printer" in argv:
@@ -154,6 +147,10 @@ def main():
         argv.pop(idx)
         if idx < len(argv):
             printer_type = argv.pop(idx)
+    
+    if "--continue" in argv:
+        argv.remove("--continue")
+        loop = True
 
     # Create agent
     llm_provider, model = create_model(argv)
@@ -171,10 +168,8 @@ def main():
     # Create printer based on mode
     def create_printer():
         if use_rich:
+            # Use V2 implementation with markdown-it
             return RichStreamingPrinter(
-                show_reasoning=True,
-                show_tools=True,
-                text_style="green",
             )
         else:
             return PlainPrinter(
@@ -182,19 +177,23 @@ def main():
                 show_tools=True,
             )
 
+    printer = create_printer()
     # Execute prompt if provided
-    if argv:
-        # Use streaming mode with StreamingPrinter
+    def execute_prompt(prompt:str):
         import asyncio
-        printer = create_printer()
-
         async def process_events():
-            async for event in agent.arun(argv[0], stream=True):
+            async for event in agent.arun(prompt, stream=True):
                 await printer.handle(event)
 
         asyncio.run(process_events())
         print()
-        return
+
+    if argv:
+        # Use streaming mode with StreamingPrinter
+        for prompt in argv:
+            execute_prompt(prompt)
+        if not loop:
+            return
 
     while True:
         try:
@@ -204,16 +203,7 @@ def main():
             if prompt.lower() in ['exit', 'quit', 'q']:
                 break
 
-            # Use streaming mode with StreamingPrinter
-            import asyncio
-            printer = create_printer()
-
-            async def process_events():
-                async for event in agent.arun(prompt, stream=True):
-                    await printer.handle(event)
-
-            asyncio.run(process_events())
-            print()
+            execute_prompt(prompt)
 
         except EOFError:
             break

@@ -11,10 +11,11 @@ from typing import Any, AsyncIterator, Iterator
 
 import httpx
 
-from hawi.agent.model import StreamEvent, BalanceInfo
+from hawi.agent.model import BalanceInfo
+from hawi.agent.message import StreamPart
 from hawi.agent.models.openai import OpenAIModel
 from hawi.agent.models.openai._streaming import StreamProcessor
-from hawi.agent.messages import MessageRequest, MessageResponse
+from hawi.agent.message import MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -144,9 +145,29 @@ class KimiOpenAIModel(OpenAIModel):
             if "thinking" in req:
                 del req["thinking"]
 
+        if req.get("tool_choice") == "required":
+            logger.warning(
+                "Kimi API 不支持 tool_choice=required，已降级为 auto"
+            )
+            req["tool_choice"] = "auto"
+
+        self._validate_request_params(req)
+
         return req
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamEvent]:
+    def _validate_request_params(self, req: dict[str, Any]) -> None:
+        temperature = req.get("temperature")
+        if temperature is not None and (temperature < 0 or temperature > 1):
+            raise ValueError("Kimi temperature 必须在 0 到 1 之间")
+
+        n = req.get("n")
+        if temperature is not None and n is not None:
+            if temperature <= 0.001 and n > 1:
+                raise ValueError(
+                    "Kimi 在 temperature 接近 0 时不支持 n>1"
+                )
+
+    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
         """
         同步流式调用 Kimi API
 
@@ -165,7 +186,7 @@ class KimiOpenAIModel(OpenAIModel):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncIterator[StreamPart]:
         """异步流式调用 Kimi API
 
         重写以处理 reasoning_content 的收集和保留。
@@ -221,7 +242,7 @@ class KimiOpenAIModel(OpenAIModel):
                 msg_response.reasoning_content = reasoning
                 # 将 reasoning_content 添加到 content 列表作为 ReasoningPart
                 # 这样 HawiAgent 可以正确处理并显示它
-                from hawi.agent.messages import ReasoningPart
+                from hawi.agent.message import ReasoningPart
                 reasoning_part: ReasoningPart = {
                     "type": "reasoning",
                     "reasoning": reasoning,

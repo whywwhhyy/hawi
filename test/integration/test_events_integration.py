@@ -5,24 +5,13 @@ Tests the complete event flow from Agent execution.
 
 import asyncio
 import pytest
-from typing import Any
 
 from hawi.agent import HawiAgent
 from hawi.agent.events import (
     Event,
     EventBus,
-    ConversationPrinter,
-    # Model events
-    model_content_block_delta_event,
-    model_content_block_start_event,
-    model_content_block_stop_event,
-    # Agent events
-    agent_run_start_event,
-    agent_run_stop_event,
-    agent_tool_call_event,
-    agent_tool_result_event,
-    agent_error_event,
 )
+from hawi.agent.printers import RichStreamingPrinter as ConversationPrinter
 from hawi.agent.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool
@@ -132,7 +121,7 @@ class TestEventFlowWithAgent:
 
         # Verify tool call details
         tc_event = tool_call_events[0]
-        assert tc_event.metadata["tool_name"] == "calculate"
+        assert tc_event.metadata["tool_name"] == "CalculatorPlugin__calculate"
         assert "expression" in tc_event.metadata["arguments"]
 
         # Find tool result event

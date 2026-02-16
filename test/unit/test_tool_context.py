@@ -4,7 +4,6 @@ Tests the context injection mechanism that allows tools to receive runtime
 context information hidden from the LLM.
 """
 
-import pytest
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.tool.types import AgentTool, ToolResult
 
@@ -175,7 +174,6 @@ class TestContextInjectionScenario:
 
     def test_context_parameter_hidden_from_schema(self):
         """Test that context parameter is hidden from ToolDefinition."""
-        from hawi.agent.messages import ToolDefinition
 
         tool = ContextTool()
 

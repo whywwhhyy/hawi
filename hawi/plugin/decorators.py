@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Callable, Any, TYPE_CHECKING, overload, ParamSpec, TypeVar
+from typing import Any, overload, ParamSpec, TypeVar, Callable
 
 from .types import (
     BeforeSessionHook,
@@ -17,25 +17,25 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def before_session(func: BeforeSessionHook):
+def before_session(func: BeforeSessionHook) -> BeforeSessionHook:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_session")
     return func
 
 
-def after_session(func: AfterSessionHook):
+def after_session(func: AfterSessionHook) -> AfterSessionHook:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_session")
     return func
 
 
-def before_conversation(func: BeforeConversationHook):
+def before_conversation(func: BeforeConversationHook) -> BeforeConversationHook:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_conversation")
     return func
 
 
-def after_conversation(func: AfterConversationHook):
+def after_conversation(func: AfterConversationHook) -> AfterConversationHook:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_conversation")
     return func
@@ -149,7 +149,7 @@ def tool(
         # Mark function for plugin discovery
         setattr(f, "_is_agent_tool", True)
         setattr(f, "_agent_tool_parameters", {k: v for k, v in {
-            'name':name,
+            'name':name or f.__qualname__.replace('.','__'),
             'description':description,
             'parameters_schema':parameters_schema,
             'audit':audit,

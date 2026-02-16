@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from hawi.agent.messages import (
+from hawi.agent.message import (
     ContentPart,
     Message,
     MessageRequest,
@@ -42,7 +42,18 @@ def prepare_request(
     if converter is None:
         converter = convert_message_to_openai
 
-    openai_messages = [converter(m) for m in request.messages]
+    openai_messages_raw = [converter(m) for m in request.messages]
+
+    # 处理 tool 消息中的图片：将图片移到紧随其后的 user 消息中
+    openai_messages: list[dict[str, Any]] = []
+    for msg in openai_messages_raw:
+        if msg.get("role") == "tool":
+            tool_msg, user_msg = split_tool_message_images(msg)
+            openai_messages.append(tool_msg)
+            if user_msg is not None:
+                openai_messages.append(user_msg)
+        else:
+            openai_messages.append(msg)
 
     # 将 system_prompt 转换为第一条 system/developer 消息
     # o1/o3 系列模型使用 "developer" 角色，其他使用 "system"
@@ -194,12 +205,30 @@ def convert_tool_message(message: Message) -> dict[str, Any]:
     Returns:
         OpenAI 格式的 tool 消息
     """
-    content = serialize_content(message["content"])
-    return {
-        "role": "tool",
-        "tool_call_id": message.get("tool_call_id") or "",
-        "content": content,
-    }
+    openai_content = convert_content_to_openai(message["content"])
+    tool_call_id = message.get("tool_call_id") or ""
+
+    if isinstance(openai_content, list):
+        has_image = any(
+            isinstance(item, dict) and item.get("type") == "image_url"
+            for item in openai_content
+        )
+        if has_image:
+            return {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": openai_content,
+            }
+        text_strs = [
+            item.get("text", "")
+            for item in openai_content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        content_str = "\n".join(s for s in text_strs if s.strip())
+        return {"role": "tool", "tool_call_id": tool_call_id, "content": content_str}
+
+    content_str = openai_content if isinstance(openai_content, str) else ""
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": content_str}
 
 
 def convert_content_to_openai(
@@ -335,11 +364,18 @@ def split_tool_message_images(
         "text": "Tool returned an image. See the following user message for the image.",
     })
 
+    # 将文本内容块合并为字符串（tool.content 必须是字符串）
+    text_strs = []
+    for t in text_content:
+        if isinstance(t, dict) and t.get("type") == "text":
+            text_strs.append(t.get("text", ""))
+    content_text = "\n".join(s for s in text_strs if s.strip()) or "Tool returned an image."
+
     # 创建干净的 tool 消息
     tool_message_clean = {
         "role": "tool",
         "tool_call_id": tool_message["tool_call_id"],
-        "content": text_content,
+        "content": content_text,
     }
 
     # 创建包含图片的 user 消息

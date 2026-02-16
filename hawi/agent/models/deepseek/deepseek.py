@@ -80,6 +80,13 @@ class DeepSeekModel:
 
         根据 api 参数和 base_url 自动选择合适的模型类。
         """
+        # 验证 model_id 类型
+        if not isinstance(model_id, str):
+            raise TypeError(
+                f"model_id must be a string, got {type(model_id).__name__}. "
+                f"Did you pass a list instead of a single model ID?"
+            )
+
         # 确定 API 类型
         if api == "auto":
             detected_api = detect_deepseek_api_type(base_url)

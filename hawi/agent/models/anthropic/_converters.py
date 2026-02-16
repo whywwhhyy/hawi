@@ -16,10 +16,12 @@ from typing import Any, cast
 
 import httpx
 
-from hawi.agent.messages import (
+from hawi.agent.message import (
     CacheControlPart,
+    CacheControl,
     ContentPart,
     DocumentPart,
+    DocumentSource,
     ImagePart,
     Message,
     ReasoningPart,
@@ -46,7 +48,6 @@ class ContentConverter:
         特殊处理：
         - CacheControlPart 会被粘合到前一个内容 Part 上
         """
-        from hawi.agent.messages import CacheControl
         result: list[dict[str, Any]] = []
         pending_cache_control: CacheControl | None = None
 
@@ -98,9 +99,7 @@ class ContentConverter:
         role = message["role"]
 
         # Anthropic 只支持 user/assistant 角色
-        if role == "developer":
-            role = "user"
-        elif role == "tool":
+        if role == "tool":
             return self._convert_tool_message(message)
 
         content = self.convert_content(message["content"])
@@ -179,7 +178,6 @@ class ContentConverter:
 
     def _convert_document(self, part: DocumentPart) -> dict[str, Any]:
         """转换文档部分（强制 base64）"""
-        from hawi.agent.messages import DocumentSource
 
         source = cast(DocumentSource, part["source"])
         url = source["url"]
@@ -256,7 +254,6 @@ class AsyncContentConverter(ContentConverter):
         特殊处理：
         - CacheControlPart 会被粘合到前一个内容 Part 上
         """
-        from hawi.agent.messages import CacheControl
         result: list[dict[str, Any]] = []
         pending_cache_control: CacheControl | None = None
 
@@ -297,9 +294,7 @@ class AsyncContentConverter(ContentConverter):
         """异步转换消息"""
         role = message["role"]
 
-        if role == "developer":
-            role = "user"
-        elif role == "tool":
+        if role == "tool":
             return self._convert_tool_message(message)
 
         content = await self.convert_content_async(message["content"])

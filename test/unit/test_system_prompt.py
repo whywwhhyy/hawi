@@ -6,10 +6,8 @@ This test suite verifies the refactored system_prompt design:
 - Anthropic: uses top-level system field with multi-block support
 """
 
-import pytest
-from typing import Any
 
-from hawi.agent.messages import MessageRequest, ContentPart, TextPart
+from hawi.agent.message import MessageRequest, ContentPart
 from hawi.agent.context import AgentContext
 from hawi.agent import HawiAgent
 from hawi.agent.models.openai._converters import prepare_request as openai_prepare_request
@@ -242,7 +240,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_user(self):
         """Message role should accept 'user'."""
-        from hawi.agent.messages import Message
+        from hawi.agent.message import Message
 
         msg: Message = {
             "role": "user",
@@ -256,7 +254,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_assistant(self):
         """Message role should accept 'assistant'."""
-        from hawi.agent.messages import Message
+        from hawi.agent.message import Message
 
         msg: Message = {
             "role": "assistant",
@@ -270,7 +268,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_tool(self):
         """Message role should accept 'tool'."""
-        from hawi.agent.messages import Message
+        from hawi.agent.message import Message
 
         msg: Message = {
             "role": "tool",
@@ -284,7 +282,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_developer(self):
         """Message role should accept 'developer' for OpenAI o1/o3 models."""
-        from hawi.agent.messages import Message
+        from hawi.agent.message import Message
 
         # Note: 'developer' role is supported for OpenAI o1/o3 models
         # but system prompts should generally be passed via MessageRequest.system

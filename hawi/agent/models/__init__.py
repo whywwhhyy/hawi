@@ -13,12 +13,23 @@ Example:
     ))
 """
 
+from typing import Optional
+
 from hawi.agent.model import BalanceInfo
 from .openai import OpenAIModel
 from .anthropic import AnthropicModel
 from .deepseek import DeepSeekModel
 from .kimi import KimiModel
-from .strands_adapter import StrandsModel
+from .strands import StrandsModel
+
+def get_model_class(name:str) -> Optional[type]:
+    return {
+        "OpenAIModel": OpenAIModel,
+        "AnthropicModel": AnthropicModel,
+        "DeepSeekModel": DeepSeekModel,
+        "KimiModel": KimiModel,
+        "StrandsModel": StrandsModel,
+    }.get(name)
 
 __all__ = [
     "BalanceInfo",
@@ -27,4 +38,5 @@ __all__ = [
     "DeepSeekModel",
     "KimiModel",
     "StrandsModel",
+    "get_model_class",
 ]

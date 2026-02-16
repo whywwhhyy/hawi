@@ -109,6 +109,59 @@ ContentPart: TypeAlias = (
 
 
 # =============================================================================
+# StreamPart 类型 - Model 流式输出的增量内容块
+# =============================================================================
+# StreamPart 与 ContentPart 字段结构保持对应关系：
+# - text_delta.delta 对应 TextPart.text
+# - tool_call_delta.arguments_delta 对应 ToolCallPart.arguments（JSON片段）
+# - StreamPart 包含增量标记（is_start, is_end, index），ContentPart 包含完整数据
+
+
+class StreamTextPart(TypedDict):
+    """文本增量块"""
+
+    type: Literal["text_delta"]
+    index: int              # 内容块序号，用于区分多个内容块
+    delta: str              # 文本增量
+    is_start: bool          # 是否是该块的开始
+    is_end: bool            # 是否是该块的结束
+
+
+class StreamThinkingPart(TypedDict):
+    """推理/思考增量块"""
+
+    type: Literal["thinking_delta"]
+    index: int
+    delta: str              # 推理内容增量
+    is_start: bool
+    is_end: bool
+
+
+class StreamToolCallPart(TypedDict):
+    """工具调用增量块"""
+
+    type: Literal["tool_call_delta"]
+    index: int
+    id: str | None          # 工具调用ID（is_start 时可能为 None）
+    name: str | None        # 工具名称（is_start 时可能为 None）
+    arguments_delta: str    # 参数JSON片段
+    is_start: bool
+    is_end: bool
+
+
+class StreamFinishPart(TypedDict):
+    """流式响应结束标记"""
+
+    type: Literal["finish"]
+    stop_reason: str
+    usage: dict[str, int] | None  # {"input_tokens": 100, "output_tokens": 50}
+
+
+# StreamPart 联合类型
+StreamPart: TypeAlias = StreamTextPart | StreamThinkingPart | StreamToolCallPart | StreamFinishPart
+
+
+# =============================================================================
 # Message 类型
 # =============================================================================
 

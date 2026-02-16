@@ -1,7 +1,7 @@
-from typing import Optional,TypedDict,Dict
+from typing import Optional,Dict,Literal
 from threading import Lock
 
-from hawi.utils.lifecycle import ExitHandler, exit_scope
+from hawi.utils.lifecycle import ExitHandler
 from .python_interpreter import PythonInterpreter
 
 from hawi.tool import ToolResult
@@ -13,10 +13,12 @@ class MultiPythonInterpreter(HawiPlugin):
         def __init__(self, *args, **kwargs):
             self.lock = Lock()
             self.executor = PythonInterpreter(*args, **kwargs)
+            self.running:bool = False
 
-    def __init__(self):
+    def __init__(self, print_execution:bool=False):
         self.lock = Lock()
         self.interpreters:Dict[str,MultiPythonInterpreter.Instance] = {}
+        self.print_execution = print_execution
         self._closed = False
         self._exit_handler = ExitHandler.get_instance()
         def cleanup_wrapper():
@@ -55,7 +57,7 @@ class MultiPythonInterpreter(HawiPlugin):
                     interpreter_name = None
             if interpreter_name in self.interpreters:
                 return f"Interpreter '{interpreter_name}' already exists!"
-            self.interpreters[interpreter_name] = MultiPythonInterpreter.Instance(work_dir)
+            self.interpreters[interpreter_name] = MultiPythonInterpreter.Instance(work_dir, print_execution=self.print_execution)
             return f"Created interpreter '{interpreter_name}'"
 
     @plugin.tool

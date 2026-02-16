@@ -9,22 +9,19 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Coroutine, Literal, TypedDict, overload
 
-from hawi.agent.model import Model, ModelErrorType, ModelFailurePolicy, StreamEvent
-from hawi.agent.messages import (
+from hawi.agent.model import Model, ModelFailurePolicy
+from hawi.agent.message import (
     ContentPart,
-    Message,
-    ReasoningPart,
+    StreamPart,
     TextPart,
     TokenUsage,
     ToolCallPart,
-    ToolResultPart,
 )
 from hawi.plugin import HawiPlugin
-from hawi.plugin.types import PluginHooks
 from hawi.tool.types import AgentTool, ToolResult
 
 from .context import AgentContext, ToolCallContext
@@ -395,6 +392,7 @@ class HawiAgent:
         """Synchronous streaming execution."""
         # Run async generator through asyncio
         loop = asyncio.new_event_loop()
+        async_gen = None
         try:
             asyncio.set_event_loop(loop)
             async_gen = self._arun_stream(message, model, failure_policy, event_bus)
@@ -406,6 +404,24 @@ class HawiAgent:
                 except StopAsyncIteration:
                     break
         finally:
+            # Properly close the async generator to prevent 'aclose' warnings
+            if async_gen is not None:
+                try:
+                    loop.run_until_complete(async_gen.aclose())
+                except Exception:
+                    pass  # Ignore errors during cleanup
+            
+            # Cancel any remaining pending tasks to prevent warnings
+            try:
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    for task in pending:
+                        task.cancel()
+                    # Run the event loop briefly to let cancellations complete
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass  # Ignore errors during cleanup
+            
             loop.close()
             asyncio.set_event_loop(None)
 
@@ -425,9 +441,8 @@ class HawiAgent:
         model: Model | None,
         failure_policy: dict[str, ModelFailurePolicyConfig] | None,
         event_bus: EventBus | None = None,
-    ) -> AsyncIterator[Event]:
+    ) -> AsyncGenerator[Event, None]:
         """Asynchronous streaming execution."""
-        import uuid
 
         m = model or self._default_model
         policy = self._parse_failure_policy(failure_policy) if failure_policy else self._model_failure_policy
@@ -488,7 +503,11 @@ class HawiAgent:
                 stop_reason = "end_turn"
                 usage: TokenUsage | None = None
 
-                async for stream_event in self._call_model_with_retry_streaming(
+                # Accumulators for building complete content from deltas
+                block_accumulators: dict[int, list[str]] = {}
+                tool_call_accumulators: dict[int, dict[str, Any]] = {}
+
+                async for chunk in self._call_model_with_retry_streaming(
                     m, policy, state, request_id, event_bus
                 ):
                     if state.error:
@@ -498,97 +517,166 @@ class HawiAgent:
                         )
                         break
 
-                    if stream_event.type == "content_block_start":
-                        # 转发 Model 层事件到 Event 层
-                        # block_type 和 block_index 由 StreamEvent 工厂方法保证为有效值
-                        assert stream_event.block_index is not None, "block_index must be set for content_block_start"
-                        assert stream_event.block_type is not None, "block_type must be set for content_block_start"
-                        yield await self._emit_event(
-                            model_content_block_start_event(
-                                request_id=request_id,
-                                block_index=stream_event.block_index,
-                                block_type=stream_event.block_type,
-                                tool_call_id=getattr(stream_event, 'tool_call_id', None),
-                                tool_name=getattr(stream_event, 'tool_name', None),
-                            ),
-                            event_bus,
-                        )
+                    # Handle text_delta chunk
+                    if chunk["type"] == "text_delta":
+                        idx = chunk["index"]
 
-                    elif stream_event.type == "content_block_delta":
-                        # 转发 Model 层事件到 Event 层
-                        # delta_type, delta 和 block_index 由工厂方法保证为有效值
-                        assert stream_event.block_index is not None, "block_index must be set for content_block_delta"
-                        assert stream_event.delta_type is not None, "delta_type must be set for content_block_delta"
-                        assert stream_event.delta is not None, "delta must be set for content_block_delta"
-                        yield await self._emit_event(
-                            model_content_block_delta_event(
-                                request_id=request_id,
-                                block_index=stream_event.block_index,
-                                delta_type=stream_event.delta_type,
-                                delta=stream_event.delta,
-                            ),
-                            event_bus,
-                        )
+                        if chunk["is_start"]:
+                            yield await self._emit_event(
+                                model_content_block_start_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    block_type="text",
+                                ),
+                                event_bus,
+                            )
 
-                    elif stream_event.type == "content_block_stop":
-                        # block_type 和 block_index 由工厂方法保证为有效值
-                        assert stream_event.block_index is not None, "block_index must be set for content_block_stop"
-                        assert stream_event.block_type is not None, "block_type must be set for content_block_stop"
-                        block_type = stream_event.block_type
-                        block_index = stream_event.block_index
+                        if chunk["delta"]:
+                            yield await self._emit_event(
+                                model_content_block_delta_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    delta_type="text",
+                                    delta=chunk["delta"],
+                                ),
+                                event_bus,
+                            )
+                            block_accumulators.setdefault(idx, []).append(chunk["delta"])
 
-                        # 转发 Model 层事件到 Event 层
-                        yield await self._emit_event(
-                            model_content_block_stop_event(
-                                request_id=request_id,
-                                block_index=block_index,
-                                block_type=block_type,
-                                full_content=getattr(stream_event, 'full_content', None),
-                                tool_call_id=getattr(stream_event, 'tool_call_id', None),
-                                tool_name=getattr(stream_event, 'tool_name', None),
-                                tool_arguments=getattr(stream_event, 'tool_arguments', None),
-                            ),
-                            event_bus,
-                        )
+                        if chunk["is_end"]:
+                            full_text = "".join(block_accumulators.get(idx, []))
+                            yield await self._emit_event(
+                                model_content_block_stop_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    block_type="text",
+                                    full_content=full_text,
+                                ),
+                                event_bus,
+                            )
+                            if full_text:
+                                content_parts.append(TextPart(type="text", text=full_text))
 
-                        # 累积内容到 context
-                        if block_type == "text":
-                            text = getattr(stream_event, 'full_content', '')
-                            if text:
-                                content_parts.append(TextPart(type="text", text=text))
-                        elif block_type == "thinking":
-                            thinking = getattr(stream_event, 'full_content', '')
-                            if thinking:
-                                from hawi.agent.messages import ReasoningPart
-                                content_parts.append(ReasoningPart(type="reasoning", reasoning=thinking, signature=None))
-                        elif block_type == "tool_use":
-                            tool_call_id = getattr(stream_event, 'tool_call_id', '')
-                            tool_name = getattr(stream_event, 'tool_name', '')
-                            tool_arguments = getattr(stream_event, 'tool_arguments', {})
-                            if tool_call_id and tool_name:
+                    # Handle thinking_delta chunk
+                    elif chunk["type"] == "thinking_delta":
+                        idx = chunk["index"]
+
+                        if chunk["is_start"]:
+                            yield await self._emit_event(
+                                model_content_block_start_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    block_type="thinking",
+                                ),
+                                event_bus,
+                            )
+
+                        if chunk["delta"]:
+                            yield await self._emit_event(
+                                model_content_block_delta_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    delta_type="thinking",
+                                    delta=chunk["delta"],
+                                ),
+                                event_bus,
+                            )
+                            block_accumulators.setdefault(idx, []).append(chunk["delta"])
+
+                        if chunk["is_end"]:
+                            full_thinking = "".join(block_accumulators.get(idx, []))
+                            yield await self._emit_event(
+                                model_content_block_stop_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    block_type="thinking",
+                                    full_content=full_thinking,
+                                ),
+                                event_bus,
+                            )
+                            if full_thinking:
+                                from hawi.agent.message import ReasoningPart
+                                content_parts.append(ReasoningPart(type="reasoning", reasoning=full_thinking, signature=None))
+
+                    # Handle tool_call_delta chunk
+                    elif chunk["type"] == "tool_call_delta":
+                        idx = chunk["index"]
+
+                        if chunk["is_start"]:
+                            yield await self._emit_event(
+                                model_content_block_start_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    block_type="tool_use",
+                                    tool_call_id=chunk.get("id"),
+                                    tool_name=chunk.get("name"),
+                                ),
+                                event_bus,
+                            )
+                            # Initialize accumulator for this tool call
+                            tool_call_accumulators[idx] = {
+                                "id": chunk.get("id") or "",
+                                "name": chunk.get("name") or "",
+                                "arguments": "",
+                            }
+
+                        if chunk.get("arguments_delta"):
+                            args_delta = chunk["arguments_delta"]
+                            yield await self._emit_event(
+                                model_content_block_delta_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    delta_type="tool_input",
+                                    delta=args_delta,
+                                ),
+                                event_bus,
+                            )
+                            if idx in tool_call_accumulators:
+                                tool_call_accumulators[idx]["arguments"] += args_delta
+
+                        if chunk["is_end"]:
+                            tool_info = tool_call_accumulators.get(idx, {"id": "", "name": "", "arguments": ""})
+                            # Parse arguments JSON
+                            import json
+                            try:
+                                parsed_args = json.loads(tool_info["arguments"]) if tool_info["arguments"] else {}
+                            except json.JSONDecodeError:
+                                parsed_args = {}
+
+                            yield await self._emit_event(
+                                model_content_block_stop_event(
+                                    request_id=request_id,
+                                    block_index=idx,
+                                    block_type="tool_use",
+                                    tool_call_id=tool_info["id"],
+                                    tool_name=tool_info["name"],
+                                    tool_arguments=parsed_args,
+                                ),
+                                event_bus,
+                            )
+
+                            if tool_info["id"] and tool_info["name"]:
                                 tool_calls.append(ToolCallPart(
                                     type="tool_call",
-                                    id=tool_call_id,
-                                    name=tool_name,
-                                    arguments=tool_arguments or {},
+                                    id=tool_info["id"],
+                                    name=tool_info["name"],
+                                    arguments=parsed_args,
                                 ))
-                                # 发送 agent_tool_call 事件
+                                # Send agent_tool_call event
                                 yield await self._emit_event(
                                     agent_tool_call_event(
                                         run_id=run_id,
-                                        tool_name=tool_name,
-                                        arguments=tool_arguments or {},
-                                        tool_call_id=tool_call_id,
+                                        tool_name=tool_info["name"],
+                                        arguments=parsed_args,
+                                        tool_call_id=tool_info["id"],
                                     ),
                                     event_bus,
                                 )
 
-                    elif stream_event.type == "finish":
-                        stop_reason = stream_event.stop_reason or "end_turn"
-
-                    elif stream_event.type == "usage":
-                        # Convert dict usage to TokenUsage model
-                        usage_dict = stream_event.usage
+                    # Handle finish chunk
+                    elif chunk["type"] == "finish":
+                        stop_reason = chunk.get("stop_reason") or "end_turn"
+                        usage_dict = chunk.get("usage")
                         if usage_dict:
                             usage = TokenUsage(
                                 input_tokens=usage_dict.get("input_tokens", 0),
@@ -614,6 +702,11 @@ class HawiAgent:
                                 )
 
                 if state.error:
+                    # Send error event before breaking (error occurred during streaming)
+                    yield await self._emit_event(
+                        agent_error_event(run_id=run_id, error_type="model_error", error_message=state.error),
+                        event_bus,
+                    )
                     break
 
                 # Model stream stop
@@ -684,6 +777,8 @@ class HawiAgent:
                 ),
                 event_bus,
             )
+            # Re-raise the exception to preserve traceback for debugging
+            raise
 
         finally:
             # after_conversation hook
@@ -696,10 +791,10 @@ class HawiAgent:
         state: _ExecutionState,
         request_id: str,
         event_bus: EventBus | None,
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncGenerator[StreamPart, None]:
         """Call model with streaming and retry logic.
 
-        Yields StreamEvent for each chunk of content from the model.
+        Yields StreamPart for each chunk of content from the model.
         Accumulates content to build complete response for tool call handling.
         """
         last_error = None
@@ -716,12 +811,12 @@ class HawiAgent:
                 request = self._context.prepare_request()
 
                 # Use astream() for streaming output
-                async for stream_event in model.astream(
+                async for chunk in model.astream(
                     messages=request.messages,
                     system=[part for part in (request.system or ()) if part['type'] == 'text'],
                     tools=request.tools,
                 ):
-                    yield stream_event
+                    yield chunk
 
                 return  # Success, exit retry loop
 
@@ -731,14 +826,16 @@ class HawiAgent:
                 policy_for_error = policy.get(error_type, ModelFailurePolicy(error_type, "stop"))
 
                 if policy_for_error.action == "stop":
-                    break
+                    # Non-retryable error - raise immediately
+                    raise
 
                 if attempt < max_retries:
                     import asyncio
                     await asyncio.sleep(min(2 ** attempt, 60))
 
-        # All retries exhausted
+        # All retries exhausted for retryable errors
         state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
+        raise last_error
 
     async def _call_model_with_retry(
         self,
@@ -770,25 +867,18 @@ class HawiAgent:
                 policy_for_error = policy.get(error_type, ModelFailurePolicy(error_type, "stop"))
 
                 if policy_for_error.action == "stop":
-                    break
+                    # Non-retryable error - raise immediately
+                    raise
 
                 if attempt < max_retries:
                     # Exponential backoff
                     wait_time = min(2**attempt, 60)
                     await asyncio.sleep(wait_time)
                     continue
-                else:
-                    break
 
+        # All retries exhausted for retryable errors
         state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
-        # Return a dummy response (this path shouldn't be reached in normal flow)
-        from hawi.agent.messages import MessageResponse
-
-        return MessageResponse(
-            id="error",
-            content=[{"type": "text", "text": f"Error: {state.error}"}],
-            stop_reason="error",
-        )
+        raise last_error
 
     async def _execute_tool(
         self,

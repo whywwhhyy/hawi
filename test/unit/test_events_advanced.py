@@ -10,7 +10,6 @@ from typing import List
 from hawi.agent.events import (
     Event,
     EventBus,
-    ConversationPrinter,
     # Model events
     model_stream_start_event,
     model_stream_stop_event,
@@ -26,6 +25,7 @@ from hawi.agent.events import (
     agent_message_added_event,
     agent_error_event,
 )
+from hawi.agent.printers import RichStreamingPrinter as ConversationPrinter
 
 
 class TestEventBusAdvanced:
@@ -305,9 +305,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_reasoning_visibility(self, monkeypatch):
         """Test reasoning visibility toggle."""
         import io
-        import hawi.agent.events as events_module
+        import hawi.agent.printers as printers_module
         output = io.StringIO()
-        monkeypatch.setattr(events_module, '_stdout', output)
+        monkeypatch.setattr(printers_module, '_stdout', output)
 
         # With reasoning shown (default)
         printer_with = ConversationPrinter(show_reasoning=True)
@@ -333,9 +333,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_reasoning_hidden(self, monkeypatch):
         """Test reasoning hidden."""
         import io
-        import hawi.agent.events as events_module
+        import hawi.agent.printers as printers_module
         output = io.StringIO()
-        monkeypatch.setattr(events_module, '_stdout', output)
+        monkeypatch.setattr(printers_module, '_stdout', output)
 
         # With reasoning hidden
         printer_without = ConversationPrinter(show_reasoning=False)
@@ -351,9 +351,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_tool_visibility(self, monkeypatch):
         """Test tool visibility toggle."""
         import io
-        import hawi.agent.events as events_module
+        import hawi.agent.printers as printers_module
         output = io.StringIO()
-        monkeypatch.setattr(events_module, '_stdout', output)
+        monkeypatch.setattr(printers_module, '_stdout', output)
 
         printer_hidden = ConversationPrinter(show_tools=False)
 
@@ -368,9 +368,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_stream_lifecycle(self, monkeypatch):
         """Test complete stream lifecycle handling."""
         import io
-        import hawi.agent.events as events_module
+        import hawi.agent.printers as printers_module
         output = io.StringIO()
-        monkeypatch.setattr(events_module, '_stdout', output)
+        monkeypatch.setattr(printers_module, '_stdout', output)
 
         printer = ConversationPrinter()
 

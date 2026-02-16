@@ -11,11 +11,12 @@ from typing import Any
 
 from anthropic import Anthropic, AsyncAnthropic
 
-from hawi.agent.model import Model, StreamEvent
-from hawi.agent.messages import (
+from hawi.agent.model import Model
+from hawi.agent.message import (
     ContentPart,
     MessageRequest,
     MessageResponse,
+    StreamPart,
     TextPart,
     TokenUsage,
     ToolCallPart,
@@ -304,7 +305,7 @@ class AnthropicModel(Model):
         response = await self.async_client.messages.create(**req)
         return self._parse_response_impl(response.model_dump())
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamEvent]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
         """同步流式调用"""
         if needs_async_conversion(
             request.messages, self.enable_image_download
@@ -317,8 +318,8 @@ class AnthropicModel(Model):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncIterator[StreamPart]:
         """异步流式调用"""
         req = await self._prepare_request_async(request)
-        async for event in stream_response_async(self.async_client, req):
-            yield event
+        async for chunk in stream_response_async(self.async_client, req):
+            yield chunk

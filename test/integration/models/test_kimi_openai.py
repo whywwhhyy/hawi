@@ -4,17 +4,15 @@ KimiOpenAIModel integration tests.
 Tests the new Kimi model implementation based on hawi.agent.models.openai.
 """
 
-import os
 import pytest
 from typing import Any
 
 from hawi.agent.models.kimi.kimi_openai import KimiOpenAIModel
-from hawi.agent.messages import (
+from hawi.agent.message import (
     ContentPart,
     Message,
     TextPart,
     ToolCallPart,
-    ToolResultPart,
     ReasoningPart,
 )
 from test.integration.models import get_kimi_openai_api_key
@@ -166,7 +164,7 @@ class TestKimiOpenAIUnit:
 
     def test_prepare_request_with_disabled_thinking(self):
         """Test request preparation with disabled thinking."""
-        from hawi.agent.messages import MessageRequest
+        from hawi.agent.message import MessageRequest
 
         model = KimiOpenAIModel(
             api_key="test-key",
@@ -281,9 +279,9 @@ class TestKimiOpenAIIntegration:
         ))
 
         # Should have content block events and finish event
-        content_events = [e for e in events if e.type == "content_block_delta" and e.delta_type == "text"]
-        reasoning_events = [e for e in events if e.type == "content_block_delta" and e.delta_type == "thinking"]
-        finish_events = [e for e in events if e.type == "finish"]
+        content_events = [e for e in events if e["type"] == "text_delta"]
+        reasoning_events = [e for e in events if e["type"] == "thinking_delta"]
+        finish_events = [e for e in events if e["type"] == "finish"]
 
         assert len(content_events) > 0
         assert len(finish_events) == 1
@@ -337,7 +335,7 @@ class TestKimiK25ToolCalls:
 
     def test_tool_call_with_reasoning(self, model: KimiOpenAIModel):
         """Test that tool calls work correctly with reasoning enabled."""
-        from hawi.agent.messages import ToolDefinition
+        from hawi.agent.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -372,7 +370,7 @@ class TestKimiK25ToolCalls:
 
     def test_multi_turn_with_tool_result(self, model: KimiOpenAIModel):
         """Test multi-turn conversation with tool results."""
-        from hawi.agent.messages import ToolDefinition
+        from hawi.agent.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

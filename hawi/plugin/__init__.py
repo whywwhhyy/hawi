@@ -10,9 +10,11 @@ from .decorators import (
     after_tool_calling,
     tool,
 )
+from .types import PluginHooks
 
 __all__ = [
     "HawiPlugin",
+    "PluginHooks",
     "before_session",
     "after_session",
     "before_conversation",

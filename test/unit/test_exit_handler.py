@@ -6,10 +6,7 @@ import os
 import signal
 import sys
 import threading
-import time
-import weakref
-from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -18,7 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from hawi.utils.lifecycle import (
     ExitHandler,
-    clear_exit_handlers,
     execute_early_and_clear,
     exit_scope,
     register_exit_handler,

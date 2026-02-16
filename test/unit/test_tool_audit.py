@@ -4,7 +4,6 @@ Tests the audit mechanism for tool calls including pending tool call tracking,
 approval/rejection workflow, and integration with AgentContext.
 """
 
-import pytest
 from hawi.agent.context import AgentContext
 from hawi.tool.types import AgentTool, ToolResult, PendingToolCall
 

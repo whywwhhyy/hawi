@@ -27,12 +27,13 @@ import json
 import logging
 from typing import Any, AsyncIterator, Iterator, cast
 
-from hawi.agent.model import BalanceInfo, Model, StreamEvent
-from hawi.agent.messages import (
+from hawi.agent.model import BalanceInfo, Model
+from hawi.agent.message import (
     ContentPart,
     Message,
     MessageRequest,
     MessageResponse,
+    StreamPart,
     TextPart,
     ImagePart,
     DocumentPart,
@@ -218,7 +219,7 @@ class StrandsModel(Model):
         # 转换响应
         return self._parse_response_impl(strands_response)
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamEvent]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
         """同步流式实现"""
         strands_request = self._prepare_request_impl(request)
 
@@ -233,8 +234,7 @@ class StrandsModel(Model):
             )
 
         # 转换流事件
-        for event in strands_stream:
-            yield from self._convert_strands_event_to_hawi(event)
+        yield from self._convert_strands_stream(strands_stream)
 
     async def _ainvoke_impl(self, request: MessageRequest) -> MessageResponse:
         """异步调用实现"""
@@ -250,7 +250,7 @@ class StrandsModel(Model):
 
         return self._parse_response_impl(strands_response)
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncIterator[StreamEvent]:
+    async def _astream_impl(self, request: MessageRequest) -> AsyncIterator[StreamPart]:
         """异步流式实现"""
         strands_request = self._prepare_request_impl(request)
 
@@ -260,13 +260,13 @@ class StrandsModel(Model):
             strands_stream = self.strands_model.astream(**strands_request)
         else:
             # Fallback 到 sync 版本
-            for event in self._stream_impl(request):
-                yield event
+            for chunk in self._stream_impl(request):
+                yield chunk
             return
 
         async for event in strands_stream:
-            for hawi_event in self._convert_strands_event_to_hawi(event):
-                yield hawi_event
+            for chunk in self._convert_strands_event_to_stream_part(event):
+                yield chunk
 
     # ==========================================================================
     # 类型转换辅助方法
@@ -485,10 +485,27 @@ class StrandsModel(Model):
 
         return mapping.get(tc_type, {"type": "auto"})
 
-    def _convert_strands_event_to_hawi(
-        self, event: Any
-    ) -> Iterator[StreamEvent]:
-        """转换 strands StreamEvent 到 hawi StreamEvent"""
+    def _convert_strands_stream(
+        self, strands_stream: Iterator[Any]
+    ) -> Iterator[StreamPart]:
+        """转换 strands 流到 StreamPart 流"""
+        current_index = 0
+        block_started = False
+        pending_usage: dict[str, int] | None = None
+
+        for event in strands_stream:
+            yield from self._convert_strands_event_to_stream_part(
+                event, current_index, block_started, pending_usage
+            )
+
+    def _convert_strands_event_to_stream_part(
+        self,
+        event: Any,
+        index: int = 0,
+        block_started: bool = False,
+        pending_usage: dict[str, int] | None = None,
+    ) -> Iterator[StreamPart]:
+        """转换单个 strands 事件到 StreamPart"""
         # strands 事件可能是 dict 或对象
         if isinstance(event, dict):
             event_type = event.get("type", "")
@@ -506,27 +523,142 @@ class StrandsModel(Model):
         if event_type == "content":
             content = event_data.get("content")
             if content:
-                part = self._convert_strands_block_to_part(content)
-                if part:
-                    yield StreamEvent(type="content", content=part)
+                # 获取文本内容
+                text = ""
+                if isinstance(content, dict) and "text" in content:
+                    text = content["text"]
+                elif isinstance(content, str):
+                    text = content
+
+                if text:
+                    # 如果是新的块，发送 start
+                    if not block_started:
+                        yield {
+                            "type": "text_delta",
+                            "index": index,
+                            "delta": "",
+                            "is_start": True,
+                            "is_end": False,
+                        }
+                        block_started = True
+
+                    yield {
+                        "type": "text_delta",
+                        "index": index,
+                        "delta": text,
+                        "is_start": False,
+                        "is_end": False,
+                    }
+
+                    # 发送 end 标记（strands 的事件是离散的，每个 content 事件是完整的）
+                    yield {
+                        "type": "text_delta",
+                        "index": index,
+                        "delta": "",
+                        "is_start": False,
+                        "is_end": True,
+                    }
+                    block_started = False
 
         elif event_type == "reasoning":
             reasoning = event_data.get("reasoning", "")
-            yield StreamEvent(type="reasoning", reasoning=reasoning)
+            if reasoning:
+                # 发送 start
+                yield {
+                    "type": "thinking_delta",
+                    "index": index,
+                    "delta": "",
+                    "is_start": True,
+                    "is_end": False,
+                }
+                # 发送内容
+                yield {
+                    "type": "thinking_delta",
+                    "index": index,
+                    "delta": reasoning,
+                    "is_start": False,
+                    "is_end": False,
+                }
+                # 发送 end
+                yield {
+                    "type": "thinking_delta",
+                    "index": index,
+                    "delta": "",
+                    "is_start": False,
+                    "is_end": True,
+                }
 
         elif event_type == "tool_call":
             tool_call = event_data.get("tool_call")
             if tool_call:
-                yield StreamEvent(type="tool_call", tool_call=tool_call)
+                # 提取工具调用信息
+                tc_id = tool_call.get("id", tool_call.get("toolUseId", "")) if isinstance(tool_call, dict) else None
+                tc_name = ""
+                tc_args = ""
+
+                if isinstance(tool_call, dict):
+                    tc_name = tool_call.get("name", tool_call.get("function", {}).get("name", ""))
+                    args = tool_call.get("arguments", tool_call.get("input", {}))
+                    if isinstance(args, dict):
+                        tc_args = json.dumps(args)
+                    else:
+                        tc_args = str(args)
+
+                # 发送 start
+                yield {
+                    "type": "tool_call_delta",
+                    "index": index,
+                    "id": tc_id or None,
+                    "name": tc_name or None,
+                    "arguments_delta": "",
+                    "is_start": True,
+                    "is_end": False,
+                }
+                # 发送参数
+                if tc_args:
+                    yield {
+                        "type": "tool_call_delta",
+                        "index": index,
+                        "id": None,
+                        "name": None,
+                        "arguments_delta": tc_args,
+                        "is_start": False,
+                        "is_end": False,
+                    }
+                # 发送 end
+                yield {
+                    "type": "tool_call_delta",
+                    "index": index,
+                    "id": tc_id or None,
+                    "name": tc_name or None,
+                    "arguments_delta": "",
+                    "is_start": False,
+                    "is_end": True,
+                }
 
         elif event_type == "usage":
             usage = event_data.get("usage")
             if usage:
-                yield StreamEvent(type="usage", usage=usage)
+                # 保存 usage 到 pending，等待 finish 事件
+                if isinstance(usage, dict):
+                    pending_usage = {
+                        "input_tokens": usage.get("prompt_tokens", 0),
+                        "output_tokens": usage.get("completion_tokens", 0),
+                    }
+                    if "cache_creation_input_tokens" in usage:
+                        pending_usage["cache_creation_input_tokens"] = usage["cache_creation_input_tokens"]
+                    if "cache_read_input_tokens" in usage:
+                        pending_usage["cache_read_input_tokens"] = usage["cache_read_input_tokens"]
 
         elif event_type == "finish":
-            stop_reason = event_data.get("stop_reason")
-            yield StreamEvent(type="finish", stop_reason=stop_reason)
+            stop_reason = event_data.get("stop_reason", "end_turn")
+            # 映射 stop_reason 到 hawi 格式
+            mapped_stop_reason = self._map_strands_stop_reason(stop_reason) if stop_reason else "end_turn"
+            yield {
+                "type": "finish",
+                "stop_reason": mapped_stop_reason,
+                "usage": pending_usage,
+            }
 
         else:
             # 未知事件类型，尝试通用处理

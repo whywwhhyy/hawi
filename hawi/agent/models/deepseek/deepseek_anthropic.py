@@ -17,7 +17,7 @@ import logging
 from typing import Any
 
 from hawi.agent.models.anthropic import AnthropicModel
-from hawi.agent.messages import MessageRequest, MessageResponse, ContentPart
+from hawi.agent.message import MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,20 @@ class DeepSeekAnthropicModel(AnthropicModel):
                 logger.debug("Removing unsupported param '%s' for DeepSeek", param)
                 del req[param]
 
+        if "tool_choice" in req:
+            tool_choice = dict(req["tool_choice"])
+            if "disable_parallel_tool_use" in tool_choice:
+                # DeepSeek Anthropic 端点忽略该字段，避免下游误判
+                logger.debug("DeepSeek 忽略 tool_choice.disable_parallel_tool_use 参数")
+                del tool_choice["disable_parallel_tool_use"]
+            req["tool_choice"] = tool_choice
+
+        if "messages" in req:
+            # 清理消息内容中的图片与文档块
+            req["messages"] = [
+                self._sanitize_message_content(m) for m in req["messages"]
+            ]
+
         # 对 Reasoner 模型进行特殊处理
         if self.model_id == "deepseek-reasoner":
             req = self._clean_reasoner_params(req)
@@ -119,6 +133,33 @@ class DeepSeekAnthropicModel(AnthropicModel):
                 logger.debug("deepseek-reasoner with tool calling - ensure reasoning_content is handled properly")
 
         return req
+
+    def _sanitize_message_content(self, message: dict[str, Any]) -> dict[str, Any]:
+        content = message.get("content")
+        if isinstance(content, list):
+            # 复制字典，避免直接修改调用方传入的 message
+            message = dict(message)
+            message["content"] = self._sanitize_content_blocks(content)
+        return message
+
+    def _sanitize_content_blocks(self, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        sanitized: list[dict[str, Any]] = []
+        for block in blocks:
+            block_type = block.get("type")
+            if block_type == "image":
+                # DeepSeek Anthropic 端点不支持图片块
+                sanitized.append({"type": "text", "text": "[图片内容]"})
+            elif block_type == "document":
+                # DeepSeek Anthropic 端点不支持文档块
+                sanitized.append({"type": "text", "text": "[文档内容]"})
+            elif block_type == "tool_result" and isinstance(block.get("content"), list):
+                # tool_result 内嵌内容同样需要递归清理
+                updated = dict(block)
+                updated["content"] = self._sanitize_content_blocks(block["content"])
+                sanitized.append(updated)
+            else:
+                sanitized.append(block)
+        return sanitized
 
     def _clean_reasoner_params(self, request: dict[str, Any]) -> dict[str, Any]:
         """清理 DeepSeek Reasoner 模型不支持的参数"""

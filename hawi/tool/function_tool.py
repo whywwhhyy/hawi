@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-from typing import Any, Callable, Coroutine, ParamSpec, TypeVar, overload
+from typing import Any, Callable, ParamSpec, TypeVar, overload
 
 from .types import AgentTool, ToolResult
 
