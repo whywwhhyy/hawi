@@ -516,9 +516,46 @@ while True:
             raise FileNotFoundError(f"Script '{script_name}' not found")
         with open(script_path, 'r', encoding='utf-8') as f:
             code = f.read()
-        print(f"exec script '{script_name}':")
+        
         result = self._execute(code, timeout)
-        print("result:", result)
+
+        if self.print_execution:
+            # 构建统一的内容面板
+            from rich.text import Text
+
+            # 代码部分
+            syntax = Syntax(code, "python", theme="monokai", line_numbers=True)
+
+            # 分隔线
+            divider = Text("─" * 60, style="dim")
+
+            # 结果部分
+            output_text = str(result.output or "(无输出)")
+            error_text = result.error or ""
+            success = result.success
+
+            status_emoji = "✅" if success else "❌"
+            status_color = "green" if success else "red"
+            status_text = "成功" if success else "失败"
+
+            # 构建结果文本
+            result_text = Text()
+            result_text.append("状态: ", style="bold")
+            result_text.append(f"{status_emoji} {status_text}\n", style=f"bold {status_color}")
+            result_text.append(f"\n脚本: {script_name}\n", style="bold cyan")
+            result_text.append("\n输出:\n", style="bold cyan")
+            result_text.append(output_text)
+
+            if error_text:
+                result_text.append("\n\n错误:\n", style="bold red")
+                result_text.append(error_text, style="red")
+
+            # 使用 Group 组合内容
+            from rich.console import Group
+            content = Group(syntax, Text(""), divider, Text(""), result_text)
+
+            _console.print(Panel(content, title="[bold blue]Python 执行脚本[/bold blue]", border_style="blue"))
+
         return result
 
     @plugin.tool

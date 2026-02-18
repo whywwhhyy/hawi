@@ -31,8 +31,7 @@ from .events import (
 from .printers import (
     PlainPrinter,
     RichStreamingPrinter,
-
-    MarkdownStreamingPrinter,
+    StreamMarkdownPrinter,
 )
 from .model import Model, ModelErrorType, ModelFailurePolicy, BalanceInfo
 from .message import StreamPart
@@ -48,7 +47,7 @@ __all__ = [
     "EventBus",
     "PlainPrinter",
     "RichStreamingPrinter",
-    "MarkdownStreamingPrinter",
+    "StreamMarkdownPrinter",
     # Model events
     "model_stream_start_event",
     "model_stream_stop_event",

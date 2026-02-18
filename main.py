@@ -49,7 +49,7 @@ from hawi.agent import HawiAgent
 from hawi.agent.printers import (
     PlainPrinter,
     RichStreamingPrinter,
-    MarkdownStreamingPrinter,
+    StreamMarkdownPrinter,
 )
 from hawi.agent.model import Model
 from hawi.agent.models import get_model_class
@@ -167,6 +167,7 @@ def main():
 
     # Create printer based on mode
     def create_printer():
+        return StreamMarkdownPrinter()
         if use_rich:
             # Use V2 implementation with markdown-it
             return RichStreamingPrinter(
