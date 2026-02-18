@@ -35,6 +35,10 @@ include = ["hawi*"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # Ignore OpenAI/httpx async stream cleanup warnings (known issue)
+    "ignore::RuntimeWarning:asyncio.base_events",
+]
 
 [tool.uv.workspace]
 members = [

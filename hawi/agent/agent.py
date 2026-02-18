@@ -507,199 +507,205 @@ class HawiAgent:
                 block_accumulators: dict[int, list[str]] = {}
                 tool_call_accumulators: dict[int, dict[str, Any]] = {}
 
-                async for chunk in self._call_model_with_retry_streaming(
+                # Use try/finally to ensure proper cleanup of the async generator
+                model_stream_gen = self._call_model_with_retry_streaming(
                     m, policy, state, request_id, event_bus
-                ):
-                    if state.error:
-                        yield await self._emit_event(
-                            agent_error_event(run_id=run_id, error_type="model_error", error_message=state.error),
-                            event_bus,
-                        )
-                        break
-
-                    # Handle text_delta chunk
-                    if chunk["type"] == "text_delta":
-                        idx = chunk["index"]
-
-                        if chunk["is_start"]:
+                )
+                try:
+                    async for chunk in model_stream_gen:
+                        if state.error:
                             yield await self._emit_event(
-                                model_content_block_start_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    block_type="text",
-                                ),
+                                agent_error_event(run_id=run_id, error_type="model_error", error_message=state.error),
                                 event_bus,
                             )
+                            break
 
-                        if chunk["delta"]:
-                            yield await self._emit_event(
-                                model_content_block_delta_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    delta_type="text",
-                                    delta=chunk["delta"],
-                                ),
-                                event_bus,
-                            )
-                            block_accumulators.setdefault(idx, []).append(chunk["delta"])
+                        # Handle text_delta chunk
+                        if chunk["type"] == "text_delta":
+                            idx = chunk["index"]
 
-                        if chunk["is_end"]:
-                            full_text = "".join(block_accumulators.get(idx, []))
-                            yield await self._emit_event(
-                                model_content_block_stop_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    block_type="text",
-                                    full_content=full_text,
-                                ),
-                                event_bus,
-                            )
-                            if full_text:
-                                content_parts.append(TextPart(type="text", text=full_text))
-
-                    # Handle thinking_delta chunk
-                    elif chunk["type"] == "thinking_delta":
-                        idx = chunk["index"]
-
-                        if chunk["is_start"]:
-                            yield await self._emit_event(
-                                model_content_block_start_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    block_type="thinking",
-                                ),
-                                event_bus,
-                            )
-
-                        if chunk["delta"]:
-                            yield await self._emit_event(
-                                model_content_block_delta_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    delta_type="thinking",
-                                    delta=chunk["delta"],
-                                ),
-                                event_bus,
-                            )
-                            block_accumulators.setdefault(idx, []).append(chunk["delta"])
-
-                        if chunk["is_end"]:
-                            full_thinking = "".join(block_accumulators.get(idx, []))
-                            yield await self._emit_event(
-                                model_content_block_stop_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    block_type="thinking",
-                                    full_content=full_thinking,
-                                ),
-                                event_bus,
-                            )
-                            if full_thinking:
-                                from hawi.agent.message import ReasoningPart
-                                content_parts.append(ReasoningPart(type="reasoning", reasoning=full_thinking, signature=None))
-
-                    # Handle tool_call_delta chunk
-                    elif chunk["type"] == "tool_call_delta":
-                        idx = chunk["index"]
-
-                        if chunk["is_start"]:
-                            yield await self._emit_event(
-                                model_content_block_start_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    block_type="tool_use",
-                                    tool_call_id=chunk.get("id"),
-                                    tool_name=chunk.get("name"),
-                                ),
-                                event_bus,
-                            )
-                            # Initialize accumulator for this tool call
-                            tool_call_accumulators[idx] = {
-                                "id": chunk.get("id") or "",
-                                "name": chunk.get("name") or "",
-                                "arguments": "",
-                            }
-
-                        if chunk.get("arguments_delta"):
-                            args_delta = chunk["arguments_delta"]
-                            yield await self._emit_event(
-                                model_content_block_delta_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    delta_type="tool_input",
-                                    delta=args_delta,
-                                ),
-                                event_bus,
-                            )
-                            if idx in tool_call_accumulators:
-                                tool_call_accumulators[idx]["arguments"] += args_delta
-
-                        if chunk["is_end"]:
-                            tool_info = tool_call_accumulators.get(idx, {"id": "", "name": "", "arguments": ""})
-                            # Parse arguments JSON
-                            import json
-                            try:
-                                parsed_args = json.loads(tool_info["arguments"]) if tool_info["arguments"] else {}
-                            except json.JSONDecodeError:
-                                parsed_args = {}
-
-                            yield await self._emit_event(
-                                model_content_block_stop_event(
-                                    request_id=request_id,
-                                    block_index=idx,
-                                    block_type="tool_use",
-                                    tool_call_id=tool_info["id"],
-                                    tool_name=tool_info["name"],
-                                    tool_arguments=parsed_args,
-                                ),
-                                event_bus,
-                            )
-
-                            if tool_info["id"] and tool_info["name"]:
-                                tool_calls.append(ToolCallPart(
-                                    type="tool_call",
-                                    id=tool_info["id"],
-                                    name=tool_info["name"],
-                                    arguments=parsed_args,
-                                ))
-                                # Send agent_tool_call event
+                            if chunk["is_start"]:
                                 yield await self._emit_event(
-                                    agent_tool_call_event(
-                                        run_id=run_id,
-                                        tool_name=tool_info["name"],
-                                        arguments=parsed_args,
-                                        tool_call_id=tool_info["id"],
+                                    model_content_block_start_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        block_type="text",
                                     ),
                                     event_bus,
                                 )
 
-                    # Handle finish chunk
-                    elif chunk["type"] == "finish":
-                        stop_reason = chunk.get("stop_reason") or "end_turn"
-                        usage_dict = chunk.get("usage")
-                        if usage_dict:
-                            usage = TokenUsage(
-                                input_tokens=usage_dict.get("input_tokens", 0),
-                                output_tokens=usage_dict.get("output_tokens", 0),
-                                cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens"),
-                                cache_read_input_tokens=usage_dict.get("cache_read_input_tokens"),
-                            )
-                            # Accumulate usage for multi-turn conversations
-                            if cumulative_usage is None:
-                                cumulative_usage = usage
-                            else:
-                                cumulative_usage = TokenUsage(
-                                    input_tokens=cumulative_usage.input_tokens + usage.input_tokens,
-                                    output_tokens=cumulative_usage.output_tokens + usage.output_tokens,
-                                    cache_creation_input_tokens=self._add_optional_tokens(
-                                        cumulative_usage.cache_creation_input_tokens,
-                                        usage.cache_creation_input_tokens,
+                            if chunk["delta"]:
+                                yield await self._emit_event(
+                                    model_content_block_delta_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        delta_type="text",
+                                        delta=chunk["delta"],
                                     ),
-                                    cache_read_input_tokens=self._add_optional_tokens(
-                                        cumulative_usage.cache_read_input_tokens,
-                                        usage.cache_read_input_tokens,
-                                    ),
+                                    event_bus,
                                 )
+                                block_accumulators.setdefault(idx, []).append(chunk["delta"])
+
+                            if chunk["is_end"]:
+                                full_text = "".join(block_accumulators.get(idx, []))
+                                yield await self._emit_event(
+                                    model_content_block_stop_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        block_type="text",
+                                        full_content=full_text,
+                                    ),
+                                    event_bus,
+                                )
+                                if full_text:
+                                    content_parts.append(TextPart(type="text", text=full_text))
+
+                        # Handle thinking_delta chunk
+                        elif chunk["type"] == "thinking_delta":
+                            idx = chunk["index"]
+
+                            if chunk["is_start"]:
+                                yield await self._emit_event(
+                                    model_content_block_start_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        block_type="thinking",
+                                    ),
+                                    event_bus,
+                                )
+
+                            if chunk["delta"]:
+                                yield await self._emit_event(
+                                    model_content_block_delta_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        delta_type="thinking",
+                                        delta=chunk["delta"],
+                                    ),
+                                    event_bus,
+                                )
+                                block_accumulators.setdefault(idx, []).append(chunk["delta"])
+
+                            if chunk["is_end"]:
+                                full_thinking = "".join(block_accumulators.get(idx, []))
+                                yield await self._emit_event(
+                                    model_content_block_stop_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        block_type="thinking",
+                                        full_content=full_thinking,
+                                    ),
+                                    event_bus,
+                                )
+                                if full_thinking:
+                                    from hawi.agent.message import ReasoningPart
+                                    content_parts.append(ReasoningPart(type="reasoning", reasoning=full_thinking, signature=None))
+
+                        # Handle tool_call_delta chunk
+                        elif chunk["type"] == "tool_call_delta":
+                            idx = chunk["index"]
+
+                            if chunk["is_start"]:
+                                yield await self._emit_event(
+                                    model_content_block_start_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        block_type="tool_use",
+                                        tool_call_id=chunk.get("id"),
+                                        tool_name=chunk.get("name"),
+                                    ),
+                                    event_bus,
+                                )
+                                # Initialize accumulator for this tool call
+                                tool_call_accumulators[idx] = {
+                                    "id": chunk.get("id") or "",
+                                    "name": chunk.get("name") or "",
+                                    "arguments": "",
+                                }
+
+                            if chunk.get("arguments_delta"):
+                                args_delta = chunk["arguments_delta"]
+                                yield await self._emit_event(
+                                    model_content_block_delta_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        delta_type="tool_input",
+                                        delta=args_delta,
+                                    ),
+                                    event_bus,
+                                )
+                                if idx in tool_call_accumulators:
+                                    tool_call_accumulators[idx]["arguments"] += args_delta
+
+                            if chunk["is_end"]:
+                                tool_info = tool_call_accumulators.get(idx, {"id": "", "name": "", "arguments": ""})
+                                # Parse arguments JSON
+                                import json
+                                try:
+                                    parsed_args = json.loads(tool_info["arguments"]) if tool_info["arguments"] else {}
+                                except json.JSONDecodeError:
+                                    parsed_args = {}
+
+                                yield await self._emit_event(
+                                    model_content_block_stop_event(
+                                        request_id=request_id,
+                                        block_index=idx,
+                                        block_type="tool_use",
+                                        tool_call_id=tool_info["id"],
+                                        tool_name=tool_info["name"],
+                                        tool_arguments=parsed_args,
+                                    ),
+                                    event_bus,
+                                )
+
+                                if tool_info["id"] and tool_info["name"]:
+                                    tool_calls.append(ToolCallPart(
+                                        type="tool_call",
+                                        id=tool_info["id"],
+                                        name=tool_info["name"],
+                                        arguments=parsed_args,
+                                    ))
+                                    # Send agent_tool_call event
+                                    yield await self._emit_event(
+                                        agent_tool_call_event(
+                                            run_id=run_id,
+                                            tool_name=tool_info["name"],
+                                            arguments=parsed_args,
+                                            tool_call_id=tool_info["id"],
+                                        ),
+                                        event_bus,
+                                    )
+
+                        # Handle finish chunk
+                        elif chunk["type"] == "finish":
+                            stop_reason = chunk.get("stop_reason") or "end_turn"
+                            usage_dict = chunk.get("usage")
+                            if usage_dict:
+                                usage = TokenUsage(
+                                    input_tokens=usage_dict.get("input_tokens", 0),
+                                    output_tokens=usage_dict.get("output_tokens", 0),
+                                    cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens"),
+                                    cache_read_input_tokens=usage_dict.get("cache_read_input_tokens"),
+                                )
+                                # Accumulate usage for multi-turn conversations
+                                if cumulative_usage is None:
+                                    cumulative_usage = usage
+                                else:
+                                    cumulative_usage = TokenUsage(
+                                        input_tokens=cumulative_usage.input_tokens + usage.input_tokens,
+                                        output_tokens=cumulative_usage.output_tokens + usage.output_tokens,
+                                        cache_creation_input_tokens=self._add_optional_tokens(
+                                            cumulative_usage.cache_creation_input_tokens,
+                                            usage.cache_creation_input_tokens,
+                                        ),
+                                        cache_read_input_tokens=self._add_optional_tokens(
+                                            cumulative_usage.cache_read_input_tokens,
+                                            usage.cache_read_input_tokens,
+                                        ),
+                                    )
+                finally:
+                    # Ensure the model stream generator is properly closed
+                    await model_stream_gen.aclose()
 
                 if state.error:
                     # Send error event before breaking (error occurred during streaming)
@@ -806,21 +812,34 @@ class HawiAgent:
                 max_retries = p.retry_count
 
         attempt = 0
+        stream_gen = None
         for attempt in range(max_retries + 1):
             try:
                 request = self._context.prepare_request()
 
                 # Use astream() for streaming output
-                async for chunk in model.astream(
+                # Store generator reference for proper cleanup
+                stream_gen = model.astream(
                     messages=request.messages,
                     system=[part for part in (request.system or ()) if part['type'] == 'text'],
                     tools=request.tools,
-                ):
-                    yield chunk
+                )
+                try:
+                    async for chunk in stream_gen:
+                        yield chunk
+                finally:
+                    # Ensure the async generator is properly closed
+                    await stream_gen.aclose()
+                    stream_gen = None
 
                 return  # Success, exit retry loop
 
             except Exception as e:
+                # Ensure cleanup on error
+                if stream_gen is not None:
+                    await stream_gen.aclose()
+                    stream_gen = None
+
                 last_error = e
                 error_type = model.classify_error(e)
                 policy_for_error = policy.get(error_type, ModelFailurePolicy(error_type, "stop"))
