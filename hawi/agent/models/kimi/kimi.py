@@ -10,7 +10,11 @@ import logging
 from typing import Any, Literal
 
 from hawi.agent.model import Model
-from hawi.agent.models._utils import detect_kimi_api_type
+from hawi.agent.models._utils import (
+    detect_kimi_api_type,
+    complete_url_and_api,
+    KIMI_URL_API_CANDIDATES,
+)
 from .kimi_openai import KimiOpenAIModel
 from .kimi_anthropic import KimiAnthropicModel
 
@@ -88,6 +92,7 @@ class KimiModel:
         创建 Kimi 模型实例
 
         根据 api 参数和 base_url 自动选择合适的模型类。
+        支持参数补全：base_url 和 api 可以互相推导。
         """
         # 验证 model_id 类型
         if not isinstance(model_id, str):
@@ -96,20 +101,26 @@ class KimiModel:
                 f"Did you pass a list instead of a single model ID?"
             )
 
-        # 确定 API 类型
+        # 处理 api="auto" 的情况
+        query_api = None if api == "auto" else api
+
+        # 使用补全函数确定 base_url 和 api
+        # 如果两者都提供，不进行验证（validate=False）
+        final_url, final_api = complete_url_and_api(
+            base_url,
+            query_api,
+            KIMI_URL_API_CANDIDATES,
+            validate=False if (base_url is not None and query_api is not None) else True,
+        )
+        
+        # 如果用户提供了 base_url 但没有提供 api，需要根据 base_url 检测
         if api == "auto":
             detected_api = detect_kimi_api_type(base_url)
             logger.debug(f"Auto-detected API type: {detected_api} for URL: {base_url}")
         else:
-            detected_api = api
-
-        # 使用默认端点（如果未提供）
-        if base_url is None:
-            base_url = (
-                DEFAULT_ANTHROPIC_URL
-                if detected_api == "anthropic"
-                else DEFAULT_OPENAI_URL
-            )
+            detected_api = final_api
+        
+        base_url = final_url
 
         # 创建对应的模型实例
         if detected_api == "anthropic":

@@ -103,6 +103,16 @@ class ContentConverter:
             return self._convert_tool_message(message)
 
         content = self.convert_content(message["content"])
+        
+        # 对于 assistant 消息，还需要处理 tool_calls
+        if role == "assistant":
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                # 将 tool_calls 转换为 tool_use 块并添加到 content
+                for tc in tool_calls:
+                    tool_use_block = self._convert_tool_call(tc)
+                    content.append(tool_use_block)
+        
         if not content:
             return None
 
@@ -298,6 +308,16 @@ class AsyncContentConverter(ContentConverter):
             return self._convert_tool_message(message)
 
         content = await self.convert_content_async(message["content"])
+        
+        # 对于 assistant 消息，还需要处理 tool_calls
+        if role == "assistant":
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                # 将 tool_calls 转换为 tool_use 块并添加到 content
+                for tc in tool_calls:
+                    tool_use_block = self._convert_tool_call(tc)
+                    content.append(tool_use_block)
+        
         if not content:
             return None
 

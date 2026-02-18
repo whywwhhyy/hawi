@@ -20,6 +20,7 @@ from .openai import OpenAIModel
 from .anthropic import AnthropicModel
 from .deepseek import DeepSeekModel
 from .kimi import KimiModel
+from .minimax import MiniMaxModel
 from .strands import StrandsModel
 
 def get_model_class(name:str) -> Optional[type]:
@@ -28,6 +29,7 @@ def get_model_class(name:str) -> Optional[type]:
         "AnthropicModel": AnthropicModel,
         "DeepSeekModel": DeepSeekModel,
         "KimiModel": KimiModel,
+        "MiniMaxModel": MiniMaxModel,
         "StrandsModel": StrandsModel,
     }.get(name)
 
@@ -37,6 +39,7 @@ __all__ = [
     "AnthropicModel",
     "DeepSeekModel",
     "KimiModel",
+    "MiniMaxModel",
     "StrandsModel",
     "get_model_class",
 ]
