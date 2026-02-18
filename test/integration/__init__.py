@@ -142,3 +142,14 @@ def get_kimi_anthropic_api_key() -> str | None:
             return config.get("apikey")
 
     return None
+
+
+def get_minimax_api_key() -> str | None:
+    """Get MiniMax API key."""
+    # Check env var first
+    key = os.environ.get("MINIMAX_API_KEY")
+    if key and key.strip():
+        return key
+
+    # Try minimax provider from apikey.yaml
+    return get_api_key("minimax")

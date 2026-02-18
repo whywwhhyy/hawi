@@ -305,9 +305,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_reasoning_visibility(self, monkeypatch):
         """Test reasoning visibility toggle."""
         import io
-        import hawi.agent.printers as printers_module
+        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(printers_module, '_stdout', output)
+        monkeypatch.setattr(rich_module, '_stdout', output)
 
         # With reasoning shown (default)
         printer_with = ConversationPrinter(show_reasoning=True)
@@ -333,9 +333,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_reasoning_hidden(self, monkeypatch):
         """Test reasoning hidden."""
         import io
-        import hawi.agent.printers as printers_module
+        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(printers_module, '_stdout', output)
+        monkeypatch.setattr(rich_module, '_stdout', output)
 
         # With reasoning hidden
         printer_without = ConversationPrinter(show_reasoning=False)
@@ -351,9 +351,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_tool_visibility(self, monkeypatch):
         """Test tool visibility toggle."""
         import io
-        import hawi.agent.printers as printers_module
+        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(printers_module, '_stdout', output)
+        monkeypatch.setattr(rich_module, '_stdout', output)
 
         printer_hidden = ConversationPrinter(show_tools=False)
 
@@ -368,9 +368,9 @@ class TestConversationPrinterAdvanced:
     async def test_printer_stream_lifecycle(self, monkeypatch):
         """Test complete stream lifecycle handling."""
         import io
-        import hawi.agent.printers as printers_module
+        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(printers_module, '_stdout', output)
+        monkeypatch.setattr(rich_module, '_stdout', output)
 
         printer = ConversationPrinter()
 

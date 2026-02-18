@@ -328,6 +328,7 @@ def complete_url_and_api(
     candidates: list[tuple[str | None, str | None]],
     *,
     validate: bool = True,
+    default_on_none: bool = True,
 ) -> tuple[str, str]:
     """
     补全 base_url 和 api_type。
@@ -341,6 +342,7 @@ def complete_url_and_api(
         candidates: 候选 (base_url, api) 列表，None 表示通配
         validate: 是否验证完整参数。当为 False 且 base_url 和 api 都提供时，
                  直接返回而不检查是否在候选列表中
+        default_on_none: 当 base_url 和 api 都为 None 时，是否使用第一个候选作为默认值
 
     Returns:
         (补全后的 base_url, 补全后的 api)
@@ -362,6 +364,15 @@ def complete_url_and_api(
         >>> complete_url_and_api("custom", "openai", candidates, validate=False)
         ("custom", "openai")  # 不验证，直接返回
     """
+    # 当两者都为 None 且允许使用默认值时，直接返回第一个候选
+    if default_on_none and base_url is None and api is None:
+        if not candidates:
+            raise TupleCompletionError("候选列表为空，无法提供默认值")
+        first_candidate = candidates[0]
+        if first_candidate[0] is None or first_candidate[1] is None:
+            raise TupleCompletionError(f"第一个候选包含 None: {first_candidate}")
+        return first_candidate  # type: ignore
+    
     query = (base_url, api)
     result = tuple_completion(query, candidates, validate=validate)
 

@@ -277,9 +277,8 @@ class TestConversationPrinter:
     def printer(self, monkeypatch):
         """Create a RichStreamingPrinter with captured stdout for testing."""
         output = io.StringIO()
-        # Patch sys.stdout for the printer module
-        import hawi.agent.printers as printers_module
-        monkeypatch.setattr(printers_module, '_stdout', output)
+        import hawi.agent.printers.rich as rich_module
+        monkeypatch.setattr(rich_module, '_stdout', output)
         printer = RichStreamingPrinter()
         printer._output = output  # Store reference for tests
         return printer
@@ -379,8 +378,8 @@ class TestConversationPrinter:
     async def test_hide_reasoning(self, monkeypatch):
         """Test hiding reasoning output."""
         output = io.StringIO()
-        import hawi.agent.printers as printers_module
-        monkeypatch.setattr(printers_module, '_stdout', output)
+        import hawi.agent.printers.rich as rich_module
+        monkeypatch.setattr(rich_module, '_stdout', output)
         printer = RichStreamingPrinter(show_reasoning=False)
         event = model_content_block_delta_event(
             request_id="req-1",
@@ -396,8 +395,8 @@ class TestConversationPrinter:
     async def test_hide_tools(self, monkeypatch):
         """Test hiding tool output."""
         output = io.StringIO()
-        import hawi.agent.printers as printers_module
-        monkeypatch.setattr(printers_module, '_stdout', output)
+        import hawi.agent.printers.rich as rich_module
+        monkeypatch.setattr(rich_module, '_stdout', output)
         printer = RichStreamingPrinter(show_tools=False)
         event = agent_tool_call_event(
             run_id="run-1",
