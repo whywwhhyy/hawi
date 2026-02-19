@@ -37,6 +37,7 @@ from hawi.agent.message import (
     TextPart,
     ImagePart,
     DocumentPart,
+    TokenUsage,
     ToolCallPart,
     ToolResultPart,
     ReasoningPart,
@@ -168,15 +169,15 @@ class StrandsModel(Model):
             for tool_call in response["tool_calls"]:
                 content.append(self._convert_strands_tool_call_to_part(tool_call))
 
-        # 提取 usage
+        # 提取 usage (Strands使用camelCase字段名)
         usage = None
         if "usage" in response and response["usage"]:
             usage_data = response["usage"]
             usage = TokenUsage(
-                input_tokens=usage_data.get("prompt_tokens", 0),
-                output_tokens=usage_data.get("completion_tokens", 0),
-                cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens"),
-                cache_read_input_tokens=usage_data.get("cache_read_input_tokens"),
+                input_tokens=usage_data.get("inputTokens", 0),
+                output_tokens=usage_data.get("outputTokens", 0),
+                cache_write_tokens=usage_data.get("cacheWriteInputTokens"),
+                cache_read_tokens=usage_data.get("cacheReadInputTokens"),
             )
 
         # 提取 stop_reason
@@ -489,28 +490,27 @@ class StrandsModel(Model):
         self, strands_stream: Iterator[Any]
     ) -> Iterator[StreamPart]:
         """转换 strands 流到 StreamPart 流"""
-        current_index = 0
-        block_started = False
-        pending_usage: dict[str, int] | None = None
+        state = {"index": 0, "block_started": False, "pending_usage": None}
 
         for event in strands_stream:
-            yield from self._convert_strands_event_to_stream_part(
-                event, current_index, block_started, pending_usage
-            )
+            yield from self._convert_strands_event_to_stream_part(event, state)
 
     def _convert_strands_event_to_stream_part(
         self,
         event: Any,
-        index: int = 0,
-        block_started: bool = False,
-        pending_usage: dict[str, int] | None = None,
+        state: dict[str, Any],
     ) -> Iterator[StreamPart]:
         """转换单个 strands 事件到 StreamPart"""
+        index = state["index"]
+        block_started = state["block_started"]
+        pending_usage = state["pending_usage"]
+
         # strands 事件可能是 dict 或对象
         if isinstance(event, dict):
             event_type = event.get("type", "")
             event_data = event
         else:
+            # 处理对象形式的事件（直接访问属性）
             event_type = getattr(event, "type", "")
             event_data = {
                 "content": getattr(event, "content", None),
@@ -635,30 +635,49 @@ class StrandsModel(Model):
                     "is_start": False,
                     "is_end": True,
                 }
+                state["block_started"] = False
+                state["index"] = index + 1
 
-        elif event_type == "usage":
-            usage = event_data.get("usage")
-            if usage:
-                # 保存 usage 到 pending，等待 finish 事件
-                if isinstance(usage, dict):
-                    pending_usage = {
-                        "input_tokens": usage.get("prompt_tokens", 0),
-                        "output_tokens": usage.get("completion_tokens", 0),
-                    }
-                    if "cache_creation_input_tokens" in usage:
-                        pending_usage["cache_creation_input_tokens"] = usage["cache_creation_input_tokens"]
-                    if "cache_read_input_tokens" in usage:
-                        pending_usage["cache_read_input_tokens"] = usage["cache_read_input_tokens"]
-
-        elif event_type == "finish":
-            stop_reason = event_data.get("stop_reason", "end_turn")
-            # 映射 stop_reason 到 hawi 格式
+        elif event_type == "messageStop":
+            # Strands消息结束事件
+            stop_reason = event_data.get("stopReason", "end_turn")
+            if isinstance(stop_reason, dict):
+                stop_reason = stop_reason.get("stopReason", "end_turn")
             mapped_stop_reason = self._map_strands_stop_reason(stop_reason) if stop_reason else "end_turn"
             yield {
                 "type": "finish",
                 "stop_reason": mapped_stop_reason,
                 "usage": pending_usage,
             }
+            state["pending_usage"] = None
+
+        elif event_type == "metadata":
+            # Strands在metadata事件中返回usage
+            metadata = event_data.get("metadata", {})
+            usage = metadata.get("usage") if isinstance(metadata, dict) else None
+            if usage:
+                # 保存 usage 到 pending，等待 finish 事件
+                if isinstance(usage, dict):
+                    new_usage = {
+                        "input_tokens": usage.get("inputTokens", 0),
+                        "output_tokens": usage.get("outputTokens", 0),
+                    }
+                    if "cacheWriteInputTokens" in usage:
+                        new_usage["cache_write_tokens"] = usage["cacheWriteInputTokens"]
+                    if "cacheReadInputTokens" in usage:
+                        new_usage["cache_read_tokens"] = usage["cacheReadInputTokens"]
+                    state["pending_usage"] = new_usage
+
+        # 保留对旧版自定义事件格式的兼容处理
+        elif event_type == "finish":
+            stop_reason = event_data.get("stop_reason", "end_turn")
+            mapped_stop_reason = self._map_strands_stop_reason(stop_reason) if stop_reason else "end_turn"
+            yield {
+                "type": "finish",
+                "stop_reason": mapped_stop_reason,
+                "usage": pending_usage,
+            }
+            state["pending_usage"] = None
 
         else:
             # 未知事件类型，尝试通用处理

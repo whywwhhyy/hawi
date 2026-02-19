@@ -183,10 +183,10 @@ class OpenAIModel(Model):
             usage = TokenUsage(
                 input_tokens=usage_data.get("prompt_tokens", 0),
                 output_tokens=usage_data.get("completion_tokens", 0),
-                cache_creation_input_tokens=usage_data.get(
+                cache_write_tokens=usage_data.get(
                     "prompt_cache_creation_tokens"
                 ),
-                cache_read_input_tokens=usage_data.get(
+                cache_read_tokens=usage_data.get(
                     "prompt_cache_read_tokens"
                 ),
             )

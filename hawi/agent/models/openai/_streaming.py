@@ -66,9 +66,9 @@ class StreamProcessor:
                 }
                 # 添加可选字段
                 if "prompt_cache_creation_tokens" in usage:
-                    self._pending_usage["cache_creation_input_tokens"] = usage["prompt_cache_creation_tokens"]
+                    self._pending_usage["cache_write_tokens"] = usage["prompt_cache_creation_tokens"]
                 if "prompt_cache_read_tokens" in usage:
-                    self._pending_usage["cache_read_input_tokens"] = usage["prompt_cache_read_tokens"]
+                    self._pending_usage["cache_read_tokens"] = usage["prompt_cache_read_tokens"]
             return
 
         choice = choices[0]

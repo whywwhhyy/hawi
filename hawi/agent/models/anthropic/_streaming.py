@@ -228,9 +228,9 @@ class _AnthropicStreamHandler:
             }
             # Include cache-related token counts if available
             if hasattr(usage, "cache_creation_input_tokens") and usage.cache_creation_input_tokens is not None:
-                usage_dict["cache_creation_input_tokens"] = usage.cache_creation_input_tokens
+                usage_dict["cache_write_tokens"] = usage.cache_creation_input_tokens
             if hasattr(usage, "cache_read_input_tokens") and usage.cache_read_input_tokens is not None:
-                usage_dict["cache_read_input_tokens"] = usage.cache_read_input_tokens
+                usage_dict["cache_read_tokens"] = usage.cache_read_input_tokens
         
         return {
             "type": "finish",

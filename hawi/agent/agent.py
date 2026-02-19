@@ -684,8 +684,8 @@ class HawiAgent:
                                 usage = TokenUsage(
                                     input_tokens=usage_dict.get("input_tokens", 0),
                                     output_tokens=usage_dict.get("output_tokens", 0),
-                                    cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens"),
-                                    cache_read_input_tokens=usage_dict.get("cache_read_input_tokens"),
+                                    cache_write_tokens=usage_dict.get("cache_write_tokens"),
+                                    cache_read_tokens=usage_dict.get("cache_read_tokens"),
                                 )
                                 # Accumulate usage for multi-turn conversations
                                 if cumulative_usage is None:
@@ -694,13 +694,13 @@ class HawiAgent:
                                     cumulative_usage = TokenUsage(
                                         input_tokens=cumulative_usage.input_tokens + usage.input_tokens,
                                         output_tokens=cumulative_usage.output_tokens + usage.output_tokens,
-                                        cache_creation_input_tokens=self._add_optional_tokens(
-                                            cumulative_usage.cache_creation_input_tokens,
-                                            usage.cache_creation_input_tokens,
+                                        cache_write_tokens=self._add_optional_tokens(
+                                            cumulative_usage.cache_write_tokens,
+                                            usage.cache_write_tokens,
                                         ),
-                                        cache_read_input_tokens=self._add_optional_tokens(
-                                            cumulative_usage.cache_read_input_tokens,
-                                            usage.cache_read_input_tokens,
+                                        cache_read_tokens=self._add_optional_tokens(
+                                            cumulative_usage.cache_read_tokens,
+                                            usage.cache_read_tokens,
                                         ),
                                     )
                 finally:
@@ -1104,13 +1104,13 @@ class HawiAgent:
                         total_usage = TokenUsage(
                             input_tokens=total_usage.input_tokens + usage.input_tokens,
                             output_tokens=total_usage.output_tokens + usage.output_tokens,
-                            cache_creation_input_tokens=self._add_optional_tokens(
-                                total_usage.cache_creation_input_tokens,
-                                usage.cache_creation_input_tokens,
+                            cache_write_tokens=self._add_optional_tokens(
+                                total_usage.cache_write_tokens,
+                                usage.cache_write_tokens,
                             ),
-                            cache_read_input_tokens=self._add_optional_tokens(
-                                total_usage.cache_read_input_tokens,
-                                usage.cache_read_input_tokens,
+                            cache_read_tokens=self._add_optional_tokens(
+                                total_usage.cache_read_tokens,
+                                usage.cache_read_tokens,
                             ),
                         )
 

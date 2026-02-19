@@ -19,6 +19,15 @@ class CacheControl(TypedDict):
     type: Literal["ephemeral"]
 
 
+class TokenUsage(BaseModel):
+    """Token 使用统计"""
+
+    input_tokens: int
+    output_tokens: int
+    cache_write_tokens: int | None = None  # Prompt caching: tokens written to cache
+    cache_read_tokens: int | None = None  # Prompt caching: tokens read from cache
+
+
 class TextPart(TypedDict):
     """文本内容"""
 
@@ -264,15 +273,6 @@ class MessageRequest(BaseModel):
     top_k: int | None = None  # Anthropic top_k sampling
     stop_sequences: list[str] | None = None  # Anthropic stop sequences
     metadata: dict[str, Any] | None = None  # Anthropic metadata (e.g., user_id)
-
-
-class TokenUsage(BaseModel):
-    """Token 使用统计"""
-
-    input_tokens: int
-    output_tokens: int
-    cache_creation_input_tokens: int | None = None  # Anthropic prompt caching
-    cache_read_input_tokens: int | None = None
 
 
 class MessageResponse(BaseModel):
