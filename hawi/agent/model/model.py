@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Iterator, List, Literal, TypedDict, Required
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator, Iterator, List, Literal
 
 from hawi.agent.message import (
     ContentPart,
@@ -175,6 +176,7 @@ class Model(ABC):
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         return await self._ainvoke_impl(request)
 
+    @asynccontextmanager
     async def astream(
         self,
         messages: list[Message],
@@ -182,11 +184,18 @@ class Model(ABC):
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
         **kwargs,
-    ) -> AsyncIterator[StreamPart]:
+    ):
         """异步流式调用模型，生成内容增量块"""
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
-        async for chunk in self._astream_impl(request):
-            yield chunk
+        
+        # 获取底层生成器
+        gen = self._astream_impl(request)
+        
+        try:
+            yield gen  # type: ignore[misc]
+        finally:
+            # 确保生成器被关闭
+            await gen.aclose()
 
     # ==========================================================================
     # 请求/响应转换 - 子类必须实现
@@ -228,7 +237,7 @@ class Model(ABC):
         """同步流式实现（默认不支持）"""
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncIterator[StreamPart]:
+    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[StreamPart, None]:
         """异步流式实现（默认使用线程池）"""
         import asyncio
         from concurrent.futures import ThreadPoolExecutor

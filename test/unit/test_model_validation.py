@@ -6,6 +6,7 @@ that errors are properly propagated as events.
 
 import asyncio
 import pytest
+from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 from hawi.agent import HawiAgent
@@ -75,6 +76,7 @@ class TestAgentErrorHandling:
         mock_model.model_id = "test-model"
 
         # Make astream raise an exception immediately (simulating _prepare_request_impl failure)
+        @asynccontextmanager
         async def failing_astream(*args, **kwargs):
             raise AttributeError("'list' object has no attribute 'startswith'")
             yield  # Make it a generator

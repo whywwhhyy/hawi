@@ -819,26 +819,18 @@ class HawiAgent:
 
                 # Use astream() for streaming output
                 # Store generator reference for proper cleanup
-                stream_gen = model.astream(
+                async with model.astream(
                     messages=request.messages,
                     system=[part for part in (request.system or ()) if part['type'] == 'text'],
                     tools=request.tools,
-                )
-                try:
+                ) as stream_gen:
                     async for chunk in stream_gen:
                         yield chunk
-                finally:
-                    # Ensure the async generator is properly closed
-                    await stream_gen.aclose()
-                    stream_gen = None
 
                 return  # Success, exit retry loop
 
             except Exception as e:
-                # Ensure cleanup on error
-                if stream_gen is not None:
-                    await stream_gen.aclose()
-                    stream_gen = None
+                stream_gen = None
 
                 last_error = e
                 error_type = model.classify_error(e)
@@ -852,9 +844,10 @@ class HawiAgent:
                     import asyncio
                     await asyncio.sleep(min(2 ** attempt, 60))
 
-        # All retries exhausted for retryable errors
-        state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
-        raise last_error
+        if last_error:
+            # All retries exhausted for retryable errors
+            state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
+            raise last_error
 
     async def _call_model_with_retry(
         self,
@@ -895,9 +888,10 @@ class HawiAgent:
                     await asyncio.sleep(wait_time)
                     continue
 
-        # All retries exhausted for retryable errors
-        state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
-        raise last_error
+        if last_error:
+            # All retries exhausted for retryable errors
+            state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
+            raise last_error
 
     async def _execute_tool(
         self,
