@@ -599,7 +599,12 @@ class HawiAgent:
                                 )
                                 if full_thinking:
                                     from hawi.agent.message import ReasoningPart
-                                    content_parts.append(ReasoningPart(type="reasoning", reasoning=full_thinking, signature=None))
+                                    content_parts.append(ReasoningPart(
+                                        type="reasoning",
+                                        reasoning=full_thinking,
+                                        signature=None,
+                                        redacted_content=None
+                                    ))
 
                         # Handle tool_call_delta chunk
                         elif chunk["type"] == "tool_call_delta":

@@ -12,11 +12,16 @@ import logging
 from typing import Any
 
 from hawi.agent.message import (
+    AudioPart,
     ContentPart,
+    FilePart,
+    ImagePart,
     Message,
     MessageRequest,
+    RefusalPart,
     ToolDefinition,
     ToolChoice,
+    VideoPart,
 )
 
 logger = logging.getLogger(__name__)
@@ -265,6 +270,39 @@ def convert_content_to_openai(
                 "type": "text",
                 "text": f"[{title}: {source['url']}]",
             })
+        elif part["type"] == "audio":
+            # OpenAI input_audio format (GPT-4o-audio)
+            source = part["source"]
+            # 优先使用 data 字段，否则使用 url 字段
+            audio_data = source.get("data") or source.get("url") or ""
+            openai_content.append({
+                "type": "input_audio",
+                "input_audio": {
+                    "data": audio_data,
+                    "format": source.get("format", "wav"),
+                },
+            })
+        elif part["type"] == "file":
+            # OpenAI file reference format
+            source = part["source"]
+            openai_content.append({
+                "type": "file",
+                "file": {
+                    "file_id": source["file_id"],
+                    "filename": source.get("filename"),
+                },
+            })
+        elif part["type"] == "video":
+            # OpenAI doesn't natively support video, convert to text placeholder
+            source = part["source"]
+            logger.warning(
+                "Video content is not natively supported by OpenAI API, "
+                "converting to placeholder text. Consider using image frames instead."
+            )
+            openai_content.append({
+                "type": "text",
+                "text": f"[Video: {source.get('url', 'unknown')}]",
+            })
 
     return openai_content if openai_content else ""
 
@@ -292,6 +330,27 @@ def convert_openai_content_to_part(
                 "source": {
                     "url": image_url.get("url", ""),
                     "detail": image_url.get("detail"),
+                },
+            }
+        ]
+    elif p_type == "refusal":
+        # OpenAI refusal response
+        return [{"type": "refusal", "refusal": part.get("refusal", "")}]
+    elif p_type == "audio":
+        # OpenAI audio output (modality response) - map to AudioPart
+        audio = part.get("audio", {})
+        metadata = {}
+        if audio.get("expires_at"):
+            metadata["expires_at"] = audio["expires_at"]
+        return [
+            {
+                "type": "audio",
+                "source": {
+                    "id": audio.get("id"),
+                    "data": audio.get("data"),
+                    "format": part.get("format", "wav"),
+                    "transcript": audio.get("transcript"),
+                    "metadata": metadata if metadata else {},
                 },
             }
         ]

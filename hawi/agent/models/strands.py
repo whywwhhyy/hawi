@@ -25,25 +25,26 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator, Iterator, cast
+from typing import Any, AsyncGenerator, Iterator, cast
 
 from hawi.agent.model import BalanceInfo, Model
 from hawi.agent.message import (
+    AudioPart,
     ContentPart,
+    DocumentPart,
+    ImagePart,
     Message,
     MessageRequest,
     MessageResponse,
+    ReasoningPart,
     StreamPart,
     TextPart,
-    ImagePart,
-    DocumentPart,
     TokenUsage,
     ToolCallPart,
-    ToolResultPart,
-    ReasoningPart,
     ToolChoice,
     ToolDefinition,
-    TokenUsage,
+    ToolResultPart,
+    VideoPart,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,10 +165,8 @@ class StrandsModel(Model):
                 if part:
                     content.append(part)
 
-        # 处理 tool calls
-        if "tool_calls" in response:
-            for tool_call in response["tool_calls"]:
-                content.append(self._convert_strands_tool_call_to_part(tool_call))
+        # 处理 tool calls (Strands中toolUse是content块的一部分)
+        # 注意：_convert_strands_block_to_part 已经处理了 toolUse，所以这里不需要重复处理
 
         # 提取 usage (Strands使用camelCase字段名)
         usage = None
@@ -251,7 +250,7 @@ class StrandsModel(Model):
 
         return self._parse_response_impl(strands_response)
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncIterator[StreamPart]:
+    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[StreamPart, None]:
         """异步流式实现"""
         strands_request = self._prepare_request_impl(request)
 
@@ -265,8 +264,9 @@ class StrandsModel(Model):
                 yield chunk
             return
 
+        state = {"index": 0, "block_started": False, "pending_usage": None}
         async for event in strands_stream:
-            for chunk in self._convert_strands_event_to_stream_part(event):
+            for chunk in self._convert_strands_event_to_stream_part(event, state):
                 yield chunk
 
     # ==========================================================================
@@ -375,7 +375,7 @@ class StrandsModel(Model):
             return {
                 "reasoningContent": {
                     "reasoningText": {
-                        "text": part["reasoning"],
+                        "text": part.get("reasoning") or "",
                         "signature": part.get("signature"),
                     }
                 }
@@ -384,6 +384,27 @@ class StrandsModel(Model):
             # strands 可能不支持 cache_control，跳过或转换
             logger.debug("CacheControlPart skipped in strands conversion")
             return None
+        elif p_type == "video":
+            part = cast(VideoPart, part)
+            return {
+                "video": {
+                    "source": {
+                        "bytes": part["source"].get("data", ""),
+                    },
+                    "format": part["source"].get("format", "mp4"),
+                }
+            }
+        elif p_type == "audio":
+            part = cast(AudioPart, part)
+            source = part["source"]
+            # Strands 音频格式：优先使用 data，否则使用 url
+            audio_data = source.get("data") or source.get("url") or ""
+            return {
+                "audio": {
+                    "source": {"bytes": audio_data},
+                    "format": source.get("format", "wav"),
+                }
+            }
 
         logger.warning(f"Unknown content part type: {p_type}")
         return None
@@ -414,20 +435,70 @@ class StrandsModel(Model):
                 "title": doc.get("title"),
                 "context": doc.get("context"),
             }
-        elif "reasoningContent" in block or "thinking" in block:
-            # reasoningContent (DeepSeek) 或 thinking (Anthropic)
-            reasoning = block.get("reasoningContent", block.get("thinking", {}))
+        elif "reasoningContent" in block:
+            # Strands reasoningContent格式
+            reasoning = block["reasoningContent"]
+            # 处理 redacted_content（加密的安全推理内容）
+            if "redactedContent" in reasoning:
+                redacted_data = reasoning["redactedContent"]
+                if isinstance(redacted_data, str):
+                    redacted_bytes = redacted_data.encode("utf-8")
+                else:
+                    redacted_bytes = redacted_data
+                return cast(ReasoningPart, {
+                    "type": "reasoning",
+                    "reasoning": None,
+                    "signature": None,
+                    "redacted_content": redacted_bytes,
+                })
             if "reasoningText" in reasoning:
                 text = reasoning["reasoningText"].get("text", "")
                 signature = reasoning["reasoningText"].get("signature")
             else:
                 text = reasoning.get("text", "")
                 signature = reasoning.get("signature")
-            return {
+            return cast(ReasoningPart, {
                 "type": "reasoning",
                 "reasoning": text,
                 "signature": signature,
+                "redacted_content": None,
+            })
+        elif "toolUse" in block:
+            # Strands中toolUse也是content块的一部分
+            return self._convert_strands_tool_use_to_part(block["toolUse"])
+        elif "toolResult" in block:
+            # toolResult块
+            tool_result = block["toolResult"]
+            return {
+                "type": "tool_result",
+                "tool_call_id": tool_result.get("toolUseId", ""),
+                "content": tool_result.get("content", ""),
+                "is_error": tool_result.get("status") == "error",
             }
+        elif "video" in block:
+            # Strands video content
+            video = block["video"]
+            source = video.get("source", {})
+            video_data = source.get("bytes", "")
+            return cast(VideoPart, {
+                "type": "video",
+                "source": {
+                    "data": video_data if isinstance(video_data, str) else "",
+                    "format": video.get("format", "mp4"),
+                },
+            })
+        elif "audio" in block:
+            # Strands audio content
+            audio = block["audio"]
+            source = audio.get("source", {})
+            audio_data = source.get("bytes", "")
+            return cast(AudioPart, {
+                "type": "audio",
+                "source": {
+                    "data": audio_data if isinstance(audio_data, str) else "",
+                    "format": audio.get("format", "wav"),
+                },
+            })
 
         logger.debug(f"Unknown strands block: {block.keys()}")
         return None
@@ -444,21 +515,21 @@ class StrandsModel(Model):
             },
         }
 
-    def _convert_strands_tool_call_to_part(self, tool_call: dict[str, Any]) -> ToolCallPart:
-        """转换 strands tool_call 到 hawi ToolCallPart"""
+    def _convert_strands_tool_use_to_part(self, tool_use: dict[str, Any]) -> ToolCallPart:
+        """转换 strands toolUse 到 hawi ToolCallPart"""
         # 解析参数
-        arguments = tool_call.get("arguments", tool_call.get("input", "{}"))
-        if isinstance(arguments, str):
+        input_data = tool_use.get("input", {})
+        if isinstance(input_data, str):
             try:
-                arguments = json.loads(arguments)
+                input_data = json.loads(input_data)
             except json.JSONDecodeError:
-                arguments = {}
+                input_data = {}
 
         return {
             "type": "tool_call",
-            "id": tool_call.get("id", tool_call.get("toolUseId", "")),
-            "name": tool_call.get("name", tool_call.get("function", {}).get("name", "")),
-            "arguments": arguments,
+            "id": tool_use.get("toolUseId", ""),
+            "name": tool_use.get("name", ""),
+            "arguments": input_data,
         }
 
     def _convert_tool_call_part_to_strands(self, part: ToolCallPart) -> dict[str, Any]:
@@ -512,126 +583,81 @@ class StrandsModel(Model):
         else:
             # 处理对象形式的事件（直接访问属性）
             event_type = getattr(event, "type", "")
-            event_data = {
-                "content": getattr(event, "content", None),
-                "reasoning": getattr(event, "reasoning", None),
-                "tool_call": getattr(event, "tool_call", None),
-                "usage": getattr(event, "usage", None),
-                "stop_reason": getattr(event, "stop_reason", None),
-            }
+            event_data = {}
+            # 尝试从对象获取标准Strands事件字段
+            if hasattr(event, "delta"):
+                event_data["delta"] = event.delta
+            if hasattr(event, "start"):
+                event_data["start"] = event.start
+            if hasattr(event, "stopReason"):
+                event_data["stopReason"] = event.stopReason
+            if hasattr(event, "metadata"):
+                event_data["metadata"] = event.metadata
 
-        if event_type == "content":
-            content = event_data.get("content")
-            if content:
-                # 获取文本内容
-                text = ""
-                if isinstance(content, dict) and "text" in content:
-                    text = content["text"]
-                elif isinstance(content, str):
-                    text = content
+        if event_type == "contentBlockDelta":
+            # Strands标准事件: contentBlockDelta
+            delta = event_data.get("delta", {})
+            if isinstance(delta, dict):
+                # 文本增量
+                if "text" in delta:
+                    text = delta["text"]
+                    if text:
+                        # 如果是新的块，发送 start
+                        if not block_started:
+                            yield {
+                                "type": "text_delta",
+                                "index": index,
+                                "delta": "",
+                                "is_start": True,
+                                "is_end": False,
+                            }
+                            state["block_started"] = True
 
-                if text:
-                    # 如果是新的块，发送 start
-                    if not block_started:
                         yield {
                             "type": "text_delta",
                             "index": index,
-                            "delta": "",
-                            "is_start": True,
+                            "delta": text,
+                            "is_start": False,
                             "is_end": False,
                         }
-                        block_started = True
+                # 工具输入增量
+                elif "toolUse" in delta:
+                    tool_input = delta["toolUse"].get("input", "")
+                    if tool_input:
+                        yield {
+                            "type": "tool_call_delta",
+                            "index": index,
+                            "id": None,
+                            "name": None,
+                            "arguments_delta": tool_input if isinstance(tool_input, str) else json.dumps(tool_input),
+                            "is_start": False,
+                            "is_end": False,
+                        }
 
-                    yield {
-                        "type": "text_delta",
-                        "index": index,
-                        "delta": text,
-                        "is_start": False,
-                        "is_end": False,
-                    }
-
-                    # 发送 end 标记（strands 的事件是离散的，每个 content 事件是完整的）
-                    yield {
-                        "type": "text_delta",
-                        "index": index,
-                        "delta": "",
-                        "is_start": False,
-                        "is_end": True,
-                    }
-                    block_started = False
-
-        elif event_type == "reasoning":
-            reasoning = event_data.get("reasoning", "")
-            if reasoning:
-                # 发送 start
-                yield {
-                    "type": "thinking_delta",
-                    "index": index,
-                    "delta": "",
-                    "is_start": True,
-                    "is_end": False,
-                }
-                # 发送内容
-                yield {
-                    "type": "thinking_delta",
-                    "index": index,
-                    "delta": reasoning,
-                    "is_start": False,
-                    "is_end": False,
-                }
-                # 发送 end
-                yield {
-                    "type": "thinking_delta",
-                    "index": index,
-                    "delta": "",
-                    "is_start": False,
-                    "is_end": True,
-                }
-
-        elif event_type == "tool_call":
-            tool_call = event_data.get("tool_call")
-            if tool_call:
-                # 提取工具调用信息
-                tc_id = tool_call.get("id", tool_call.get("toolUseId", "")) if isinstance(tool_call, dict) else None
-                tc_name = ""
-                tc_args = ""
-
-                if isinstance(tool_call, dict):
-                    tc_name = tool_call.get("name", tool_call.get("function", {}).get("name", ""))
-                    args = tool_call.get("arguments", tool_call.get("input", {}))
-                    if isinstance(args, dict):
-                        tc_args = json.dumps(args)
-                    else:
-                        tc_args = str(args)
-
-                # 发送 start
-                yield {
-                    "type": "tool_call_delta",
-                    "index": index,
-                    "id": tc_id or None,
-                    "name": tc_name or None,
-                    "arguments_delta": "",
-                    "is_start": True,
-                    "is_end": False,
-                }
-                # 发送参数
-                if tc_args:
+        elif event_type == "contentBlockStart":
+            # Strands块开始事件
+            start = event_data.get("start", {})
+            if isinstance(start, dict):
+                if "toolUse" in start:
+                    tool = start["toolUse"]
                     yield {
                         "type": "tool_call_delta",
                         "index": index,
-                        "id": None,
-                        "name": None,
-                        "arguments_delta": tc_args,
-                        "is_start": False,
+                        "id": tool.get("toolUseId"),
+                        "name": tool.get("name"),
+                        "arguments_delta": "",
+                        "is_start": True,
                         "is_end": False,
                     }
-                # 发送 end
+                    state["block_started"] = True
+
+        elif event_type == "contentBlockStop":
+            # Strands块结束事件
+            if block_started:
                 yield {
-                    "type": "tool_call_delta",
+                    "type": "text_delta",
                     "index": index,
-                    "id": tc_id or None,
-                    "name": tc_name or None,
-                    "arguments_delta": "",
+                    "delta": "",
                     "is_start": False,
                     "is_end": True,
                 }

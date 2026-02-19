@@ -30,15 +30,16 @@ class MockStrandsModel:
             "content": [{"text": "Hello from strands"}],
             "stop_reason": "stop",
             "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
+                "inputTokens": 10,
+                "outputTokens": 5,
             },
         }
 
     def run_stream(self, **kwargs: Any):
         self.last_call = kwargs
-        yield {"type": "content", "content": {"text": "Hello"}}
-        yield {"type": "finish", "stop_reason": "stop"}
+        # Standard Strands streaming events
+        yield {"type": "contentBlockDelta", "delta": {"text": "Hello"}}
+        yield {"type": "messageStop", "stopReason": "end_turn"}
 
 
 class TestStrandsModel:
@@ -225,8 +226,8 @@ class TestResponseConversion:
             "content": [{"text": "Hello world"}],
             "stop_reason": "stop",
             "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
+                "inputTokens": 10,
+                "outputTokens": 5,
             },
         }
 
@@ -242,21 +243,22 @@ class TestResponseConversion:
         assert result.usage.output_tokens == 5
 
     def test_convert_tool_call_response(self):
-        """测试转换 tool call 响应"""
+        """测试转换 tool call 响应 - Strands使用content块中的toolUse"""
         strands_model = MockStrandsModel()
         adapter = StrandsModel(strands_model)
 
         strands_response = {
             "id": "msg_789",
-            "content": [],
-            "tool_calls": [
+            "content": [
                 {
-                    "id": "call_123",
-                    "name": "get_weather",
-                    "arguments": '{"city": "Beijing"}',
+                    "toolUse": {
+                        "toolUseId": "call_123",
+                        "name": "get_weather",
+                        "input": {"city": "Beijing"},
+                    }
                 }
             ],
-            "stop_reason": "tool_calls",
+            "stop_reason": "tool_use",
         }
 
         result = adapter._parse_response_impl(strands_response)
@@ -271,30 +273,43 @@ class TestResponseConversion:
 class TestStreamConversion:
     """流式事件转换测试"""
 
-    def test_convert_content_event(self):
-        """测试转换 content 事件"""
+    def test_convert_content_block_delta_event(self):
+        """测试转换 contentBlockDelta 事件"""
         strands_model = MockStrandsModel()
         adapter = StrandsModel(strands_model)
 
-        event = {"type": "content", "content": {"text": "Hello"}}
-        result = list(adapter._convert_strands_event_to_stream_part(event))
+        state = {"index": 0, "block_started": False, "pending_usage": None}
+        event = {"type": "contentBlockDelta", "delta": {"text": "Hello"}}
+        result = list(adapter._convert_strands_event_to_stream_part(event, state))
 
-        # StreamPart 将 content 拆分为 start + delta + end
-        assert len(result) == 3
+        # contentBlockDelta 产生 start + delta (end由contentBlockStop产生)
+        assert len(result) == 2
         assert result[0]["type"] == "text_delta"
         assert result[0]["is_start"] is True
         assert result[1]["type"] == "text_delta"
         assert result[1]["delta"] == "Hello"
-        assert result[2]["type"] == "text_delta"
-        assert result[2]["is_end"] is True
 
-    def test_convert_finish_event(self):
-        """测试转换 finish 事件"""
+    def test_convert_message_stop_event(self):
+        """测试转换 messageStop 事件"""
         strands_model = MockStrandsModel()
         adapter = StrandsModel(strands_model)
 
+        state = {"index": 0, "block_started": False, "pending_usage": None}
+        event = {"type": "messageStop", "stopReason": "end_turn"}
+        result = list(adapter._convert_strands_event_to_stream_part(event, state))
+
+        assert len(result) == 1
+        assert result[0]["type"] == "finish"
+        assert result[0]["stop_reason"] == "end_turn"
+
+    def test_convert_legacy_finish_event(self):
+        """测试转换旧版 finish 事件（向后兼容）"""
+        strands_model = MockStrandsModel()
+        adapter = StrandsModel(strands_model)
+
+        state = {"index": 0, "block_started": False, "pending_usage": None}
         event = {"type": "finish", "stop_reason": "stop"}
-        result = list(adapter._convert_strands_event_to_stream_part(event))
+        result = list(adapter._convert_strands_event_to_stream_part(event, state))
 
         assert len(result) == 1
         assert result[0]["type"] == "finish"
@@ -346,15 +361,13 @@ class TestIntegration:
         # Verify strands model was called
         assert strands_model.last_call is not None
 
-        # Verify events (start + delta + end + finish = 4 events)
-        assert len(events) == 4
+        # Verify events (start + delta from contentBlockDelta + finish from messageStop = 3 events)
+        assert len(events) == 3
         assert events[0]["type"] == "text_delta"
         assert events[0]["is_start"] is True
         assert events[1]["type"] == "text_delta"
         assert events[1]["delta"] == "Hello"
-        assert events[2]["type"] == "text_delta"
-        assert events[2]["is_end"] is True
-        assert events[3]["type"] == "finish"
+        assert events[2]["type"] == "finish"
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from hawi.agent.message import (
     ContentPart,
     DocumentPart,
     DocumentSource,
+    GuardContentPart,
     ImagePart,
     Message,
     ReasoningPart,
@@ -86,6 +87,8 @@ class ContentConverter:
             return self._convert_tool_result(cast(ToolResultPart, part))
         elif p_type == "reasoning":
             return self._convert_reasoning(cast(ReasoningPart, part))
+        elif p_type == "guard_content":
+            return self._convert_guard_content(cast(GuardContentPart, part))
         elif p_type == "cache_control":
             # CacheControlPart 在 convert_content 中处理，这里返回 None
             return None
@@ -236,12 +239,32 @@ class ContentConverter:
             result["is_error"] = True
         return result
 
-    def _convert_reasoning(self, part: ReasoningPart) -> dict[str, Any]:
+    def _convert_reasoning(self, part: ReasoningPart) -> dict[str, Any] | None:
         """转换 reasoning/thinking"""
+        # 处理 redacted_content（Anthropic 加密的安全推理内容）
+        redacted = part.get("redacted_content")
+        if redacted:
+            return {
+                "type": "redacted_thinking",
+                "data": redacted.decode("utf-8", errors="replace"),
+            }
+
         return {
             "type": "thinking",
-            "thinking": part["reasoning"],
+            "thinking": part.get("reasoning") or "",
             "signature": part.get("signature"),
+        }
+
+    def _convert_guard_content(self, part: GuardContentPart) -> dict[str, Any]:
+        """转换 guard_content（Anthropic Guardrails）"""
+        return {
+            "type": "guard_content",
+            "guard_content": {
+                "text": {
+                    "text": part["text"],
+                    "qualifiers": part.get("qualifiers", ["guard_content"]),
+                }
+            },
         }
 
     def _convert_tool_result_content(

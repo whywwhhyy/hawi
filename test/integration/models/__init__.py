@@ -6,6 +6,16 @@ API Key configuration (priority order):
 2. apikey.yaml file in project root
 """
 
-from test.integration import get_deepseek_api_key, get_kimi_openai_api_key, get_minimax_api_key
+from test.integration import (
+    get_deepseek_api_key,
+    get_kimi_openai_api_key,
+    get_kimi_anthropic_api_key,
+    get_minimax_api_key,
+)
 
-__all__ = ["get_deepseek_api_key", "get_kimi_openai_api_key", "get_minimax_api_key"]
+__all__ = [
+    "get_deepseek_api_key",
+    "get_kimi_openai_api_key",
+    "get_kimi_anthropic_api_key",
+    "get_minimax_api_key",
+]

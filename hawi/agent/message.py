@@ -4,7 +4,7 @@
 使用 TypedDict 实现 Tagged Union 设计，支持完整的类型检查。
 """
 
-from typing import Any, List, Literal, Required, TypeAlias, TypedDict
+from typing import Any, Literal, Required, TypeAlias, TypedDict, cast
 
 from pydantic import BaseModel
 
@@ -83,12 +83,13 @@ class ToolResultPart(TypedDict):
     is_error: bool | None  # 是否错误（Anthropic 支持）
 
 
-class ReasoningPart(TypedDict):
+class ReasoningPart(TypedDict, total=False):
     """推理/思考内容"""
 
-    type: Literal["reasoning"]
-    reasoning: str  # 推理过程文本
+    type: Required[Literal["reasoning"]]
+    reasoning: str | None  # 普通推理文本
     signature: str | None  # Anthropic 的验证签名
+    redacted_content: bytes | None  # Anthropic 加密的安全推理内容
 
 
 class CacheControlPart(TypedDict):
@@ -111,9 +112,97 @@ class CacheControlPart(TypedDict):
     cache_control: CacheControl
 
 
+# =============================================================================
+# 扩展 ContentPart 类型 - 支持更多 LLM API 功能
+# 详见: todo/message-abstraction-gap-analysis.md
+# =============================================================================
+
+
+class AudioSource(TypedDict, total=False):
+    """
+    音频数据抽象
+
+    通用音频数据源，支持输入/输出双向音频，不绑定特定 API。
+    字段根据使用场景（输入或输出）选择性填充。
+
+    输入音频示例：
+        AudioSource(url="data:audio/wav;base64,...", format="wav")
+
+    输出音频示例（模型生成）：
+        AudioSource(
+            id="audio_xxx",
+            data="base64encoded...",
+            format="wav",
+            transcript="Hello!",
+            metadata={"expires_at": 1234567890}
+        )
+    """
+
+    # 核心字段
+    data: str  # base64 编码的音频数据（优先于 url）
+    url: str  # 数据 URI 或 http URL 或外部引用 ID
+    format: Literal["wav", "mp3", "flac", "opus", "pcm16"]  # 音频编码格式
+
+    # 元数据（输出音频常见）
+    id: str  # 服务端音频资源唯一标识
+    transcript: str  # 音频转录文本（便于不支持音频的模型共享上下文）
+    metadata: dict[str, Any]  # 扩展元数据（过期时间等）
+
+
+class AudioPart(TypedDict):
+    """音频内容"""
+
+    type: Literal["audio"]
+    source: AudioSource
+
+
+class VideoSource(TypedDict):
+    """视频来源 (Strands)"""
+
+    url: str  # data URI: data:video/mp4;base64,...
+    format: Literal["mp4", "mov", "webm", "mkv", "avi", "flv", "mpeg", "mpg", "three_gp", "wmv"]
+
+
+class VideoPart(TypedDict):
+    """视频内容 (Strands)"""
+
+    type: Literal["video"]
+    source: VideoSource
+
+
+class FileSource(TypedDict):
+    """文件来源 (OpenAI File API)"""
+
+    file_id: str  # OpenAI File API 返回的 file_id
+    filename: str | None
+
+
+class FilePart(TypedDict):
+    """文件内容引用 (OpenAI File API)"""
+
+    type: Literal["file"]
+    source: FileSource
+
+
+class RefusalPart(TypedDict):
+    """拒绝内容 (OpenAI) - 当模型拒绝生成内容时返回"""
+
+    type: Literal["refusal"]
+    refusal: str
+
+
+class GuardContentPart(TypedDict):
+    """Guardrails 内容安全评估 (Anthropic)"""
+
+    type: Literal["guard_content"]
+    text: str
+    qualifiers: list[Literal["grounding_source", "query", "guard_content"]]
+
+
 # ContentPart 联合类型
 ContentPart: TypeAlias = (
-    TextPart | ImagePart | DocumentPart | ToolCallPart | ToolResultPart | ReasoningPart | CacheControlPart
+    TextPart | ImagePart | DocumentPart | AudioPart | VideoPart | FilePart |
+    ToolCallPart | ToolResultPart | ReasoningPart | CacheControlPart | RefusalPart | GuardContentPart
 )
 
 
@@ -213,6 +302,126 @@ class Message(TypedDict):
 
     # 元数据（可选，用于上下文管理）
     metadata: MessageMetadata | None
+
+
+# =============================================================================
+# 音频处理工具函数
+# =============================================================================
+
+def transcribe_audio(audio_source: AudioSource) -> str:
+    """
+    语音识别接口 - 将音频转换为文本
+
+    TODO: 当前为占位实现，后续接入实际语音识别引擎（如 Whisper）
+
+    Args:
+        audio_source: 音频数据源
+
+    Returns:
+        识别出的文本内容，如果无法识别则返回提示信息
+    """
+    # 如果已经有转录文本，直接返回
+    transcript = audio_source.get("transcript")
+    if transcript:
+        return transcript
+
+    # TODO: 接入实际的语音识别引擎
+    # 示例: return whisper_client.transcribe(audio_source["data"])
+
+    return "[语音消息 - 暂不支持语音识别，请使用支持音频的模型]"
+
+
+def convert_audio_part_to_text(part: AudioPart) -> TextPart:
+    """
+    将 AudioPart 转换为 TextPart
+
+    用于不支持音频的模型，将音频降级为文本处理。
+    如果音频包含转录文本则使用，否则调用语音识别接口。
+
+    Args:
+        part: 音频内容部分
+
+    Returns:
+        文本内容部分
+    """
+    source = part["source"]
+
+    # 优先使用已有的转录文本
+    transcript = source.get("transcript")
+    if transcript:
+        text = transcript
+    else:
+        # 调用语音识别接口
+        text = transcribe_audio(source)
+
+    return {"type": "text", "text": text}
+
+
+def downgrade_audio_content(content: list[ContentPart]) -> list[ContentPart]:
+    """
+    将内容中的 AudioPart 降级为 TextPart
+
+    用于不支持音频输入的模型，在请求转换前调用。
+
+    Args:
+        content: 原始内容列表
+
+    Returns:
+        处理后的内容列表（所有 AudioPart 被替换为 TextPart）
+    """
+    result: list[ContentPart] = []
+
+    for part in content:
+        if part["type"] == "audio":
+            # 将音频降级为文本
+            result.append(convert_audio_part_to_text(part))
+        elif part["type"] == "tool_result":
+            # 递归处理 tool_result 中的内容
+            tool_part = cast(ToolResultPart, part)
+            tool_content = tool_part.get("content")
+            if isinstance(tool_content, list):
+                new_part: ToolResultPart = {
+                    "type": "tool_result",
+                    "tool_call_id": tool_part["tool_call_id"],
+                    "content": downgrade_audio_content(tool_content),
+                    "is_error": tool_part.get("is_error"),
+                }
+                result.append(new_part)
+            else:
+                result.append(part)
+        else:
+            result.append(part)
+
+    return result
+
+
+def downgrade_messages_audio(messages: list[Message]) -> list[Message]:
+    """
+    将消息列表中的所有 AudioPart 降级为 TextPart
+
+    用于不支持音频输入的模型，在请求转换前调用。
+
+    Args:
+        messages: 原始消息列表
+
+    Returns:
+        处理后的消息列表
+    """
+    result: list[Message] = []
+
+    for msg in messages:
+        # 复制消息并处理 content
+        new_msg: Message = {
+            "role": msg["role"],
+            "content": downgrade_audio_content(msg["content"]),
+            "name": msg.get("name"),
+            "tool_calls": msg.get("tool_calls"),
+            "tool_call_id": msg.get("tool_call_id"),
+            "metadata": msg.get("metadata"),
+        }
+        result.append(new_msg)
+
+    return result
 
 
 # =============================================================================
