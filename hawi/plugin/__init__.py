@@ -11,10 +11,13 @@ from .decorators import (
     tool,
 )
 from .types import PluginHooks
+from .resource import HawiResource, ResourceContent
 
 __all__ = [
     "HawiPlugin",
     "PluginHooks",
+    "HawiResource",
+    "ResourceContent",
     "before_session",
     "after_session",
     "before_conversation",
