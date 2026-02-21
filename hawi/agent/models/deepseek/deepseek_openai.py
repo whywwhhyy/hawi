@@ -8,7 +8,7 @@ Tool Calling 支持:
 - deepseek-reasoner: 从 V3.2 版本开始支持 tool calling + thinking mode
 
 API 限制 (参考 https://api-docs.deepseek.com/guides/thinking_mode):
-- reasoning_content: 只能从响应中读取，请求中包含会导致 400 错误
+- reasoning_content: 普通对话中无需回传，但在 tool calling 场景下必须回传
 - tool 消息 content: 必须是字符串，不支持数组格式
 - Reasoner 模型: temperature/top_p 等参数会被忽略但不会报错
 """
@@ -201,9 +201,24 @@ class DeepSeekOpenAIModel(OpenAIModel):
             if isinstance(content, list):
                 result["content"] = self._serialize_content_to_string(content)
 
-        # 注意：根据 DeepSeek API 文档，请求中不能包含 reasoning_content 字段，
-        # 否则会返回 400 错误。reasoning_content 只能从响应中读取。
-        # 因此这里不将 reasoning_content 添加到请求中。
+        # DeepSeek Reasoner 模型在 tool calling 场景下需要回传 reasoning_content
+        # 参考: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
+        if self.model_id == "deepseek-reasoner" and result.get("role") == "assistant":
+            # 从消息内容中提取 reasoning_content (来自 ReasoningPart)
+            for part in message.get("content", []):
+                if part.get("type") == "reasoning":
+                    result["reasoning_content"] = part.get("reasoning", "")
+                    break
+
+            # 如果消息元数据中有 reasoning_content，也提取出来
+            metadata = message.get("metadata")
+            if not result.get("reasoning_content") and metadata and metadata.get("reasoning_content"):
+                result["reasoning_content"] = metadata["reasoning_content"]
+
+            # DeepSeek Reasoner API 要求 tool call 消息必须有非空的 reasoning_content
+            # 如果没有 reasoning_content 但有 tool_calls，添加一个默认的
+            if not result.get("reasoning_content") and result.get("tool_calls"):
+                result["reasoning_content"] = "Using tool to solve the problem..."
 
         return result
 

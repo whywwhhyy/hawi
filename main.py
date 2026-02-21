@@ -70,16 +70,19 @@ def load_apikey_yaml() -> list[dict[str, Any]]:
     return []
 
 def create_model(argv:list[str]):
+    quick_arguments = []
     def take_item(items, name:str):
         def select_from_argv_or_user(keys):
             for key in keys:
                 if str(key) in argv:
                     argv.remove(key)
-                    return key
-            key = user_select(keys, f"Select {name}:")
-            if key is None:
-                print("")
-                exit()
+                    break
+            else:
+                key = user_select(keys, f"Select {name}:")
+                if key is None:
+                    print("")
+                    exit()
+            quick_arguments.append(key)
             return key
 
         if not isinstance(items, list):
@@ -106,6 +109,8 @@ def create_model(argv:list[str]):
     model_class = get_model_class(adapter)
     if not model_class:
         raise Exception(f"unknown model adapter {adapter}")
+    
+    print(f"quick arguments: {' '.join(quick_arguments)}")
     return provider_config['key'], model_class(**model_params)
 
 def create_agent(model: Model) -> HawiAgent:

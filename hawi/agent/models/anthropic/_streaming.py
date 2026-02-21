@@ -72,6 +72,10 @@ class _AnthropicStreamHandler:
         elif event_type in ("text","input_json"):
             # 不需要处理snapshot信息，因为我们已经用delta信息拼接完毕
             pass
+        elif event_type in ("thinking", "signature"):
+            # DeepSeek Anthropic 兼容端点发送的非标准事件
+            # 这些事件不包含增量数据，已由 content_block_start/delta/stop 处理
+            pass
         else:
             print(f"unhandled event type: {event_type}")
     
