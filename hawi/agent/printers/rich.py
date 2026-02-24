@@ -74,6 +74,7 @@ class RichStreamingPrinter(BasePrinter):
         show_reasoning: bool = True,
         show_tools: bool = True,
         show_errors: bool = True,
+        show_error_stack: bool = True,
         max_arg_length: int = 80,
         max_result_length: int = 200,
         console: Console | None = None,
@@ -84,6 +85,7 @@ class RichStreamingPrinter(BasePrinter):
             show_reasoning=show_reasoning,
             show_tools=show_tools,
             show_errors=show_errors,
+            show_error_stack=show_error_stack,
             max_arg_length=max_arg_length,
             max_result_length=max_result_length,
         )

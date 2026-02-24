@@ -295,22 +295,60 @@ def agent_message_added_event(
 
 def agent_error_event(
     run_id: str,
-    error_type: str,
-    error_message: str,
-    recoverable: bool = False,
+    error: str | Exception,
+    error_type: str | None = None,
+    recoverable: bool | None = None,
     **metadata: Any,
 ) -> Event:
-    """Agent 执行错误"""
+    """Agent 执行错误
+
+    Args:
+        run_id: 运行ID
+        error: 错误信息（字符串）或异常对象
+        error_type: 错误类型（字符串形式，当 error 为字符串时需要）
+        recoverable: 是否可恢复（当 error 为字符串时需要）
+        **metadata: 额外元数据
+    """
+    from hawi.agent.errors import AgentError
+
+    if isinstance(error, AgentError):
+        # 传入的是 AgentError 异常对象
+        event_metadata = {
+            "run_id": run_id,
+            "error_type": error.__class__.__name__,
+            "error_message": error.message,
+            "error": error,
+            "recoverable": error.recoverable,
+            "error_stack": error.stack_trace,
+            **metadata,
+        }
+    elif isinstance(error, Exception):
+        # 传入的是其他异常对象
+        import traceback
+
+        event_metadata = {
+            "run_id": run_id,
+            "error_type": error.__class__.__name__,
+            "error_message": str(error),
+            "error": error,
+            "recoverable": recoverable if recoverable is not None else False,
+            "error_stack": traceback.format_exc(),
+            **metadata,
+        }
+    else:
+        # 传入的是字符串（兼容旧代码）
+        event_metadata = {
+            "run_id": run_id,
+            "error_type": error_type or "unknown",
+            "error_message": error,
+            "recoverable": recoverable if recoverable is not None else False,
+            **metadata,
+        }
+
     return Event(
         type="agent.error",
         source="agent",
-        metadata={
-            "run_id": run_id,
-            "error_type": error_type,
-            "error_message": error_message,
-            "recoverable": recoverable,
-            **metadata,
-        },
+        metadata=event_metadata,
     )
 
 

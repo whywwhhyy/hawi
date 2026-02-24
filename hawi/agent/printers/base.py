@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from hawi.agent.events import Event
+from hawi.agent.errors import AgentError
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,14 @@ class BasePrinter(ABC):
         show_reasoning: bool = True,
         show_tools: bool = True,
         show_errors: bool = True,
+        show_error_stack: bool = True,  # 新增：是否显示错误调用栈
         max_arg_length: int = 80,
         max_result_length: int = 200,
     ):
         self.show_reasoning = show_reasoning
         self.show_tools = show_tools
         self.show_errors = show_errors
+        self.show_error_stack = show_error_stack
         self.max_arg_length = max_arg_length
         self.max_result_length = max_result_length
 
@@ -147,8 +150,29 @@ class BasePrinter(ABC):
             return
 
         meta = event.metadata
-        error = meta.get("error", "Unknown error")
-        await self._print_error(error)
+        error_obj = meta.get("error")
+
+        if isinstance(error_obj, AgentError):
+            # 有完整的 AgentError 异常对象
+            message = error_obj.message
+            if self.show_error_stack and error_obj.stack_trace:
+                full_message = f"{message}\n\n[Stack Trace]\n{error_obj.stack_trace}"
+            else:
+                full_message = message
+            await self._print_error(full_message)
+        elif isinstance(error_obj, Exception):
+            # 其他异常对象
+            message = str(error_obj)
+            error_stack = meta.get("error_stack")
+            if self.show_error_stack and error_stack:
+                full_message = f"{message}\n\n[Stack Trace]\n{error_stack}"
+            else:
+                full_message = message
+            await self._print_error(full_message)
+        else:
+            # 兼容旧代码：使用 error_message 或 error 字段
+            error_msg = meta.get("error_message") or meta.get("error", "Unknown error")
+            await self._print_error(error_msg)
 
     @abstractmethod
     async def _print_error(self, error: str) -> None:

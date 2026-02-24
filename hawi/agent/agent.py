@@ -25,6 +25,13 @@ from hawi.plugin import HawiPlugin
 from hawi.tool.types import AgentTool, ToolResult
 
 from .context import AgentContext, ToolCallContext
+from .errors import (
+    AgentError,
+    MaxIterationsError,
+    ModelError,
+    ToolNotFoundError,
+    ToolExecutionError,
+)
 from .events import (
     Event,
     EventBus,
@@ -63,7 +70,7 @@ class _ExecutionState:
 
     iteration: int = 0
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
-    error: str | None = None
+    error: AgentError | str | None = None
     should_stop: bool = False
 
 
@@ -478,9 +485,10 @@ class HawiAgent:
             while not state.should_stop:
                 # Check max iterations
                 if self._max_iterations is not None and state.iteration >= self._max_iterations:
-                    state.error = f"Maximum iterations ({self._max_iterations}) reached"
+                    err = MaxIterationsError(f"Maximum iterations ({self._max_iterations}) reached")
+                    state.error = err
                     yield await self._emit_event(
-                        agent_error_event(run_id=run_id, error_type="max_iterations", error_message=state.error),
+                        agent_error_event(run_id=run_id, error=err),
                         event_bus,
                     )
                     break
@@ -514,10 +522,18 @@ class HawiAgent:
                 try:
                     async for chunk in model_stream_gen:
                         if state.error:
-                            yield await self._emit_event(
-                                agent_error_event(run_id=run_id, error_type="model_error", error_message=state.error),
-                                event_bus,
-                            )
+                            # state.error 现在应该是异常对象
+                            if isinstance(state.error, AgentError):
+                                yield await self._emit_event(
+                                    agent_error_event(run_id=run_id, error=state.error),
+                                    event_bus,
+                                )
+                            else:
+                                # 兼容旧代码：字符串错误
+                                yield await self._emit_event(
+                                    agent_error_event(run_id=run_id, error=str(state.error)),
+                                    event_bus,
+                                )
                             break
 
                         # Handle text_delta chunk
@@ -714,10 +730,16 @@ class HawiAgent:
 
                 if state.error:
                     # Send error event before breaking (error occurred during streaming)
-                    yield await self._emit_event(
-                        agent_error_event(run_id=run_id, error_type="model_error", error_message=state.error),
-                        event_bus,
-                    )
+                    if isinstance(state.error, AgentError):
+                        yield await self._emit_event(
+                            agent_error_event(run_id=run_id, error=state.error),
+                            event_bus,
+                        )
+                    else:
+                        yield await self._emit_event(
+                            agent_error_event(run_id=run_id, error=str(state.error)),
+                            event_bus,
+                        )
                     break
 
                 # Model stream stop
@@ -778,18 +800,23 @@ class HawiAgent:
 
                 # Continue loop for next iteration
 
-        except Exception as e:
-            state.error = f"{type(e).__name__}: {e}"
+        except AgentError as e:
+            # AgentError 已经被包装过了，发送 error event 然后重新抛出
             yield await self._emit_event(
-                agent_error_event(
-                    run_id=run_id,
-                    error_type="exception",
-                    error_message=state.error,
-                ),
+                agent_error_event(run_id=run_id, error=e),
                 event_bus,
             )
-            # Re-raise the exception to preserve traceback for debugging
             raise
+        except Exception as e:
+            # 包装为 AgentError，保留原始异常
+            err = AgentError(f"{type(e).__name__}: {e}", details={"original": e})
+            state.error = err
+            yield await self._emit_event(
+                agent_error_event(run_id=run_id, error=err),
+                event_bus,
+            )
+            # 使用 raise from 保留原始异常的调用栈
+            raise err from e
 
         finally:
             # after_conversation hook
@@ -838,12 +865,26 @@ class HawiAgent:
                 stream_gen = None
 
                 last_error = e
-                error_type = model.classify_error(e)
-                policy_for_error = policy.get(error_type, ModelFailurePolicy(error_type, "stop"))
+                # classify_error 现在返回 ModelError 实例
+                model_error = model.classify_error(e)
+                if isinstance(model_error, ModelError):
+                    error_type_key = model_error.__class__.__name__.lower().replace("error", "")
+                    if error_type_key == "throttle":
+                        error_type_key = "throttle"
+                    elif error_type_key == "network":
+                        error_type_key = "network"
+                    elif error_type_key == "denied":
+                        error_type_key = "denied"
+                    else:
+                        error_type_key = "unknown"
+                else:
+                    error_type_key = "unknown"
+                
+                policy_for_error = policy.get(error_type_key, ModelFailurePolicy(error_type_key, "stop"))
 
                 if policy_for_error.action == "stop":
-                    # Non-retryable error - raise immediately
-                    raise
+                    # Non-retryable error - raise with context
+                    raise model_error from e
 
                 if attempt < max_retries:
                     import asyncio
@@ -851,8 +892,9 @@ class HawiAgent:
 
         if last_error:
             # All retries exhausted for retryable errors
-            state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
-            raise last_error
+            err = ModelError(f"Model call failed after {attempt + 1} attempts", details={"original": last_error})
+            state.error = err
+            raise err from last_error
 
     async def _call_model_with_retry(
         self,
@@ -880,12 +922,26 @@ class HawiAgent:
                 )
             except Exception as e:
                 last_error = e
-                error_type = model.classify_error(e)
-                policy_for_error = policy.get(error_type, ModelFailurePolicy(error_type, "stop"))
+                # classify_error 现在返回 ModelError 实例
+                model_error = model.classify_error(e)
+                if isinstance(model_error, ModelError):
+                    error_type_key = model_error.__class__.__name__.lower().replace("error", "")
+                    if error_type_key == "throttle":
+                        error_type_key = "throttle"
+                    elif error_type_key == "network":
+                        error_type_key = "network"
+                    elif error_type_key == "denied":
+                        error_type_key = "denied"
+                    else:
+                        error_type_key = "unknown"
+                else:
+                    error_type_key = "unknown"
+                
+                policy_for_error = policy.get(error_type_key, ModelFailurePolicy(error_type_key, "stop"))
 
                 if policy_for_error.action == "stop":
-                    # Non-retryable error - raise immediately
-                    raise
+                    # Non-retryable error - raise with context
+                    raise model_error from e
 
                 if attempt < max_retries:
                     # Exponential backoff
@@ -895,8 +951,9 @@ class HawiAgent:
 
         if last_error:
             # All retries exhausted for retryable errors
-            state.error = f"Model call failed after {attempt + 1} attempts: {last_error}"
-            raise last_error
+            err = ModelError(f"Model call failed after {attempt + 1} attempts", details={"original": last_error})
+            state.error = err
+            raise err from last_error
 
     async def _execute_tool(
         self,
@@ -916,7 +973,8 @@ class HawiAgent:
         # Find tool
         tool = self._context.get_tool(tool_name)
         if tool is None:
-            result = ToolResult(success=False, error=f"Tool '{tool_name}' not found")
+            err = ToolNotFoundError(f"Tool '{tool_name}' not found")
+            result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
         elif getattr(tool, "audit", False):
             # Audit mode: cache the tool call and return pending status
             self._context._add_pending_tool_call(tool_call_id, tool_name, arguments)
@@ -936,8 +994,10 @@ class HawiAgent:
             try:
                 result = await tool.ainvoke(tool_arguments)
             except Exception as e:
+                # 包装为 ToolExecutionError，保留原始异常
+                err = ToolExecutionError(f"Tool '{tool_name}' execution failed: {e}", details={"original": e})
                 # All errors return to model as string (per design requirement)
-                result = ToolResult(success=False, error=f"{type(e).__name__}: {e}")
+                result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
 
         duration_ms = (time.time() - start_time) * 1000
 

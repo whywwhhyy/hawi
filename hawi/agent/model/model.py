@@ -22,8 +22,9 @@ from hawi.agent.message import (
     ToolDefinition,
     ToolChoice,
 )
+from hawi.agent.errors import ModelError
 
-__all__ = ["Model", "StreamPart", "BalanceInfo", "ModelErrorType", "ModelFailurePolicy", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails"]
+__all__ = ["Model", "StreamPart", "BalanceInfo", "ModelFailurePolicy", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -39,15 +40,6 @@ ModelParams = dict[str, Any]
 # 余额详情类型：各提供商返回的余额信息格式不同
 BalanceDetails = dict[str, Any]
 """余额详情，包含各平台特定的额外信息（如赠送余额、冻结余额等）"""
-
-
-class ModelErrorType:
-    """模型错误类型分类"""
-
-    NETWORK = "network"      # 网络错误（连接失败、超时等）
-    THROTTLE = "throttle"    # 限流错误（429等）
-    DENIED = "denied"        # 权限错误（认证失败、禁止访问等）
-    UNKNOWN = "unknown"      # 未知错误
 
 
 @dataclass
@@ -338,29 +330,15 @@ class Model(ABC):
     # 错误分类 - 子类可覆盖以提供提供商特定的错误映射
     # ==========================================================================
 
-    def classify_error(self, exception: Exception) -> str:
-        """分类模型调用异常为错误类型
+    def classify_error(self, exception: Exception) -> ModelError:
+        """分类模型调用异常为具体的错误类实例
 
-        子类应覆盖此方法以提供提供商特定的错误分类。
+        子类可覆盖此方法以提供提供商特定的错误分类。
 
         Args:
             exception: 捕获的异常
 
         Returns:
-            错误类型 (ModelErrorType.NETWORK, THROTTLE, DENIED, UNKNOWN)
+            具体的 ModelError 子类实例（NetworkError, ThrottleError, DeniedError, UnknownModelError）
         """
-        error_str = str(exception).lower()
-
-        # 限流错误检测
-        if any(kw in error_str for kw in ["rate limit", "429", "too many requests", "throttle"]):
-            return ModelErrorType.THROTTLE
-
-        # 权限错误检测
-        if any(kw in error_str for kw in ["unauthorized", "forbidden", "401", "403", "denied", "api key"]):
-            return ModelErrorType.DENIED
-
-        # 网络错误检测
-        if any(kw in error_str for kw in ["connection", "timeout", "network", "dns", "refused", "reset"]):
-            return ModelErrorType.NETWORK
-
-        return ModelErrorType.UNKNOWN
+        return ModelError.classify(exception)

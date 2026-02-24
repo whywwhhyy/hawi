@@ -134,7 +134,7 @@ You have access to a persistent Python interpreter through the following tools:
 Use these tools to help users with coding tasks, data analysis, calculations, etc.
 Always explain what you're doing before executing code.
 """,
-        max_iterations=10,
+        max_iterations=None,
         enable_streaming=True,   # Enable streaming for real-time output
     )
 

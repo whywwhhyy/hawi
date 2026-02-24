@@ -33,7 +33,22 @@ from .printers import (
     RichStreamingPrinter,
     StreamMarkdownPrinter,
 )
-from .model import Model, ModelErrorType, ModelFailurePolicy, BalanceInfo
+from .model import Model, ModelFailurePolicy, BalanceInfo
+from .errors import (
+    HawiError,
+    AgentError,
+    MaxIterationsError,
+    ModelError,
+    NetworkError,
+    ThrottleError,
+    DeniedError,
+    UnknownModelError,
+    ToolError,
+    ToolNotFoundError,
+    ToolValidationError,
+    ToolExecutionError,
+    ConfigurationError,
+)
 from .message import StreamPart
 from .result import AgentRunResult, ToolCallRecord
 
@@ -66,8 +81,21 @@ __all__ = [
     "AgentRunResult",
     "ToolCallRecord",
     # Model
-    "ModelErrorType",
     "ModelFailurePolicy",
     "BalanceInfo",
     "StreamPart",
+    # Errors
+    "HawiError",
+    "AgentError",
+    "MaxIterationsError",
+    "ModelError",
+    "NetworkError",
+    "ThrottleError",
+    "DeniedError",
+    "UnknownModelError",
+    "ToolError",
+    "ToolNotFoundError",
+    "ToolValidationError",
+    "ToolExecutionError",
+    "ConfigurationError",
 ]
