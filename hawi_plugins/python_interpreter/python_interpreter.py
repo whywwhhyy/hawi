@@ -19,15 +19,13 @@ from rich.syntax import Syntax
 
 from hawi.tool import ToolResult
 from hawi.utils.lifecycle import ExitHandler
-from hawi.plugin import HawiPlugin
-import hawi.plugin as plugin
 
 
 # 创建 rich console 实例用于美化输出
 _console = Console()
 
 
-class PythonInterpreter(HawiPlugin):
+class PythonInterpreter:
     """
     持久化子进程Python解释器
 
@@ -159,7 +157,7 @@ while True:
             self._init_temp_project()
 
         self._start_server()
-        
+
         # 注册退出处理函数，确保在程序退出时正确清理
         self._exit_handler = ExitHandler.get_instance()
         # 创建一个包装函数，检查是否已经关闭
@@ -319,7 +317,6 @@ while True:
                     success=False
                 )
 
-    @plugin.tool
     def execute(self, code: str, timeout: Optional[float] = None) -> ToolResult:
         """
         在子进程中执行Python代码
@@ -388,7 +385,6 @@ while True:
             self._close_proc()
             self._start_server()
 
-    @plugin.tool
     def restart_server(self) -> ToolResult:
         """
         重启子进程服务器，清空所有状态
@@ -403,7 +399,6 @@ while True:
             success=True
         )
 
-    @plugin.tool
     def install_dependency(
         self,
         package: str | list[str],
@@ -413,7 +408,7 @@ while True:
         使用 uv 在临时环境中安装依赖包（隔离，不污染agent项目）
 
         Args:
-            package: 包名或包名列表，如 "requests"、["requests", "numpy>=1.20"]
+            package: 包名或包名列表，如 "requests"、[ "requests", "numpy>=1.20" ]
             auto_restart: 安装成功后是否自动重启解释器，使新包立即可用。
                          默认为 True。设为 False 可手动控制重启时机。
 
@@ -462,203 +457,6 @@ while True:
                 success=False
             )
 
-    def _get_script_path(self, script_name: str) -> str:
-        """获取脚本的完整路径"""
-        if not script_name.endswith('.py'):
-            script_name += '.py'
-        script_name = os.path.basename(script_name)
-        scripts_dir = os.path.join(self._work_dir, "scripts")
-        return os.path.join(scripts_dir, script_name)
-
-    @plugin.tool
-    def save_script(self, script_name: str, code: str, description: str = "") -> str:
-        """
-        保存脚本到脚本目录
-
-        Args:
-            script_name: 脚本文件名（会自动添加 .py 后缀）
-            code: 脚本代码内容
-            description: 脚本描述，会保存在脚本开头
-
-        Returns:
-            str: 保存结果信息
-        """
-        script_path = self._get_script_path(script_name)
-        scripts_dir = os.path.dirname(script_path)
-        os.makedirs(scripts_dir, exist_ok=True)
-
-        with open(script_path, 'w', encoding='utf-8') as f:
-            if description:
-                for line in description.strip().split('\n'):
-                    f.write(f"# {line}\n")
-                f.write("\n")
-            f.write(code)
-        return f"Script '{os.path.basename(script_path)}' saved"
-
-    @plugin.tool
-    def execute_script(self, script_name: str, timeout: Optional[float] = None) -> ToolResult:
-        """
-        执行脚本目录中的脚本
-
-        **重要提示：解释器会保留之前运行过的结果。**
-        脚本执行时可以看到之前代码执行中定义的变量和导入的模块。
-        如果需要清空状态重新开始，请调用 restart_server()。
-
-        Args:
-            script_name: 脚本文件名
-            timeout: 超时时间（秒）
-
-        Returns:
-            ToolResult: 执行结果
-        """
-        script_path = self._get_script_path(script_name)
-        if not os.path.exists(script_path):
-            raise FileNotFoundError(f"Script '{script_name}' not found")
-        with open(script_path, 'r', encoding='utf-8') as f:
-            code = f.read()
-        
-        result = self._execute(code, timeout)
-
-        if self.print_execution:
-            # 构建统一的内容面板
-            from rich.text import Text
-
-            # 代码部分
-            syntax = Syntax(code, "python", theme="monokai", line_numbers=True)
-
-            # 分隔线
-            divider = Text("─" * 60, style="dim")
-
-            # 结果部分
-            output_text = str(result.output or "(无输出)")
-            error_text = result.error or ""
-            success = result.success
-
-            status_emoji = "✅" if success else "❌"
-            status_color = "green" if success else "red"
-            status_text = "成功" if success else "失败"
-
-            # 构建结果文本
-            result_text = Text()
-            result_text.append("状态: ", style="bold")
-            result_text.append(f"{status_emoji} {status_text}\n", style=f"bold {status_color}")
-            result_text.append(f"\n脚本: {script_name}\n", style="bold cyan")
-            result_text.append("\n输出:\n", style="bold cyan")
-            result_text.append(output_text)
-
-            if error_text:
-                result_text.append("\n\n错误:\n", style="bold red")
-                result_text.append(error_text, style="red")
-
-            # 使用 Group 组合内容
-            from rich.console import Group
-            content = Group(syntax, Text(""), divider, Text(""), result_text)
-
-            _console.print(Panel(content, title="[bold blue]Python 执行脚本[/bold blue]", border_style="blue"))
-
-        return result
-
-    @plugin.tool
-    def delete_script(self, script_name: str) -> str:
-        """
-        删除脚本目录中的脚本
-
-        Args:
-            script_name: 脚本文件名
-
-        Returns:
-            str: 删除结果信息
-        """
-        script_path = self._get_script_path(script_name)
-        if not os.path.exists(script_path):
-            raise FileNotFoundError(f"Script '{script_name}' not found")
-        os.remove(script_path)
-        return f"Script '{os.path.basename(script_path)}' deleted"
-
-    @plugin.tool
-    def list_scripts(self) -> list[dict]:
-        """
-        列出脚本目录中的所有脚本及其描述
-
-        Returns:
-            list[dict]: 脚本信息列表，每项包含 name 和 description
-        """
-        scripts_dir = os.path.join(self._work_dir, "scripts")
-        if not os.path.exists(scripts_dir):
-            return []
-
-        result = []
-        for filename in os.listdir(scripts_dir):
-            if filename.endswith('.py'):
-                script_path = os.path.join(scripts_dir, filename)
-                description = ""
-                with open(script_path, 'r', encoding='utf-8') as f:
-                    lines = []
-                    for line in f:
-                        if line.startswith('# '):
-                            lines.append(line[2:].strip())
-                        elif line.startswith('#'):
-                            lines.append(line[1:].strip())
-                        else:
-                            break
-                    description = '\n'.join(lines)
-                result.append({
-                    "name": filename,
-                    "description": description
-                })
-        return result
-
-    @plugin.tool
-    def read_script(self, script_name: str) -> dict:
-        """
-        读取脚本内容
-
-        Args:
-            script_name: 脚本文件名
-
-        Returns:
-            dict: 包含 name、description 和 code 的字典
-
-        Raises:
-            FileNotFoundError: 脚本不存在
-        """
-        script_path = self._get_script_path(script_name)
-        if not os.path.exists(script_path):
-            raise FileNotFoundError(f"Script '{script_name}' not found")
-
-        with open(script_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # 解析描述（开头的注释行）
-        lines = content.split('\n')
-        desc_lines = []
-        code_lines = []
-        in_desc = True
-
-        for line in lines:
-            if in_desc:
-                if line.startswith('# '):
-                    desc_lines.append(line[2:])
-                elif line.startswith('#'):
-                    desc_lines.append(line[1:])
-                elif line.strip() == '':
-                    desc_lines.append('')
-                else:
-                    in_desc = False
-                    code_lines.append(line)
-            else:
-                code_lines.append(line)
-
-        # 移除描述末尾的空行
-        while desc_lines and desc_lines[-1] == '':
-            desc_lines.pop()
-
-        return {
-            "name": os.path.basename(script_path),
-            "description": '\n'.join(desc_lines),
-            "code": '\n'.join(code_lines)
-        }
-
     def _close_proc(self) -> None:
         """关闭子进程"""
         if self._proc is None:
@@ -700,7 +498,7 @@ while True:
                     shutil.rmtree(self._work_dir)
                 except Exception:
                     pass  # 忽略清理失败的错误
-            
+
             # 从退出处理器中注销清理函数（如果已注册）
             if hasattr(self, '_exit_handler'):
                 try:

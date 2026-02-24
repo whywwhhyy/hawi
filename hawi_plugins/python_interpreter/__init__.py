@@ -1,7 +1,7 @@
 from .python_interpreter import PythonInterpreter
-from .multi_python_interpreter import MultiPythonInterpreter
+from .plugin import PythonInterpreterPlugin
 
 __all__ = [
     "PythonInterpreter",
-    "MultiPythonInterpreter",
+    "PythonInterpreterPlugin",
 ]

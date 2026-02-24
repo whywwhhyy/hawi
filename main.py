@@ -55,7 +55,7 @@ from hawi.agent.model import Model
 from hawi.agent.models import get_model_class
 from hawi.utils.terminal import user_select
 
-from hawi_plugins.python_interpreter import PythonInterpreter, MultiPythonInterpreter
+from hawi_plugins.python_interpreter import PythonInterpreter, PythonInterpreterPlugin
 
 
 def load_apikey_yaml() -> list[dict[str, Any]]:
