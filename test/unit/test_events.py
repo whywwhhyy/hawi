@@ -49,14 +49,19 @@ class TestEvent:
 
     def test_event_hashable(self):
         """Test that Event can be used in sets/dicts."""
-        event1 = Event(type="test", source="agent", metadata={"id": 1})
-        event2 = Event(type="test", source="agent", metadata={"id": 2})
-        event3 = Event(type="test", source="agent", metadata={"id": 1})
-
         # Events with same type/source/timestamp are equal
-        # Note: timestamp makes them unique unless mocked
+        # Use explicit same timestamp for equality check
+        event1 = Event(type="test", source="agent", timestamp=1000.0, metadata={"id": 1})
+        event2 = Event(type="test", source="agent", timestamp=1001.0, metadata={"id": 2})
+        event3 = Event(type="test", source="agent", timestamp=1000.0, metadata={"id": 3})
+
+        # Events with different timestamps should have different hashes
         events = {event1, event2}
         assert len(events) == 2
+
+        # Events with same type/source/timestamp are considered equal
+        # (metadata is compare=False, so not used in equality check)
+        assert event1 == event3  # Same timestamp means equal despite different metadata
 
 
 class TestModelEvents:
@@ -171,8 +176,8 @@ class TestAgentEvents:
         """Test agent_error_event creation."""
         event = agent_error_event(
             run_id="run-123",
+            error="API timeout",
             error_type="model_error",
-            error_message="API timeout",
             recoverable=False,
         )
         assert event.type == "agent.error"
@@ -413,8 +418,8 @@ class TestConversationPrinter:
         """Test printing error events."""
         event = agent_error_event(
             run_id="run-1",
+            error="Something went wrong",
             error_type="model_error",
-            error_message="Something went wrong",
         )
         await printer.handle(event)
         # Error uses console.print, verify no exception

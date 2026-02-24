@@ -286,8 +286,8 @@ class TestAgentEventFactories:
         """Test agent_error_event factory."""
         event = agent_error_event(
             run_id="run-123",
+            error="API timeout",
             error_type="model_error",
-            error_message="API timeout",
             recoverable=True,
             retry_count=2
         )

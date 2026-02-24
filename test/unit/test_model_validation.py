@@ -72,8 +72,13 @@ class TestAgentErrorHandling:
         were silently swallowed and no events were produced.
         """
         # Create a mock model that fails during preparation
+        from hawi.agent.errors import UnknownModelError
+
         mock_model = MagicMock()
         mock_model.model_id = "test-model"
+
+        # Make classify_error return an actual exception instance
+        mock_model.classify_error = MagicMock(return_value=UnknownModelError("model error"))
 
         # Make astream raise an exception immediately (simulating _prepare_request_impl failure)
         @asynccontextmanager
@@ -93,15 +98,15 @@ class TestAgentErrorHandling:
         try:
             async for event in agent.arun("test message", stream=True):
                 events.append(event)
-        except AttributeError:
+        except UnknownModelError:
             # Exception should be raised after error event is sent
             pass
 
         # Should have received error event before exception was raised
         error_events = [e for e in events if e.type == "agent.error"]
         assert len(error_events) > 0, f"Expected agent.error event, got: {[e.type for e in events]}"
-        assert "attribute" in error_events[0].metadata.get("error_message", "").lower() or \
-               "startswith" in error_events[0].metadata.get("error_message", "").lower()
+        # The error event should contain the model error message
+        assert "model error" in error_events[0].metadata.get("error_message", "").lower()
 
     @pytest.mark.asyncio
     async def test_model_init_error_is_not_silent(self):

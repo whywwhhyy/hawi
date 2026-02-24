@@ -82,6 +82,7 @@ class DeepSeekOpenAIModel(OpenAIModel):
         model_id: str = "deepseek-chat",
         api_key: str | None = None,
         base_url: str = "https://api.deepseek.com",
+        include_reasoning_in_context: bool = False,
         **params,
     ):
         """
@@ -91,6 +92,9 @@ class DeepSeekOpenAIModel(OpenAIModel):
             model_id: 模型标识符，默认为 "deepseek-chat"
             api_key: API 密钥
             base_url: API 基础 URL，默认为 "https://api.deepseek.com"
+            include_reasoning_in_context: 是否在请求中包含 reasoning_content
+                - True: 在 tool calling 场景下需要回传 reasoning_content
+                - False: 不发送 reasoning_content（普通对话场景，避免 400 错误，默认）
             **params: 其他参数，如 temperature, max_tokens 等
         """
         super().__init__(
@@ -99,6 +103,8 @@ class DeepSeekOpenAIModel(OpenAIModel):
             base_url=base_url,
             **params
         )
+
+        self.include_reasoning_in_context = include_reasoning_in_context
 
         # 如果是 Reasoner 模型，警告不支持的参数
         if self.model_id == "deepseek-reasoner":
@@ -203,7 +209,10 @@ class DeepSeekOpenAIModel(OpenAIModel):
 
         # DeepSeek Reasoner 模型在 tool calling 场景下需要回传 reasoning_content
         # 参考: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
-        if self.model_id == "deepseek-reasoner" and result.get("role") == "assistant":
+        # 但普通对话场景不应发送 reasoning_content，否则 API 会返回 400 错误
+        if (self.model_id == "deepseek-reasoner" and
+            self.include_reasoning_in_context and
+            result.get("role") == "assistant"):
             # 从消息内容中提取 reasoning_content (来自 ReasoningPart)
             for part in message.get("content", []):
                 if part.get("type") == "reasoning":
