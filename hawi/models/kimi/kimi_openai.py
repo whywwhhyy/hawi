@@ -11,10 +11,10 @@ from typing import Any, AsyncIterator, Iterator
 
 import httpx
 
-from hawi.agent.model import BalanceInfo
+from hawi.model import BalanceInfo
 from hawi.agent.message import StreamPart
-from hawi.agent.models.openai import OpenAIModel
-from hawi.agent.models.openai._streaming import StreamProcessor
+from hawi.models.openai import OpenAIModel
+from hawi.models.openai._streaming import StreamProcessor
 from hawi.agent.message import MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)

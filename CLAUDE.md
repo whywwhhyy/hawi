@@ -68,7 +68,7 @@ Model (ABC)
 
 **Usage:**
 ```python
-from hawi.agent.models import DeepSeekModel, KimiModel
+from hawi.models import DeepSeekModel, KimiModel
 
 # Auto-detect API type based on URL
 deepseek = DeepSeekModel(model_id="deepseek-chat", api_key="...")
@@ -296,7 +296,7 @@ test/
 **Basic Agent:**
 ```python
 from hawi.agent import HawiAgent
-from hawi.agent.models import DeepSeekModel
+from hawi.models import DeepSeekModel
 
 model = DeepSeekModel(model_id="deepseek-chat")
 agent = HawiAgent(model=model)

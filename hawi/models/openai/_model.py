@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, Iterator
 
 from openai import OpenAI, AsyncOpenAI
 
-from hawi.agent.model import Model
+from hawi.model import Model
 from hawi.agent.message import (
     MessageRequest,
     MessageResponse,
@@ -36,7 +36,7 @@ class OpenAIModel(Model):
     支持 OpenAI 官方 API 及兼容 OpenAI 格式的第三方 API。
 
     Example:
-        from hawi.agent.models.openai import OpenAIModel
+        from hawi.models.openai import OpenAIModel
 
         model = OpenAIModel(
             model_id="gpt-4",

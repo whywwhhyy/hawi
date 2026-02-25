@@ -8,7 +8,7 @@ This package provides:
 - Result: Execution result types
 """
 
-from .agent import HawiAgent
+from .hawi_agent import HawiAgent
 from .context import AgentContext
 from .events import (
     Event,
@@ -33,7 +33,6 @@ from .printers import (
     RichStreamingPrinter,
     StreamMarkdownPrinter,
 )
-from .model import Model, ModelFailurePolicy, BalanceInfo
 from .errors import (
     HawiError,
     AgentError,
@@ -56,7 +55,6 @@ __all__ = [
     # Core
     "HawiAgent",
     "AgentContext",
-    "Model",
     # Events
     "Event",
     "EventBus",
@@ -80,10 +78,6 @@ __all__ = [
     # Results
     "AgentRunResult",
     "ToolCallRecord",
-    # Model
-    "ModelFailurePolicy",
-    "BalanceInfo",
-    "StreamPart",
     # Errors
     "HawiError",
     "AgentError",

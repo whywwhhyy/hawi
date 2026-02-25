@@ -6,12 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 from anthropic import Anthropic, AsyncAnthropic
 
-from hawi.agent.model import Model
+from hawi.model import Model
 from hawi.agent.message import (
     ContentPart,
     MessageRequest,
@@ -318,7 +318,7 @@ class AnthropicModel(Model):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamPart]:
+    ) -> AsyncGenerator[StreamPart, None]:
         """异步流式调用"""
         req = await self._prepare_request_async(request)
         async for chunk in stream_response_async(self.async_client, req):

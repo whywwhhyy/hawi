@@ -55,7 +55,7 @@ async def example_basic_usage():
 async def example_with_agent():
     """与 Hawi Agent 集成示例"""
     from hawi.agent import HawiAgent
-    from hawi.agent.models.kimi import KimiModel
+    from hawi.models.kimi import KimiModel
     from hawi_plugins.mcp_plugin import MCPPlugin
 
     # 创建 MCP 插件

@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal
 
-from hawi.agent.model import Model
-from hawi.agent.models._utils import (
+from hawi.model import Model
+from hawi.models._utils import (
     detect_minimax_api_type,
     complete_url_and_api,
     MINIMAX_URL_API_CANDIDATES,

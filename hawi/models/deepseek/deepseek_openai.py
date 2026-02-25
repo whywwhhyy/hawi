@@ -21,9 +21,9 @@ from typing import Any
 
 import httpx
 
-from hawi.agent.models.openai import OpenAIModel
+from hawi.models.openai import OpenAIModel
 from hawi.agent.message import MessageResponse
-from hawi.agent.model import BalanceInfo
+from hawi.model import BalanceInfo
 
 logger = logging.getLogger(__name__)
 

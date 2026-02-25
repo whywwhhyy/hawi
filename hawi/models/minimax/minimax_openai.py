@@ -11,8 +11,8 @@ import re
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from hawi.agent.models.openai import OpenAIModel
-from hawi.agent.models.openai._streaming import StreamProcessor
+from hawi.models.openai import OpenAIModel
+from hawi.models.openai._streaming import StreamProcessor
 from hawi.agent.message import MessageResponse, StreamPart, MessageRequest
 
 logger = logging.getLogger(__name__)

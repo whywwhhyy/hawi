@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, TypedDict, NotRequired, Any, Callable, Union
 if TYPE_CHECKING:
     from hawi.agent import HawiAgent
     from hawi.agent.context import AgentContext
-    from hawi.agent.model import Model
+    from hawi.model import Model
     from hawi.agent.message import MessageResponse
 
 # ===== Hook types for regular functions =====

@@ -8,7 +8,7 @@ Anthropic API 兼容模型实现
 4. 支持 Prompt Caching (cache_control)
 
 使用示例:
-    from hawi.agent.models.anthropic import AnthropicModel
+    from hawi.models.anthropic import AnthropicModel
 
     model = AnthropicModel(
         model_id="claude-3-5-sonnet-20241022",

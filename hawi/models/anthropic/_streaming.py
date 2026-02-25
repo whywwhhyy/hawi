@@ -273,9 +273,12 @@ async def stream_response_async(
 
 
 def run_async_stream(
-    async_gen: AsyncGenerator[StreamPart, None],
+    async_iter: AsyncIterator[StreamPart],
 ) -> Iterator[StreamPart]:
-    """将异步流式生成器转为同步迭代器"""
+    """将异步流式迭代器转为同步迭代器"""
+    # 使用 cast 将 AsyncIterator 转为 AsyncGenerator 以访问 aclose 方法
+    # 这是安全的，因为在实际运行时传入的是 AsyncGenerator
+    async_gen = cast(AsyncGenerator[StreamPart, None], async_iter)
     loop = asyncio.new_event_loop()
     try:
         asyncio.set_event_loop(loop)
@@ -287,7 +290,7 @@ def run_async_stream(
             except StopAsyncIteration:
                 break
     finally:
-        # Properly close the async generator to prevent 'aclose' warnings
+        # Properly close the async generator to prevent warnings
         try:
             loop.run_until_complete(async_gen.aclose())
         except Exception:

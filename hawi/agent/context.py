@@ -18,7 +18,7 @@ from hawi.agent.message import (
 from hawi.tool.types import AgentTool, PendingToolCall
 
 if TYPE_CHECKING:
-    from .agent import HawiAgent
+    from .hawi_agent import HawiAgent
 
 
 @dataclass

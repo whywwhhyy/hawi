@@ -21,12 +21,12 @@ from anthropic.types import (
     SignatureDelta,
 )
 
-from hawi.agent.models.anthropic import AnthropicModel
-from hawi.agent.models.anthropic._streaming import (
+from hawi.models.anthropic import AnthropicModel
+from hawi.models.anthropic._streaming import (
     _AnthropicStreamHandler,
     run_async_stream,
 )
-from hawi.agent.models.anthropic._converters import needs_async_conversion
+from hawi.models.anthropic._converters import needs_async_conversion
 from hawi.agent.message import StreamPart, MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)

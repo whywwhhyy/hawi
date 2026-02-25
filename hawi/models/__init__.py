@@ -4,7 +4,7 @@ Hawi Agent 模型实现
 提供各 LLM 提供商的具体实现。
 
 Example:
-    from hawi.agent.models import OpenAIModel
+    from hawi.models import OpenAIModel
     from hawi.agent.model import ModelConfig
 
     model = OpenAIModel(config=ModelConfig(
@@ -15,7 +15,7 @@ Example:
 
 from typing import Optional
 
-from hawi.agent.model import BalanceInfo
+from hawi.model import BalanceInfo
 from .openai import OpenAIModel
 from .anthropic import AnthropicModel
 from .deepseek import DeepSeekModel

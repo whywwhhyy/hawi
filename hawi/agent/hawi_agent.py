@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Coroutine, Literal, TypedDict, overload
 
-from hawi.agent.model import Model, ModelFailurePolicy
+from hawi.model import Model, ModelFailurePolicy
 from hawi.agent.message import (
     ContentPart,
     StreamPart,

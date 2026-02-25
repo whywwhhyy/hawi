@@ -7,7 +7,7 @@ Strands Model 到 Hawi Model 的适配器
 示例:
     # 包装 strands DeepSeek 模型
     from strands_models import DeepSeekOpenAIModel
-    from hawi.agent.models.strands_adapter import StrandsModel
+    from hawi.models.strands_adapter import StrandsModel
 
     strands_model = DeepSeekOpenAIModel(
         client_args={"api_key": "sk-...", "base_url": "https://api.deepseek.com"},
@@ -27,7 +27,7 @@ import json
 import logging
 from typing import Any, AsyncGenerator, Iterator, cast
 
-from hawi.agent.model import BalanceInfo, Model
+from hawi.model import BalanceInfo, Model
 from hawi.agent.message import (
     AudioPart,
     ContentPart,
@@ -63,7 +63,7 @@ class StrandsModel(Model):
 
     Example:
         >>> from strands_models import DeepSeekOpenAIModel
-        >>> from hawi.agent.models.strands_adapter import StrandsModel
+        >>> from hawi.models.strands_adapter import StrandsModel
         >>>
         >>> strands_model = DeepSeekOpenAIModel(...)
         >>> hawi_model = StrandsModel(strands_model)

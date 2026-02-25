@@ -8,8 +8,8 @@ import pytest
 from typing import cast
 
 from hawi.agent import HawiAgent
-from hawi.agent.model import Model
-from hawi.agent.models.deepseek import DeepSeekModel
+from hawi.model import Model
+from hawi.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool, before_conversation, after_conversation
 

@@ -5,7 +5,7 @@ MCP (Model Context Protocol) Hawi 插件
 
 基本用法:
     from hawi.agent import HawiAgent
-    from hawi.agent.models.kimi import KimiModel
+    from hawi.models.kimi import KimiModel
     from hawi_plugins.mcp_plugin import MCPPlugin
 
     # 创建插件

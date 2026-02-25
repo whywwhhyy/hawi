@@ -7,7 +7,7 @@ import os
 import sys
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any,Literal,cast
 import yaml
 
 # Interactive REPL
@@ -51,11 +51,12 @@ from hawi.agent.printers import (
     RichStreamingPrinter,
     StreamMarkdownPrinter,
 )
-from hawi.agent.model import Model
-from hawi.agent.models import get_model_class
+from hawi.model import Model
+from hawi.models import get_model_class
 from hawi.utils.terminal import user_select
 
-from hawi_plugins.python_interpreter import PythonInterpreter, PythonInterpreterPlugin
+from hawi_plugins.python_interpreter import PythonInterpreterPlugin
+from hawi_plugins.skills_plugin import SkillsPlugin
 
 
 def load_apikey_yaml() -> list[dict[str, Any]]:
@@ -115,12 +116,14 @@ def create_model(argv:list[str]):
 
 def create_agent(model: Model) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
-    plugin = PythonInterpreter(print_execution=False)
     # print(model.get_balance())
 
     return HawiAgent(
         model=model,
-        plugins=[plugin],
+        plugins=[
+            PythonInterpreterPlugin(work_dir=".python_vm", print_execution=False),
+            SkillsPlugin(skills_dir=".skills"),
+        ],
         system_prompt="""You are a helpful AI assistant with Python execution capabilities.
 
 You have access to a persistent Python interpreter through the following tools:
@@ -161,8 +164,13 @@ def main():
     llm_provider, model = create_model(argv)
 
     # Determine actual printer to use
-    use_rich = printer_type == "rich" or (printer_type == "auto" and _supports_color())
-    actual_printer = "rich" if use_rich else "plain"
+    if printer_type == 'auto':
+        if sys.stdout.isatty():
+            actual_printer = 'rich'
+        else:
+            actual_printer = 'plain'
+    else:
+        actual_printer = printer_type
 
     agent = create_agent(model)
     print(f"Using provider: {llm_provider}")
@@ -170,20 +178,16 @@ def main():
     print(f"Printer: {actual_printer}" + (" (auto-detected)" if printer_type == "auto" else ""))
     print("Type 'exit', 'quit', or 'q' to exit\n")
 
-    # Create printer based on mode
-    def create_printer():
-        return StreamMarkdownPrinter()
-        if use_rich:
-            # Use V2 implementation with markdown-it
-            return RichStreamingPrinter(
-            )
-        else:
-            return PlainPrinter(
-                show_reasoning=True,
-                show_tools=True,
-            )
+    if actual_printer == 'rich':
+        printer = StreamMarkdownPrinter()
+    elif actual_printer == 'plain':
+        printer = PlainPrinter(
+            show_reasoning=True,
+            show_tools=True,
+        )
+    else:
+        raise KeyError("printer type should be auto, rich, or plain")
 
-    printer = create_printer()
     # Execute prompt if provided
     def execute_prompt(prompt:str):
         import asyncio
