@@ -51,7 +51,7 @@ class TestEvent:
         """Test that Event is immutable."""
         event = ModelStreamStartEvent.create(request_id="req-123")
         with pytest.raises(Exception):  # Pydantic raises ValidationError or similar
-            event.type = "modified"
+            event.timestamp = 0.0
 
 
 class TestModelEvents:
@@ -74,6 +74,7 @@ class TestModelEvents:
         )
         assert event.type == "model.stream_stop"
         assert event.stop_reason == "end_turn"
+        assert event.usage is not None
         assert event.usage.input_tokens == 10
 
     def test_model_content_block_delta_event(self):
@@ -189,6 +190,7 @@ class TestAgentEvents:
         assert event.type == "agent.tool_result"
         assert event.success is True
         assert event.result_preview == "2"
+        assert event.arguments is not None
         assert event.arguments["expression"] == "1+1"
 
     def test_agent_error_event(self):
@@ -302,14 +304,19 @@ class TestConversationPrinter:
         import hawi.agent.printers.rich as rich_module
         monkeypatch.setattr(rich_module, '_stdout', output)
         printer = RichStreamingPrinter()
-        printer._output = output  # Store reference for tests
+        # Store reference to output for test assertions using monkeypatch
+        monkeypatch.setattr(printer, '_test_output', output, raising=False)
         return printer
 
     @pytest.mark.asyncio
-    async def test_handle_text_delta(self, printer):
+    async def test_handle_text_delta(self, printer, monkeypatch):
         """Test printing text delta events."""
         from hawi.model.message import StreamTextPart
 
+        output = io.StringIO()
+        import hawi.agent.printers.rich as rich_module
+        monkeypatch.setattr(rich_module, '_stdout', output)
+        
         part: StreamTextPart = {
             "type": "text_delta",
             "index": 0,
@@ -322,8 +329,7 @@ class TestConversationPrinter:
             part=part,
         )
         await printer.handle(event)
-        output = printer._output.getvalue()
-        assert "Hello World" in output
+        assert "Hello World" in output.getvalue()
 
     @pytest.mark.asyncio
     async def test_handle_reasoning_delta(self, printer):
@@ -509,8 +515,8 @@ class TestEventOrdering:
         received = []
 
         async def handler(event: Event) -> None:
-            # Access event attributes directly
-            if hasattr(event, 'run_id'):
+            # Access event attributes directly with type checking
+            if isinstance(event, AgentRunStartEvent):
                 received.append(event.run_id)
 
         bus.subscribe(handler)

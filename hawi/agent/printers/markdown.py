@@ -240,7 +240,11 @@ class StreamMarkdownPrinter(BasePrinter):
 
             buffered_types = {'table_open', 'fence', 'code_block', 'html_block'}
 
-            should_live_stream = first_token.type not in buffered_types
+            # Check for potentially problematic incomplete inline structures
+            # that can cause Rich to crash (e.g., unclosed strong/em marks)
+            has_unclosed_inline = self._has_unclosed_inline_tokens(active_tokens)
+
+            should_live_stream = first_token.type not in buffered_types and not has_unclosed_inline
 
             if should_live_stream:
                 md = TokenMarkdown(active_tokens, code_theme=self._code_theme)
@@ -254,6 +258,88 @@ class StreamMarkdownPrinter(BasePrinter):
                 if self._live:
                     self._live.stop()
                     self._live = None
+                # If we have unclosed inline tokens, print as plain text to avoid Rich crash
+                if has_unclosed_inline:
+                    self._print_plain_text_from_tokens(active_tokens)
+
+    def _has_unclosed_inline_tokens(self, tokens: list[Any]) -> bool:
+        """Check if tokens contain unclosed inline markup that could crash Rich.
+
+        Detects patterns like strong_open without strong_close, em_open without em_close, etc.
+        """
+        # Track nesting levels for inline elements that can cause Rich to crash
+        nesting = {
+            'strong': 0,
+            'em': 0,
+            'link': 0,
+            'code_inline': 0,
+        }
+
+        for token in tokens:
+            if token.type == 'inline':
+                # Check inline token children
+                if hasattr(token, 'children') and token.children:
+                    for child in token.children:
+                        child_type = getattr(child, 'type', '')
+                        if child_type == 'strong_open':
+                            nesting['strong'] += 1
+                        elif child_type == 'strong_close':
+                            nesting['strong'] -= 1
+                        elif child_type == 'em_open':
+                            nesting['em'] += 1
+                        elif child_type == 'em_close':
+                            nesting['em'] -= 1
+                        elif child_type == 'link_open':
+                            nesting['link'] += 1
+                        elif child_type == 'link_close':
+                            nesting['link'] -= 1
+                        elif child_type == 'code_inline':
+                            # code_inline is self-contained, check if content is unbalanced
+                            pass
+            elif token.type == 'strong_open':
+                nesting['strong'] += 1
+            elif token.type == 'strong_close':
+                nesting['strong'] -= 1
+            elif token.type == 'em_open':
+                nesting['em'] += 1
+            elif token.type == 'em_close':
+                nesting['em'] -= 1
+
+        # If any nesting level is positive, we have unclosed markup
+        return any(v > 0 for v in nesting.values())
+
+    def _print_plain_text_from_tokens(self, tokens: list[Any]) -> None:
+        """Extract and print plain text from tokens without Rich markdown parsing.
+
+        This is a fallback to avoid Rich crashes when markdown structure is incomplete.
+        """
+        text_parts = []
+
+        for token in tokens:
+            if token.type == 'inline':
+                # For inline tokens, extract the raw content
+                if hasattr(token, 'content'):
+                    text_parts.append(token.content)
+                elif hasattr(token, 'children') and token.children:
+                    # Extract text from children
+                    for child in token.children:
+                        if hasattr(child, 'content'):
+                            text_parts.append(child.content)
+            elif token.type == 'text':
+                if hasattr(token, 'content'):
+                    text_parts.append(token.content)
+            elif token.type == 'paragraph_open':
+                text_parts.append('\n')
+            elif token.type == 'paragraph_close':
+                text_parts.append('\n')
+            elif token.type == 'softbreak':
+                text_parts.append(' ')
+            elif token.type == 'hardbreak':
+                text_parts.append('\n')
+
+        if text_parts:
+            plain_text = ''.join(text_parts)
+            self._console.print(plain_text, end='')
 
     def _print_tokens(self, tokens: list[Any]):
         buffer = []

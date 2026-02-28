@@ -7,6 +7,8 @@ tool execution, and plugin hooks for agent workflows.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -53,6 +55,7 @@ from hawi.events import (
     ModelStreamStartEvent,
     ModelStreamStopEvent,
 )
+from hawi.utils import DumpManager
 from .context import AgentContext, ToolCallContext
 from .result import AgentRunResult, ToolCallRecord
 
@@ -331,6 +334,7 @@ class HawiAgent:
         enable_streaming: bool = True,
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
+        event_dump_file: str | None = None,
     ):
         """Initialize HawiAgent.
 
@@ -342,6 +346,7 @@ class HawiAgent:
             enable_streaming: Whether streaming is enabled by default
             model_error_policy: Error handling policy mapping error_type to config
             event_bus: Event bus for multi-agent coordination (not implemented)
+            event_dump_file: Path to dump all events for debugging (default: None)
 
         Raises:
             NotImplementedError: If event_bus is provided (not yet supported)
@@ -352,6 +357,9 @@ class HawiAgent:
         self._default_model = model
         self._max_iterations = max_iterations
         self._enable_streaming = enable_streaming
+
+        # Initialize event dump manager
+        self._dump_manager = DumpManager(event_dump_file) if event_dump_file else None
 
         if model_error_policy is None:
             self._model_model_error_policy_config = self._default_model_error_policy()
@@ -658,6 +666,11 @@ class HawiAgent:
         """Emit event to both generator and event bus."""
         if event_bus is not None:
             await event_bus.publish(event)
+
+        # Dump event to file if configured
+        if self._dump_manager is not None:
+            self._dump_manager.dump(event)
+
         return event
 
     async def _arun_stream(
@@ -1070,7 +1083,15 @@ class HawiAgent:
 
         # Add tool result to context (unless audit pending - will be added after approval)
         if not (tool and getattr(tool, "audit", False)):
-            result_content = result.output if isinstance(result.output, str) else str(result.output)
+            # Build result content: include both output and error
+            output_str = result.output if isinstance(result.output, str) else str(result.output) if result.output else ""
+            if not result.success and result.error:
+                # On failure, include error information
+                result_content = f"Error: {result.error}"
+                if output_str:
+                    result_content = f"Output before error:\n{output_str}\n\n{result_content}"
+            else:
+                result_content = output_str
             self._context.add_tool_result(
                 tool_call_id=tool_call_id,
                 content=result_content,
@@ -1153,7 +1174,13 @@ class HawiAgent:
             records.append(record)
 
             # Add tool result to context
-            result_content = result.output if isinstance(result.output, str) else str(result.output)
+            output_str = result.output if isinstance(result.output, str) else str(result.output) if result.output else ""
+            if not result.success and result.error:
+                result_content = f"Error: {result.error}"
+                if output_str:
+                    result_content = f"Output before error:\n{output_str}\n\n{result_content}"
+            else:
+                result_content = output_str
             self._context.add_tool_result(
                 tool_call_id=pending.tool_call_id,
                 content=result_content,

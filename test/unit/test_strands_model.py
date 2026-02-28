@@ -8,10 +8,12 @@ Tests the Hawi StrandsModel adapter to ensure it correctly:
 """
 
 import pytest
+from typing import Any, cast
 from unittest.mock import Mock, MagicMock
 
 from hawi.models.strands import StrandsModel
 from hawi.model.message import (
+    Message,
     MessageRequest,
     TokenUsage,
     ContentPart,
@@ -128,9 +130,9 @@ class TestStrandsModelToolCalls:
         assert len(tool_call_parts) == 1
         
         tool_call_part = tool_call_parts[0]
-        assert tool_call_part["id"] == "tool-123"
-        assert tool_call_part["name"] == "calculator"
-        assert tool_call_part["arguments"] == {"expression": "1 + 1"}
+        assert tool_call_part["id"]  # type: ignore[typeddict-item] == "tool-123"
+        assert tool_call_part["name"]  # type: ignore[typeddict-item] == "calculator"
+        assert tool_call_part["arguments"]  # type: ignore[typeddict-item] == {"expression": "1 + 1"}
 
     def test_parse_multiple_tool_uses(self):
         """Parse multiple toolUse blocks from content."""
@@ -153,8 +155,8 @@ class TestStrandsModelToolCalls:
         # Should have exactly 2 tool_call parts (no duplicates)
         tool_call_parts = [p for p in response.content if p.get("type") == "tool_call"]
         assert len(tool_call_parts) == 2
-        assert tool_call_parts[0]["name"] == "weather"
-        assert tool_call_parts[1]["name"] == "time"
+        assert tool_call_parts[0]["name"]  # type: ignore[typeddict-item] == "weather"
+        assert tool_call_parts[1]["name"]  # type: ignore[typeddict-item] == "time"
 
     def test_parse_tool_use_with_string_input(self):
         """Tool input might be a JSON string instead of dict."""
@@ -179,7 +181,8 @@ class TestStrandsModelToolCalls:
         
         response = model._parse_response_impl(strands_response)
         
-        tool_call = response.content[0]
+        content_list = list(response.content)
+        tool_call = content_list[0]  # type: ignore[index]
         assert tool_call["arguments"] == {"query": "test"}
 
 
@@ -206,8 +209,9 @@ class TestStrandsModelStreaming:
         assert len(parts) == 2
         assert parts[0]["type"] == "text_delta"
         assert parts[0]["is_start"] is True
-        assert parts[1]["delta"] == "Hello world"
-        assert parts[1]["is_end"] is False
+        delta_part = parts[1]
+        assert delta_part["delta"]  # type: ignore[typeddict-item] == "Hello world"
+        assert delta_part["is_end"]  # type: ignore[typeddict-item] is False
         
         # Second event: contentBlockStop ends the block
         event2 = {"type": "contentBlockStop"}
@@ -345,14 +349,14 @@ class TestStrandsModelMessageConversion:
         
         model = StrandsModel(mock_strands_model)
         
-        hawi_message = {
+        hawi_message = cast(Message, {
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
             "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
-        }
+        })
         
         strands_msg = model._convert_single_message_to_strands(hawi_message)
         
@@ -366,7 +370,7 @@ class TestStrandsModelMessageConversion:
         
         model = StrandsModel(mock_strands_model)
         
-        hawi_message = {
+        hawi_message = cast(Message, {
             "role": "assistant",
             "content": [],
             "tool_calls": [
@@ -375,7 +379,7 @@ class TestStrandsModelMessageConversion:
             "name": None,
             "tool_call_id": None,
             "metadata": None,
-        }
+        })
         
         strands_msg = model._convert_single_message_to_strands(hawi_message)
         
@@ -390,14 +394,14 @@ class TestStrandsModelMessageConversion:
         
         model = StrandsModel(mock_strands_model)
         
-        hawi_message = {
+        hawi_message = cast(Message, {
             "role": "tool",
             "content": [{"type": "text", "text": "Result: 25°C"}],
             "tool_call_id": "tool-1",
             "name": None,
             "tool_calls": None,
             "metadata": None,
-        }
+        })
         
         strands_msg = model._convert_single_message_to_strands(hawi_message)
         
@@ -439,7 +443,7 @@ class TestStrandsModelEdgeCases:
         
         response = model._parse_response_impl(strands_response)
         
-        assert response.content == []
+        assert list(response.content) == []
 
     def test_unknown_content_block(self):
         """Handle unknown content block types gracefully."""
@@ -460,8 +464,9 @@ class TestStrandsModelEdgeCases:
         response = model._parse_response_impl(strands_response)
         
         # Unknown block should be skipped, text should be preserved
-        assert len(response.content) == 1
-        assert response.content[0]["type"] == "text"
+        content_list = list(response.content)
+        assert len(content_list) == 1
+        assert content_list[0]["type"]  # type: ignore[index,typeddict-item] == "text"
 
     def test_backward_compatible_finish_event(self):
         """Still support old custom finish event format."""

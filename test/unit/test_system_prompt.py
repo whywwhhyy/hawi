@@ -286,8 +286,9 @@ class TestMessageRoleValidation:
 
         # Note: 'developer' role is supported for OpenAI o1/o3 models
         # but system prompts should generally be passed via MessageRequest.system
-        msg: Message = {
-            "role": "developer",
+        # Using dict annotation to allow 'developer' role which is not in the standard Message type
+        msg: dict = {
+            "role": "developer",  # type: ignore[assignment]
             "content": [{"type": "text", "text": "Dev message"}],
             "name": None,
             "tool_calls": None,

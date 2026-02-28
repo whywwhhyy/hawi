@@ -114,7 +114,7 @@ def create_model(argv:list[str]):
     print(f"quick arguments: {' '.join(quick_arguments)}")
     return provider_config['key'], model_class(**model_params)
 
-def create_agent(model: Model) -> HawiAgent:
+def create_agent(model: Model, event_dump_file: str | None = None) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
     # print(model.get_balance())
 
@@ -139,6 +139,7 @@ Always explain what you're doing before executing code.
 """,
         max_iterations=None,
         enable_streaming=True,   # Enable streaming for real-time output
+        event_dump_file=event_dump_file,
     )
 
 
@@ -148,6 +149,7 @@ def main():
     # Parse arguments
     printer_type = "auto"  # auto, rich, text
     loop = False
+    event_dump_file = None
 
     # Parse printer type
     if "--printer" in argv:
@@ -155,10 +157,22 @@ def main():
         argv.pop(idx)
         if idx < len(argv):
             printer_type = argv.pop(idx)
-    
+
     if "--continue" in argv:
         argv.remove("--continue")
         loop = True
+
+    # Parse event dump file
+    if "--dump-events" in argv:
+        idx = argv.index("--dump-events")
+        argv.pop(idx)
+        if idx < len(argv):
+            event_dump_file = argv.pop(idx)
+        else:
+            # Default dump file with timestamp
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            event_dump_file = f".dumps/events_{timestamp}.json"
 
     # Create agent
     llm_provider, model = create_model(argv)
@@ -172,10 +186,12 @@ def main():
     else:
         actual_printer = printer_type
 
-    agent = create_agent(model)
+    agent = create_agent(model, event_dump_file=event_dump_file)
     print(f"Using provider: {llm_provider}")
     print(f"Model: {model.model_id}")
     print(f"Printer: {actual_printer}" + (" (auto-detected)" if printer_type == "auto" else ""))
+    if event_dump_file:
+        print(f"Event dump: {event_dump_file}")
     print("Type 'exit', 'quit', or 'q' to exit\n")
 
     if actual_printer == 'rich':
@@ -195,8 +211,14 @@ def main():
             async for event in agent.arun(prompt, stream=True):
                 await printer.handle(event)
 
-        asyncio.run(process_events())
-        print()
+        try:
+            asyncio.run(process_events())
+            print()
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            if event_dump_file:
+                print(f"📄 Event dump available at: {event_dump_file}")
+            raise
 
     if argv:
         # Use streaming mode with StreamingPrinter
@@ -213,7 +235,12 @@ def main():
             if prompt.lower() in ['exit', 'quit', 'q']:
                 break
 
-            execute_prompt(prompt)
+            try:
+                execute_prompt(prompt)
+            except Exception:
+                # Error already printed in execute_prompt with dump path
+                # Continue to next prompt
+                pass
 
         except EOFError:
             break

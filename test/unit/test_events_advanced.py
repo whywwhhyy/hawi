@@ -41,7 +41,7 @@ class TestEventBusAdvanced:
 
         async def handler(event: Event) -> None:
             async with lock:
-                if hasattr(event, 'run_id'):
+                if isinstance(event, AgentRunStartEvent):
                     received.append(event.run_id)
 
         bus.subscribe(handler)
@@ -103,7 +103,7 @@ class TestEventLifecycle:
 
         # Should not be able to modify frozen fields
         with pytest.raises(Exception):
-            event.type = "modified"
+            event.timestamp = 0.0
 
         with pytest.raises(Exception):
             event.source = "agent"
@@ -157,6 +157,7 @@ class TestModelEventClasses:
         )
         assert event.type == "model.stream_stop"
         assert event.stop_reason == "tool_calls"
+        assert event.usage is not None
         assert event.usage.input_tokens == 10
 
     def test_model_content_block_start_event(self):
@@ -213,6 +214,7 @@ class TestModelEventClasses:
             latency_ms=500.0
         )
         assert event.type == "model.metadata"
+        assert event.usage is not None
         assert event.usage.output_tokens == 20
         assert event.latency_ms == 500.0
 
