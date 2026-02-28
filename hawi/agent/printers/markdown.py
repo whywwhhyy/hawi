@@ -26,7 +26,15 @@ from mdit_py_plugins.container import container_plugin
 from mdit_py_plugins.admon import admon_plugin
 from markdown_it.token import Token
 
-from hawi.agent.events import Event
+from hawi.events import (
+    Event,
+    ModelContentBlockStartEvent,
+    ModelContentBlockDeltaEvent,
+    ModelContentBlockStopEvent,
+    AgentToolCallEvent,
+    AgentToolResultEvent,
+    AgentErrorEvent,
+)
 from hawi.agent.printers.base import BasePrinter
 
 logger = logging.getLogger(__name__)
@@ -141,12 +149,14 @@ class StreamMarkdownPrinter(BasePrinter):
 
     async def _on_content_block_start(self, event: Event) -> None:
         """内容块开始"""
-        block_type = event.metadata.get("block_type")
+        assert isinstance(event, ModelContentBlockStartEvent)
+        block_type = event.block_type
         self._current_block_type = block_type
 
     async def _on_content_block_delta(self, event: Event) -> None:
-        delta = event.metadata.get("delta", "")
-        delta_type = event.metadata.get("delta_type", "text")
+        assert isinstance(event, ModelContentBlockDeltaEvent)
+        delta = event.delta
+        delta_type = event.delta_type
 
         if delta_type == "text":
             self._buffer += delta
@@ -156,29 +166,37 @@ class StreamMarkdownPrinter(BasePrinter):
 
     async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束"""
+        assert isinstance(event, ModelContentBlockStopEvent)
         if self._live:
             self._live.stop()
             self._live = None
 
-        meta = event.metadata
         block_type = self._current_block_type
 
         if block_type == "tool_use" and self.show_tools:
-            tool_call_id = meta.get("tool_call_id")
-            tool_name = meta.get("tool_name")
-            tool_arguments = meta.get("tool_arguments", {})
+            # 从 content 中提取工具调用信息
+            for part in event.content:
+                if part.get("type") == "tool_call":
+                    tool_call_id = part.get("id", "")
+                    tool_name = part.get("name", "")
+                    tool_arguments = part.get("arguments", {})
 
-            if tool_call_id and tool_name:
-                self._active_tool_calls[tool_call_id] = {
-                    "tool_name": tool_name,
-                    "arguments": tool_arguments,
-                    "status": "running",
-                    "start_time": time.time(),
-                }
+                    if tool_call_id and tool_name:
+                        self._active_tool_calls[tool_call_id] = {
+                            "tool_name": tool_name,
+                            "arguments": tool_arguments,
+                            "status": "running",
+                            "start_time": time.time(),
+                        }
 
         if block_type == "thinking" and self.show_reasoning:
-            full_content = meta.get("full_content", "")
-            self._print_thinking_panel(self._reasoning_buffer or full_content)
+            # 从 content 中提取 reasoning 文本
+            reasoning_content = ""
+            for part in event.content:
+                if part.get("type") == "reasoning":
+                    reasoning_content = part.get("reasoning") or ""
+                    break
+            self._print_thinking_panel(self._reasoning_buffer or reasoning_content)
             self._reasoning_buffer = ""
 
         tokens = self._parser.parse(self._buffer)

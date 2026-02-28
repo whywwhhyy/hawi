@@ -4,9 +4,22 @@
 使用 TypedDict 实现 Tagged Union 设计，支持完整的类型检查。
 """
 
-from typing import Any, Literal, Required, TypeAlias, TypedDict, cast
+from typing import Any, Iterable, Literal, Required, TypeAlias, TypedDict, cast
 
 from pydantic import BaseModel
+
+
+# =============================================================================
+# Token Usage 类型
+# =============================================================================
+
+class TokenUsage(BaseModel):
+    """Token 使用统计"""
+
+    input_tokens: int
+    output_tokens: int
+    cache_write_tokens: int | None = None  # Prompt caching: tokens written to cache
+    cache_read_tokens: int | None = None  # Prompt caching: tokens read from cache
 
 
 # =============================================================================
@@ -17,15 +30,6 @@ from pydantic import BaseModel
 class CacheControl(TypedDict):
     """Prompt caching 控制（Anthropic 支持）"""
     type: Literal["ephemeral"]
-
-
-class TokenUsage(BaseModel):
-    """Token 使用统计"""
-
-    input_tokens: int
-    output_tokens: int
-    cache_write_tokens: int | None = None  # Prompt caching: tokens written to cache
-    cache_read_tokens: int | None = None  # Prompt caching: tokens read from cache
 
 
 class TextPart(TypedDict):
@@ -445,13 +449,6 @@ class ToolChoice(TypedDict):
     name: str | None  # type="tool" 时指定工具名
 
 
-class ResponseFormat(TypedDict):
-    """响应格式配置（用于结构化输出）"""
-
-    type: Literal["text", "json_object", "json_schema"]
-    json_schema: dict[str, Any] | None  # type="json_schema" 时使用
-
-
 class MessageRequest(BaseModel):
     """请求消息容器"""
 
@@ -489,7 +486,7 @@ class MessageResponse(BaseModel):
 
     id: str
     role: Literal["assistant"] = "assistant"
-    content: list[ContentPart]
+    content: Iterable[ContentPart]
     stop_reason: str | None = None
     usage: TokenUsage | None = None
     reasoning_content: str | None = None  # DeepSeek/Kimi 思考内容

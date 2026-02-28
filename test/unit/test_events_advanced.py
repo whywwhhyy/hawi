@@ -7,25 +7,26 @@ import asyncio
 import pytest
 from typing import List
 
-from hawi.agent.events import (
+from hawi.events import (
     Event,
     EventBus,
     # Model events
-    model_stream_start_event,
-    model_stream_stop_event,
-    model_content_block_start_event,
-    model_content_block_delta_event,
-    model_content_block_stop_event,
-    model_metadata_event,
+    ModelStreamStartEvent,
+    ModelStreamStopEvent,
+    ModelContentBlockStartEvent,
+    ModelContentBlockDeltaEvent,
+    ModelContentBlockStopEvent,
+    ModelMetadataEvent,
     # Agent events
-    agent_run_start_event,
-    agent_run_stop_event,
-    agent_tool_call_event,
-    agent_tool_result_event,
-    agent_message_added_event,
-    agent_error_event,
+    AgentRunStartEvent,
+    AgentRunStopEvent,
+    AgentToolCallEvent,
+    AgentToolResultEvent,
+    AgentMessageAddedEvent,
+    AgentErrorEvent,
 )
 from hawi.agent.printers import RichStreamingPrinter as ConversationPrinter
+from hawi.errors import AgentError
 
 
 class TestEventBusAdvanced:
@@ -40,13 +41,14 @@ class TestEventBusAdvanced:
 
         async def handler(event: Event) -> None:
             async with lock:
-                received.append(event.metadata["seq"])
+                if hasattr(event, 'run_id'):
+                    received.append(event.run_id)
 
         bus.subscribe(handler)
 
         # Publish multiple events concurrently
         await asyncio.gather(*[
-            bus.publish(Event(type="test", source="agent", metadata={"seq": f"event-{i}"}))
+            bus.publish(AgentRunStartEvent.create(run_id=f"event-{i}"))
             for i in range(10)
         ])
 
@@ -73,7 +75,7 @@ class TestEventBusAdvanced:
         bus.subscribe(failing_handler)
         bus.subscribe(good_handler)
 
-        await bus.publish(agent_run_start_event(run_id="test"))
+        await bus.publish(AgentRunStartEvent.create(run_id="test"))
         await asyncio.sleep(0.1)
 
         # Both handlers should have been called
@@ -84,160 +86,180 @@ class TestEventBusAdvanced:
 class TestEventLifecycle:
     """Tests for event lifecycle scenarios."""
 
+    def test_event_cannot_be_instantiated_directly(self):
+        """Test that Event base class cannot be instantiated directly."""
+        with pytest.raises(TypeError, match="abstract base class"):
+            Event(type="test.event", source="agent")
+
+    def test_event_subclass_can_be_created(self):
+        """Test that Event subclasses can be created via create()."""
+        event = ModelStreamStartEvent.create(request_id="req-123")
+        assert event.type == "model.stream_start"
+        assert event.source == "model"
+
     def test_event_immutability(self):
-        """Test that events are immutable (frozen dataclass)."""
-        event = Event(
-            type="test.event",
-            source="agent",
-            metadata={"key": "value"}
-        )
+        """Test that events are immutable (Pydantic frozen model)."""
+        event = ModelStreamStartEvent.create(request_id="req-123")
 
         # Should not be able to modify frozen fields
-        with pytest.raises(AttributeError):
+        with pytest.raises(Exception):
             event.type = "modified"
 
-        with pytest.raises(AttributeError):
-            event.source = "model"
-
-        # Note: metadata dict itself is not frozen (only the field reference)
-        # The frozen=True prevents reassigning event.metadata, but modifying
-        # the dict contents is still possible since dict is mutable
-        event.metadata["new_key"] = "new_value"  # This works
-        assert event.metadata["new_key"] == "new_value"
+        with pytest.raises(Exception):
+            event.source = "agent"
 
     def test_event_equality(self):
         """Test event equality based on attributes."""
-        # Events with same attributes
-        event1 = Event(type="test", source="agent", timestamp=1.0, metadata={})
-        event2 = Event(type="test", source="agent", timestamp=1.0, metadata={})
+        # Events with same attributes (explicit timestamp)
+        event1 = AgentRunStartEvent.create(run_id="test", message_preview=None)
+        event2 = AgentRunStartEvent.create(run_id="test", message_preview=None)
 
-        assert event1 == event2
+        # Events are not equal because they have different timestamps
+        assert event1 != event2
 
-        # Events with different attributes
-        event3 = Event(type="test", source="agent", timestamp=2.0, metadata={})
-        assert event1 != event3
+        # Create events with same all fields
+        event3 = AgentRunStartEvent(
+            type="agent.run_start",
+            source="agent",
+            timestamp=1.0,
+            run_id="test",
+            message_preview=None
+        )
+        event4 = AgentRunStartEvent(
+            type="agent.run_start",
+            source="agent",
+            timestamp=1.0,
+            run_id="test",
+            message_preview=None
+        )
+        assert event3 == event4
 
 
-class TestModelEventFactories:
-    """Tests for model event factory functions."""
+class TestModelEventClasses:
+    """Tests for model event classes."""
 
     def test_model_stream_start_event(self):
-        """Test model_stream_start_event factory."""
-        event = model_stream_start_event(
+        """Test ModelStreamStartEvent.create()."""
+        event = ModelStreamStartEvent.create(
             request_id="req-123",
-            model_id="gpt-4",
-            extra="value"
         )
         assert event.type == "model.stream_start"
         assert event.source == "model"
-        assert event.metadata["request_id"] == "req-123"
-        assert event.metadata["model_id"] == "gpt-4"
-        assert event.metadata["extra"] == "value"
+        assert event.request_id == "req-123"
 
     def test_model_stream_stop_event(self):
-        """Test model_stream_stop_event factory."""
-        event = model_stream_stop_event(
+        """Test ModelStreamStopEvent.create()."""
+        from hawi.model.message import TokenUsage
+        event = ModelStreamStopEvent.create(
             request_id="req-123",
             stop_reason="tool_calls",
-            usage={"prompt_tokens": 10, "completion_tokens": 20}
+            usage=TokenUsage(input_tokens=10, output_tokens=20)
         )
         assert event.type == "model.stream_stop"
-        assert event.metadata["stop_reason"] == "tool_calls"
-        assert event.metadata["usage"]["prompt_tokens"] == 10
+        assert event.stop_reason == "tool_calls"
+        assert event.usage.input_tokens == 10
 
     def test_model_content_block_start_event(self):
-        """Test model_content_block_start_event factory."""
-        event = model_content_block_start_event(
+        """Test ModelContentBlockStartEvent.create()."""
+        event = ModelContentBlockStartEvent.create(
             request_id="req-123",
             block_index=0,
-            block_type="text"
+            block_type="text",
         )
         assert event.type == "model.content_block_start"
-        assert event.metadata["block_index"] == 0
-        assert event.metadata["block_type"] == "text"
+        assert event.block_index == 0
+        assert event.block_type == "text"
 
     def test_model_content_block_delta_event(self):
-        """Test model_content_block_delta_event factory."""
-        event = model_content_block_delta_event(
+        """Test ModelContentBlockDeltaEvent.create()."""
+        from hawi.model.message import StreamTextPart
+
+        part: StreamTextPart = {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "Hello",
+            "is_start": False,
+            "is_end": False,
+        }
+        event = ModelContentBlockDeltaEvent.create(
             request_id="req-123",
-            block_index=0,
-            delta_type="text",
-            delta="Hello",
-            is_complete=False
+            part=part,
         )
         assert event.type == "model.content_block_delta"
-        assert event.metadata["delta"] == "Hello"
-        assert event.metadata["delta_type"] == "text"
+        assert event.delta == "Hello"
+        assert event.delta_type == "text"
+        assert event.part == part
 
     def test_model_content_block_stop_event(self):
-        """Test model_content_block_stop_event factory."""
-        event = model_content_block_stop_event(
+        """Test ModelContentBlockStopEvent.create()."""
+        from hawi.model.message import TextPart
+
+        text_part = TextPart(type="text", text="Hello World")
+        event = ModelContentBlockStopEvent.create(
             request_id="req-123",
             block_index=0,
-            full_content="Hello World"
+            content=[text_part],
         )
         assert event.type == "model.content_block_stop"
-        assert event.metadata["full_content"] == "Hello World"
+        assert event.content[0].get("text") == "Hello World"
+        assert event.block_type == "text"
 
     def test_model_metadata_event(self):
-        """Test model_metadata_event factory."""
-        event = model_metadata_event(
+        """Test ModelMetadataEvent.create()."""
+        from hawi.model.message import TokenUsage
+        event = ModelMetadataEvent.create(
             request_id="req-123",
-            usage={"total_tokens": 100},
+            usage=TokenUsage(input_tokens=10, output_tokens=20),
             latency_ms=500.0
         )
         assert event.type == "model.metadata"
-        assert event.metadata["usage"]["total_tokens"] == 100
-        assert event.metadata["latency_ms"] == 500.0
+        assert event.usage.output_tokens == 20
+        assert event.latency_ms == 500.0
 
 
-class TestAgentEventFactories:
-    """Tests for agent event factory functions."""
+class TestAgentEventClasses:
+    """Tests for agent event classes."""
 
     def test_agent_run_start_event(self):
-        """Test agent_run_start_event factory."""
-        event = agent_run_start_event(
+        """Test AgentRunStartEvent.create()."""
+        event = AgentRunStartEvent.create(
             run_id="run-123",
-            message_preview="Hello, world!",
-            user_id="user-456"
+            message_preview="Hello, world!"
         )
         assert event.type == "agent.run_start"
         assert event.source == "agent"
-        assert event.metadata["run_id"] == "run-123"
-        assert event.metadata["message_preview"] == "Hello, world!"
-        assert event.metadata["user_id"] == "user-456"
+        assert event.run_id == "run-123"
+        assert event.message_preview == "Hello, world!"
 
     def test_agent_run_stop_event(self):
-        """Test agent_run_stop_event factory."""
-        event = agent_run_stop_event(
+        """Test AgentRunStopEvent.create()."""
+        from hawi.model.message import TokenUsage
+        event = AgentRunStopEvent.create(
             run_id="run-123",
             stop_reason="max_iterations",
             duration_ms=1234.5,
-            iteration_count=5
+            usage=TokenUsage(input_tokens=10, output_tokens=20)
         )
         assert event.type == "agent.run_stop"
-        assert event.metadata["stop_reason"] == "max_iterations"
-        assert event.metadata["duration_ms"] == 1234.5
-        assert event.metadata["iteration_count"] == 5
+        assert event.stop_reason == "max_iterations"
+        assert event.duration_ms == 1234.5
 
     def test_agent_tool_call_event(self):
-        """Test agent_tool_call_event factory."""
-        event = agent_tool_call_event(
+        """Test AgentToolCallEvent.create()."""
+        event = AgentToolCallEvent.create(
             run_id="run-123",
             tool_name="calculator",
             arguments={"expression": "1+1"},
-            tool_call_id="tc-789",
-            pending_audit=True
+            tool_call_id="tc-789"
         )
         assert event.type == "agent.tool_call"
-        assert event.metadata["tool_name"] == "calculator"
-        assert event.metadata["arguments"]["expression"] == "1+1"
-        assert event.metadata["tool_call_id"] == "tc-789"
-        assert event.metadata["pending_audit"] is True
+        assert event.tool_name == "calculator"
+        assert event.arguments["expression"] == "1+1"
+        assert event.tool_call_id == "tc-789"
 
     def test_agent_tool_result_event(self):
-        """Test agent_tool_result_event factory."""
-        event = agent_tool_result_event(
+        """Test AgentToolResultEvent.create()."""
+        event = AgentToolResultEvent.create(
             run_id="run-123",
             tool_name="calculator",
             tool_call_id="tc-789",
@@ -247,55 +269,46 @@ class TestAgentEventFactories:
             arguments={"expression": "1+1"}
         )
         assert event.type == "agent.tool_result"
-        assert event.metadata["success"] is True
-        assert event.metadata["result_preview"] == "2"
-        assert event.metadata["duration_ms"] == 50.5
+        assert event.success is True
+        assert event.result_preview == "2"
+        assert event.duration_ms == 50.5
 
     def test_agent_tool_result_event_failure(self):
-        """Test agent_tool_result_event for failure case."""
-        event = agent_tool_result_event(
+        """Test AgentToolResultEvent.create() for failure case."""
+        event = AgentToolResultEvent.create(
             run_id="run-123",
             tool_name="calculator",
             tool_call_id="tc-789",
             success=False,
             result_preview="Error: Division by zero",
             duration_ms=10.0,
-            arguments={"expression": "1/0"},
-            error_message="Division by zero"
+            arguments={"expression": "1/0"}
         )
         assert event.type == "agent.tool_result"
-        assert event.metadata["success"] is False
-        assert event.metadata["error_message"] == "Division by zero"
+        assert event.success is False
+        assert event.result_preview == "Error: Division by zero"
 
     def test_agent_message_added_event(self):
-        """Test agent_message_added_event factory."""
-        event = agent_message_added_event(
+        """Test AgentMessageAddedEvent.create()."""
+        event = AgentMessageAddedEvent.create(
             run_id="run-123",
             role="assistant",
-            message_preview="Hello world",
-            message_index=5,
-            has_tool_calls=True
+            message_preview="Hello world"
         )
         assert event.type == "agent.message_added"
-        assert event.metadata["role"] == "assistant"
-        assert event.metadata["message_preview"] == "Hello world"
-        assert event.metadata["message_index"] == 5
-        assert event.metadata["has_tool_calls"] is True
+        assert event.role == "assistant"
+        assert event.message_preview == "Hello world"
 
     def test_agent_error_event(self):
-        """Test agent_error_event factory."""
-        event = agent_error_event(
+        """Test AgentErrorEvent.create()."""
+        error = AgentError(error_type="tool_execution", msg="API timeout")
+        event = AgentErrorEvent.create(
             run_id="run-123",
-            error="API timeout",
-            error_type="model_error",
-            recoverable=True,
-            retry_count=2
+            error=error
         )
         assert event.type == "agent.error"
-        assert event.metadata["error_type"] == "model_error"
-        assert event.metadata["error_message"] == "API timeout"
-        assert event.metadata["recoverable"] is True
-        assert event.metadata["retry_count"] == 2
+        assert event.error.error_type == "tool_execution"
+        assert event.error.message == "API timeout"
 
 
 class TestConversationPrinterAdvanced:
@@ -312,19 +325,33 @@ class TestConversationPrinterAdvanced:
         # With reasoning shown (default)
         printer_with = ConversationPrinter(show_reasoning=True)
 
-        await printer_with.handle(model_content_block_start_event(
+        from hawi.model.message import ReasoningPart
+
+        await printer_with.handle(ModelContentBlockStartEvent.create(
             request_id="r1", block_index=0, block_type="thinking"
         ))
-        await printer_with.handle(model_content_block_delta_event(
-            request_id="r1", block_index=0, delta_type="thinking", delta="Thinking..."
+        await printer_with.handle(ModelContentBlockDeltaEvent.create(
+            request_id="r1", part={
+                "type": "thinking_delta",
+                "index": 0,
+                "delta": "Thinking...",
+                "is_start": False,
+                "is_end": False,
+            }
         ))
 
         # Verify reasoning was captured in buffer before stop event
         assert "Thinking..." in printer_with._reasoning_buffer
 
         # Reasoning is buffered and displayed on stop event
-        await printer_with.handle(model_content_block_stop_event(
-            request_id="r1", block_index=0, block_type="thinking", full_content="Thinking..."
+        reasoning_part = ReasoningPart(
+            type="reasoning",
+            reasoning="Thinking...",
+            signature=None,
+            redacted_content=None
+        )
+        await printer_with.handle(ModelContentBlockStopEvent.create(
+            request_id="r1", block_index=0, content=[reasoning_part]
         ))
 
         # Buffer is cleared after printing
@@ -340,8 +367,14 @@ class TestConversationPrinterAdvanced:
         # With reasoning hidden
         printer_without = ConversationPrinter(show_reasoning=False)
 
-        await printer_without.handle(model_content_block_delta_event(
-            request_id="r1", block_index=0, delta_type="reasoning", delta="Secret thought"
+        await printer_without.handle(ModelContentBlockDeltaEvent.create(
+            request_id="r1", part={
+                "type": "thinking_delta",
+                "index": 0,
+                "delta": "Secret thought",
+                "is_start": False,
+                "is_end": False,
+            }
         ))
 
         # Verify reasoning buffer is empty when hidden
@@ -357,7 +390,7 @@ class TestConversationPrinterAdvanced:
 
         printer_hidden = ConversationPrinter(show_tools=False)
 
-        await printer_hidden.handle(agent_tool_call_event(
+        await printer_hidden.handle(AgentToolCallEvent.create(
             run_id="r1", tool_name="test", arguments={}, tool_call_id="tc1"
         ))
 
@@ -375,28 +408,42 @@ class TestConversationPrinterAdvanced:
         printer = ConversationPrinter()
 
         # Stream start
-        await printer.handle(model_stream_start_event(request_id="r1"))
+        await printer.handle(ModelStreamStartEvent.create(request_id="r1"))
 
         # Content block start
-        await printer.handle(model_content_block_start_event(
+        await printer.handle(ModelContentBlockStartEvent.create(
             request_id="r1", block_index=0, block_type="text"
         ))
 
         # Deltas
-        await printer.handle(model_content_block_delta_event(
-            request_id="r1", block_index=0, delta_type="text", delta="Hello"
+        await printer.handle(ModelContentBlockDeltaEvent.create(
+            request_id="r1", part={
+                "type": "text_delta",
+                "index": 0,
+                "delta": "Hello",
+                "is_start": False,
+                "is_end": False,
+            }
         ))
-        await printer.handle(model_content_block_delta_event(
-            request_id="r1", block_index=0, delta_type="text", delta=" World"
+        await printer.handle(ModelContentBlockDeltaEvent.create(
+            request_id="r1", part={
+                "type": "text_delta",
+                "index": 0,
+                "delta": " World",
+                "is_start": False,
+                "is_end": False,
+            }
         ))
 
         # Content block stop
-        await printer.handle(model_content_block_stop_event(
-            request_id="r1", block_index=0, full_content="Hello World"
+        from hawi.model.message import TextPart
+        text_part = TextPart(type="text", text="Hello World")
+        await printer.handle(ModelContentBlockStopEvent.create(
+            request_id="r1", block_index=0, content=[text_part]
         ))
 
         # Stream stop
-        await printer.handle(model_stream_stop_event(
+        await printer.handle(ModelStreamStopEvent.create(
             request_id="r1", stop_reason="end_turn"
         ))
 

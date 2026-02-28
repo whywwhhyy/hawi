@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
 import sys
@@ -19,7 +18,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from hawi.agent.events import Event
+from hawi.events import (
+    Event,
+    ModelContentBlockStartEvent,
+    ModelContentBlockDeltaEvent,
+    ModelContentBlockStopEvent,
+)
 from hawi.agent.printers.base import BasePrinter
 
 logger = logging.getLogger(__name__)
@@ -108,15 +112,16 @@ class RichStreamingPrinter(BasePrinter):
 
     async def _on_content_block_start(self, event: Event) -> None:
         """内容块开始"""
-        block_type = event.metadata.get("block_type")
+        assert isinstance(event, ModelContentBlockStartEvent)
+        block_type = event.block_type
         self._current_block_type = block_type
         self._block_has_received_delta = False
 
     async def _on_content_block_delta(self, event: Event) -> None:
         """逐字符实时输出"""
-        meta = event.metadata
-        delta_type = meta.get("delta_type")
-        delta = meta.get("delta", "")
+        assert isinstance(event, ModelContentBlockDeltaEvent)
+        delta_type = event.delta_type
+        delta = event.delta
 
         if not self._block_has_received_delta:
             self._block_has_received_delta = True
@@ -142,28 +147,23 @@ class RichStreamingPrinter(BasePrinter):
 
     async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束"""
-        meta = event.metadata
-        full_content = meta.get("full_content", "")
+        assert isinstance(event, ModelContentBlockStopEvent)
 
         if self._ansi_prefix:
             _stdout.write(ANSI_COLORS["reset"])
             _stdout.flush()
 
-        block_type = meta.get("block_type")
+        block_type = event.block_type
 
-        if block_type == "thinking" and self.show_reasoning:
-            self._print_thinking_panel(self._reasoning_buffer or full_content)
+        if block_type == "reasoning" and self.show_reasoning:
+            # 从 content 中提取 reasoning 文本
+            reasoning_content = ""
+            for part in event.content:
+                if part.get("type") == "reasoning":
+                    reasoning_content = part.get("reasoning") or ""
+                    break
+            self._print_thinking_panel(self._reasoning_buffer or reasoning_content)
             self._reasoning_buffer = ""
-        elif block_type == "tool_use":
-            tool_call_id = meta.get("tool_call_id")
-            tool_name = meta.get("tool_name")
-            if tool_call_id and tool_name and self.show_tools:
-                self._active_tool_calls[tool_call_id] = {
-                    "tool_name": tool_name,
-                    "arguments": meta.get("tool_arguments", {}),
-                    "status": "running",
-                    "start_time": time.time(),
-                }
 
         self._current_block_type = None
 

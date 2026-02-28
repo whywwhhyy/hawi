@@ -5,8 +5,8 @@ import pytest
 from typing import Any, AsyncGenerator
 
 from hawi.agent import HawiAgent
-from hawi.agent.model import Model
-from hawi.agent.message import (
+from hawi.model import Model
+from hawi.model.message import (
     MessageRequest, MessageResponse, TokenUsage, ToolCallPart, TextPart,
     StreamPart, StreamTextPart, StreamToolCallPart, StreamFinishPart,
     ContentPart

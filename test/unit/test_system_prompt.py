@@ -7,11 +7,11 @@ This test suite verifies the refactored system_prompt design:
 """
 
 
-from hawi.agent.message import MessageRequest, ContentPart
+from hawi.model.message import MessageRequest, ContentPart
 from hawi.agent.context import AgentContext
 from hawi.agent import HawiAgent
-from hawi.agent.models.openai._converters import prepare_request as openai_prepare_request
-from hawi.agent.models.anthropic._utils import convert_system_prompt
+from hawi.models.openai._converters import prepare_request as openai_prepare_request
+from hawi.models.anthropic._utils import convert_system_prompt
 
 
 class TestSystemPromptTypes:
@@ -83,7 +83,7 @@ class TestHawiAgentSystemPrompt:
 
     def test_hawi_agent_accepts_string_system_prompt(self):
         """HawiAgent should accept string system_prompt."""
-        from hawi.agent.models.deepseek import DeepSeekModel
+        from hawi.models.deepseek import DeepSeekModel
 
         agent = HawiAgent(
             model=DeepSeekModel(api_key="test"),
@@ -94,7 +94,7 @@ class TestHawiAgentSystemPrompt:
 
     def test_hawi_agent_accepts_list_system_prompt(self):
         """HawiAgent should accept list[ContentPart] system_prompt."""
-        from hawi.agent.models.deepseek import DeepSeekModel
+        from hawi.models.deepseek import DeepSeekModel
 
         system: list[ContentPart] = [
             {"type": "text", "text": "You are helpful."},
@@ -109,7 +109,7 @@ class TestHawiAgentSystemPrompt:
 
     def test_hawi_agent_accepts_none_system_prompt(self):
         """HawiAgent should accept None system_prompt."""
-        from hawi.agent.models.deepseek import DeepSeekModel
+        from hawi.models.deepseek import DeepSeekModel
 
         agent = HawiAgent(
             model=DeepSeekModel(api_key="test"),
@@ -120,7 +120,7 @@ class TestHawiAgentSystemPrompt:
 
     def test_hawi_agent_clone_preserves_system_prompt(self):
         """Cloned agent should preserve system_prompt."""
-        from hawi.agent.models.deepseek import DeepSeekModel
+        from hawi.models.deepseek import DeepSeekModel
 
         agent = HawiAgent(
             model=DeepSeekModel(api_key="test"),
@@ -240,7 +240,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_user(self):
         """Message role should accept 'user'."""
-        from hawi.agent.message import Message
+        from hawi.model.message import Message
 
         msg: Message = {
             "role": "user",
@@ -254,7 +254,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_assistant(self):
         """Message role should accept 'assistant'."""
-        from hawi.agent.message import Message
+        from hawi.model.message import Message
 
         msg: Message = {
             "role": "assistant",
@@ -268,7 +268,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_tool(self):
         """Message role should accept 'tool'."""
-        from hawi.agent.message import Message
+        from hawi.model.message import Message
 
         msg: Message = {
             "role": "tool",
@@ -282,7 +282,7 @@ class TestMessageRoleValidation:
 
     def test_message_role_accepts_developer(self):
         """Message role should accept 'developer' for OpenAI o1/o3 models."""
-        from hawi.agent.message import Message
+        from hawi.model.message import Message
 
         # Note: 'developer' role is supported for OpenAI o1/o3 models
         # but system prompts should generally be passed via MessageRequest.system

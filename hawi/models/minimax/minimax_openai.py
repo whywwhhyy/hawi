@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
-from hawi.agent.message import MessageResponse, StreamPart, MessageRequest
+from hawi.model.message import MessageResponse, StreamPart, ContentPart, MessageRequest
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
 
         # 从内容中提取 <think> 标签
         thinking_content = None
-        text_content = []
+        text_content:list[ContentPart] = []
 
         for part in msg_response.content:
             if part.get("type") == "text":
@@ -99,7 +99,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
         if thinking_content:
             msg_response.reasoning_content = thinking_content
             # 将 thinking 内容添加到 content 列表作为 ReasoningPart
-            from hawi.agent.message import ReasoningPart
+            from hawi.model.message import ReasoningPart
             reasoning_part: ReasoningPart = {
                 "type": "reasoning",
                 "reasoning": thinking_content,
@@ -228,7 +228,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamPart]:
+    ) -> AsyncGenerator[StreamPart, None]:
         """异步流式调用 - 处理 <think> 标签"""
         req = self._prepare_request_impl(request)
         req["stream"] = True

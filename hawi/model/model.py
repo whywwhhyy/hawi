@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Iterator, List, Literal
 
-from hawi.agent.message import (
+from hawi.model.message import (
     ContentPart,
     Message,
     MessageRequest,
@@ -22,9 +22,9 @@ from hawi.agent.message import (
     ToolDefinition,
     ToolChoice,
 )
-from hawi.agent.errors import ModelError
+from hawi.errors import ModelError
 
-__all__ = ["Model", "StreamPart", "BalanceInfo", "ModelFailurePolicy", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
+__all__ = ["Model", "StreamPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -40,21 +40,6 @@ ModelParams = dict[str, Any]
 # 余额详情类型：各提供商返回的余额信息格式不同
 BalanceDetails = dict[str, Any]
 """余额详情，包含各平台特定的额外信息（如赠送余额、冻结余额等）"""
-
-
-@dataclass
-class ModelFailurePolicy:
-    """模型失败处理策略
-
-    Attributes:
-        error_type: 错误类型
-        action: 处理方式 ("retry" 或 "stop")
-        retry_count: 重试次数（仅当 action="retry" 时有效）
-    """
-
-    error_type: str
-    action: Literal["retry", "stop"] = "stop"
-    retry_count: int = 0
 
 
 @dataclass
@@ -82,9 +67,6 @@ class BalanceInfo:
             f"BalanceInfo({self.currency}: "
             f"available={self.available_balance:.4f})"
         )
-
-
-
 
 
 class Model(ABC):
@@ -325,20 +307,3 @@ class Model(ABC):
             USD: 15.50
         """
         raise NotImplementedError(f"{self.__class__.__name__} does not support balance query")
-
-    # ==========================================================================
-    # 错误分类 - 子类可覆盖以提供提供商特定的错误映射
-    # ==========================================================================
-
-    def classify_error(self, exception: Exception) -> ModelError:
-        """分类模型调用异常为具体的错误类实例
-
-        子类可覆盖此方法以提供提供商特定的错误分类。
-
-        Args:
-            exception: 捕获的异常
-
-        Returns:
-            具体的 ModelError 子类实例（NetworkError, ThrottleError, DeniedError, UnknownModelError）
-        """
-        return ModelError.classify(exception)

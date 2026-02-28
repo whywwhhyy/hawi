@@ -5,7 +5,7 @@ if TYPE_CHECKING:
     from hawi.agent import HawiAgent
     from hawi.agent.context import AgentContext
     from hawi.model import Model
-    from hawi.agent.message import MessageResponse
+    from hawi.model.message import MessageResponse
 
 # ===== Hook types for regular functions =====
 # Function: def hook(agent: HawiAgent) -> None

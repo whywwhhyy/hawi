@@ -5,7 +5,7 @@ Anthropic 模型辅助工具函数
 import logging
 from typing import Any,cast
 
-from hawi.agent.message import (
+from hawi.model.message import (
     ContentPart,
     TextPart
 )

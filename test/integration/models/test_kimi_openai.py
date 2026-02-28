@@ -7,8 +7,8 @@ Tests the new Kimi model implementation based on hawi.agent.models.openai.
 import pytest
 from typing import Any
 
-from hawi.agent.models.kimi.kimi_openai import KimiOpenAIModel
-from hawi.agent.message import (
+from hawi.models.kimi.kimi_openai import KimiOpenAIModel
+from hawi.model.message import (
     ContentPart,
     Message,
     TextPart,
@@ -164,7 +164,7 @@ class TestKimiOpenAIUnit:
 
     def test_prepare_request_with_disabled_thinking(self):
         """Test request preparation with disabled thinking."""
-        from hawi.agent.message import MessageRequest
+        from hawi.model.message import MessageRequest
 
         model = KimiOpenAIModel(
             api_key="test-key",
@@ -256,7 +256,8 @@ class TestKimiOpenAIIntegration:
 
         assert response.id is not None
         assert len(response.content) > 0
-        assert response.content[0]["type"] == "text"
+        # When thinking is enabled, reasoning_content comes first
+        assert response.content[0]["type"] in ["text", "reasoning"]
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.output_tokens > 0
@@ -269,6 +270,7 @@ class TestKimiOpenAIIntegration:
 
         assert response.id is not None
         assert len(response.content) > 0
+        # When thinking is disabled, content[0] should be text
         assert response.content[0]["type"] == "text"
         # May or may not have reasoning_content when thinking is disabled
 
@@ -295,8 +297,10 @@ class TestKimiOpenAIIntegration:
 
         # First turn
         response1 = model.invoke(messages=messages)
-        first_part = response1.content[0]
-        assert first_part["type"] == "text"
+        # Find text part (reasoning may come first when thinking is enabled)
+        text_parts = [p for p in response1.content if p["type"] == "text"]
+        assert len(text_parts) > 0
+        first_part = text_parts[0]
         messages.append(_create_assistant_message(content=[
             _text_part(first_part["text"]),
         ]))
@@ -305,8 +309,10 @@ class TestKimiOpenAIIntegration:
         messages.append(_create_user_message("What's my name?"))
         response2 = model.invoke(messages=messages)
 
-        second_part = response2.content[0]
-        assert second_part["type"] == "text"
+        # Find text part (reasoning may come first when thinking is enabled)
+        text_parts = [p for p in response2.content if p["type"] == "text"]
+        assert len(text_parts) > 0
+        second_part = text_parts[0]
         assert "Bob" in second_part["text"]
 
     def test_balance_query(self, model: KimiOpenAIModel):
@@ -335,7 +341,7 @@ class TestKimiK25ToolCalls:
 
     def test_tool_call_with_reasoning(self, model: KimiOpenAIModel):
         """Test that tool calls work correctly with reasoning enabled."""
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -370,7 +376,7 @@ class TestKimiK25ToolCalls:
 
     def test_multi_turn_with_tool_result(self, model: KimiOpenAIModel):
         """Test multi-turn conversation with tool results."""
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

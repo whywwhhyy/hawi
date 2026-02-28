@@ -5,8 +5,8 @@ Tests the DeepSeek model implementation using Anthropic-compatible API.
 
 import pytest
 
-from hawi.agent.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
-from hawi.agent.message import Message, ContentPart
+from hawi.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
+from hawi.model.message import Message, ContentPart
 from test.integration import get_deepseek_api_key
 
 # Check if API key is available
@@ -80,7 +80,7 @@ class TestDeepSeekAnthropicUnit:
 
     def test_prepare_request_filters_reasoner_params(self):
         """Test that Reasoner model parameters are filtered correctly."""
-        from hawi.agent.message import MessageRequest
+        from hawi.model.message import MessageRequest
 
         model = DeepSeekAnthropicModel(
             model_id="deepseek-reasoner",
@@ -101,7 +101,7 @@ class TestDeepSeekAnthropicUnit:
 
     def test_prepare_request_removes_top_k(self):
         """Test that top_k parameter is removed for DeepSeek."""
-        from hawi.agent.message import MessageRequest
+        from hawi.model.message import MessageRequest
 
         model = DeepSeekAnthropicModel(
             model_id="deepseek-chat",
@@ -120,7 +120,7 @@ class TestDeepSeekAnthropicUnit:
 
     def test_prepare_request_sanitizes_image_content(self):
         """Test that image content is sanitized for DeepSeek."""
-        from hawi.agent.message import MessageRequest
+        from hawi.model.message import MessageRequest
 
         model = DeepSeekAnthropicModel(
             model_id="deepseek-chat",
@@ -151,7 +151,7 @@ class TestDeepSeekAnthropicUnit:
 
     def test_prepare_request_sanitizes_document_content(self):
         """Test that document content is sanitized for DeepSeek."""
-        from hawi.agent.message import MessageRequest
+        from hawi.model.message import MessageRequest
 
         model = DeepSeekAnthropicModel(
             model_id="deepseek-chat",
@@ -240,7 +240,7 @@ class TestDeepSeekAnthropicIntegration:
 
     def test_tool_call_formatting(self, model: DeepSeekAnthropicModel):
         """Test tool call request formatting."""
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -307,7 +307,7 @@ class TestDeepSeekAnthropicReasonerMultiTurn:
         Note: When using tool calls with Reasoner, reasoning_content must be
         properly handled in multi-turn conversations.
         """
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

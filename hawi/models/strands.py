@@ -28,7 +28,7 @@ import logging
 from typing import Any, AsyncGenerator, Iterator, cast
 
 from hawi.model import BalanceInfo, Model
-from hawi.agent.message import (
+from hawi.model.message import (
     AudioPart,
     ContentPart,
     DocumentPart,

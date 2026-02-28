@@ -1,12 +1,12 @@
 import pytest
 from unittest.mock import MagicMock
 
-from hawi.agent.message import MessageRequest
-from hawi.agent.models.kimi.kimi_openai import KimiOpenAIModel
-from hawi.agent.models.kimi.kimi_anthropic import KimiAnthropicModel
+from hawi.model.message import MessageRequest,Message
+from hawi.models.kimi.kimi_openai import KimiOpenAIModel
+from hawi.models.kimi.kimi_anthropic import KimiAnthropicModel
 
 
-def _user_message():
+def _user_message() -> Message:
     return {
         "role": "user",
         "content": [{"type": "text", "text": "Hello"}],

@@ -10,8 +10,9 @@ from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 from hawi.agent import HawiAgent
-from hawi.agent.models import DeepSeekModel, KimiModel
-from hawi.agent.events import agent_error_event
+from hawi.models import DeepSeekModel, KimiModel
+from hawi.events import AgentErrorEvent, ModelErrorEvent
+from hawi.errors import AgentError, ModelError
 
 
 class TestModelValidation:
@@ -65,28 +66,26 @@ class TestAgentErrorHandling:
     """Tests for agent error event propagation."""
 
     @pytest.mark.asyncio
-    async def test_model_error_sends_agent_error_event(self):
-        """Test that model errors result in agent.error events being sent.
+    async def test_model_error_raises_exception(self):
+        """Test that model errors result in exceptions being raised (not silently swallowed).
 
         This is a regression test for the bug where model preparation errors
         were silently swallowed and no events were produced.
         """
-        # Create a mock model that fails during preparation
-        from hawi.agent.errors import UnknownModelError
+        from hawi.errors import AgentError
 
+        # Create a mock model that fails during preparation
         mock_model = MagicMock()
         mock_model.model_id = "test-model"
 
-        # Make classify_error return an actual exception instance
-        mock_model.classify_error = MagicMock(return_value=UnknownModelError("model error"))
+        # Make astream return an async context manager that raises on enter
+        class FailingAsyncContextManager:
+            async def __aenter__(self):
+                raise AttributeError("'list' object has no attribute 'startswith'")
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
 
-        # Make astream raise an exception immediately (simulating _prepare_request_impl failure)
-        @asynccontextmanager
-        async def failing_astream(*args, **kwargs):
-            raise AttributeError("'list' object has no attribute 'startswith'")
-            yield  # Make it a generator
-
-        mock_model.astream = failing_astream
+        mock_model.astream = MagicMock(return_value=FailingAsyncContextManager())
 
         agent = HawiAgent(
             model=mock_model,
@@ -94,19 +93,13 @@ class TestAgentErrorHandling:
             enable_streaming=True,
         )
 
-        events = []
-        try:
-            async for event in agent.arun("test message", stream=True):
-                events.append(event)
-        except UnknownModelError:
-            # Exception should be raised after error event is sent
-            pass
+        # Exception should be raised (not silently swallowed)
+        with pytest.raises(AgentError) as exc_info:
+            async for _event in agent.arun("test message", stream=True):
+                pass
 
-        # Should have received error event before exception was raised
-        error_events = [e for e in events if e.type == "agent.error"]
-        assert len(error_events) > 0, f"Expected agent.error event, got: {[e.type for e in events]}"
-        # The error event should contain the model error message
-        assert "model error" in error_events[0].metadata.get("error_message", "").lower()
+        # The error should contain the original error message
+        assert "startswith" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_model_init_error_is_not_silent(self):
@@ -115,38 +108,31 @@ class TestAgentErrorHandling:
         This ensures that if a model's __init__ or astream raises an exception,
         the error propagates properly rather than being silently ignored.
         """
-        # Create a model that will fail when its methods are called
-        # We can't easily test the actual DeepSeekModel without valid API key,
-        # so we test the agent's error handling behavior
+        from hawi.errors import AgentError
 
-        class BrokenModel:
-            model_id = ["broken", "model"]  # Invalid type
+        # Create a mock model that fails when astream is called
+        mock_model = MagicMock()
+        mock_model.model_id = "test-model"
 
-            async def astream(self, *args, **kwargs):
-                # This simulates what happens when model_id is a list
-                # and _prepare_request_impl tries to call .startswith() on it
+        # Make astream return an async context manager that raises on enter
+        class BrokenAsyncContextManager:
+            async def __aenter__(self):
                 raise AttributeError("'list' object has no attribute 'startswith'")
-                yield
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        mock_model.astream = MagicMock(return_value=BrokenAsyncContextManager())
 
         agent = HawiAgent(
-            model=BrokenModel(),
+            model=mock_model,
             system_prompt="Test",
             enable_streaming=True,
         )
 
-        events = []
-        try:
-            async for event in agent.arun("test", stream=True):
-                events.append(event)
-        except Exception as e:
-            # If exception propagates, that's acceptable
-            # But ideally we want it as an event
-            pass
+        # Exception should be raised (not silently swallowed)
+        with pytest.raises(AgentError) as exc_info:
+            async for _event in agent.arun("test", stream=True):
+                pass
 
-        # Either we got an error event, or an exception was raised
-        # Silent failure (empty events or just start/stop) is the bug
-        error_events = [e for e in events if e.type == "agent.error"]
-        exception_raised = len(events) <= 2  # Just run_start and stream_start
-
-        assert len(error_events) > 0 or exception_raised, \
-            "Error should either be sent as event or raised as exception, not silently swallowed"
+        # The error should contain the original error message
+        assert "startswith" in str(exc_info.value)

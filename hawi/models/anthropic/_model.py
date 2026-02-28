@@ -12,7 +12,7 @@ from typing import Any
 from anthropic import Anthropic, AsyncAnthropic
 
 from hawi.model import Model
-from hawi.agent.message import (
+from hawi.model.message import (
     ContentPart,
     MessageRequest,
     MessageResponse,

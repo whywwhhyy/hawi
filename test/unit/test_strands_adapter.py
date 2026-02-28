@@ -7,8 +7,8 @@ StrandsModel 适配器单元测试
 import pytest
 from typing import Any
 
-from hawi.agent.models.strands import StrandsModel
-from hawi.agent.message import (
+from hawi.models.strands import StrandsModel
+from hawi.model.message import (
     Message,
     ToolDefinition,
     ToolChoice,

@@ -1,0 +1,62 @@
+"""
+Hawi Event System
+
+统一事件系统：
+- Event: 只读、非阻塞，由 Model 和 Agent 产生
+- Hook: 阻塞、可修改，仅由 Agent 产生
+
+命名规范：
+- Model*Event: 由 Model 产生的事件
+- Agent*Event: 由 Agent 产生的事件
+"""
+
+from .event import (
+    Event,
+    EventSource,
+    EventType,
+    ModelEventType,
+    AgentEventType,
+    EventBus
+)
+from .model_events import (
+    ModelStreamStartEvent,
+    ModelStreamStopEvent,
+    ModelContentBlockStartEvent,
+    ModelContentBlockDeltaEvent,
+    ModelContentBlockStopEvent,
+    ModelMetadataEvent,
+    ModelErrorEvent,
+)
+from .agent_events import (
+    AgentRunStartEvent,
+    AgentRunStopEvent,
+    AgentToolCallEvent,
+    AgentToolResultEvent,
+    AgentMessageAddedEvent,
+    AgentErrorEvent,
+)
+
+__all__ = [
+    # Base
+    "Event",
+    "EventBus",
+    "EventSource",
+    "EventType",
+    "ModelEventType",
+    "AgentEventType",
+    # Model (re-exported from hawi.model.message)
+    "ModelStreamStartEvent",
+    "ModelStreamStopEvent",
+    "ModelContentBlockStartEvent",
+    "ModelContentBlockDeltaEvent",
+    "ModelContentBlockStopEvent",
+    "ModelMetadataEvent",
+    "ModelErrorEvent",
+    # Agent
+    "AgentRunStartEvent",
+    "AgentRunStopEvent",
+    "AgentToolCallEvent",
+    "AgentToolResultEvent",
+    "AgentMessageAddedEvent",
+    "AgentErrorEvent",
+]

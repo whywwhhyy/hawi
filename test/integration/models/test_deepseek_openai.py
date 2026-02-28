@@ -5,8 +5,8 @@ Tests the new DeepSeek model implementation based on hawi.agent.models.openai.
 
 import pytest
 
-from hawi.agent.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
-from hawi.agent.message import Message, ContentPart
+from hawi.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
+from hawi.model.message import Message, ContentPart
 from test.integration.models import get_deepseek_api_key
 
 # Check if API key is available
@@ -80,7 +80,7 @@ class TestDeepSeekOpenAIUnit:
 
     def test_prepare_request_filters_reasoner_params(self):
         """Test that Reasoner model parameters are filtered correctly."""
-        from hawi.agent.message import MessageRequest
+        from hawi.model.message import MessageRequest
 
         model = DeepSeekOpenAIModel(
             model_id="deepseek-reasoner",
@@ -203,7 +203,7 @@ class TestDeepSeekOpenAIIntegration:
 
     def test_tool_call_formatting(self, model: DeepSeekOpenAIModel):
         """Test tool call request formatting."""
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -280,7 +280,7 @@ class TestDeepSeekReasonerMultiTurn:
         Note: When using tool calls with Reasoner, reasoning_content must be
         properly handled in multi-turn conversations.
         """
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -315,7 +315,7 @@ class TestDeepSeekReasonerMultiTurn:
         When using tool calls with deepseek-reasoner, the API returns reasoning_content
         which must be preserved in multi-turn conversations.
         """
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

@@ -6,8 +6,8 @@ Tests the Kimi model implementation using Anthropic-compatible API.
 import pytest
 from typing import Any
 
-from hawi.agent.models.kimi.kimi_anthropic import KimiAnthropicModel
-from hawi.agent.message import (
+from hawi.models.kimi.kimi_anthropic import KimiAnthropicModel
+from hawi.model.message import (
     ContentPart,
     Message,
     TextPart,
@@ -164,7 +164,7 @@ class TestKimiAnthropicIntegration:
 
     def test_tool_call_formatting(self, model: KimiAnthropicModel):
         """Test tool call request formatting."""
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -230,7 +230,7 @@ class TestKimiAnthropicToolCalls:
 
     def test_tool_call_with_citations(self, model: KimiAnthropicModel):
         """Test that tool calls work correctly and handle citations."""
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -265,7 +265,7 @@ class TestKimiAnthropicToolCalls:
 
     def test_multi_turn_with_tool_result(self, model: KimiAnthropicModel):
         """Test multi-turn conversation with tool results."""
-        from hawi.agent.message import ToolDefinition
+        from hawi.model.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

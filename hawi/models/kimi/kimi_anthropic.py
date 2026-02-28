@@ -14,7 +14,7 @@ import logging
 from typing import Any
 
 from hawi.models.anthropic import AnthropicModel
-from hawi.agent.message import MessageResponse
+from hawi.model.message import MessageResponse
 
 logger = logging.getLogger(__name__)
 

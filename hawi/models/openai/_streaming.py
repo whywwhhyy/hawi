@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any, Iterator
 
-from hawi.agent.message import StreamPart
+from hawi.model.message import StreamPart
 
 logger = logging.getLogger(__name__)
 

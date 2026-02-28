@@ -5,8 +5,14 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-from hawi.agent.events import Event
-from hawi.agent.errors import AgentError
+from hawi.events import (
+    Event,
+    AgentToolCallEvent,
+    AgentToolResultEvent,
+    AgentErrorEvent,
+    ModelErrorEvent,
+)
+from hawi.errors import AgentError, ModelError
 
 logger = logging.getLogger(__name__)
 
@@ -93,13 +99,15 @@ class BasePrinter(ABC):
         if not self.show_tools:
             return
 
-        meta = event.metadata
-        tool_name = meta.get("tool_name", "unknown")
-        tool_call_id = meta.get("tool_call_id") or tool_name
+        # 类型断言以访问具体属性
+        assert isinstance(event, AgentToolCallEvent)
+
+        tool_name = event.tool_name
+        tool_call_id = event.tool_call_id or tool_name
 
         self._active_tool_calls[tool_call_id] = {
             "tool_name": tool_name,
-            "arguments": meta.get("arguments", {}),
+            "arguments": event.arguments,
             "status": "running",
             "start_time": time.time(),
         }
@@ -109,26 +117,18 @@ class BasePrinter(ABC):
         if not self.show_tools:
             return
 
-        meta = event.metadata
-        tool_name = meta.get("tool_name", "unknown")
-        success = meta.get("success", False)
-        result_preview = meta.get("result_preview", "")
+        # 类型断言以访问具体属性
+        assert isinstance(event, AgentToolResultEvent)
 
-        start_time = None
-        arguments = {}
-        tool_call_id = None
+        tool_name = event.tool_name
+        success = event.success
+        result_preview = event.result_preview
+        duration = event.duration_ms
+        arguments = event.arguments
 
-        for tid, info in list(self._active_tool_calls.items()):
-            if info.get("tool_name") == tool_name:
-                tool_call_id = tid
-                start_time = info.get("start_time")
-                arguments = info.get("arguments", {})
-                break
-
-        if tool_call_id:
-            self._active_tool_calls.pop(tool_call_id, None)
-
-        duration = (time.time() - start_time) * 1000 if start_time else 0
+        # 清理已完成的 tool call
+        if event.tool_call_id in self._active_tool_calls:
+            self._active_tool_calls.pop(event.tool_call_id, None)
 
         await self._print_tool_result(tool_name, success, result_preview, duration, arguments)
 
@@ -145,16 +145,18 @@ class BasePrinter(ABC):
         pass
 
     async def _on_error(self, event: Event) -> None:
-        """错误处理"""
+        """错误处理 - 处理 AgentErrorEvent 和 ModelErrorEvent"""
         if not self.show_errors:
             return
 
-        meta = event.metadata
-        error_obj = meta.get("error")
+        # 获取错误对象
+        error_obj = getattr(event, 'error', None)
+        if error_obj is None:
+            return
 
-        if isinstance(error_obj, AgentError):
-            # 有完整的 AgentError 异常对象
-            message = error_obj.message
+        if isinstance(error_obj, (AgentError, ModelError)):
+            # 有完整的结构化异常对象
+            message = error_obj.message or "Unknown error"
             if self.show_error_stack and error_obj.stack_trace:
                 full_message = f"{message}\n\n[Stack Trace]\n{error_obj.stack_trace}"
             else:
@@ -163,16 +165,10 @@ class BasePrinter(ABC):
         elif isinstance(error_obj, Exception):
             # 其他异常对象
             message = str(error_obj)
-            error_stack = meta.get("error_stack")
-            if self.show_error_stack and error_stack:
-                full_message = f"{message}\n\n[Stack Trace]\n{error_stack}"
-            else:
-                full_message = message
-            await self._print_error(full_message)
+            await self._print_error(message)
         else:
-            # 兼容旧代码：使用 error_message 或 error 字段
-            error_msg = meta.get("error_message") or meta.get("error", "Unknown error")
-            await self._print_error(error_msg)
+            # 兼容其他情况
+            await self._print_error(str(error_obj))
 
     @abstractmethod
     async def _print_error(self, error: str) -> None:

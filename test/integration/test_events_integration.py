@@ -7,12 +7,12 @@ import asyncio
 import pytest
 
 from hawi.agent import HawiAgent
-from hawi.agent.events import (
+from hawi.events import (
     Event,
     EventBus,
 )
 from hawi.agent.printers import RichStreamingPrinter as ConversationPrinter
-from hawi.agent.models.deepseek import DeepSeekModel
+from hawi.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool
 
@@ -121,16 +121,16 @@ class TestEventFlowWithAgent:
 
         # Verify tool call details
         tc_event = tool_call_events[0]
-        assert tc_event.metadata["tool_name"] == "CalculatorPlugin__calculate"
-        assert "expression" in tc_event.metadata["arguments"]
+        assert tc_event.tool_name == "CalculatorPlugin__calculate"
+        assert "expression" in tc_event.arguments
 
         # Find tool result event
         tool_result_events = [e for e in events if e.type == "agent.tool_result"]
         assert len(tool_result_events) >= 1
 
         tr_event = tool_result_events[0]
-        assert tr_event.metadata["success"] is True
-        assert "8" in tr_event.metadata["result_preview"]
+        assert tr_event.success is True
+        assert "8" in tr_event.result_preview
 
     @pytest.mark.asyncio
     async def test_event_bus_with_agent(self, agent: HawiAgent):
@@ -184,7 +184,7 @@ class TestEventFlowWithAgent:
         assert len(delta_events) > 0
 
         # Should have text content
-        text_content = "".join(e.metadata.get("delta", "") for e in delta_events if e.metadata.get("delta_type") == "text")
+        text_content = "".join(e.delta for e in delta_events if e.delta_type == "text")
         assert "Test123" in text_content or len(text_content) > 0
 
     @pytest.mark.asyncio
@@ -199,9 +199,8 @@ class TestEventFlowWithAgent:
         assert len(run_stop_events) == 1
 
         stop_event = run_stop_events[0]
-        assert "duration_ms" in stop_event.metadata
-        assert stop_event.metadata["duration_ms"] > 0
-        assert stop_event.metadata["stop_reason"] == "end_turn"
+        assert stop_event.duration_ms > 0
+        assert stop_event.stop_reason == "end_turn"
 
     @pytest.mark.asyncio
     async def test_event_metadata_consistency(self, agent: HawiAgent):
@@ -214,7 +213,7 @@ class TestEventFlowWithAgent:
         # All agent events should have the same run_id
         agent_events = [e for e in events if e.source == "agent"]
         if len(agent_events) > 0:
-            run_ids = set(e.metadata.get("run_id") for e in agent_events if "run_id" in e.metadata)
+            run_ids = set(e.run_id for e in agent_events if hasattr(e, "run_id"))
             assert len(run_ids) == 1  # Should all share the same run_id
 
     @pytest.mark.asyncio
@@ -233,7 +232,7 @@ class TestEventFlowWithAgent:
 
         run_stop_events = [e for e in events if e.type == "agent.run_stop"]
         assert len(run_stop_events) == 1
-        assert run_stop_events[0].metadata["stop_reason"] == "end_turn"
+        assert run_stop_events[0].stop_reason == "end_turn"
 
 
 @pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
@@ -327,7 +326,7 @@ class TestEventWithReasoningModel:
         block_start_events = [e for e in events if e.type == "model.content_block_start"]
 
         # Check for reasoning block type
-        block_types = [e.metadata.get("block_type") for e in block_start_events]
+        block_types = [e.block_type for e in block_start_events]
 
         # Should have at least text blocks, may have reasoning
         assert "text" in block_types
@@ -335,4 +334,4 @@ class TestEventWithReasoningModel:
         # Verify delta events have correct types
         delta_events = [e for e in events if e.type == "model.content_block_delta"]
         for de in delta_events:
-            assert de.metadata.get("delta_type") in ["text", "thinking"]
+            assert de.delta_type in ["text", "thinking", "tool_input", "signature"]

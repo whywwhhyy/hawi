@@ -10,8 +10,8 @@ Tests the Hawi StrandsModel adapter to ensure it correctly:
 import pytest
 from unittest.mock import Mock, MagicMock
 
-from hawi.agent.models.strands import StrandsModel
-from hawi.agent.message import (
+from hawi.models.strands import StrandsModel
+from hawi.model.message import (
     MessageRequest,
     TokenUsage,
     ContentPart,

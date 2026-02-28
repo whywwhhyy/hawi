@@ -10,9 +10,9 @@ DeepSeek API 合规性测试
 import pytest
 from unittest.mock import patch
 
-from hawi.agent.message import MessageRequest, Message
-from hawi.agent.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
-from hawi.agent.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
+from hawi.model.message import MessageRequest, Message
+from hawi.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
+from hawi.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
 
 
 class TestReasoningContentCompliance:
@@ -98,7 +98,7 @@ class TestReasonerParameterHandling:
 
         根据 DeepSeek 文档，temperature/top_p 等参数会被忽略但不应导致错误
         """
-        with patch("hawi.agent.models.deepseek.deepseek_openai.logger") as mock_logger:
+        with patch("hawi.models.deepseek.deepseek_openai.logger") as mock_logger:
             model = DeepSeekOpenAIModel(
                 model_id="deepseek-reasoner",
                 api_key="test-key",

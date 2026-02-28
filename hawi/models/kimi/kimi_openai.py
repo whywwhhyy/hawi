@@ -12,10 +12,10 @@ from typing import Any, AsyncIterator, Iterator
 import httpx
 
 from hawi.model import BalanceInfo
-from hawi.agent.message import StreamPart
+from hawi.model.message import StreamPart
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
-from hawi.agent.message import MessageRequest, MessageResponse
+from hawi.model.message import MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ class KimiOpenAIModel(OpenAIModel):
                 result["reasoning_content"] = metadata["reasoning_content"]
 
             # Kimi K2.5 API 要求 tool call 消息必须有非空的 reasoning_content
-            # 如果没有 reasoning_content 但有 tool_calls，添加一个默认的
+            # 如果没有 reasoning_content 但有 tool_calls，添加一个默认值
             if not result.get("reasoning_content") and result.get("tool_calls"):
                 result["reasoning_content"] = "Using tool to solve the problem..."
 
@@ -242,14 +242,15 @@ class KimiOpenAIModel(OpenAIModel):
                 msg_response.reasoning_content = reasoning
                 # 将 reasoning_content 添加到 content 列表作为 ReasoningPart
                 # 这样 HawiAgent 可以正确处理并显示它
-                from hawi.agent.message import ReasoningPart
+                from hawi.model.message import ReasoningPart
                 reasoning_part: ReasoningPart = {
                     "type": "reasoning",
                     "reasoning": reasoning,
                     "signature": None,
                 }
-                # 添加到 content 末尾，保持 text 在开头（与测试期望一致）
-                msg_response.content.append(reasoning_part)
+                # 插入到 content 开头，保持 reasoning 在 text 之前
+                # 这与流式输出顺序一致：reasoning_content 先于 content 出现
+                msg_response.content.insert(0, reasoning_part)
 
         return msg_response
 

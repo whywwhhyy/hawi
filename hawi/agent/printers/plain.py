@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
 import sys
 
-from hawi.agent.events import Event
+from hawi.events import (
+    Event,
+    ModelContentBlockStartEvent,
+    ModelContentBlockDeltaEvent,
+    ModelContentBlockStopEvent,
+)
 from hawi.agent.printers.base import BasePrinter
 
 logger = logging.getLogger(__name__)
@@ -93,8 +97,8 @@ class PlainPrinter(BasePrinter):
 
     async def _on_content_block_start(self, event: Event) -> None:
         """内容块开始"""
-        meta = event.metadata
-        block_type = meta.get("block_type")
+        assert isinstance(event, ModelContentBlockStartEvent)
+        block_type = event.block_type
         self._current_block_type = block_type
         self._block_has_received_delta = False
 
@@ -103,9 +107,9 @@ class PlainPrinter(BasePrinter):
 
     async def _on_content_block_delta(self, event: Event) -> None:
         """逐字符实时输出"""
-        meta = event.metadata
-        delta_type = meta.get("delta_type")
-        delta = meta.get("delta", "")
+        assert isinstance(event, ModelContentBlockDeltaEvent)
+        delta_type = event.delta_type
+        delta = event.delta
 
         if not self._block_has_received_delta:
             self._block_has_received_delta = True
@@ -125,24 +129,15 @@ class PlainPrinter(BasePrinter):
         if not self._block_has_received_delta:
             self._stop_spinner()
 
-        meta = event.metadata
-        block_type = meta.get("block_type")
+        assert isinstance(event, ModelContentBlockStopEvent)
+        block_type = event.block_type
 
         if block_type == "thinking" and self.show_reasoning:
             if self._reasoning_buffer.strip():
                 _stdout.write(f"\n[Thinking]\n{self._reasoning_buffer.strip()}\n[/Thinking]\n")
                 _stdout.flush()
             self._reasoning_buffer = ""
-        elif block_type == "tool_use":
-            tool_call_id = meta.get("tool_call_id")
-            tool_name = meta.get("tool_name")
-            if tool_call_id and tool_name and self.show_tools:
-                self._active_tool_calls[tool_call_id] = {
-                    "tool_name": tool_name,
-                    "arguments": meta.get("tool_arguments", {}),
-                    "status": "running",
-                    "start_time": time.time(),
-                }
+
         self._current_block_type = None
 
     async def _on_run_start(self, event: Event) -> None:

@@ -7,12 +7,12 @@ OpenAI 模型实现
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncGenerator, Iterator
 
 from openai import OpenAI, AsyncOpenAI
 
 from hawi.model import Model
-from hawi.agent.message import (
+from hawi.model.message import (
     MessageRequest,
     MessageResponse,
     TokenUsage,
@@ -236,7 +236,7 @@ class OpenAIModel(Model):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamPart]:
+    ) -> AsyncGenerator[StreamPart, None]:
         """异步流式调用 OpenAI API"""
         req = self._prepare_request_impl(request)
         req["stream"] = True

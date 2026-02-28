@@ -10,8 +10,8 @@ MiniMax Anthropic API 兼容模型
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from collections.abc import AsyncGenerator, Iterator
+from typing import Any, cast
 
 from anthropic.types import (
     RawContentBlockStartEvent,
@@ -19,6 +19,9 @@ from anthropic.types import (
     ToolUseBlock,
     ThinkingDelta,
     SignatureDelta,
+    TextBlock,
+    ThinkingBlock,
+    RedactedThinkingBlock,
 )
 
 from hawi.models.anthropic import AnthropicModel
@@ -27,7 +30,7 @@ from hawi.models.anthropic._streaming import (
     run_async_stream,
 )
 from hawi.models.anthropic._converters import needs_async_conversion
-from hawi.agent.message import StreamPart, MessageRequest, MessageResponse
+from hawi.model.message import StreamPart, MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -64,22 +67,20 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
         block = event.content_block
         self._content_blocks[block_index] = block
         
-        block_type = getattr(block, 'type', None)
-        
-        if block_type == "tool_use":
+        if block.type == "tool_use":
             self._partial_json_parts = []
-            block = block  # type: ignore
-            logger.debug(f"MiniMax tool_use start: id={block.id}, name={block.name}")
+            tool_use_block = cast(ToolUseBlock, block)
+            logger.debug(f"MiniMax tool_use start: id={tool_use_block.id}, name={tool_use_block.name}")
             yield {
                 "type": "tool_call_delta",
                 "index": block_index,
-                "id": block.id,
-                "name": block.name,
+                "id": tool_use_block.id,
+                "name": tool_use_block.name,
                 "arguments_delta": "",
                 "is_start": True,
                 "is_end": False,
             }
-        elif block_type == "text":
+        elif block.type == "text":
             yield {
                 "type": "text_delta",
                 "index": block_index,
@@ -87,7 +88,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
                 "is_start": True,
                 "is_end": False,
             }
-        elif block_type == "thinking":
+        elif block.type == "thinking":
             yield {
                 "type": "thinking_delta",
                 "index": block_index,
@@ -95,7 +96,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
                 "is_start": True,
                 "is_end": False,
             }
-        elif block_type == "redacted_thinking":
+        elif block.type == "redacted_thinking":
             yield {
                 "type": "thinking_delta",
                 "index": block_index,
@@ -104,7 +105,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
                 "is_end": True,
             }
         else:
-            logger.debug(f"MiniMax block type {block_type} in content_block_start event")
+            logger.debug(f"MiniMax block type {block.type} in content_block_start event")
     
     def _handle_content_block_delta(
         self, event: RawContentBlockDeltaEvent
@@ -142,7 +143,7 @@ def minimax_stream_response(
 
 async def minimax_stream_response_async(
     client, request: dict[str, Any]
-) -> AsyncIterator[StreamPart]:
+) -> AsyncGenerator[StreamPart, None]:
     """MiniMax 异步流式响应处理"""
     async with client.messages.stream(**request) as stream:
         handler = MiniMaxAnthropicStreamHandler(stream)
@@ -211,7 +212,7 @@ class MiniMaxAnthropicModel(AnthropicModel):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamPart]:
+    ) -> AsyncGenerator[StreamPart]:
         """异步流式调用 - 使用 MiniMax 专属的 handler"""
         req = await self._prepare_request_async(request)
         async for chunk in minimax_stream_response_async(self.async_client, req):
