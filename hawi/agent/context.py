@@ -248,7 +248,6 @@ class AgentContext:
             "role": "user",
             "content": content,
             "name": None,
-            "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
         })
@@ -256,19 +255,16 @@ class AgentContext:
     def add_assistant_message(
         self,
         content: list[ContentPart],
-        tool_calls: list[ToolCallPart] | None = None,
     ) -> None:
         """Add an assistant message.
 
         Args:
-            content: Content parts
-            tool_calls: Optional tool calls
+            content: Content parts (may include ToolCallPart items)
         """
         self.messages.append({
             "role": "assistant",
             "content": content,
             "name": None,
-            "tool_calls": tool_calls,
             "tool_call_id": None,
             "metadata": None,
         })
@@ -293,7 +289,6 @@ class AgentContext:
             "role": "tool",
             "content": content,
             "name": None,
-            "tool_calls": None,
             "tool_call_id": tool_call_id,
             "metadata": None,
         })
@@ -342,7 +337,6 @@ class AgentContext:
             "role": "user",
             "content": [{"type": "text", "text": f"[Previous conversation summary: {summary}]"}],
             "name": None,
-            "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
         }

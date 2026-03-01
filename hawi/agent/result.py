@@ -110,6 +110,14 @@ class AgentRunResult:
         Returns:
             Serializable dictionary representation
         """
+        # Extract tool calls from messages' content (ToolCallPart items)
+        tool_calls_from_content = []
+        for msg in self.messages:
+            if msg["role"] == "assistant":
+                for part in msg["content"]:
+                    if isinstance(part, dict) and part.get("type") == "tool_call":
+                        tool_calls_from_content.append(part)
+
         return {
             "stop_reason": self.stop_reason,
             "messages": self.messages,
@@ -128,5 +136,6 @@ class AgentRunResult:
                 }
                 for tc in self.tool_calls
             ],
+            "tool_calls_from_content": tool_calls_from_content,
             "error": self.error,
         }

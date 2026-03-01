@@ -297,13 +297,14 @@ class StrandsModel(Model):
             strands_content = self._convert_content_to_strands(msg["content"])
             strands_msg["content"] = strands_content
 
-        # 处理 tool_calls (assistant role)
-        tool_calls = msg.get("tool_calls")
-        if role == "assistant" and tool_calls:
-            strands_msg["tool_calls"] = [
-                self._convert_tool_call_part_to_strands(tc)
-                for tc in tool_calls
-            ]
+        # 处理 tool_calls (assistant role) - extract from content as ToolCallPart
+        if role == "assistant" and msg["content"]:
+            tool_call_parts = [p for p in msg["content"] if p.get("type") == "tool_call"]
+            if tool_call_parts:
+                strands_msg["tool_calls"] = [
+                    self._convert_tool_call_part_to_strands(cast(ToolCallPart, tc))
+                    for tc in tool_call_parts
+                ]
 
         # 处理 tool_call_id (tool role)
         if role == "tool" and msg.get("tool_call_id"):

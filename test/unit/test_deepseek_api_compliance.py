@@ -40,8 +40,7 @@ class TestReasoningContentCompliance:
                 {"type": "text", "text": "Here's the answer"},
             ],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }
 
@@ -115,8 +114,7 @@ class TestReasonerParameterHandling:
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
                 "name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
+                                "tool_call_id": None,
                 "metadata": None,
             }])
 
@@ -154,8 +152,7 @@ class TestReasonerParameterHandling:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }])
         openai_req = openai_model._prepare_request_impl(openai_request)
@@ -166,8 +163,7 @@ class TestReasonerParameterHandling:
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
                 "name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
+                                "tool_call_id": None,
                 "metadata": None,
             }],
             temperature=0.7,
@@ -201,12 +197,11 @@ class TestDeepSeekOpenAIAPILimits:
                 {"type": "text", "text": "Part 2"},
             ],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": "call_123",
+                        "tool_call_id": "call_123",
             "metadata": None,
         }
 
-        result = model._convert_message_to_openai(message)
+        result = model._convert_message_to_openai(message)[0]
 
         assert result["role"] == "tool"
         assert isinstance(result["content"], str), \
@@ -228,8 +223,7 @@ class TestDeepSeekOpenAIAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }])
 
@@ -250,12 +244,11 @@ class TestDeepSeekOpenAIAPILimits:
                 {"type": "image", "source": {"url": "https://example.com/test.png", "detail": "auto"}},
             ],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }
 
-        result = model._convert_message_to_openai(message)
+        result = model._convert_message_to_openai(message)[0]
 
         assert isinstance(result["content"], list)
         assert all(block.get("type") != "image_url" for block in result["content"])
@@ -277,8 +270,7 @@ class TestDeepSeekOpenAIAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }])
 
@@ -305,8 +297,7 @@ class TestDeepSeekAnthropicAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }])
 
@@ -328,8 +319,7 @@ class TestDeepSeekAnthropicAPILimits:
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
                 "name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
+                                "tool_call_id": None,
                 "metadata": None,
             }],
             tools=[{
@@ -369,8 +359,7 @@ class TestDeepSeekAnthropicAPILimits:
                 },
             ],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }
 
@@ -397,8 +386,7 @@ class TestDeepSeekAnthropicAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
+                        "tool_call_id": None,
             "metadata": None,
         }])
 

@@ -81,7 +81,6 @@ class TestMessageConversion:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
         }]
@@ -100,7 +99,6 @@ class TestMessageConversion:
             "role": "assistant",
             "content": [{"type": "text", "text": "Hi there"}],
             "name": None,
-            "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
         }]
@@ -119,7 +117,6 @@ class TestMessageConversion:
             "role": "user",
             "content": [{"type": "image", "source": {"url": "https://example.com/img.jpg", "detail": "auto"}}],
             "name": None,
-            "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
         }]
@@ -130,23 +127,26 @@ class TestMessageConversion:
         ]
 
     def test_convert_tool_calls(self):
-        """测试转换 tool_calls"""
+        """测试转换 tool_calls - now stored as ToolCallPart in content"""
         strands_model = MockStrandsModel()
         adapter = StrandsModel(strands_model)
 
+        # Tool calls are now stored in content as ToolCallPart, not in separate tool_calls field
         messages: list[Message] = [{
             "role": "assistant",
-            "content": [],
-            "name": None,
-            "tool_calls": [
+            "content": [
+                {"type": "text", "text": "I'll check the weather."},
                 {"type": "tool_call", "id": "call_123", "name": "get_weather", "arguments": {"city": "Beijing"}}
             ],
+            "name": None,
             "tool_call_id": None,
             "metadata": None,
         }]
         result = adapter._convert_messages_to_strands(messages)
 
         assert result[0]["role"] == "assistant"
+        # tool_calls should be extracted from content
+        assert "tool_calls" in result[0]
         assert result[0]["tool_calls"] == [
             {
                 "toolUse": {
@@ -156,6 +156,8 @@ class TestMessageConversion:
                 }
             }
         ]
+        # Content should also include the tool_call as toolUse block
+        assert any(block.get("toolUse") for block in result[0]["content"])
 
 
 class TestToolConversion:
@@ -234,9 +236,10 @@ class TestResponseConversion:
         result = adapter._parse_response_impl(strands_response)
 
         assert result.id == "msg_456"
-        assert len(result.content) == 1
-        assert result.content[0]["type"] == "text"
-        assert result.content[0]["text"] == "Hello world"  # type: ignore
+        content_list = list(result.content)
+        assert len(content_list) == 1
+        assert content_list[0]["type"] == "text"
+        assert content_list[0]["text"] == "Hello world"  # type: ignore
         assert result.stop_reason == "end_turn"
         assert result.usage is not None
         assert result.usage.input_tokens == 10
@@ -263,10 +266,11 @@ class TestResponseConversion:
 
         result = adapter._parse_response_impl(strands_response)
 
-        assert len(result.content) == 1
-        assert result.content[0]["type"] == "tool_call"
-        assert result.content[0]["name"] == "get_weather"  # type: ignore
-        assert result.content[0]["arguments"] == {"city": "Beijing"}  # type: ignore
+        content_list = list(result.content)
+        assert len(content_list) == 1
+        assert content_list[0]["type"] == "tool_call"
+        assert content_list[0]["name"] == "get_weather"  # type: ignore
+        assert content_list[0]["arguments"] == {"city": "Beijing"}  # type: ignore
         assert result.stop_reason == "tool_use"
 
 
@@ -329,7 +333,6 @@ class TestIntegration:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
         }]
@@ -341,7 +344,8 @@ class TestIntegration:
 
         # Verify response
         assert response.id == "msg_123"
-        assert response.content[0]["type"] == "text"
+        content_list = list(response.content)
+        assert content_list[0]["type"] == "text"
 
     def test_stream_delegation(self):
         """测试 stream 委托给 strands model"""
@@ -352,7 +356,6 @@ class TestIntegration:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
             "tool_call_id": None,
             "metadata": None,
         }]

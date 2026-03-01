@@ -192,44 +192,50 @@ class DeepSeekOpenAIModel(OpenAIModel):
             "content": combined_content,
         }
 
-    def _convert_message_to_openai(self, message) -> dict[str, Any]:
+    def _convert_message_to_openai(self, message) -> list[dict[str, Any]]:
         """转换消息，处理 DeepSeek 特殊格式"""
-        result = super()._convert_message_to_openai(message)
+        results = super()._convert_message_to_openai(message)
 
-        content = result.get("content")
-        if isinstance(content, list):
-            # DeepSeek 不支持 image_url 结构，替换为文本占位
-            result["content"] = self._sanitize_openai_content(content)
-
-        # tool 消息特殊处理：确保 content 是字符串
-        if result.get("role") == "tool":
-            content = result.get("content", "")
+        # 处理每条消息（父类可能返回多条，如混合内容拆分时）
+        for result in results:
+            content = result.get("content")
             if isinstance(content, list):
-                result["content"] = self._serialize_content_to_string(content)
+                # DeepSeek 不支持 image_url 结构，替换为文本占位
+                result["content"] = self._sanitize_openai_content(content)
 
-        # DeepSeek Reasoner 模型在 tool calling 场景下需要回传 reasoning_content
-        # 参考: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
-        # 但普通对话场景不应发送 reasoning_content，否则 API 会返回 400 错误
-        if (self.model_id == "deepseek-reasoner" and
-            self.include_reasoning_in_context and
-            result.get("role") == "assistant"):
-            # 从消息内容中提取 reasoning_content (来自 ReasoningPart)
-            for part in message.get("content", []):
-                if part.get("type") == "reasoning":
-                    result["reasoning_content"] = part.get("reasoning", "")
-                    break
+            # tool 消息特殊处理：确保 content 是字符串
+            if result.get("role") == "tool":
+                content = result.get("content", "")
+                if isinstance(content, list):
+                    result["content"] = self._serialize_content_to_string(content)
 
-            # 如果消息元数据中有 reasoning_content，也提取出来
-            metadata = message.get("metadata")
-            if not result.get("reasoning_content") and metadata and metadata.get("reasoning_content"):
-                result["reasoning_content"] = metadata["reasoning_content"]
+            # DeepSeek Reasoner 模型在 tool calling 场景下需要回传 reasoning_content
+            # 参考: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
+            # 但普通对话场景不应发送 reasoning_content，否则 API 会返回 400 错误
+            if (self.model_id == "deepseek-reasoner" and
+                self.include_reasoning_in_context and
+                result.get("role") == "assistant"):
+                # 从消息内容中提取 reasoning_content (来自 ReasoningPart)
+                for part in message.get("content", []):
+                    if part.get("type") == "reasoning":
+                        result["reasoning_content"] = part.get("reasoning", "")
+                        break
 
-            # DeepSeek Reasoner API 要求 tool call 消息必须有非空的 reasoning_content
-            # 如果没有 reasoning_content 但有 tool_calls，添加一个默认的
-            if not result.get("reasoning_content") and result.get("tool_calls"):
-                result["reasoning_content"] = "Using tool to solve the problem..."
+                # 如果消息元数据中有 reasoning_content，也提取出来
+                metadata = message.get("metadata")
+                if not result.get("reasoning_content") and metadata and metadata.get("reasoning_content"):
+                    result["reasoning_content"] = metadata["reasoning_content"]
 
-        return result
+                # DeepSeek Reasoner API 要求 tool call 消息必须有非空的 reasoning_content
+                # 如果没有 reasoning_content 但有 tool_calls，添加一个默认的
+                # 从 result (OpenAI格式) 或原始 message content (ToolCallPart) 中检查 tool_calls
+                has_tool_calls = result.get("tool_calls") or any(
+                    part.get("type") == "tool_call" for part in message.get("content", [])
+                )
+                if not result.get("reasoning_content") and has_tool_calls:
+                    result["reasoning_content"] = "Using tool to solve the problem..."
+
+        return results
 
     def _sanitize_openai_content(self, content: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sanitized: list[dict[str, Any]] = []
@@ -277,8 +283,10 @@ class DeepSeekOpenAIModel(OpenAIModel):
                     "reasoning": reasoning,
                     "signature": None,
                 }
-                # 插入到 content 开头，保持 reasoning 在 text 之前
-                msg_response.content.insert(0, reasoning_part)
+                # content 是 Iterable，需要转换为 list 才能插入
+                content_list = list(msg_response.content)
+                content_list.insert(0, reasoning_part)
+                msg_response.content = content_list
 
         return msg_response
 

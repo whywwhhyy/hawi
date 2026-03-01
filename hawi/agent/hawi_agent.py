@@ -293,7 +293,7 @@ class ContentBlockHandler:
             self._accumulator = None
 
             if not is_empty:
-                yield part  # type: ignore[misc]
+                yield part
 
 
 @dataclass
@@ -840,16 +840,16 @@ class HawiAgent:
                             # Check if it's a Part by looking for 'type' key
                             part_type = getattr(event_or_part, "get", lambda x: None)("type")
                             if part_type in ("text", "reasoning", "tool_call", "tool_result"):
-                                content_parts.append(event_or_part)  # type: ignore[arg-type]
+                                content_parts.append(event_or_part)
                                 if part_type == "tool_call":
-                                    tool_calls.append(event_or_part)  # type: ignore[arg-type]
+                                    tool_calls.append(event_or_part)
                                     # For tool calls, also send AgentToolCallEvent
                                     yield await self._emit_event(
                                         AgentToolCallEvent.create(
                                             run_id=run_id,
-                                            tool_name=event_or_part["name"],  # type: ignore[index]
-                                            arguments=event_or_part["arguments"],  # type: ignore[index]
-                                            tool_call_id=event_or_part["id"],  # type: ignore[index]
+                                            tool_name=event_or_part["name"],
+                                            arguments=event_or_part["arguments"],
+                                            tool_call_id=event_or_part["id"],
                                         ),
                                         event_bus,
                                     )
@@ -886,11 +886,8 @@ class HawiAgent:
                 response_content: list[ContentPart] = content_parts
 
                 # Add assistant message to context
-                # tool_calls is already list[ToolCallPart], pass directly
-                self._context.add_assistant_message(
-                    content=response_content,
-                    tool_calls=tool_calls if tool_calls else None,
-                )
+                # tool_calls are now included in content as ToolCallPart items
+                self._context.add_assistant_message(content=response_content)
 
                 # Check if tool calls need to be executed
                 if not tool_calls:

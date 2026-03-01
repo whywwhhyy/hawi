@@ -364,28 +364,31 @@ class TestStrandsModelMessageConversion:
         assert strands_msg["content"] == [{"text": "Hello"}]
 
     def test_convert_tool_call_message(self):
-        """Convert Hawi assistant message with tool_calls."""
+        """Convert Hawi assistant message with tool_calls in content as ToolCallPart."""
         mock_strands_model = Mock()
         mock_strands_model.config = {"model_id": "test-model"}
-        
+
         model = StrandsModel(mock_strands_model)
-        
+
+        # Tool calls are now stored in content as ToolCallPart, not in separate tool_calls field
         hawi_message = cast(Message, {
             "role": "assistant",
-            "content": [],
-            "tool_calls": [
+            "content": [
+                {"type": "text", "text": "I'll check the weather for you."},
                 {"type": "tool_call", "id": "tool-1", "name": "weather", "arguments": {"city": "Beijing"}}
             ],
             "name": None,
             "tool_call_id": None,
             "metadata": None,
         })
-        
+
         strands_msg = model._convert_single_message_to_strands(hawi_message)
-        
+
         assert strands_msg["role"] == "assistant"
         assert "tool_calls" in strands_msg
         assert strands_msg["tool_calls"][0]["toolUse"]["toolUseId"] == "tool-1"
+        # Content should also include the tool_call as toolUse block
+        assert any(block.get("toolUse") for block in strands_msg["content"])
 
     def test_convert_tool_result_message(self):
         """Convert Hawi tool result message."""

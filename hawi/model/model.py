@@ -166,7 +166,7 @@ class Model(ABC):
         gen = self._astream_impl(request)
         
         try:
-            yield gen  # type: ignore[misc]
+            yield gen
         finally:
             # 确保生成器被关闭
             await gen.aclose()

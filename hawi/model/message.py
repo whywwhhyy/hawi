@@ -301,7 +301,7 @@ class Message(TypedDict):
 
     # 以下字段仅在特定 role 下使用
     name: str | None  # 区分同名角色的不同参与者
-    tool_calls: list[ToolCallPart] | None  # assistant role: 模型请求调用工具
+    # Note: tool_calls are now stored as ToolCallPart in content
     tool_call_id: str | None  # tool role: 对应 tool_calls 的 id
 
     # 元数据（可选，用于上下文管理）
@@ -419,7 +419,6 @@ def downgrade_messages_audio(messages: list[Message]) -> list[Message]:
             "role": msg["role"],
             "content": downgrade_audio_content(msg["content"]),
             "name": msg.get("name"),
-            "tool_calls": msg.get("tool_calls"),
             "tool_call_id": msg.get("tool_call_id"),
             "metadata": msg.get("metadata"),
         }

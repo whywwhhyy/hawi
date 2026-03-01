@@ -117,14 +117,14 @@ class OpenAIModel(Model):
     # 请求/响应转换
     # ==================================================================
 
-    def _convert_message_to_openai(self, message) -> dict[str, Any]:
+    def _convert_message_to_openai(self, message) -> list[dict[str, Any]]:
         """将通用消息转换为 OpenAI 格式（子类可覆盖）
 
         Args:
             message: 通用消息
 
         Returns:
-            OpenAI 格式的消息字典
+            OpenAI 格式的消息字典列表
         """
         return convert_message_to_openai(message)
 

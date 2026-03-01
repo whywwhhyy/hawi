@@ -187,7 +187,7 @@ class ModelContentBlockDeltaEvent(Event):
             source="model",
             request_id=request_id,
             block_index=block_index,
-            delta_type=delta_type,  # type: ignore[arg-type]
+            delta_type=delta_type,
             delta=delta,
             part=part,
         )
@@ -350,7 +350,7 @@ class ModelContentBlockStopEvent(Event):
         if not self.content:
             return None
         part = self.content[0]
-        return part.get("type")  # type: ignore[return-value]
+        return part['type']
 
     @classmethod
     def create(

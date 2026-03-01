@@ -205,29 +205,37 @@ class KimiOpenAIModel(OpenAIModel):
                 for event in processor.process_chunk(chunk_dict):
                     yield event
 
-    def _convert_message_to_openai(self, message) -> dict[str, Any]:
+    def _convert_message_to_openai(self, message) -> list[dict[str, Any]]:
         """转换消息，处理 Kimi K2.5 reasoning_content"""
-        result = super()._convert_message_to_openai(message)
+        results = super()._convert_message_to_openai(message)
 
         # 对于 K2.5 thinking 模型，从消息中提取 reasoning_content
         # 注意：reasoning_content 应该来自模型的实际响应，而非硬编码
         if self._is_thinking_model():
-            for part in message.get("content", []):
-                if part.get("type") == "reasoning":
-                    result["reasoning_content"] = part.get("reasoning", "")
-                    break
+            for result in results:
+                if result.get("role") != "assistant":
+                    continue
 
-            # 如果消息元数据中有 reasoning_content，也提取出来
-            metadata = message.get("metadata")
-            if not result.get("reasoning_content") and metadata and metadata.get("reasoning_content"):
-                result["reasoning_content"] = metadata["reasoning_content"]
+                for part in message.get("content", []):
+                    if part.get("type") == "reasoning":
+                        result["reasoning_content"] = part.get("reasoning", "")
+                        break
 
-            # Kimi K2.5 API 要求 tool call 消息必须有非空的 reasoning_content
-            # 如果没有 reasoning_content 但有 tool_calls，添加一个默认值
-            if not result.get("reasoning_content") and result.get("tool_calls"):
-                result["reasoning_content"] = "Using tool to solve the problem..."
+                # 如果消息元数据中有 reasoning_content，也提取出来
+                metadata = message.get("metadata")
+                if not result.get("reasoning_content") and metadata and metadata.get("reasoning_content"):
+                    result["reasoning_content"] = metadata["reasoning_content"]
 
-        return result
+                # Kimi K2.5 API 要求 tool call 消息必须有非空的 reasoning_content
+                # 如果没有 reasoning_content 但有 tool_calls，添加一个默认值
+                # Check for tool_calls in result (set by parent) or in message content
+                has_tool_calls = result.get("tool_calls") or any(
+                    part.get("type") == "tool_call" for part in message.get("content", [])
+                )
+                if not result.get("reasoning_content") and has_tool_calls:
+                    result["reasoning_content"] = "Using tool to solve the problem..."
+
+        return results
 
     def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
         """解析响应，提取 reasoning_content 并添加到 content 列表"""
@@ -250,7 +258,10 @@ class KimiOpenAIModel(OpenAIModel):
                 }
                 # 插入到 content 开头，保持 reasoning 在 text 之前
                 # 这与流式输出顺序一致：reasoning_content 先于 content 出现
-                msg_response.content.insert(0, reasoning_part)
+                # content 是 Iterable，需要转换为 list 才能插入
+                content_list = list(msg_response.content)
+                content_list.insert(0, reasoning_part)
+                msg_response.content = content_list
 
         return msg_response
 

@@ -19,6 +19,7 @@ from hawi.model.message import (
     Message,
     MessageRequest,
     RefusalPart,
+    ToolCallPart,
     ToolDefinition,
     ToolChoice,
     VideoPart,
@@ -47,7 +48,14 @@ def prepare_request(
     if converter is None:
         converter = convert_message_to_openai
 
-    openai_messages_raw = [converter(m) for m in request.messages]
+    # 转换消息（每个消息可能返回多条，需要扁平化）
+    openai_messages_raw = []
+    for m in request.messages:
+        converted = converter(m)
+        if isinstance(converted, list):
+            openai_messages_raw.extend(converted)
+        else:
+            openai_messages_raw.append(converted)
 
     # 处理 tool 消息中的图片：将图片移到紧随其后的 user 消息中
     openai_messages: list[dict[str, Any]] = []
@@ -162,26 +170,91 @@ def convert_tool_choice(tool_choice: ToolChoice) -> str | dict[str, Any]:
     return "auto"
 
 
-def convert_message_to_openai(message: Message) -> dict[str, Any]:
+def _is_mixed_content(content: list[ContentPart]) -> bool:
+    """Check if content mixes tool_calls with other parts.
+
+    OpenAI API doesn't support mixing tool_calls with other content types
+    in the same message.
+
+    Args:
+        content: Content parts to check
+
+    Returns:
+        True if content contains both tool_calls and other parts
+    """
+    has_tool_call = any(p["type"] == "tool_call" for p in content)
+    has_other = any(p["type"] != "tool_call" for p in content)
+    return has_tool_call and has_other
+
+
+def convert_message_to_openai(message: Message) -> list[dict[str, Any]]:
     """将通用消息转换为 OpenAI 格式
+
+    当 content 混合 tool_calls 和其他内容时，会生成多条消息：
+    - 第一条：包含非 tool_calls 内容
+    - 第二条：包含 tool_calls（OpenAI API 要求 content 为 null）
 
     Args:
         message: 通用消息
 
     Returns:
-        OpenAI 格式的消息字典
+        OpenAI 格式的消息字典列表
     """
     role = message["role"]
 
     if role == "tool":
-        return convert_tool_message(message)
+        return [convert_tool_message(message)]
 
-    # OpenAI 支持 system 角色
-    content = convert_content_to_openai(message["content"])
-    result: dict[str, Any] = {"role": role, "content": content}
+    content = message["content"]
 
-    if role == "assistant" and message.get("tool_calls"):
-        result["tool_calls"] = [
+    # Separate tool_calls from other content
+    tool_call_parts = [p for p in content if p["type"] == "tool_call"]
+    other_parts = [p for p in content if p["type"] != "tool_call"]
+
+    # If no mixing, return single message
+    if not tool_call_parts or not other_parts:
+        result: dict[str, Any] = {"role": role}
+
+        # Handle content - must be null (not empty) when tool_calls present
+        if other_parts:
+            result["content"] = convert_content_to_openai(other_parts)
+        else:
+            result["content"] = None
+
+        # Handle tool_calls
+        if tool_call_parts:
+            result["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc["arguments"]),
+                    },
+                }
+                for tc in tool_call_parts
+            ]
+
+        if message.get("name"):
+            result["name"] = message["name"]
+
+        return [result]
+
+    # Mixed content: need to split into multiple messages
+    results: list[dict[str, Any]] = []
+
+    # First message: other content
+    results.append({
+        "role": role,
+        "content": convert_content_to_openai(other_parts),
+        **({"name": message["name"]} if message.get("name") else {}),
+    })
+
+    # Second message: tool_calls only (OpenAI requires content=null)
+    results.append({
+        "role": role,
+        "content": None,
+        "tool_calls": [
             {
                 "id": tc["id"],
                 "type": "function",
@@ -190,13 +263,12 @@ def convert_message_to_openai(message: Message) -> dict[str, Any]:
                     "arguments": json.dumps(tc["arguments"]),
                 },
             }
-            for tc in (message["tool_calls"] or ())
-        ]
+            for tc in tool_call_parts
+        ],
+        **({"name": message["name"]} if message.get("name") else {}),
+    })
 
-    if message.get("name"):
-        result["name"] = message["name"]
-
-    return result
+    return results
 
 
 def convert_tool_message(message: Message) -> dict[str, Any]:

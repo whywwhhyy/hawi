@@ -126,7 +126,8 @@ class MockModel(Model):
         response = self._invoke_impl(request)
         
         idx = 0
-        for part in response.content:
+        content_list = list(response.content)
+        for part in content_list:
             if part["type"] == "text":
                 yield {
                     "type": "text_delta",
