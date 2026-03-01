@@ -1,15 +1,28 @@
 """Tests for DumpManager."""
 
 import json
-import os
+import re
 import tempfile
-import shutil
 from pathlib import Path
 
 import pytest
 
-from hawi.utils import DumpManager
-from hawi.events import AgentRunStartEvent
+from hawi.events import DumpManager, AgentRunStartEvent
+
+
+def _parse_jsonl_records(content: str) -> list[dict]:
+    """Parse JSONL content with pretty-printed JSON objects."""
+    # Pattern to find boundaries between JSON objects: } followed by whitespace/newlines followed by {
+    pattern = r'(?<=\})\s*(?=\{)'
+    parts = re.split(pattern, content.strip())
+
+    records = []
+    for part in parts:
+        part = part.strip()
+        if part:
+            records.append(json.loads(part))
+
+    return records
 
 
 class TestDumpManager:
@@ -33,12 +46,12 @@ class TestDumpManager:
 
             # Check initial structure
             with open(dump_file, "r") as f:
-                data = json.load(f)
+                content = f.read()
 
-            assert "session_start" in data
-            assert "session_start_iso" in data
-            assert "events" in data
-            assert data["events"] == []
+            records = _parse_jsonl_records(content)
+            assert len(records) == 1
+            assert records[0]["type"] == "session_start"
+            assert "session_start" in records[0]
 
     def test_dump_event(self):
         """Test dumping an event."""
@@ -51,12 +64,13 @@ class TestDumpManager:
 
             # Verify event was dumped
             with open(dump_file, "r") as f:
-                data = json.load(f)
+                content = f.read()
 
-            assert len(data["events"]) == 1
-            assert data["events"][0]["type"] == "agent.run_start"
-            assert data["events"][0]["source"] == "agent"
-            assert data["events"][0]["data"]["run_id"] == "test-123"
+            records = _parse_jsonl_records(content)
+            assert len(records) == 2  # session_start + event
+            assert records[1]["type"] == "agent.run_start"
+            assert records[1]["source"] == "agent"
+            assert records[1]["run_id"] == "test-123"
 
     def test_dump_multiple_events(self):
         """Test dumping multiple events."""
@@ -71,11 +85,12 @@ class TestDumpManager:
             dm.dump(event2)
 
             with open(dump_file, "r") as f:
-                data = json.load(f)
+                content = f.read()
 
-            assert len(data["events"]) == 2
-            assert data["events"][0]["data"]["run_id"] == "test-1"
-            assert data["events"][1]["data"]["run_id"] == "test-2"
+            records = _parse_jsonl_records(content)
+            assert len(records) == 3  # session_start + 2 events
+            assert records[1]["run_id"] == "test-1"
+            assert records[2]["run_id"] == "test-2"
 
     def test_dump_without_init(self):
         """Test dump does nothing when disabled."""
@@ -94,17 +109,18 @@ class TestDumpManager:
             assert dm.is_enabled()
             assert nested_path.exists()
 
-    def test_dump_raw(self):
-        """Test dumping raw data."""
+    def test_dump_raw_dict(self):
+        """Test dumping raw dict data."""
         with tempfile.TemporaryDirectory() as tmpdir:
             dump_file = Path(tmpdir) / "test_events.json"
             dm = DumpManager(str(dump_file))
 
-            dm.dump_raw({"test": "data", "number": 42})
+            dm.dump({"test": "data", "number": 42})
 
             with open(dump_file, "r") as f:
-                data = json.load(f)
+                content = f.read()
 
-            assert "raw_dumps" in data
-            assert len(data["raw_dumps"]) == 1
-            assert data["raw_dumps"][0]["data"]["test"] == "data"
+            records = _parse_jsonl_records(content)
+            assert len(records) == 2  # session_start + raw data
+            assert records[1]["test"] == "data"
+            assert records[1]["number"] == 42

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from pydantic import field_serializer
+
 from hawi.errors import AgentError
 from hawi.model.message import TokenUsage
 
@@ -151,3 +153,12 @@ class AgentErrorEvent(Event):
             run_id=run_id,
             error=error,
         )
+
+    @field_serializer('error')
+    def serialize_error(self, error: AgentError) -> dict[str, Any]:
+        """将 AgentError 序列化为可 JSON 序列化的字典"""
+        return {
+            'type': error.error_type if hasattr(error, 'error_type') else 'unknown',
+            'message': str(error),
+            'class': error.__class__.__name__,
+        }

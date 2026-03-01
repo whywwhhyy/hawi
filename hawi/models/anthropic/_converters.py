@@ -105,16 +105,20 @@ class ContentConverter:
         if role == "tool":
             return self._convert_tool_message(message)
 
-        content = self.convert_content(message["content"])
-        
-        # 对于 assistant 消息，还需要处理 tool_calls
-        if role == "assistant":
-            tool_calls = message.get("tool_calls")
-            if tool_calls:
-                # 将 tool_calls 转换为 tool_use 块并添加到 content
-                for tc in tool_calls:
-                    tool_use_block = self._convert_tool_call(tc)
-                    content.append(tool_use_block)
+        # 对于 assistant 消息，如果存在 tool_calls 字段，content 中的 tool_call 会被忽略
+        # 以避免在 Anthropic API 中生成重复的 tool_use 块
+        msg_content: list = message.get("content") or []
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and tool_calls:
+            # 从 content 中过滤掉 tool_call 类型，只从 tool_calls 字段转换
+            filtered_content = [p for p in msg_content if p.get("type") != "tool_call"]
+            content = self.convert_content(filtered_content)
+            # 从 tool_calls 字段转换 tool_use 块
+            for tc in tool_calls:
+                tool_use_block = self._convert_tool_call(tc)
+                content.append(tool_use_block)
+        else:
+            content = self.convert_content(msg_content)
         
         if not content:
             return None
@@ -330,17 +334,21 @@ class AsyncContentConverter(ContentConverter):
         if role == "tool":
             return self._convert_tool_message(message)
 
-        content = await self.convert_content_async(message["content"])
-        
-        # 对于 assistant 消息，还需要处理 tool_calls
-        if role == "assistant":
-            tool_calls = message.get("tool_calls")
-            if tool_calls:
-                # 将 tool_calls 转换为 tool_use 块并添加到 content
-                for tc in tool_calls:
-                    tool_use_block = self._convert_tool_call(tc)
-                    content.append(tool_use_block)
-        
+        # 对于 assistant 消息，如果存在 tool_calls 字段，content 中的 tool_call 会被忽略
+        # 以避免在 Anthropic API 中生成重复的 tool_use 块
+        msg_content: list = message.get("content") or []
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and tool_calls:
+            # 从 content 中过滤掉 tool_call 类型，只从 tool_calls 字段转换
+            filtered_content = [p for p in msg_content if p.get("type") != "tool_call"]
+            content = await self.convert_content_async(filtered_content)
+            # 从 tool_calls 字段转换 tool_use 块
+            for tc in tool_calls:
+                tool_use_block = self._convert_tool_call(tc)
+                content.append(tool_use_block)
+        else:
+            content = await self.convert_content_async(msg_content)
+
         if not content:
             return None
 

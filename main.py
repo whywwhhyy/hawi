@@ -172,7 +172,7 @@ def main():
             # Default dump file with timestamp
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            event_dump_file = f".dumps/events_{timestamp}.json"
+            event_dump_file = f".dumps/events_{timestamp}.jsonl"
 
     # Create agent
     llm_provider, model = create_model(argv)
@@ -195,7 +195,8 @@ def main():
     print("Type 'exit', 'quit', or 'q' to exit\n")
 
     if actual_printer == 'rich':
-        printer = StreamMarkdownPrinter()
+        # printer = StreamMarkdownPrinter()
+        printer = RichStreamingPrinter()
     elif actual_printer == 'plain':
         printer = PlainPrinter(
             show_reasoning=True,
@@ -237,9 +238,9 @@ def main():
 
             try:
                 execute_prompt(prompt)
-            except Exception:
-                # Error already printed in execute_prompt with dump path
-                # Continue to next prompt
+            except Exception as e:
+                import traceback
+                traceback.print_exception(e)
                 pass
 
         except EOFError:

@@ -6,7 +6,9 @@ Model events are produced by Model implementations.
 
 from __future__ import annotations
 
-from typing import Literal, overload
+from typing import Any, Literal, overload
+
+from pydantic import field_serializer
 
 from hawi.errors import ModelError
 from hawi.model.message import ContentPart, StreamPart, TokenUsage
@@ -52,73 +54,26 @@ class ModelStreamStopEvent(Event):
 
 
 class ModelContentBlockStartEvent(Event):
-    """内容块开始（统一 Anthropic 和 OpenAI 的所有内容类型）
+    """内容块开始（统一 Anthropic 和 OpenAI 的非工具内容类型）
 
     block_type 说明:
     - text: 普通文本（Anthropic text, OpenAI content）
     - thinking: 推理内容（Anthropic thinking, OpenAI reasoning_content）
-    - tool_use: 工具调用（Anthropic tool_use, OpenAI tool_calls）
     - redacted_thinking: 被编辑的推理（Anthropic 特有）
 
-    使用 @overload 提供类型安全的工厂方法，不同类型有不同的参数要求。
+    注意: tool_use 类型请使用 ModelToolUseBlockStartEvent
     """
 
     request_id: str
     block_index: int
-    block_type: Literal["text", "thinking", "tool_use", "redacted_thinking"]
-    # text/thinking/redacted_thinking 不需要额外字段
-    # tool_use 类型需要以下字段（keyword-only）
-    tool_call_id: str | None = None
-    tool_name: str | None = None
-
-    @overload
-    @classmethod
-    def create(
-        cls,
-        request_id: str,
-        block_index: int,
-        block_type: Literal["text"],
-    ) -> ModelContentBlockStartEvent: ...
-
-    @overload
-    @classmethod
-    def create(
-        cls,
-        request_id: str,
-        block_index: int,
-        block_type: Literal["thinking"],
-    ) -> ModelContentBlockStartEvent: ...
-
-    @overload
-    @classmethod
-    def create(
-        cls,
-        request_id: str,
-        block_index: int,
-        block_type: Literal["redacted_thinking"],
-    ) -> ModelContentBlockStartEvent: ...
-
-    @overload
-    @classmethod
-    def create(
-        cls,
-        request_id: str,
-        block_index: int,
-        block_type: Literal["tool_use"],
-        *,
-        tool_call_id: str,
-        tool_name: str,
-    ) -> ModelContentBlockStartEvent: ...
+    block_type: Literal["text", "thinking", "redacted_thinking"]
 
     @classmethod
     def create(
         cls,
         request_id: str,
         block_index: int,
-        block_type: Literal["text", "thinking", "tool_use", "redacted_thinking"],
-        *,
-        tool_call_id: str | None = None,
-        tool_name: str | None = None,
+        block_type: Literal["text", "thinking", "redacted_thinking"],
     ) -> ModelContentBlockStartEvent:
         """创建内容块开始事件
 
@@ -126,14 +81,9 @@ class ModelContentBlockStartEvent(Event):
             request_id: 请求 ID
             block_index: 内容块序号
             block_type: 内容块类型
-            tool_call_id: 工具调用 ID（仅 tool_use 类型必需，keyword-only）
-            tool_name: 工具名称（仅 tool_use 类型必需，keyword-only）
 
         Returns:
             ModelContentBlockStartEvent 实例
-
-        Raises:
-            ValueError: tool_use 类型缺少必需参数时
 
         Example:
             # 文本块
@@ -141,24 +91,13 @@ class ModelContentBlockStartEvent(Event):
 
             # 推理块
             event = ModelContentBlockStartEvent.create("req-1", 1, "thinking")
-
-            # 工具调用块（必须使用关键字参数）
-            event = ModelContentBlockStartEvent.create(
-                "req-1", 2, "tool_use",
-                tool_call_id="call_123", tool_name="calculator"
-            )
         """
-        if block_type == "tool_use" and (not tool_call_id or not tool_name):
-            raise ValueError("tool_use type requires tool_call_id and tool_name")
-
         return cls(
             type="model.content_block_start",
             source="model",
             request_id=request_id,
             block_index=block_index,
             block_type=block_type,
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
         )
 
 
@@ -251,6 +190,126 @@ class ModelContentBlockDeltaEvent(Event):
             delta_type=delta_type,  # type: ignore[arg-type]
             delta=delta,
             part=part,
+        )
+
+
+class ModelToolUseBlockStartEvent(Event):
+    """工具调用内容块开始
+
+    专门用于 tool_use 类型的内容块，包含 tool_call_id 和 tool_name。
+    """
+
+    request_id: str
+    block_index: int
+    tool_call_id: str
+    tool_name: str
+
+    @classmethod
+    def create(
+        cls,
+        request_id: str,
+        block_index: int,
+        tool_call_id: str,
+        tool_name: str,
+    ) -> ModelToolUseBlockStartEvent:
+        """创建工具调用内容块开始事件
+
+        Args:
+            request_id: 请求 ID
+            block_index: 内容块序号
+            tool_call_id: 工具调用 ID
+            tool_name: 工具名称
+
+        Returns:
+            ModelToolUseBlockStartEvent 实例
+        """
+        return cls(
+            type="model.tool_use_block_start",
+            source="model",
+            request_id=request_id,
+            block_index=block_index,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+        )
+
+
+class ModelToolUseBlockDeltaEvent(Event):
+    """工具调用内容块增量
+
+    专门用于 tool_use 类型的增量更新。
+    """
+
+    request_id: str
+    block_index: int
+    tool_call_id: str
+    arguments_delta: str
+
+    @classmethod
+    def create(
+        cls,
+        request_id: str,
+        block_index: int,
+        tool_call_id: str,
+        arguments_delta: str,
+    ) -> ModelToolUseBlockDeltaEvent:
+        """创建工具调用内容块增量事件
+
+        Args:
+            request_id: 请求 ID
+            block_index: 内容块序号
+            tool_call_id: 工具调用 ID
+            arguments_delta: 参数增量（JSON 片段）
+
+        Returns:
+            ModelToolUseBlockDeltaEvent 实例
+        """
+        return cls(
+            type="model.tool_use_block_delta",
+            source="model",
+            request_id=request_id,
+            block_index=block_index,
+            tool_call_id=tool_call_id,
+            arguments_delta=arguments_delta,
+        )
+
+
+class ModelToolUseBlockStopEvent(Event):
+    """工具调用内容块结束
+
+    专门用于 tool_use 类型的结束事件，包含完整的参数。
+    """
+
+    request_id: str
+    block_index: int
+    tool_call_id: str
+    arguments: str  # 完整的 JSON 参数
+
+    @classmethod
+    def create(
+        cls,
+        request_id: str,
+        block_index: int,
+        tool_call_id: str,
+        arguments: str,
+    ) -> ModelToolUseBlockStopEvent:
+        """创建工具调用内容块结束事件
+
+        Args:
+            request_id: 请求 ID
+            block_index: 内容块序号
+            tool_call_id: 工具调用 ID
+            arguments: 完整的参数 JSON 字符串
+
+        Returns:
+            ModelToolUseBlockStopEvent 实例
+        """
+        return cls(
+            type="model.tool_use_block_stop",
+            source="model",
+            request_id=request_id,
+            block_index=block_index,
+            tool_call_id=tool_call_id,
+            arguments=arguments,
         )
 
 
@@ -351,3 +410,12 @@ class ModelErrorEvent(Event):
             source='model',
             error=error,
         )
+
+    @field_serializer('error')
+    def serialize_error(self, error: ModelError) -> dict[str, Any]:
+        """将 ModelError 序列化为可 JSON 序列化的字典"""
+        return {
+            'type': error.error_type if hasattr(error, 'error_type') else 'unknown',
+            'message': str(error),
+            'class': error.__class__.__name__,
+        }

@@ -11,6 +11,9 @@ from hawi.events import (
     AgentToolResultEvent,
     AgentErrorEvent,
     ModelErrorEvent,
+    ModelToolUseBlockStartEvent,
+    ModelToolUseBlockDeltaEvent,
+    ModelToolUseBlockStopEvent,
 )
 from hawi.errors import AgentError, ModelError
 
@@ -31,6 +34,7 @@ class BasePrinter(ABC):
         show_error_stack: bool = True,  # 新增：是否显示错误调用栈
         max_arg_length: int = 80,
         max_result_length: int = 200,
+        show_full_tool_content: bool = True,
     ):
         self.show_reasoning = show_reasoning
         self.show_tools = show_tools
@@ -38,10 +42,15 @@ class BasePrinter(ABC):
         self.show_error_stack = show_error_stack
         self.max_arg_length = max_arg_length
         self.max_result_length = max_result_length
+        self.show_full_tool_content = show_full_tool_content
 
         self._current_block_type: str | None = None
         self._reasoning_buffer: str = ""
         self._active_tool_calls: dict[str, dict[str, Any]] = {}
+
+    def set_show_full_tool_content(self, value: bool) -> None:
+        """设置是否显示完整的工具调用内容（不省略）。"""
+        self.show_full_tool_content = value
 
     async def handle(self, event: Event) -> None:
         """处理事件"""
@@ -49,6 +58,9 @@ class BasePrinter(ABC):
             "model.content_block_start": self._on_content_block_start,
             "model.content_block_delta": self._on_content_block_delta,
             "model.content_block_stop": self._on_content_block_stop,
+            "model.tool_use_block_start": self._on_tool_use_block_start,
+            "model.tool_use_block_delta": self._on_tool_use_block_delta,
+            "model.tool_use_block_stop": self._on_tool_use_block_stop,
             "model.stream_start": self._on_stream_start,
             "model.stream_stop": self._on_stream_stop,
             "agent.run_start": self._on_run_start,
@@ -84,6 +96,21 @@ class BasePrinter(ABC):
     @abstractmethod
     async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束 - 子类实现"""
+        pass
+
+    @abstractmethod
+    async def _on_tool_use_block_start(self, event: Event) -> None:
+        """工具调用块开始 - 子类实现"""
+        pass
+
+    @abstractmethod
+    async def _on_tool_use_block_delta(self, event: Event) -> None:
+        """工具调用块增量 - 子类实现"""
+        pass
+
+    @abstractmethod
+    async def _on_tool_use_block_stop(self, event: Event) -> None:
+        """工具调用块结束 - 子类实现"""
         pass
 
     async def _on_run_start(self, event: Event) -> None:

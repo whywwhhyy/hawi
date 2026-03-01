@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+import re
 from typing import Any
 
 from rich.console import Console
@@ -31,9 +32,9 @@ from hawi.events import (
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
     ModelContentBlockStopEvent,
-    AgentToolCallEvent,
-    AgentToolResultEvent,
-    AgentErrorEvent,
+    ModelToolUseBlockStartEvent,
+    ModelToolUseBlockDeltaEvent,
+    ModelToolUseBlockStopEvent,
 )
 from hawi.agent.printers.base import BasePrinter
 
@@ -68,16 +69,14 @@ class StreamMarkdownPrinter(BasePrinter):
     StreamMarkdownPrinter - 支持流式 Markdown 输出的打印机
 
     特性：
-    1. 支持流式输入：逐字处理输入流。
-    2. 普通文本立即输出：通过 Live Display 实现即时反馈。
-    3. 块级结构智能渲染：利用 markdown-it 的解析能力，识别块的完整性。
-       - 对于未完成的块（如正在输入的代码块），Live Display 会显示当前状态（可能是文本）。
-       - 当块结构完成（如闭合代码块）或类型确定时，自动更新为正确的渲染样式。
-    4. 显式集成 markdown-it-py：使用 Token 流进行增量渲染。
-    5. 表格处理：支持省略表格（ellipsize_tables=True）或手动渲染宽表格。
-    6. 工具调用显示：支持显示工具调用和结果。
-    7. Thinking 块显示：支持显示模型思考过程。
+    1. 正常文本立即流式输出
+    2. 检测到特殊格式字符（*, `, [, ] 等）时开始缓冲
+    3. 格式完整闭合后才一起渲染输出
+    4. 块结束时如果格式未闭合，以纯文本输出缓冲内容
     """
+
+    # 可能开启特殊格式的字符
+    _FORMAT_START_CHARS = frozenset(['*', '`', '[', ']', '_', '~'])
 
     def __init__(
         self,
@@ -87,15 +86,19 @@ class StreamMarkdownPrinter(BasePrinter):
         show_tools: bool = True,
         show_reasoning: bool = True,
         show_errors: bool = True,
+        show_error_stack: bool = True,
         max_arg_length: int = 80,
         max_result_length: int = 200,
+        show_full_tool_content: bool = True,
     ):
         super().__init__(
             show_reasoning=show_reasoning,
             show_tools=show_tools,
             show_errors=show_errors,
+            show_error_stack=show_error_stack,
             max_arg_length=max_arg_length,
             max_result_length=max_result_length,
+            show_full_tool_content=show_full_tool_content,
         )
         self._console = console or Console()
         self._code_theme = code_theme
@@ -110,17 +113,27 @@ class StreamMarkdownPrinter(BasePrinter):
             .use(admon_plugin)
         )
 
+        # 主缓冲区 - 已确认的内容
         self._buffer = ""
         self._committed_tokens_len = 0
+
+        # 格式检测缓冲区 - 可能包含未完成格式的内容
+        self._format_buffer = ""
+        self._in_format_detection = False
+
         self._live: Live | None = None
         self._current_block_type: str | None = None
         self._reasoning_buffer: str = ""
+        self._block_count: int = 0
 
     async def handle(self, event: Event) -> None:
         handlers = {
             "model.content_block_start": self._on_content_block_start,
             "model.content_block_delta": self._on_content_block_delta,
             "model.content_block_stop": self._on_content_block_stop,
+            "model.tool_use_block_start": self._on_tool_use_block_start,
+            "model.tool_use_block_delta": self._on_tool_use_block_delta,
+            "model.tool_use_block_stop": self._on_tool_use_block_stop,
             "model.stream_start": self._on_stream_start,
             "model.stream_stop": self._on_stream_stop,
             "agent.run_start": self._on_run_start,
@@ -139,9 +152,15 @@ class StreamMarkdownPrinter(BasePrinter):
         self._active_tool_calls.clear()
         self._buffer = ""
         self._committed_tokens_len = 0
+        self._format_buffer = ""
+        self._in_format_detection = False
+        self._block_count = 0
 
     async def _on_stream_stop(self, event: Event) -> None:
         """Model 流式响应结束"""
+        # Flush any pending format buffer
+        if self._format_buffer:
+            self._flush_format_buffer()
         if self._live:
             self._live.stop()
             self._live = None
@@ -153,20 +172,99 @@ class StreamMarkdownPrinter(BasePrinter):
         block_type = event.block_type
         self._current_block_type = block_type
 
+        # 在每个 block 前添加额外换行（第一个除外）
+        if self._block_count > 0:
+            self._buffer += "\n\n"
+            self._update_display()
+        self._block_count += 1
+
     async def _on_content_block_delta(self, event: Event) -> None:
         assert isinstance(event, ModelContentBlockDeltaEvent)
         delta = event.delta
         delta_type = event.delta_type
 
         if delta_type == "text":
-            self._buffer += delta
-            self._update_display()
+            self._process_text_delta(delta)
         elif delta_type == "thinking" and self.show_reasoning:
             self._reasoning_buffer += delta
+
+    def _process_text_delta(self, delta: str) -> None:
+        """处理文本 delta，实现格式检测和缓冲逻辑"""
+        for char in delta:
+            if self._in_format_detection:
+                self._format_buffer += char
+                # 检查格式是否完整
+                if self._is_format_complete(self._format_buffer):
+                    # 格式完整，可以安全渲染
+                    self._buffer += self._format_buffer
+                    self._format_buffer = ""
+                    self._in_format_detection = False
+                    self._update_display()
+                elif self._is_format_aborted(self._format_buffer):
+                    # 格式不可能完成，刷新缓冲区为纯文本
+                    self._flush_format_buffer()
+            else:
+                if char in self._FORMAT_START_CHARS:
+                    # 检测到可能开启格式的字符，开始缓冲
+                    self._in_format_detection = True
+                    self._format_buffer = char
+                else:
+                    # 普通字符，直接加入缓冲区
+                    self._buffer += char
+                    self._update_display()
+
+    def _is_format_complete(self, text: str) -> bool:
+        """检查文本中的格式是否完整闭合"""
+        # 检查粗体 **text**
+        if re.match(r'\*\*[^*]+\*\*$', text):
+            return True
+        # 检查斜体 *text* (但不是 **)
+        if re.match(r'\*[^*]+\*$', text) and not text.startswith('**'):
+            return True
+        # 检查行内代码 `text`
+        if re.match(r'`[^`]+`$', text):
+            return True
+        # 检查链接 [text](url)
+        if re.match(r'\[([^\]]+)\]\([^)]+\)$', text):
+            return True
+        # 检查删除线 ~~text~~
+        if re.match(r'~~[^~]+~~$', text):
+            return True
+        return False
+
+    def _is_format_aborted(self, text: str) -> bool:
+        """检查格式是否不可能完成（如换行后）"""
+        # 如果缓冲区中有换行，且格式跨行，则放弃
+        if '\n' in text:
+            # 检查是否是代码块（允许跨行）
+            if text.startswith('```'):
+                return False  # 代码块可以跨行
+            # 检查行内格式跨行
+            if text.startswith('**') or text.startswith('*') or text.startswith('`'):
+                return True
+        # 如果缓冲区太长且没有闭合，放弃
+        if len(text) > 200:
+            # 但代码块可以更长
+            if not text.startswith('```'):
+                return True
+        return False
+
+    def _flush_format_buffer(self) -> None:
+        """将格式缓冲区作为纯文本刷新到主缓冲区"""
+        if self._format_buffer:
+            self._buffer += self._format_buffer
+            self._format_buffer = ""
+            self._in_format_detection = False
+            self._update_display()
 
     async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束"""
         assert isinstance(event, ModelContentBlockStopEvent)
+
+        # 刷新任何待处理的格式缓冲区
+        if self._format_buffer:
+            self._flush_format_buffer()
+
         if self._live:
             self._live.stop()
             self._live = None
@@ -207,9 +305,33 @@ class StreamMarkdownPrinter(BasePrinter):
 
         self._buffer = ""
         self._committed_tokens_len = 0
+        self._format_buffer = ""
+        self._in_format_detection = False
+        self._current_block_type = None
+
+    async def _on_tool_use_block_start(self, event: Event) -> None:
+        """工具调用块开始"""
+        assert isinstance(event, ModelToolUseBlockStartEvent)
+        self._current_block_type = "tool_use"
+
+    async def _on_tool_use_block_delta(self, event: Event) -> None:
+        """工具调用块增量"""
+        assert isinstance(event, ModelToolUseBlockDeltaEvent)
+        # 工具调用参数增量不直接显示，在 stop 时显示完整信息
+
+    async def _on_tool_use_block_stop(self, event: Event) -> None:
+        """工具调用块结束"""
+        assert isinstance(event, ModelToolUseBlockStopEvent)
+
+        # 工具调用信息由 agent.tool_call 事件处理
+        # 这里只清理状态
         self._current_block_type = None
 
     def _update_display(self):
+        """更新显示 - 只渲染已确认的、格式完整的内容"""
+        if not self._buffer:
+            return
+
         tokens = self._parser.parse(self._buffer)
 
         top_level_block_end_indices = []
@@ -237,14 +359,9 @@ class StreamMarkdownPrinter(BasePrinter):
 
         if active_tokens:
             first_token = active_tokens[0]
-
             buffered_types = {'table_open', 'fence', 'code_block', 'html_block'}
 
-            # Check for potentially problematic incomplete inline structures
-            # that can cause Rich to crash (e.g., unclosed strong/em marks)
-            has_unclosed_inline = self._has_unclosed_inline_tokens(active_tokens)
-
-            should_live_stream = first_token.type not in buffered_types and not has_unclosed_inline
+            should_live_stream = first_token.type not in buffered_types
 
             if should_live_stream:
                 md = TokenMarkdown(active_tokens, code_theme=self._code_theme)
@@ -258,88 +375,6 @@ class StreamMarkdownPrinter(BasePrinter):
                 if self._live:
                     self._live.stop()
                     self._live = None
-                # If we have unclosed inline tokens, print as plain text to avoid Rich crash
-                if has_unclosed_inline:
-                    self._print_plain_text_from_tokens(active_tokens)
-
-    def _has_unclosed_inline_tokens(self, tokens: list[Any]) -> bool:
-        """Check if tokens contain unclosed inline markup that could crash Rich.
-
-        Detects patterns like strong_open without strong_close, em_open without em_close, etc.
-        """
-        # Track nesting levels for inline elements that can cause Rich to crash
-        nesting = {
-            'strong': 0,
-            'em': 0,
-            'link': 0,
-            'code_inline': 0,
-        }
-
-        for token in tokens:
-            if token.type == 'inline':
-                # Check inline token children
-                if hasattr(token, 'children') and token.children:
-                    for child in token.children:
-                        child_type = getattr(child, 'type', '')
-                        if child_type == 'strong_open':
-                            nesting['strong'] += 1
-                        elif child_type == 'strong_close':
-                            nesting['strong'] -= 1
-                        elif child_type == 'em_open':
-                            nesting['em'] += 1
-                        elif child_type == 'em_close':
-                            nesting['em'] -= 1
-                        elif child_type == 'link_open':
-                            nesting['link'] += 1
-                        elif child_type == 'link_close':
-                            nesting['link'] -= 1
-                        elif child_type == 'code_inline':
-                            # code_inline is self-contained, check if content is unbalanced
-                            pass
-            elif token.type == 'strong_open':
-                nesting['strong'] += 1
-            elif token.type == 'strong_close':
-                nesting['strong'] -= 1
-            elif token.type == 'em_open':
-                nesting['em'] += 1
-            elif token.type == 'em_close':
-                nesting['em'] -= 1
-
-        # If any nesting level is positive, we have unclosed markup
-        return any(v > 0 for v in nesting.values())
-
-    def _print_plain_text_from_tokens(self, tokens: list[Any]) -> None:
-        """Extract and print plain text from tokens without Rich markdown parsing.
-
-        This is a fallback to avoid Rich crashes when markdown structure is incomplete.
-        """
-        text_parts = []
-
-        for token in tokens:
-            if token.type == 'inline':
-                # For inline tokens, extract the raw content
-                if hasattr(token, 'content'):
-                    text_parts.append(token.content)
-                elif hasattr(token, 'children') and token.children:
-                    # Extract text from children
-                    for child in token.children:
-                        if hasattr(child, 'content'):
-                            text_parts.append(child.content)
-            elif token.type == 'text':
-                if hasattr(token, 'content'):
-                    text_parts.append(token.content)
-            elif token.type == 'paragraph_open':
-                text_parts.append('\n')
-            elif token.type == 'paragraph_close':
-                text_parts.append('\n')
-            elif token.type == 'softbreak':
-                text_parts.append(' ')
-            elif token.type == 'hardbreak':
-                text_parts.append('\n')
-
-        if text_parts:
-            plain_text = ''.join(text_parts)
-            self._console.print(plain_text, end='')
 
     def _print_tokens(self, tokens: list[Any]):
         buffer = []
@@ -458,6 +493,34 @@ class StreamMarkdownPrinter(BasePrinter):
 
             self._console.print(table, soft_wrap=True)
 
+    def _format_tool_arguments(self, arguments: dict[str, Any]) -> Text:
+        """格式化工具参数为易读的 Markdown 格式。
+
+        - 无换行符的参数: **arg**: value
+        - 有换行符的参数: **arg**:\nvalue
+        """
+        if not arguments:
+            return Text("", style="dim")
+
+        lines: list[str] = []
+        for key, value in arguments.items():
+            value_str = str(value)
+            if '\n' in value_str:
+                # 有换行符的参数，冒号后换行
+                lines.append(f"**{key}**:")
+                lines.append(value_str)
+            else:
+                # 无换行符的参数，单行显示
+                lines.append(f"**{key}**: {value_str}")
+
+        # 限制长度
+        full_text = "\n".join(lines)
+        if not self.show_full_tool_content and len(full_text) > self.max_arg_length:
+            full_text = full_text[:self.max_arg_length - 3] + "..."
+
+        # 返回支持 markdown 样式的 Text
+        return Text.from_markup(full_text, style="dim")
+
     def _print_thinking_panel(self, content: str) -> None:
         """打印 thinking 面板"""
         if not content.strip():
@@ -495,17 +558,15 @@ class StreamMarkdownPrinter(BasePrinter):
 
         table.add_row("工具", Text(tool_name, style="bold cyan"))
         if arguments:
-            args_str = str(arguments)
-            if len(args_str) > self.max_arg_length:
-                args_str = args_str[:self.max_arg_length - 3] + "..."
-            table.add_row("参数", Text(args_str, style="dim"))
+            args_text = self._format_tool_arguments(arguments)
+            table.add_row("参数", args_text)
 
         table.add_row("", "")
         table.add_row("结果", f"{status_emoji} {status_text}", style=f"bold {status_color}")
 
         if result_preview:
             preview = str(result_preview)
-            if len(preview) > self.max_result_length:
+            if not self.show_full_tool_content and len(preview) > self.max_result_length:
                 preview = preview[: self.max_result_length - 3] + "..."
             table.add_row("", Text(preview, style="white"))
 

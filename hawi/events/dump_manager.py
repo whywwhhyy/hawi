@@ -12,8 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from hawi.events import Event
-
+from . import Event
 
 class DumpManager:
     """管理事件转储到文件的类。
@@ -52,12 +51,13 @@ class DumpManager:
 
             # 写入初始结构
             initial_data = {
+                "type": "session_start",
                 "session_start": time.time(),
                 "session_start_iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "events": [],
             }
             with open(self._dump_file, "w", encoding="utf-8") as f:
                 json.dump(initial_data, f, indent=2, ensure_ascii=False)
+                f.write('\n')
 
             self._initialized = True
         except Exception:
@@ -65,43 +65,7 @@ class DumpManager:
             self._dump_file = None
             self._initialized = False
 
-    def dump(self, event: Event) -> None:
-        """转储单个事件到文件。
-
-        Args:
-            event: 要转储的事件
-        """
-        if not self._dump_file or not self._initialized:
-            return
-
-        try:
-            # 读取现有数据
-            with open(self._dump_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # 转换事件为字典
-            event_data = event.model_dump(mode="json")
-
-            # 添加事件记录
-            event_record = {
-                "timestamp": time.time(),
-                "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "type": event.type,
-                "source": event.source,
-                "data": event_data,
-            }
-
-            data["events"].append(event_record)
-
-            # 写回文件
-            with open(self._dump_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-
-        except Exception:
-            # 静默忽略错误，不影响主流程
-            pass
-
-    def dump_raw(self, data: dict[str, Any]) -> None:
+    def dump(self, data: dict[str, Any] | Event) -> None:
         """转储原始数据（用于调试特定场景）。
 
         Args:
@@ -109,21 +73,14 @@ class DumpManager:
         """
         if not self._dump_file or not self._initialized:
             return
+        
+        if isinstance(data, Event):
+            data = data.model_dump(mode="json")
 
         try:
-            with open(self._dump_file, "r", encoding="utf-8") as f:
-                file_data = json.load(f)
-
-            if "raw_dumps" not in file_data:
-                file_data["raw_dumps"] = []
-
-            file_data["raw_dumps"].append({
-                "timestamp": time.time(),
-                "data": data,
-            })
-
-            with open(self._dump_file, "w", encoding="utf-8") as f:
-                json.dump(file_data, f, indent=2, ensure_ascii=False, default=str)
+            with open(self._dump_file, "at+", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+                f.write('\n')
 
         except Exception:
             pass

@@ -52,10 +52,13 @@ from hawi.events import (
     ModelContentBlockStartEvent,
     ModelContentBlockStopEvent,
     ModelErrorEvent,
+    ModelToolUseBlockDeltaEvent,
+    ModelToolUseBlockStartEvent,
+    ModelToolUseBlockStopEvent,
     ModelStreamStartEvent,
     ModelStreamStopEvent,
+    DumpManager,
 )
-from hawi.utils import DumpManager
 from .context import AgentContext, ToolCallContext
 from .result import AgentRunResult, ToolCallRecord
 
@@ -211,13 +214,12 @@ class ContentBlockHandler:
             self._current_block_index = idx
             self._accumulator = self._create_accumulator()
 
-            # 工具调用需要额外参数
+            # 工具调用使用专门的事件类型
             if self.block_type == "tool_use":
                 yield await emit_event(
-                    ModelContentBlockStartEvent.create(
+                    ModelToolUseBlockStartEvent.create(
                         request_id=request_id,
                         block_index=idx,
-                        block_type=self.block_type,
                         tool_call_id=chunk.get("id") or "",
                         tool_name=chunk.get("name") or "",
                     ),
@@ -233,14 +235,25 @@ class ContentBlockHandler:
                     event_bus,
                 )
 
-        # 发送 DeltaEvent
-        yield await emit_event(
-            ModelContentBlockDeltaEvent.create(
-                request_id=request_id,
-                part=chunk,
-            ),
-            event_bus,
-        )
+        # 发送 DeltaEvent（工具调用和非工具调用使用不同类型）
+        if self.block_type == "tool_use":
+            yield await emit_event(
+                ModelToolUseBlockDeltaEvent.create(
+                    request_id=request_id,
+                    block_index=idx,
+                    tool_call_id=chunk.get("id") or "",
+                    arguments_delta=chunk.get("arguments_delta", ""),
+                ),
+                event_bus,
+            )
+        else:
+            yield await emit_event(
+                ModelContentBlockDeltaEvent.create(
+                    request_id=request_id,
+                    part=chunk,
+                ),
+                event_bus,
+            )
 
         # 累积内容
         self._add_delta(chunk)
@@ -249,14 +262,28 @@ class ContentBlockHandler:
         if chunk.get("is_end") and self._accumulator is not None:
             part = self._build_part(idx)
 
-            yield await emit_event(
-                ModelContentBlockStopEvent.create(
-                    request_id=request_id,
-                    block_index=idx,
-                    content=[part],
-                ),
-                event_bus,
-            )
+            # 工具调用和非工具调用使用不同类型
+            if self.block_type == "tool_use":
+                # 从 accumulator 获取完整参数（在 _build_part 前）
+                acc = self._accumulator
+                yield await emit_event(
+                    ModelToolUseBlockStopEvent.create(
+                        request_id=request_id,
+                        block_index=idx,
+                        tool_call_id=acc.get("id") or "",
+                        arguments=acc.get("arguments", ""),
+                    ),
+                    event_bus,
+                )
+            else:
+                yield await emit_event(
+                    ModelContentBlockStopEvent.create(
+                        request_id=request_id,
+                        block_index=idx,
+                        content=[part],
+                    ),
+                    event_bus,
+                )
 
             # 返回完成的 part（供调用者收集）- 在重置前检查！
             is_empty = self._is_empty()

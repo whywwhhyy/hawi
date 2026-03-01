@@ -24,6 +24,9 @@ from .model_events import (
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
     ModelContentBlockStopEvent,
+    ModelToolUseBlockStartEvent,
+    ModelToolUseBlockDeltaEvent,
+    ModelToolUseBlockStopEvent,
     ModelMetadataEvent,
     ModelErrorEvent,
 )
@@ -35,6 +38,7 @@ from .agent_events import (
     AgentMessageAddedEvent,
     AgentErrorEvent,
 )
+from .dump_manager import DumpManager
 
 __all__ = [
     # Base
@@ -50,6 +54,9 @@ __all__ = [
     "ModelContentBlockStartEvent",
     "ModelContentBlockDeltaEvent",
     "ModelContentBlockStopEvent",
+    "ModelToolUseBlockStartEvent",
+    "ModelToolUseBlockDeltaEvent",
+    "ModelToolUseBlockStopEvent",
     "ModelMetadataEvent",
     "ModelErrorEvent",
     # Agent
@@ -59,4 +66,6 @@ __all__ = [
     "AgentToolResultEvent",
     "AgentMessageAddedEvent",
     "AgentErrorEvent",
+    # Dump Manager
+    "DumpManager",
 ]

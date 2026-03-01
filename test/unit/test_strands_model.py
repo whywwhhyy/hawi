@@ -183,7 +183,7 @@ class TestStrandsModelToolCalls:
         
         content_list = list(response.content)
         tool_call = content_list[0]  # type: ignore[index]
-        assert tool_call["arguments"] == {"query": "test"}
+        assert tool_call["arguments"]  # type: ignore[typeddict-item] == {"query": "test"}
 
 
 class TestStrandsModelStreaming:
@@ -211,7 +211,7 @@ class TestStrandsModelStreaming:
         assert parts[0]["is_start"] is True
         delta_part = parts[1]
         assert delta_part["delta"]  # type: ignore[typeddict-item] == "Hello world"
-        assert delta_part["is_end"]  # type: ignore[typeddict-item] is False
+        assert delta_part["is_end"] == False  # type: ignore[typeddict-item]
         
         # Second event: contentBlockStop ends the block
         event2 = {"type": "contentBlockStop"}
