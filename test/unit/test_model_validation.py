@@ -90,13 +90,11 @@ class TestAgentErrorHandling:
         agent = HawiAgent(
             model=mock_model,
             system_prompt="You are a test assistant.",
-            enable_streaming=True,
         )
 
         # Exception should be raised (not silently swallowed)
         with pytest.raises(AgentError) as exc_info:
-            async for _event in agent.arun("test message", stream=True):
-                pass
+            await agent.arun("test message")
 
         # The error should contain the original error message
         assert "startswith" in str(exc_info.value)
@@ -126,13 +124,11 @@ class TestAgentErrorHandling:
         agent = HawiAgent(
             model=mock_model,
             system_prompt="Test",
-            enable_streaming=True,
         )
 
         # Exception should be raised (not silently swallowed)
         with pytest.raises(AgentError) as exc_info:
-            async for _event in agent.arun("test", stream=True):
-                pass
+            await agent.arun("test")
 
         # The error should contain the original error message
         assert "startswith" in str(exc_info.value)

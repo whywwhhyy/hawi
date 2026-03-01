@@ -188,8 +188,8 @@ async def test_skills_plugin_end_to_end():
         # Initialize
         model = MockModel(workspace=tmp_dir)
         plugin = SkillsPlugin(skills_dir=skills_dir)
-        agent = HawiAgent(model=model, plugins=[plugin], enable_streaming=False)
-        
+        agent = HawiAgent(model=model, plugins=[plugin])
+
         # Test 1: Write file
         response = await agent.arun("Please write a file")
         assert "Task completed" in response.text

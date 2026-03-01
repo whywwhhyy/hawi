@@ -14,8 +14,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Optional, Coroutine, Literal, Mapping, overload, cast
-from typing import Callable
+from typing import Any, Optional, Coroutine, Literal, Mapping, Callable
 
 
 from hawi.model import Model
@@ -68,6 +67,8 @@ class ContentBlockHandler:
 
     通过实例方法处理不同类型的内容块，避免代码重复。
 
+    事件通过 EventBus 异步发布，方法返回完成的 ContentPart（块结束时）或 None。
+
     Example:
         # 文本块处理器
         text_handler = ContentBlockHandler.create_text_handler()
@@ -76,8 +77,9 @@ class ContentBlockHandler:
         tool_handler = ContentBlockHandler.create_tool_handler()
 
         # 使用
-        async for event in handler.handle(chunk, request_id, event_bus):
-            yield event
+        part = await handler.handle(chunk, request_id, event_bus)
+        if part is not None:
+            content_parts.append(part)
     """
 
     # 块类型配置
@@ -194,18 +196,18 @@ class ContentBlockHandler:
         chunk: StreamPart,
         request_id: str,
         event_bus: EventBus | None,
-        emit_event: Callable[[Event, EventBus | None], Coroutine[Any, Any, Event]],
-    ) -> AsyncGenerator[Event, None]:
-        """处理单个 chunk，生成相应的事件。
+    ) -> ContentPart | None:
+        """处理单个 chunk，返回完成的 Part（块结束时）或 None。
+
+        事件通过 event_bus 异步发布，不阻塞处理流程。
 
         Args:
             chunk: StreamPart（必须是匹配的 type）
             request_id: 请求 ID
-            event_bus: 事件总线
-            emit_event: 事件发送函数
+            event_bus: 事件总线（可为 None）
 
-        Yields:
-            Start/Delta/Stop 事件
+        Returns:
+            块完成时返回 ContentPart，否则返回 None
         """
         idx = chunk.get("index", 0)
 
@@ -214,78 +216,66 @@ class ContentBlockHandler:
             self._current_block_index = idx
             self._accumulator = self._create_accumulator()
 
-            # 工具调用使用专门的事件类型
             if self.block_type == "tool_use":
-                yield await emit_event(
-                    ModelToolUseBlockStartEvent.create(
-                        request_id=request_id,
-                        block_index=idx,
-                        tool_call_id=chunk.get("id") or "",
-                        tool_name=chunk.get("name") or "",
-                    ),
-                    event_bus,
-                )
-            else:
-                yield await emit_event(
-                    ModelContentBlockStartEvent.create(
-                        request_id=request_id,
-                        block_index=idx,
-                        block_type=self.block_type,
-                    ),
-                    event_bus,
-                )
-
-        # 发送 DeltaEvent（工具调用和非工具调用使用不同类型）
-        if self.block_type == "tool_use":
-            yield await emit_event(
-                ModelToolUseBlockDeltaEvent.create(
+                event = ModelToolUseBlockStartEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     tool_call_id=chunk.get("id") or "",
-                    arguments_delta=chunk.get("arguments_delta", ""),
-                ),
-                event_bus,
+                    tool_name=chunk.get("name") or "",
+                )
+            else:
+                event = ModelContentBlockStartEvent.create(
+                    request_id=request_id,
+                    block_index=idx,
+                    block_type=self.block_type,
+                )
+
+            if event_bus is not None:
+                await event_bus.publish(event)
+
+        # 发送 DeltaEvent
+        if self.block_type == "tool_use":
+            event = ModelToolUseBlockDeltaEvent.create(
+                request_id=request_id,
+                block_index=idx,
+                tool_call_id=chunk.get("id") or "",
+                arguments_delta=chunk.get("arguments_delta", ""),
             )
         else:
-            yield await emit_event(
-                ModelContentBlockDeltaEvent.create(
-                    request_id=request_id,
-                    part=chunk,
-                ),
-                event_bus,
+            event = ModelContentBlockDeltaEvent.create(
+                request_id=request_id,
+                part=chunk,
             )
+
+        if event_bus is not None:
+            await event_bus.publish(event)
 
         # 累积内容
         self._add_delta(chunk)
 
-        # is_end: 构建 Part，发送 StopEvent
+        # is_end: 构建 Part，发送 StopEvent，返回 Part
         if chunk.get("is_end") and self._accumulator is not None:
             part = self._build_part(idx)
 
-            # 工具调用和非工具调用使用不同类型
             if self.block_type == "tool_use":
-                # 从 accumulator 获取完整参数（在 _build_part 前）
                 acc = self._accumulator
-                yield await emit_event(
-                    ModelToolUseBlockStopEvent.create(
-                        request_id=request_id,
-                        block_index=idx,
-                        tool_call_id=acc.get("id") or "",
-                        arguments=acc.get("arguments", ""),
-                    ),
-                    event_bus,
+                event = ModelToolUseBlockStopEvent.create(
+                    request_id=request_id,
+                    block_index=idx,
+                    tool_call_id=acc.get("id") or "",
+                    arguments=acc.get("arguments", ""),
                 )
             else:
-                yield await emit_event(
-                    ModelContentBlockStopEvent.create(
-                        request_id=request_id,
-                        block_index=idx,
-                        content=[part],
-                    ),
-                    event_bus,
+                event = ModelContentBlockStopEvent.create(
+                    request_id=request_id,
+                    block_index=idx,
+                    content=[part],
                 )
 
-            # 返回完成的 part（供调用者收集）- 在重置前检查！
+            if event_bus is not None:
+                await event_bus.publish(event)
+
+            # 在重置前检查是否为空
             is_empty = self._is_empty()
 
             # 重置状态
@@ -293,7 +283,9 @@ class ContentBlockHandler:
             self._accumulator = None
 
             if not is_empty:
-                yield part
+                return part
+
+        return None
 
 
 @dataclass
@@ -358,7 +350,6 @@ class HawiAgent:
         plugins: list[HawiPlugin] | None = None,
         system_prompt: str | list[ContentPart] | None = None,
         max_iterations: int | None = None,
-        enable_streaming: bool = True,
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
         event_dump_file: str | None = None,
@@ -370,20 +361,13 @@ class HawiAgent:
             plugins: List of plugins providing tools and hooks (default: empty list)
             system_prompt: Default system prompt (str or list[ContentPart])
             max_iterations: Maximum tool execution iterations (None for unlimited)
-            enable_streaming: Whether streaming is enabled by default
             model_error_policy: Error handling policy mapping error_type to config
-            event_bus: Event bus for multi-agent coordination (not implemented)
+            event_bus: Event bus for event publishing. If None, creates a default EventBus
             event_dump_file: Path to dump all events for debugging (default: None)
-
-        Raises:
-            NotImplementedError: If event_bus is provided (not yet supported)
         """
-        if event_bus is not None:
-            raise NotImplementedError("event_bus is not yet supported")
-
         self._default_model = model
         self._max_iterations = max_iterations
-        self._enable_streaming = enable_streaming
+        self._event_bus = event_bus or EventBus()
 
         # Initialize event dump manager
         self._dump_manager = DumpManager(event_dump_file) if event_dump_file else None
@@ -473,7 +457,7 @@ class HawiAgent:
         - Copied context (messages, tools, system_prompt)
         - Same plugins (shared reference)
         - Same default model
-        - Same configuration (max_iterations, enable_streaming, etc.)
+        - Same configuration (max_iterations, etc.)
 
         The clone is independent - modifications to the clone's context
         do not affect the original agent.
@@ -487,7 +471,7 @@ class HawiAgent:
             plugins=self._plugins,  # Shared - plugins are typically stateless
             system_prompt=self._system_prompt,
             max_iterations=self._max_iterations,
-            enable_streaming=self._enable_streaming,
+            event_bus=self._event_bus,
             model_error_policy=self._model_model_error_policy_config,
         )
 
@@ -519,171 +503,100 @@ class HawiAgent:
                     stacklevel=3,
                 )
 
-    @overload
     def run(
         self,
         message: str | list[ContentPart] | None = None,
         *,
         model: Model | None = None,
-        stream: Literal[True],
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
-    ) -> Iterator[Event]: ...
-
-    @overload
-    def run(
-        self,
-        message: str | list[ContentPart] | None = None,
-        *,
-        model: Model | None = None,
-        stream: Literal[False] = False,
-        model_error_policy: Optional[ModelErrorPolicyConfig] = None,
-        event_bus: EventBus | None = None,
-    ) -> AgentRunResult: ...
-
-    def run(
-        self,
-        message: str | list[ContentPart] | None = None,
-        *,
-        model: Model | None = None,
-        stream: bool | None = None,
-        model_error_policy: Optional[ModelErrorPolicyConfig] = None,
-        event_bus: EventBus | None = None,
-    ) -> AgentRunResult | Iterator[Event]:
-        """Execute agent with a message.
+    ) -> AgentRunResult:
+        """Execute agent with a message (synchronous).
 
         Args:
             message: User message (str, content parts, or None to use existing context)
             model: Override model for this run
-            stream: Whether to stream events (default: self._enable_streaming)
             model_error_policy: Override failure policy for this run
-            event_bus: Optional event bus for publishing events
+            event_bus: Optional event bus for publishing events (defaults to self.event_bus)
 
         Returns:
-            AgentRunResult if stream=False, Iterator[Event] if stream=True
+            AgentRunResult containing the execution result
         """
-        use_stream = self._enable_streaming if stream is None else stream
-
         # Normalize model_error_policy to empty dict if None
         policy = model_error_policy or {}
 
-        if use_stream:
-            return self._run_stream(message, model, policy, event_bus)
-        else:
-            # Collect all events and return result
-            events = list(self._run_stream(message, model, policy, event_bus))
-            return self._build_result_from_events(events)
+        # Use provided event_bus or default
+        effective_event_bus = event_bus or self._event_bus
 
-    @overload
-    def arun(
+        # Run async execution in sync context
+        return asyncio.run(self._execute(message, model, policy, effective_event_bus))
+
+    async def arun(
         self,
         message: str | list[ContentPart] | None = None,
         *,
         model: Model | None = None,
-        stream: Literal[True],
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
-    ) -> AsyncIterator[Event]: ...
-
-    @overload
-    def arun(
-        self,
-        message: str | list[ContentPart] | None = None,
-        *,
-        model: Model | None = None,
-        stream: Literal[False] = False,
-        model_error_policy: Optional[ModelErrorPolicyConfig] = None,
-        event_bus: EventBus | None = None,
-    ) -> "Coroutine[Any, Any, AgentRunResult]": ...
-
-    def arun(
-        self,
-        message: str | list[ContentPart] | None = None,
-        *,
-        model: Model | None = None,
-        stream: bool | None = None,
-        model_error_policy: Optional[ModelErrorPolicyConfig] = None,
-        event_bus: EventBus | None = None,
-    ) -> AsyncIterator[Event] | Coroutine[Any, Any, AgentRunResult]:
+    ) -> AgentRunResult:
         """Execute agent asynchronously.
 
         Args:
             message: User message (str, content parts, or None to use existing context)
             model: Override model for this run
-            stream: Whether to stream events (default: self._enable_streaming)
             model_error_policy: Override failure policy for this run
-            event_bus: Optional event bus for publishing events
+            event_bus: Optional event bus for publishing events (defaults to self.event_bus)
 
         Returns:
-            AgentRunResult if stream=False, AsyncIterator[Event] if stream=True
+            AgentRunResult containing the execution result
         """
-        use_stream = self._enable_streaming if stream is None else stream
-
         # Normalize model_error_policy to empty dict if None
         policy = model_error_policy or {}
 
-        if use_stream:
-            # Directly return async iterator (not a coroutine)
-            return self._arun_stream(message, model, policy, event_bus)
-        else:
-            # Return coroutine that resolves to AgentRunResult
-            return self._arun_non_stream(message, model, policy, event_bus)
+        # Use provided event_bus or default
+        effective_event_bus = event_bus or self._event_bus
 
-    async def _arun_non_stream(
+        return await self._execute(message, model, policy, effective_event_bus)
+
+    @property
+    def event_bus(self) -> EventBus:
+        """Get the agent's EventBus for event subscriptions."""
+        return self._event_bus
+
+    def subscribe(
         self,
-        message: str | list[ContentPart] | None,
-        model: Model | None,
-        model_error_policy_config: Optional[ModelErrorPolicyConfig],
-        event_bus: EventBus | None = None,
-    ) -> AgentRunResult:
-        """Non-streaming async execution."""
-        events = []
-        async for event in self._arun_stream(message, model, model_error_policy_config, event_bus):
-            events.append(event)
-        return self._build_result_from_events(events)
+        callback: Callable[[Event], Coroutine[Any, Any, None]],
+        event_types: list[str] | None = None,
+        blocking: bool = False,
+        maxsize: int = 100,
+    ) -> None:
+        """Subscribe to agent events (delegates to EventBus).
 
-    def _run_stream(
+        Args:
+            callback: Async callback function to handle events
+            event_types: List of event types to subscribe to, None for all
+            blocking: If True, agent waits for this handler to complete
+            maxsize: Queue size for non-blocking handlers
+        """
+        self._event_bus.subscribe(callback, event_types, blocking, maxsize)
+
+    async def unsubscribe(
         self,
-        message: str | list[ContentPart] | None,
-        model: Model | None,
-        model_error_policy_config: Optional[ModelErrorPolicyConfig],
-        event_bus: EventBus | None = None,
-    ) -> Iterator[Event]:
-        """Synchronous streaming execution."""
-        # Run async generator through asyncio
-        loop = asyncio.new_event_loop()
-        async_gen = None
-        try:
-            asyncio.set_event_loop(loop)
-            async_gen = self._arun_stream(message, model, model_error_policy_config, event_bus)
+        callback: Callable[[Event], Coroutine[Any, Any, None]],
+        wait: bool = False,
+        timeout: float | None = None,
+    ) -> bool:
+        """Unsubscribe from agent events (delegates to EventBus).
 
-            while True:
-                try:
-                    event = loop.run_until_complete(async_gen.__anext__())
-                    yield event
-                except StopAsyncIteration:
-                    break
-        finally:
-            # Properly close the async generator to prevent 'aclose' warnings
-            if async_gen is not None:
-                try:
-                    loop.run_until_complete(async_gen.aclose())
-                except Exception:
-                    pass  # Ignore errors during cleanup
-            
-            # Cancel any remaining pending tasks to prevent warnings
-            try:
-                pending = asyncio.all_tasks(loop)
-                if pending:
-                    for task in pending:
-                        task.cancel()
-                    # Run the event loop briefly to let cancellations complete
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass  # Ignore errors during cleanup
-            
-            loop.close()
-            asyncio.set_event_loop(None)
+        Args:
+            callback: Callback function to remove
+            wait: Whether to wait for queued events to be processed
+            timeout: Timeout for waiting (seconds)
+
+        Returns:
+            True if successfully unsubscribed
+        """
+        return await self._event_bus.unsubscribe(callback, wait, timeout)
 
     async def _emit_event(
         self,
@@ -700,14 +613,14 @@ class HawiAgent:
 
         return event
 
-    async def _arun_stream(
+    async def _execute(
         self,
         message: str | list[ContentPart] | None,
         model: Model | None,
         model_error_policy_config: Optional[ModelErrorPolicyConfig],
         event_bus: EventBus | None = None,
-    ) -> AsyncGenerator[Event, None]:
-        """Asynchronous streaming execution."""
+    ) -> AgentRunResult:
+        """Execute agent and return result (pure EventBus-driven)."""
 
         m = model or self._default_model
         policy = model_error_policy_config or self._model_model_error_policy_config
@@ -717,6 +630,9 @@ class HawiAgent:
 
         # Track cumulative usage across all model calls (for multi-turn conversations)
         cumulative_usage: TokenUsage | None = None
+
+        # Track all events for building result
+        events: list[Event] = []
 
         # Add user message if provided
         if message is not None:
@@ -731,7 +647,7 @@ class HawiAgent:
             )
 
         # Agent run start
-        yield await self._emit_event(
+        await self._emit_event(
             AgentRunStartEvent.create(run_id=run_id, message_preview=str(message)[:100] if message else None),
             event_bus,
         )
@@ -745,7 +661,7 @@ class HawiAgent:
                 if self._max_iterations is not None and state.iteration >= self._max_iterations:
                     err = MaxIterationsError(f"Maximum iterations ({self._max_iterations}) reached")
                     state.error = err
-                    yield await self._emit_event(
+                    await self._emit_event(
                         AgentErrorEvent.create(run_id=run_id, error=err),
                         event_bus,
                     )
@@ -758,7 +674,7 @@ class HawiAgent:
 
                 # Model stream start
                 request_id = f"{run_id}-{state.iteration}"
-                yield await self._emit_event(
+                await self._emit_event(
                     ModelStreamStartEvent.create(request_id=request_id),
                     event_bus,
                 )
@@ -786,7 +702,7 @@ class HawiAgent:
                         if state.error:
                             # state.error 现在应该是异常对象
                             if isinstance(state.error, AgentError):
-                                yield await self._emit_event(
+                                await self._emit_event(
                                     AgentErrorEvent.create(run_id=run_id, error=state.error),
                                     event_bus,
                                 )
@@ -833,28 +749,21 @@ class HawiAgent:
                             continue  # Unknown chunk type
 
                         # Handle the chunk with appropriate handler
-                        async for event_or_part in handler.handle(
-                            chunk, request_id, event_bus, self._emit_event
-                        ):
-                            # Handler yields Events and optionally the final Part
-                            # Check if it's a Part by looking for 'type' key
-                            part_type = getattr(event_or_part, "get", lambda x: None)("type")
-                            if part_type in ("text", "reasoning", "tool_call", "tool_result"):
-                                content_parts.append(event_or_part)
-                                if part_type == "tool_call":
-                                    tool_calls.append(event_or_part)
-                                    # For tool calls, also send AgentToolCallEvent
-                                    yield await self._emit_event(
-                                        AgentToolCallEvent.create(
-                                            run_id=run_id,
-                                            tool_name=event_or_part["name"],
-                                            arguments=event_or_part["arguments"],
-                                            tool_call_id=event_or_part["id"],
-                                        ),
-                                        event_bus,
-                                    )
-                            else:
-                                yield event_or_part
+                        part = await handler.handle(chunk, request_id, event_bus)
+                        if part is not None:
+                            content_parts.append(part)
+                            if part["type"] == "tool_call":
+                                tool_calls.append(part)
+                                # For tool calls, also send AgentToolCallEvent
+                                await self._emit_event(
+                                    AgentToolCallEvent.create(
+                                        run_id=run_id,
+                                        tool_name=part["name"],
+                                        arguments=part["arguments"],
+                                        tool_call_id=part["id"],
+                                    ),
+                                    event_bus,
+                                )
                 finally:
                     # Ensure the model stream generator is properly closed
                     await model_stream_gen.aclose()
@@ -862,14 +771,14 @@ class HawiAgent:
                 if state.error:
                     # Send error event before breaking (error occurred during streaming)
                     if isinstance(state.error, AgentError):
-                        yield await self._emit_event(
+                        await self._emit_event(
                             AgentErrorEvent.create(run_id=run_id, error=state.error),
                             event_bus,
                         )
                     break
 
                 # Model stream stop
-                yield await self._emit_event(
+                await self._emit_event(
                     ModelStreamStopEvent.create(
                         request_id=request_id,
                         stop_reason=stop_reason,
@@ -893,7 +802,7 @@ class HawiAgent:
                 if not tool_calls:
                     # No tool calls, we're done
                     duration_ms = (time.time() - start_time) * 1000
-                    yield await self._emit_event(
+                    await self._emit_event(
                         AgentRunStopEvent.create(
                             run_id=run_id,
                             stop_reason=stop_reason or "end_turn",
@@ -908,7 +817,7 @@ class HawiAgent:
                 for tc in tool_calls:
                     record = await self._execute_tool(tc, state)
                     state.tool_calls.append(record)
-                    yield await self._emit_event(
+                    await self._emit_event(
                         AgentToolResultEvent.create(
                             run_id=run_id,
                             tool_name=record.tool_name,
@@ -925,7 +834,7 @@ class HawiAgent:
 
         except AgentError as e:
             # AgentError 已经被包装过了，发送 error event 然后重新抛出
-            yield await self._emit_event(
+            await self._emit_event(
                 AgentErrorEvent.create(run_id=run_id, error=e),
                 event_bus,
             )
@@ -934,7 +843,7 @@ class HawiAgent:
             # 包装为 AgentError，保留原始异常
             err = AgentError("tool_execution", f"{type(e).__name__}: {e}")
             state.error = err
-            yield await self._emit_event(
+            await self._emit_event(
                 AgentErrorEvent.create(run_id=run_id, error=err),
                 event_bus,
             )
@@ -944,6 +853,32 @@ class HawiAgent:
         finally:
             # after_conversation hook
             self._invoke_hook("after_conversation", self)
+
+        # Build and return result
+        duration_ms = (time.time() - start_time) * 1000
+        if state.error:
+            stop_reason = "error"
+        elif state.iteration > 0 and not state.tool_calls:
+            stop_reason = "end_turn"
+        else:
+            stop_reason = "tool_use"
+
+        # Get the last assistant message as response
+        messages = self._context.messages
+        response = None
+        for msg in reversed(messages):
+            if msg["role"] == "assistant":
+                response = msg
+                break
+
+        return AgentRunResult(
+            stop_reason=stop_reason,
+            messages=messages,
+            response=response,
+            usage=cumulative_usage,
+            tool_calls=state.tool_calls,
+            error=str(state.error) if state.error else None,
+        )
 
     async def _call_model_with_retry_streaming(
         self,

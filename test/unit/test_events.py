@@ -282,7 +282,7 @@ class TestEventBus:
         await asyncio.sleep(0.1)
         assert len(received) == 1
 
-        bus.unsubscribe(handler)
+        await bus.unsubscribe(handler)
         await bus.publish(AgentRunStartEvent.create(run_id="test2"))
         await asyncio.sleep(0.1)
         assert len(received) == 1  # No new events

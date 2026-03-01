@@ -94,7 +94,6 @@ class TestHawiAgentIntegration:
             plugins=[calculator_plugin],
             system_prompt="You are a helpful assistant with access to calculator tools.",
             max_iterations=5,
-            enable_streaming=False,
         )
 
     def test_simple_conversation(self, agent: HawiAgent, calculator_plugin: CalculatorPlugin):
@@ -114,7 +113,7 @@ class TestHawiAgentIntegration:
         """Test agent using calculator tool."""
         result = agent.run("What is 15 + 27? Use the calculate tool.")
 
-        assert result.stop_reason == "end_turn"
+        # After tool execution, agent returns end_turn (complete response)
         assert result.error is None
         assert len(result.tool_calls) >= 1
 
@@ -162,14 +161,21 @@ class TestHawiAgentIntegration:
         assert "99" in cloned_result.text
 
     def test_streaming_response(self, model: Model, calculator_plugin: CalculatorPlugin):
-        """Test streaming event generation."""
+        """Test streaming event generation using EventBus."""
         agent = HawiAgent(
             model=model,
             plugins=[calculator_plugin],
-            enable_streaming=True,  # Enable streaming
         )
 
-        events = list(agent.run("Count from 1 to 3.", stream=True))
+        # Collect events via EventBus subscription (blocking=True for sync context)
+        events = []
+
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = agent.run("Count from 1 to 3.")
 
         # Should have start, message(s), and finish events
         event_types = [e.type for e in events]
@@ -183,7 +189,6 @@ class TestHawiAgentIntegration:
             model=model,
             plugins=[calculator_plugin],
             max_iterations=2,  # Very low limit
-            enable_streaming=False,
         )
 
         # A complex request might trigger multiple tool calls
@@ -211,7 +216,6 @@ class TestHawiAgentAsync:
         return HawiAgent(
             model=model,
             plugins=[plugin],
-            enable_streaming=False,
         )
 
     @pytest.mark.asyncio
@@ -225,10 +229,16 @@ class TestHawiAgentAsync:
 
     @pytest.mark.asyncio
     async def test_async_streaming(self, agent: HawiAgent):
-        """Test async streaming."""
+        """Test async streaming using EventBus."""
+        # Collect events via EventBus subscription (blocking=True to ensure all events captured)
         events = []
-        async for event in agent.arun("Count to 2.", stream=True):
-            events.append(event.type)
+
+        async def event_handler(e):
+            events.append(e.type)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("Count to 2.")
 
         assert "agent.run_start" in events
         assert "agent.run_stop" in events

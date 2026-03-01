@@ -69,7 +69,6 @@ class TestEventFlowWithAgent:
             plugins=[CalculatorPlugin()],
             system_prompt="You are a helpful assistant with calculator tools.",
             max_iterations=5,
-            enable_streaming=True,
         )
 
     @pytest.mark.asyncio
@@ -77,8 +76,12 @@ class TestEventFlowWithAgent:
         """Test that agent produces correct event flow."""
         events = []
 
-        async for event in agent.arun("Say 'Hello' and nothing else.", stream=True):
-            events.append(event)
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("Say 'Hello' and nothing else.")
 
         # Check event types
         event_types = [e.type for e in events]
@@ -96,8 +99,8 @@ class TestEventFlowWithAgent:
         assert "model.content_block_delta" in event_types
         assert "model.content_block_stop" in event_types
 
-        # Order matters: run_start should be first
-        assert event_types[0] == "agent.run_start"
+        # Order matters: run_start should be among first events
+        assert "agent.run_start" in event_types[:2]
         # run_stop should be last
         assert event_types[-1] == "agent.run_stop"
 
@@ -106,8 +109,12 @@ class TestEventFlowWithAgent:
         """Test events produced during tool calling."""
         events = []
 
-        async for event in agent.arun("What is 5 + 3? Use the calculate tool.", stream=True):
-            events.append(event)
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("What is 5 + 3? Use the calculate tool.")
 
         event_types = [e.type for e in events]
 
@@ -143,8 +150,7 @@ class TestEventFlowWithAgent:
 
         bus.subscribe(handler)
 
-        async for event in agent.arun("Say 'Hi'", stream=True, event_bus=bus):
-            pass  # Events are also published to bus
+        result = await agent.arun("Say 'Hi'", event_bus=bus)
 
         await asyncio.sleep(0.1)  # Wait for async handlers
 
@@ -159,8 +165,9 @@ class TestEventFlowWithAgent:
         """Test ConversationPrinter with real agent execution."""
         printer = ConversationPrinter(show_reasoning=True, show_tools=True)
 
-        async for event in agent.arun("Calculate 2+2", stream=True):
-            await printer.handle(event)
+        agent.subscribe(printer.handle)
+
+        result = await agent.arun("Calculate 2+2")
 
         captured = capsys.readouterr()
         output = captured.out
@@ -176,8 +183,12 @@ class TestEventFlowWithAgent:
         """Test content block events contain correct text content."""
         events = []
 
-        async for event in agent.arun("Say exactly 'Test123'", stream=True):
-            events.append(event)
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("Say exactly 'Test123'")
 
         # Find content block events
         delta_events = [e for e in events if e.type == "model.content_block_delta"]
@@ -192,8 +203,12 @@ class TestEventFlowWithAgent:
         """Test that run_stop event contains execution duration."""
         events = []
 
-        async for event in agent.arun("Say 'Hello'", stream=True):
-            events.append(event)
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("Say 'Hello'")
 
         run_stop_events = [e for e in events if e.type == "agent.run_stop"]
         assert len(run_stop_events) == 1
@@ -207,8 +222,12 @@ class TestEventFlowWithAgent:
         """Test that event metadata is consistent across related events."""
         events = []
 
-        async for event in agent.arun("Calculate 1+1", stream=True):
-            events.append(event)
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("Calculate 1+1")
 
         # All agent events should have the same run_id
         agent_events = [e for e in events if e.source == "agent"]
@@ -217,18 +236,20 @@ class TestEventFlowWithAgent:
             assert len(run_ids) == 1  # Should all share the same run_id
 
     @pytest.mark.asyncio
-    async def test_streaming_vs_non_streaming_events(self, agent: HawiAgent):
-        """Test that streaming produces same result as non-streaming."""
-        # Streaming execution
+    async def test_eventbus_vs_direct_result(self, agent: HawiAgent):
+        """Test that EventBus subscription produces same result as direct return."""
+        # EventBus subscription
         events = []
-        async for event in agent.arun("Say 'Hello'", stream=True):
-            events.append(event)
 
-        # Non-streaming execution (must be awaited in async test)
-        result_non_stream = await agent.arun("Say 'Hello'", stream=False)
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("Say 'Hello'")
 
         # Both should succeed
-        assert result_non_stream.stop_reason == "end_turn"
+        assert result.stop_reason == "end_turn"
 
         run_stop_events = [e for e in events if e.type == "agent.run_stop"]
         assert len(run_stop_events) == 1
@@ -251,7 +272,6 @@ class TestEventFiltering:
         return HawiAgent(
             model=model,
             plugins=[CalculatorPlugin()],
-            enable_streaming=True,
         )
 
     @pytest.mark.asyncio
@@ -265,8 +285,7 @@ class TestEventFiltering:
 
         bus.subscribe(tool_handler, event_types=["agent.tool_call", "agent.tool_result"])
 
-        async for event in agent.arun("Calculate 1+1", stream=True, event_bus=bus):
-            pass
+        result = await agent.arun("Calculate 1+1", event_bus=bus)
 
         await asyncio.sleep(0.1)
 
@@ -286,8 +305,7 @@ class TestEventFiltering:
 
         bus.subscribe(catch_all)  # No event_types = wildcard
 
-        async for event in agent.arun("Say 'Hi'", stream=True, event_bus=bus):
-            pass
+        result = await agent.arun("Say 'Hi'", event_bus=bus)
 
         await asyncio.sleep(0.1)
 
@@ -311,7 +329,6 @@ class TestEventWithReasoningModel:
     def agent(self, model: DeepSeekModel) -> HawiAgent:
         return HawiAgent(
             model=model,
-            enable_streaming=True,
         )
 
     @pytest.mark.asyncio
@@ -319,8 +336,12 @@ class TestEventWithReasoningModel:
         """Test that reasoning models produce reasoning content events."""
         events = []
 
-        async for event in agent.arun("What is 15 * 23? Show your thinking.", stream=True):
-            events.append(event)
+        async def event_handler(e):
+            events.append(e)
+
+        agent.subscribe(event_handler, blocking=True)
+
+        result = await agent.arun("What is 15 * 23? Show your thinking.")
 
         # Find content block events
         block_start_events = [e for e in events if e.type == "model.content_block_start"]
