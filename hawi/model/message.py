@@ -27,6 +27,29 @@ class TokenUsage(BaseModel):
 # =============================================================================
 
 
+# ContentPart 的 type 字段字面量类型
+# 用于 ContentPart 联合类型中各个成员的 type 字段
+ContentPartType = Literal[
+    "text",
+    "image",
+    "document",
+    "audio",
+    "video",
+    "file",
+    "tool_call",
+    "tool_result",
+    "reasoning",
+    "cache_control",
+    "refusal",
+    "guard_content",
+]
+
+
+# 流式内容块类型 - 事件系统中使用的块类型
+# 注意：这是 ContentPartType 的子集，用于流式块处理
+StreamPartType = Literal["text", "thinking", "tool_use", "redacted_thinking"]
+
+
 class CacheControl(TypedDict):
     """Prompt caching 控制（Anthropic 支持）"""
     type: Literal["ephemeral"]

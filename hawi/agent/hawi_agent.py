@@ -51,9 +51,9 @@ from hawi.events import (
     ModelContentBlockStartEvent,
     ModelContentBlockStopEvent,
     ModelErrorEvent,
-    ModelToolUseBlockDeltaEvent,
-    ModelToolUseBlockStartEvent,
-    ModelToolUseBlockStopEvent,
+    ModelToolCallBlockDeltaEvent,
+    ModelToolCallBlockStartEvent,
+    ModelToolCallBlockStopEvent,
     ModelStreamStartEvent,
     ModelStreamStopEvent,
     DumpManager,
@@ -217,7 +217,7 @@ class ContentBlockHandler:
             self._accumulator = self._create_accumulator()
 
             if self.block_type == "tool_use":
-                event = ModelToolUseBlockStartEvent.create(
+                event = ModelToolCallBlockStartEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     tool_call_id=chunk.get("id") or "",
@@ -235,7 +235,7 @@ class ContentBlockHandler:
 
         # 发送 DeltaEvent
         if self.block_type == "tool_use":
-            event = ModelToolUseBlockDeltaEvent.create(
+            event = ModelToolCallBlockDeltaEvent.create(
                 request_id=request_id,
                 block_index=idx,
                 tool_call_id=chunk.get("id") or "",
@@ -259,7 +259,7 @@ class ContentBlockHandler:
 
             if self.block_type == "tool_use":
                 acc = self._accumulator
-                event = ModelToolUseBlockStopEvent.create(
+                event = ModelToolCallBlockStopEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     tool_call_id=acc.get("id") or "",
@@ -372,10 +372,11 @@ class HawiAgent:
         # Initialize event dump manager
         self._dump_manager = DumpManager(event_dump_file) if event_dump_file else None
 
+
         if model_error_policy is None:
-            self._model_model_error_policy_config = self._default_model_error_policy()
+            self._model_error_policy = self._default_model_error_policy()
         else:
-            self._model_model_error_policy_config = model_error_policy
+            self._model_error_policy = model_error_policy
 
         # Initialize plugins and collect tools/hooks
         # Use empty list if None to avoid mutable default argument issue
@@ -472,7 +473,7 @@ class HawiAgent:
             system_prompt=self._system_prompt,
             max_iterations=self._max_iterations,
             event_bus=self._event_bus,
-            model_error_policy=self._model_model_error_policy_config,
+            model_error_policy=self._model_error_policy,
         )
 
         # Copy context (deep copy)
@@ -523,7 +524,7 @@ class HawiAgent:
             AgentRunResult containing the execution result
         """
         # Normalize model_error_policy to empty dict if None
-        policy = model_error_policy or {}
+        policy = model_error_policy or self._model_error_policy
 
         # Use provided event_bus or default
         effective_event_bus = event_bus or self._event_bus
@@ -551,7 +552,7 @@ class HawiAgent:
             AgentRunResult containing the execution result
         """
         # Normalize model_error_policy to empty dict if None
-        policy = model_error_policy or {}
+        policy = model_error_policy or self._model_error_policy
 
         # Use provided event_bus or default
         effective_event_bus = event_bus or self._event_bus
@@ -623,7 +624,7 @@ class HawiAgent:
         """Execute agent and return result (pure EventBus-driven)."""
 
         m = model or self._default_model
-        policy = model_error_policy_config or self._model_model_error_policy_config
+        policy = model_error_policy_config or self._model_error_policy
         state = _ExecutionState()
         run_id = str(uuid.uuid4())[:8]
         start_time = time.time()
@@ -631,16 +632,20 @@ class HawiAgent:
         # Track cumulative usage across all model calls (for multi-turn conversations)
         cumulative_usage: TokenUsage | None = None
 
-        # Track all events for building result
-        events: list[Event] = []
-
         # Add user message if provided
         if message is not None:
+            # Normalize message to list[ContentPart]
+            if isinstance(message, str):
+                user_content: list[ContentPart] = [{"type": "text", "text": message}]
+            else:
+                user_content = message
+            
             self._context.add_user_message(message)
             await self._emit_event(
                 AgentMessageAddedEvent.create(
                     run_id=run_id,
                     role="user",
+                    content=user_content,
                     message_preview=str(message)[:100],
                 ),
                 event_bus,
@@ -689,9 +694,6 @@ class HawiAgent:
                 text_handler = ContentBlockHandler.create_text_handler()
                 thinking_handler = ContentBlockHandler.create_thinking_handler()
                 tool_handler = ContentBlockHandler.create_tool_handler()
-
-                # Track current handlers by block index
-                handlers: dict[int, ContentBlockHandler] = {}
 
                 # Use try/finally to ensure proper cleanup of the async generator
                 model_stream_gen = self._call_model_with_retry_streaming(
@@ -797,6 +799,17 @@ class HawiAgent:
                 # Add assistant message to context
                 # tool_calls are now included in content as ToolCallPart items
                 self._context.add_assistant_message(content=response_content)
+
+                # Emit event for assistant message added
+                await self._emit_event(
+                    AgentMessageAddedEvent.create(
+                        run_id=run_id,
+                        role="assistant",
+                        content=response_content,
+                        message_preview=str(response_content)[:100] if response_content else "",
+                    ),
+                    event_bus,
+                )
 
                 # Check if tool calls need to be executed
                 if not tool_calls:

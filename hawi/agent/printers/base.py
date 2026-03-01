@@ -11,10 +11,15 @@ from hawi.events import (
     AgentToolResultEvent,
     AgentErrorEvent,
     ModelErrorEvent,
-    ModelToolUseBlockStartEvent,
-    ModelToolUseBlockDeltaEvent,
-    ModelToolUseBlockStopEvent,
+    ModelToolCallBlockStartEvent,
+    ModelToolCallBlockDeltaEvent,
+    ModelToolCallBlockStopEvent,
 )
+
+# Backward compatibility aliases
+ModelToolCallBlockStartEvent = ModelToolCallBlockStartEvent
+ModelToolCallBlockDeltaEvent = ModelToolCallBlockDeltaEvent
+ModelToolCallBlockStopEvent = ModelToolCallBlockStopEvent
 from hawi.errors import AgentError, ModelError
 
 logger = logging.getLogger(__name__)

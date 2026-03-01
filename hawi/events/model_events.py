@@ -11,11 +11,9 @@ from typing import Any, Literal, overload
 from pydantic import field_serializer
 
 from hawi.errors import ModelError
-from hawi.model.message import ContentPart, StreamPart, TokenUsage
+from hawi.model.message import ContentPart, StreamPart, TokenUsage, ContentPartType
 
 from .event import Event
-
-from hawi.model.message import TextPart, ToolCallPart, ReasoningPart
 
 
 class ModelStreamStartEvent(Event):
@@ -61,7 +59,7 @@ class ModelContentBlockStartEvent(Event):
     - thinking: 推理内容（Anthropic thinking, OpenAI reasoning_content）
     - redacted_thinking: 被编辑的推理（Anthropic 特有）
 
-    注意: tool_use 类型请使用 ModelToolUseBlockStartEvent
+    注意: tool_use 类型请使用 ModelToolCallBlockStartEvent
     """
 
     request_id: str
@@ -164,22 +162,18 @@ class ModelContentBlockDeltaEvent(Event):
         block_index = part.get("index", 0)
         part_type = part.get("type", "")
 
-        # 映射 part type 到 delta_type
-        delta_type_mapping = {
-            "text_delta": "text",
-            "thinking_delta": "thinking",
-            "tool_call_delta": "tool_input",
-        }
-        delta_type = delta_type_mapping.get(part_type, "text")
-
-        # 提取 delta 内容
+        # 映射 part type 到 delta_type 并提取 delta 内容
         if part_type == "text_delta":
+            delta_type: Literal["text", "thinking", "tool_input", "signature"] = "text"
             delta = part.get("delta", "")
         elif part_type == "thinking_delta":
+            delta_type = "thinking"
             delta = part.get("delta", "")
         elif part_type == "tool_call_delta":
+            delta_type = "tool_input"
             delta = part.get("arguments_delta", "")
         else:
+            delta_type = "text"
             delta = ""
 
         return cls(
@@ -193,10 +187,10 @@ class ModelContentBlockDeltaEvent(Event):
         )
 
 
-class ModelToolUseBlockStartEvent(Event):
+class ModelToolCallBlockStartEvent(Event):
     """工具调用内容块开始
 
-    专门用于 tool_use 类型的内容块，包含 tool_call_id 和 tool_name。
+    专门用于 tool_call 类型的内容块，包含 tool_call_id 和 tool_name。
     """
 
     request_id: str
@@ -211,7 +205,7 @@ class ModelToolUseBlockStartEvent(Event):
         block_index: int,
         tool_call_id: str,
         tool_name: str,
-    ) -> ModelToolUseBlockStartEvent:
+    ) -> ModelToolCallBlockStartEvent:
         """创建工具调用内容块开始事件
 
         Args:
@@ -221,10 +215,10 @@ class ModelToolUseBlockStartEvent(Event):
             tool_name: 工具名称
 
         Returns:
-            ModelToolUseBlockStartEvent 实例
+            ModelToolCallBlockStartEvent 实例
         """
         return cls(
-            type="model.tool_use_block_start",
+            type="model.tool_call_block_start",
             source="model",
             request_id=request_id,
             block_index=block_index,
@@ -233,10 +227,10 @@ class ModelToolUseBlockStartEvent(Event):
         )
 
 
-class ModelToolUseBlockDeltaEvent(Event):
+class ModelToolCallBlockDeltaEvent(Event):
     """工具调用内容块增量
 
-    专门用于 tool_use 类型的增量更新。
+    专门用于 tool_call 类型的增量更新。
     """
 
     request_id: str
@@ -251,7 +245,7 @@ class ModelToolUseBlockDeltaEvent(Event):
         block_index: int,
         tool_call_id: str,
         arguments_delta: str,
-    ) -> ModelToolUseBlockDeltaEvent:
+    ) -> ModelToolCallBlockDeltaEvent:
         """创建工具调用内容块增量事件
 
         Args:
@@ -261,10 +255,10 @@ class ModelToolUseBlockDeltaEvent(Event):
             arguments_delta: 参数增量（JSON 片段）
 
         Returns:
-            ModelToolUseBlockDeltaEvent 实例
+            ModelToolCallBlockDeltaEvent 实例
         """
         return cls(
-            type="model.tool_use_block_delta",
+            type="model.tool_call_block_delta",
             source="model",
             request_id=request_id,
             block_index=block_index,
@@ -273,10 +267,10 @@ class ModelToolUseBlockDeltaEvent(Event):
         )
 
 
-class ModelToolUseBlockStopEvent(Event):
+class ModelToolCallBlockStopEvent(Event):
     """工具调用内容块结束
 
-    专门用于 tool_use 类型的结束事件，包含完整的参数。
+    专门用于 tool_call 类型的结束事件，包含完整的参数。
     """
 
     request_id: str
@@ -291,7 +285,7 @@ class ModelToolUseBlockStopEvent(Event):
         block_index: int,
         tool_call_id: str,
         arguments: str,
-    ) -> ModelToolUseBlockStopEvent:
+    ) -> ModelToolCallBlockStopEvent:
         """创建工具调用内容块结束事件
 
         Args:
@@ -301,10 +295,10 @@ class ModelToolUseBlockStopEvent(Event):
             arguments: 完整的参数 JSON 字符串
 
         Returns:
-            ModelToolUseBlockStopEvent 实例
+            ModelToolCallBlockStopEvent 实例
         """
         return cls(
-            type="model.tool_use_block_stop",
+            type="model.tool_call_block_stop",
             source="model",
             request_id=request_id,
             block_index=block_index,
@@ -345,7 +339,7 @@ class ModelContentBlockStopEvent(Event):
     content: list[ContentPart]
 
     @property
-    def block_type(self) -> Literal["text", "thinking", "tool_use", "redacted_thinking"] | None:
+    def block_type(self) -> ContentPartType | None:
         """内容块类型（从第一个 ContentPart 推断）"""
         if not self.content:
             return None

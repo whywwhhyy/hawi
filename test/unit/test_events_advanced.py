@@ -295,10 +295,12 @@ class TestAgentEventClasses:
         event = AgentMessageAddedEvent.create(
             run_id="run-123",
             role="assistant",
+            content=[{"type": "text", "text": "Hello world"}],
             message_preview="Hello world"
         )
         assert event.type == "agent.message_added"
         assert event.role == "assistant"
+        assert event.content == [{"type": "text", "text": "Hello world"}]
         assert event.message_preview == "Hello world"
 
     def test_agent_error_event(self):

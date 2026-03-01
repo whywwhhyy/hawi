@@ -23,9 +23,9 @@ from hawi.events import (
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
     ModelContentBlockStopEvent,
-    ModelToolUseBlockStartEvent,
-    ModelToolUseBlockDeltaEvent,
-    ModelToolUseBlockStopEvent,
+    ModelToolCallBlockStartEvent,
+    ModelToolCallBlockDeltaEvent,
+    ModelToolCallBlockStopEvent,
 )
 from hawi.agent.printers.base import BasePrinter
 
@@ -181,20 +181,20 @@ class RichStreamingPrinter(BasePrinter):
 
     async def _on_tool_use_block_start(self, event: Event) -> None:
         """工具调用块开始"""
-        assert isinstance(event, ModelToolUseBlockStartEvent)
+        assert isinstance(event, ModelToolCallBlockStartEvent)
         self._current_block_type = "tool_use"
         self._block_has_received_delta = False
 
     async def _on_tool_use_block_delta(self, event: Event) -> None:
         """工具调用块增量"""
-        assert isinstance(event, ModelToolUseBlockDeltaEvent)
+        assert isinstance(event, ModelToolCallBlockDeltaEvent)
         # 工具调用参数增量不直接显示，在 stop 时显示完整信息
         if not self._block_has_received_delta:
             self._block_has_received_delta = True
 
     async def _on_tool_use_block_stop(self, event: Event) -> None:
         """工具调用块结束"""
-        assert isinstance(event, ModelToolUseBlockStopEvent)
+        assert isinstance(event, ModelToolCallBlockStopEvent)
         self._current_block_type = None
 
     async def _on_stream_stop(self, event: Event) -> None:

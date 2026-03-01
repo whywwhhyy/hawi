@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import field_serializer
 
 from hawi.errors import AgentError
-from hawi.model.message import TokenUsage
+from hawi.model.message import ContentPart, TokenUsage
 
 from .event import Event
 
@@ -123,6 +123,7 @@ class AgentMessageAddedEvent(Event):
     """消息被添加到上下文"""
     run_id: str
     role: Literal["user", "assistant", "tool"]
+    content: list[ContentPart]
     message_preview: str
 
     @classmethod
@@ -130,6 +131,7 @@ class AgentMessageAddedEvent(Event):
         cls,
         run_id: str,
         role: Literal["user", "assistant", "tool"],
+        content: list[ContentPart],
         message_preview: str,
     ) -> AgentMessageAddedEvent:
         return cls(
@@ -137,6 +139,7 @@ class AgentMessageAddedEvent(Event):
             source="agent",
             run_id=run_id,
             role=role,
+            content=content,
             message_preview=message_preview,
         )
 

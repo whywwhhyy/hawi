@@ -16,7 +16,6 @@ from .event import (
     EventType,
     ModelEventType,
     AgentEventType,
-    EventBus
 )
 from .model_events import (
     ModelStreamStartEvent,
@@ -24,9 +23,9 @@ from .model_events import (
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
     ModelContentBlockStopEvent,
-    ModelToolUseBlockStartEvent,
-    ModelToolUseBlockDeltaEvent,
-    ModelToolUseBlockStopEvent,
+    ModelToolCallBlockStartEvent,
+    ModelToolCallBlockDeltaEvent,
+    ModelToolCallBlockStopEvent,
     ModelMetadataEvent,
     ModelErrorEvent,
 )
@@ -38,6 +37,7 @@ from .agent_events import (
     AgentMessageAddedEvent,
     AgentErrorEvent,
 )
+from .event_bus import EventBus
 from .dump_manager import DumpManager
 
 __all__ = [
@@ -54,9 +54,9 @@ __all__ = [
     "ModelContentBlockStartEvent",
     "ModelContentBlockDeltaEvent",
     "ModelContentBlockStopEvent",
-    "ModelToolUseBlockStartEvent",
-    "ModelToolUseBlockDeltaEvent",
-    "ModelToolUseBlockStopEvent",
+    "ModelToolCallBlockStartEvent",
+    "ModelToolCallBlockDeltaEvent",
+    "ModelToolCallBlockStopEvent",
     "ModelMetadataEvent",
     "ModelErrorEvent",
     # Agent
@@ -69,3 +69,4 @@ __all__ = [
     # Dump Manager
     "DumpManager",
 ]
+

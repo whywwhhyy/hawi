@@ -32,9 +32,9 @@ from hawi.events import (
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
     ModelContentBlockStopEvent,
-    ModelToolUseBlockStartEvent,
-    ModelToolUseBlockDeltaEvent,
-    ModelToolUseBlockStopEvent,
+    ModelToolCallBlockStartEvent,
+    ModelToolCallBlockDeltaEvent,
+    ModelToolCallBlockStopEvent,
 )
 from hawi.agent.printers.base import BasePrinter
 
@@ -311,17 +311,17 @@ class StreamMarkdownPrinter(BasePrinter):
 
     async def _on_tool_use_block_start(self, event: Event) -> None:
         """工具调用块开始"""
-        assert isinstance(event, ModelToolUseBlockStartEvent)
+        assert isinstance(event, ModelToolCallBlockStartEvent)
         self._current_block_type = "tool_use"
 
     async def _on_tool_use_block_delta(self, event: Event) -> None:
         """工具调用块增量"""
-        assert isinstance(event, ModelToolUseBlockDeltaEvent)
+        assert isinstance(event, ModelToolCallBlockDeltaEvent)
         # 工具调用参数增量不直接显示，在 stop 时显示完整信息
 
     async def _on_tool_use_block_stop(self, event: Event) -> None:
         """工具调用块结束"""
-        assert isinstance(event, ModelToolUseBlockStopEvent)
+        assert isinstance(event, ModelToolCallBlockStopEvent)
 
         # 工具调用信息由 agent.tool_call 事件处理
         # 这里只清理状态
