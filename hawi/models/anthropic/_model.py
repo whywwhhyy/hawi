@@ -85,6 +85,13 @@ class AnthropicModel(Model):
         self._client: Anthropic | None = None
         self._async_client: AsyncAnthropic | None = None
 
+        # Clear env vars that may interfere with API calls when api_key is provided
+        # Anthropic SDK reads ANTHROPIC_AUTH_TOKEN which can cause wrong API endpoint
+        if api_key:
+            import os
+            os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+            os.environ.pop("ANTHROPIC_BASE_URL", None)
+
         # 初始化转换器
         self._converter = ContentConverter(enable_image_download)
         self._async_converter = AsyncContentConverter(enable_image_download)

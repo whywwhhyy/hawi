@@ -55,7 +55,6 @@ def _create_user_message(
         "role": "user",
         "content": _normalize_content(content),
         "name": name,
-        "tool_calls": None,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -66,11 +65,14 @@ def _create_assistant_message(
     tool_calls: list[ToolCallPart] | None = None,
 ) -> Message:
     """Create an assistant message."""
+    # 合并 content 和 tool_calls 到 content 中
+    normalized_content = _normalize_content(content)
+    if tool_calls:
+        normalized_content = normalized_content + tool_calls
     return {
         "role": "assistant",
-        "content": _normalize_content(content),
+        "content": normalized_content,
         "name": None,
-        "tool_calls": tool_calls,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -85,7 +87,6 @@ def _create_tool_result_message(
         "role": "tool",
         "content": _normalize_content(content),
         "name": None,
-        "tool_calls": None,
         "tool_call_id": tool_call_id,
         "metadata": None,
     }
@@ -193,7 +194,7 @@ class TestKimiOpenAIUnit:
             _text_part("The answer is 42"),
         ])
 
-        result = model._convert_message_to_openai(msg)
+        result = model._convert_message_to_openai(msg)[0]
 
         assert result["role"] == "assistant"
         assert result.get("reasoning_content") == "Analyzing the problem..."
@@ -216,7 +217,7 @@ class TestKimiOpenAIUnit:
             ],
         )
 
-        result = model._convert_message_to_openai(msg)
+        result = model._convert_message_to_openai(msg)[0]
 
         assert result["role"] == "assistant"
         assert result.get("tool_calls") is not None
@@ -255,9 +256,10 @@ class TestKimiOpenAIIntegration:
         )
 
         assert response.id is not None
-        assert len(response.content) > 0
+        content_list = list(response.content)
+        assert len(content_list) > 0
         # When thinking is enabled, reasoning_content comes first
-        assert response.content[0]["type"] in ["text", "reasoning"]
+        assert content_list[0]["type"] in ["text", "reasoning"]
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.output_tokens > 0
@@ -269,9 +271,10 @@ class TestKimiOpenAIIntegration:
         )
 
         assert response.id is not None
-        assert len(response.content) > 0
+        content_list = list(response.content)
+        assert len(content_list) > 0
         # When thinking is disabled, content[0] should be text
-        assert response.content[0]["type"] == "text"
+        assert content_list[0]["type"] == "text"
         # May or may not have reasoning_content when thinking is disabled
 
     def test_streaming_response(self, model: KimiOpenAIModel):
@@ -364,8 +367,9 @@ class TestKimiK25ToolCalls:
         )
 
         # Check if tool was called or text response given
-        tool_calls = [c for c in response.content if c["type"] == "tool_call"]
-        text_parts = [c for c in response.content if c["type"] == "text"]
+        content_list = list(response.content)
+        tool_calls = [c for c in content_list if c["type"] == "tool_call"]
+        text_parts = [c for c in content_list if c["type"] == "text"]
 
         if tool_calls:
             assert tool_calls[0]["name"] == "calculate"
@@ -396,7 +400,8 @@ class TestKimiK25ToolCalls:
             tools=tools,
         )
 
-        tool_calls = [c for c in response.content if c["type"] == "tool_call"]
+        content_list = list(response.content)
+        tool_calls = [c for c in content_list if c["type"] == "tool_call"]
         if not tool_calls:
             pytest.skip("Model did not call tool")
 

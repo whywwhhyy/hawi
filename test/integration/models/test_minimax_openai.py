@@ -23,7 +23,6 @@ def _create_user_message(content: str) -> Message:
         "role": "user",
         "content": [{"type": "text", "text": content}],
         "name": None,
-        "tool_calls": None,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -35,7 +34,6 @@ def _create_assistant_message(content: list[ContentPart]) -> Message:
         "role": "assistant",
         "content": content,
         "name": None,
-        "tool_calls": None,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -47,7 +45,6 @@ def _create_tool_result_message(tool_call_id: str, content: str) -> Message:
         "role": "tool",
         "content": [{"type": "text", "text": content}],
         "name": None,
-        "tool_calls": None,
         "tool_call_id": tool_call_id,
         "metadata": None,
     }
@@ -83,7 +80,7 @@ class TestMiniMaxOpenAIUnit:
             content="Tool result data",
         )
 
-        result = model._convert_message_to_openai(msg)
+        result = model._convert_message_to_openai(msg)[0]
 
         assert result["role"] == "tool"
         assert result["tool_call_id"] == "call_123"
@@ -110,12 +107,13 @@ class TestMiniMaxM25Integration:
         )
 
         assert response.id is not None
-        assert len(response.content) > 0
+        content_list = list(response.content)
+        assert len(content_list) > 0
         # MiniMax M2.5 may return reasoning content as the first part
-        assert response.content[0]["type"] in ["text", "reasoning"]
+        assert content_list[0]["type"] in ["text", "reasoning"]
         # Find text content for assertion
         text_content = ""
-        for part in response.content:
+        for part in content_list:
             if part.get("type") == "text":
                 text_content += part.get("text", "")
         assert "Hello" in text_content or "World" in text_content
@@ -162,10 +160,11 @@ class TestMiniMaxM25Integration:
         )
 
         # Should either have text response or tool_call
-        assert len(response.content) > 0
-        if response.content[0]["type"] == "tool_call":
-            assert response.content[0]["name"] == "get_weather"
-            assert "location" in response.content[0]["arguments"]
+        content_list = list(response.content)
+        assert len(content_list) > 0
+        if content_list[0]["type"] == "tool_call":
+            assert content_list[0]["name"] == "get_weather"
+            assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
     def test_multi_turn_conversation(self, model: MiniMaxOpenAIModel):
@@ -212,9 +211,10 @@ class TestMiniMaxM21Integration:
         )
 
         assert response.id is not None
-        assert len(response.content) > 0
+        content_list = list(response.content)
+        assert len(content_list) > 0
         # MiniMax M2.1 may return reasoning content as the first part
-        assert response.content[0]["type"] in ["text", "reasoning"]
+        assert content_list[0]["type"] in ["text", "reasoning"]
         assert response.stop_reason == "end_turn"
         assert response.usage is not None
 

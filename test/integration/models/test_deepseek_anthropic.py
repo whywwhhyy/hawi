@@ -23,7 +23,6 @@ def _create_user_message(content: str) -> Message:
         "role": "user",
         "content": [{"type": "text", "text": content}],
         "name": None,
-        "tool_calls": None,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -35,7 +34,6 @@ def _create_assistant_message(content: list[ContentPart]) -> Message:
         "role": "assistant",
         "content": content,
         "name": None,
-        "tool_calls": None,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -47,7 +45,6 @@ def _create_tool_result_message(tool_call_id: str, content: str) -> Message:
         "role": "tool",
         "content": [{"type": "text", "text": content}],
         "name": None,
-        "tool_calls": None,
         "tool_call_id": tool_call_id,
         "metadata": None,
     }
@@ -135,7 +132,6 @@ class TestDeepSeekAnthropicUnit:
                     {"type": "image", "source": {"url": "data:image/png;base64,abc", "detail": "auto"}},
                 ],
                 "name": None,
-                "tool_calls": None,
                 "tool_call_id": None,
                 "metadata": None,
             }],
@@ -166,7 +162,6 @@ class TestDeepSeekAnthropicUnit:
                     {"type": "document", "source": {"url": "data:application/pdf;base64,abc", "mime_type": "application/pdf"}, "title": None, "context": None},
                 ],
                 "name": None,
-                "tool_calls": None,
                 "tool_call_id": None,
                 "metadata": None,
             }],
@@ -208,9 +203,10 @@ class TestDeepSeekAnthropicIntegration:
         )
 
         assert response.id is not None
-        assert len(response.content) > 0
-        assert response.content[0]["type"] == "text"
-        assert "Hello" in response.content[0]["text"] or "World" in response.content[0]["text"]
+        content_list = list(response.content)
+        assert len(content_list) > 0
+        assert content_list[0]["type"] == "text"
+        assert "Hello" in content_list[0]["text"] or "World" in content_list[0]["text"]
         assert response.stop_reason == "end_turn"
         assert response.usage is not None
         assert response.usage.input_tokens > 0
@@ -223,7 +219,8 @@ class TestDeepSeekAnthropicIntegration:
         )
 
         assert response.id is not None
-        assert len(response.content) > 0
+        content_list = list(response.content)
+        assert len(content_list) > 0
         # Reasoner model may have reasoning content
         assert response.usage is not None
 
@@ -263,10 +260,11 @@ class TestDeepSeekAnthropicIntegration:
         )
 
         # Should either have text response or tool_call
-        assert len(response.content) > 0
-        if response.content[0]["type"] == "tool_call":
-            assert response.content[0]["name"] == "get_weather"
-            assert "location" in response.content[0]["arguments"]
+        content_list = list(response.content)
+        assert len(content_list) > 0
+        if content_list[0]["type"] == "tool_call":
+            assert content_list[0]["name"] == "get_weather"
+            assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
     def test_multi_turn_conversation(self, model: DeepSeekAnthropicModel):
@@ -277,15 +275,17 @@ class TestDeepSeekAnthropicIntegration:
 
         # First turn
         response1 = model.invoke(messages=messages)
+        response1_content = list(response1.content)
         messages.append(_create_assistant_message(content=[
-            {"type": "text", "text": response1.content[0].get("text", "")},
+            {"type": "text", "text": response1_content[0].get("text", "")},
         ]))
 
         # Second turn
         messages.append(_create_user_message("What's my name?"))
         response2 = model.invoke(messages=messages)
+        response2_content = list(response2.content)
 
-        assert "Alice" in response2.content[0].get("text", "")
+        assert "Alice" in response2_content[0].get("text", "")
 
 
 @pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
@@ -332,6 +332,7 @@ class TestDeepSeekAnthropicReasonerMultiTurn:
         )
 
         # Should have some response content
-        assert len(response.content) > 0
+        content_list = list(response.content)
+        assert len(content_list) > 0
         # Response could be text, tool_call, or reasoning (for Reasoner model)
-        assert response.content[0]["type"] in ["text", "tool_call", "reasoning"]
+        assert content_list[0]["type"] in ["text", "tool_call", "reasoning"]

@@ -54,7 +54,6 @@ def _create_user_message(
         "role": "user",
         "content": _normalize_content(content),
         "name": name,
-        "tool_calls": None,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -65,11 +64,14 @@ def _create_assistant_message(
     tool_calls: list[ToolCallPart] | None = None,
 ) -> Message:
     """Create an assistant message."""
+    # Merge content and tool_calls into content
+    normalized_content = _normalize_content(content)
+    if tool_calls:
+        normalized_content = normalized_content + tool_calls
     return {
         "role": "assistant",
-        "content": _normalize_content(content),
+        "content": normalized_content,
         "name": None,
-        "tool_calls": tool_calls,
         "tool_call_id": None,
         "metadata": None,
     }
@@ -84,7 +86,6 @@ def _create_tool_result_message(
         "role": "tool",
         "content": _normalize_content(content),
         "name": None,
-        "tool_calls": None,
         "tool_call_id": tool_call_id,
         "metadata": None,
     }
@@ -141,9 +142,10 @@ class TestKimiAnthropicIntegration:
         )
 
         assert response.id is not None
-        assert len(response.content) > 0
-        assert response.content[0]["type"] == "text"
-        assert "Hello" in response.content[0]["text"] or "World" in response.content[0]["text"]
+        content_list = list(response.content)
+        assert len(content_list) > 0
+        assert content_list[0]["type"] == "text"
+        assert "Hello" in content_list[0]["text"] or "World" in content_list[0]["text"]
         assert response.stop_reason == "end_turn"
         assert response.usage is not None
         # Kimi may report input_tokens as 0 when using cache - check total tokens instead
@@ -187,10 +189,11 @@ class TestKimiAnthropicIntegration:
         )
 
         # Should either have text response or tool_call
-        assert len(response.content) > 0
-        if response.content[0]["type"] == "tool_call":
-            assert response.content[0]["name"] == "get_weather"
-            assert "location" in response.content[0]["arguments"]
+        content_list = list(response.content)
+        assert len(content_list) > 0
+        if content_list[0]["type"] == "tool_call":
+            assert content_list[0]["name"] == "get_weather"
+            assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
     def test_multi_turn_conversation(self, model: KimiAnthropicModel):
@@ -201,7 +204,7 @@ class TestKimiAnthropicIntegration:
 
         # First turn
         response1 = model.invoke(messages=messages)
-        first_part = response1.content[0]
+        first_part = list(response1.content)[0]
         assert first_part["type"] == "text"
         messages.append(_create_assistant_message(content=[
             _text_part(first_part["text"]),
@@ -211,7 +214,7 @@ class TestKimiAnthropicIntegration:
         messages.append(_create_user_message("What's my name?"))
         response2 = model.invoke(messages=messages)
 
-        second_part = response2.content[0]
+        second_part = list(response2.content)[0]
         assert second_part["type"] == "text"
         assert "Bob" in second_part["text"]
 
@@ -253,8 +256,9 @@ class TestKimiAnthropicToolCalls:
         )
 
         # Check if tool was called or text response given
-        tool_calls = [c for c in response.content if c["type"] == "tool_call"]
-        text_parts = [c for c in response.content if c["type"] == "text"]
+        content_list = list(response.content)
+        tool_calls = [c for c in content_list if c["type"] == "tool_call"]
+        text_parts = [c for c in content_list if c["type"] == "text"]
 
         if tool_calls:
             assert tool_calls[0]["name"] == "calculate"
@@ -285,7 +289,8 @@ class TestKimiAnthropicToolCalls:
             tools=tools,
         )
 
-        tool_calls = [c for c in response.content if c["type"] == "tool_call"]
+        content_list = list(response.content)
+        tool_calls = [c for c in content_list if c["type"] == "tool_call"]
         if not tool_calls:
             pytest.skip("Model did not call tool")
 
@@ -311,4 +316,4 @@ class TestKimiAnthropicToolCalls:
         # Second turn
         response2 = model.invoke(messages=messages, tools=tools)
 
-        assert len(response2.content) > 0
+        assert len(list(response2.content)) > 0
