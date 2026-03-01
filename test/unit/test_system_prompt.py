@@ -141,8 +141,6 @@ class TestOpenAISystemPromptConversion:
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
                 "name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
                 "metadata": None,
             }],
             system=system,
@@ -246,8 +244,6 @@ class TestMessageRoleValidation:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
             "metadata": None,
         }
         assert msg["role"] == "user"
@@ -260,8 +256,6 @@ class TestMessageRoleValidation:
             "role": "assistant",
             "content": [{"type": "text", "text": "Hi"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
             "metadata": None,
         }
         assert msg["role"] == "assistant"
@@ -272,10 +266,13 @@ class TestMessageRoleValidation:
 
         msg: Message = {
             "role": "tool",
-            "content": [{"type": "text", "text": "result"}],
+            "content": [{
+                "type": "tool_result",
+                "tool_call_id": "123",
+                "content": [{"type": "text", "text": "result"}],
+                "is_error": False,
+            }],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": "123",
             "metadata": None,
         }
         assert msg["role"] == "tool"
@@ -291,8 +288,6 @@ class TestMessageRoleValidation:
             "role": "developer",  # type: ignore[assignment]
             "content": [{"type": "text", "text": "Dev message"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
             "metadata": None,
         }
         assert msg["role"] == "developer"

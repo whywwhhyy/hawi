@@ -306,9 +306,14 @@ class StrandsModel(Model):
                     for tc in tool_call_parts
                 ]
 
-        # 处理 tool_call_id (tool role)
-        if role == "tool" and msg.get("tool_call_id"):
-            strands_msg["tool_call_id"] = msg["tool_call_id"]
+        # 处理 tool_call_id (tool role) - 从 content 中的 ToolResultPart 获取
+        if role == "tool" and msg["content"]:
+            for part in msg["content"]:
+                if part.get("type") == "tool_result":
+                    tool_call_id = cast(ToolResultPart, part).get("tool_call_id")
+                    if tool_call_id:
+                        strands_msg["tool_call_id"] = tool_call_id
+                    break
 
         # 处理 name
         if msg.get("name"):

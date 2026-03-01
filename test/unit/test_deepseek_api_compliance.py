@@ -40,7 +40,6 @@ class TestReasoningContentCompliance:
                 {"type": "text", "text": "Here's the answer"},
             ],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }
 
@@ -114,7 +113,6 @@ class TestReasonerParameterHandling:
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
                 "name": None,
-                                "tool_call_id": None,
                 "metadata": None,
             }])
 
@@ -152,7 +150,6 @@ class TestReasonerParameterHandling:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }])
         openai_req = openai_model._prepare_request_impl(openai_request)
@@ -163,7 +160,6 @@ class TestReasonerParameterHandling:
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
                 "name": None,
-                                "tool_call_id": None,
                 "metadata": None,
             }],
             temperature=0.7,
@@ -193,11 +189,12 @@ class TestDeepSeekOpenAIAPILimits:
         message: Message = {
             "role": "tool",
             "content": [
-                {"type": "text", "text": "Part 1"},
-                {"type": "text", "text": "Part 2"},
+                {"type": "tool_result", "tool_call_id": "call_123", "content": [
+                    {"type": "text", "text": "Part 1"},
+                    {"type": "text", "text": "Part 2"},
+                ], "is_error": False},
             ],
             "name": None,
-                        "tool_call_id": "call_123",
             "metadata": None,
         }
 
@@ -223,7 +220,6 @@ class TestDeepSeekOpenAIAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }])
 
@@ -244,7 +240,6 @@ class TestDeepSeekOpenAIAPILimits:
                 {"type": "image", "source": {"url": "https://example.com/test.png", "detail": "auto"}},
             ],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }
 
@@ -270,7 +265,6 @@ class TestDeepSeekOpenAIAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }])
 
@@ -297,7 +291,6 @@ class TestDeepSeekAnthropicAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }])
 
@@ -319,7 +312,6 @@ class TestDeepSeekAnthropicAPILimits:
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
                 "name": None,
-                                "tool_call_id": None,
                 "metadata": None,
             }],
             tools=[{
@@ -359,7 +351,6 @@ class TestDeepSeekAnthropicAPILimits:
                 },
             ],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }
 
@@ -386,7 +377,6 @@ class TestDeepSeekAnthropicAPILimits:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-                        "tool_call_id": None,
             "metadata": None,
         }])
 

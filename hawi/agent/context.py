@@ -14,6 +14,7 @@ from hawi.model.message import (
     MessageRequest,
     ToolDefinition,
     ToolCallPart,
+    ToolResultPart,
 )
 from hawi.tool.types import AgentTool, PendingToolCall
 
@@ -248,7 +249,6 @@ class AgentContext:
             "role": "user",
             "content": content,
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         })
 
@@ -265,7 +265,6 @@ class AgentContext:
             "role": "assistant",
             "content": content,
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         })
 
@@ -285,11 +284,18 @@ class AgentContext:
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
 
+        # 将 tool_call_id 嵌入到 ToolResultPart 中
+        tool_result_part: ToolResultPart = {
+            "type": "tool_result",
+            "tool_call_id": tool_call_id,
+            "content": content,
+            "is_error": is_error,
+        }
+
         self.messages.append({
             "role": "tool",
-            "content": content,
+            "content": [tool_result_part],
             "name": None,
-            "tool_call_id": tool_call_id,
             "metadata": None,
         })
 
@@ -337,7 +343,6 @@ class AgentContext:
             "role": "user",
             "content": [{"type": "text", "text": f"[Previous conversation summary: {summary}]"}],
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         }
         self.messages.insert(start, summary_message)

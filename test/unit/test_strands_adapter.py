@@ -81,7 +81,6 @@ class TestMessageConversion:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         }]
         result = adapter._convert_messages_to_strands(messages)
@@ -99,7 +98,6 @@ class TestMessageConversion:
             "role": "assistant",
             "content": [{"type": "text", "text": "Hi there"}],
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         }]
         result = adapter._convert_messages_to_strands(messages)
@@ -117,7 +115,6 @@ class TestMessageConversion:
             "role": "user",
             "content": [{"type": "image", "source": {"url": "https://example.com/img.jpg", "detail": "auto"}}],
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         }]
         result = adapter._convert_messages_to_strands(messages)
@@ -139,7 +136,6 @@ class TestMessageConversion:
                 {"type": "tool_call", "id": "call_123", "name": "get_weather", "arguments": {"city": "Beijing"}}
             ],
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         }]
         result = adapter._convert_messages_to_strands(messages)

@@ -23,7 +23,6 @@ def _create_user_message(content: str) -> Message:
         "role": "user",
         "content": [{"type": "text", "text": content}],
         "name": None,
-        "tool_call_id": None,
         "metadata": None,
     }
 
@@ -34,7 +33,6 @@ def _create_assistant_message(content: list[ContentPart]) -> Message:
         "role": "assistant",
         "content": content,
         "name": None,
-        "tool_call_id": None,
         "metadata": None,
     }
 
@@ -43,9 +41,13 @@ def _create_tool_result_message(tool_call_id: str, content: str) -> Message:
     """Create a tool result message directly."""
     return {
         "role": "tool",
-        "content": [{"type": "text", "text": content}],
+        "content": [{
+            "type": "tool_result",
+            "tool_call_id": tool_call_id,
+            "content": [{"type": "text", "text": content}],
+            "is_error": False,
+        }],
         "name": None,
-        "tool_call_id": tool_call_id,
         "metadata": None,
     }
 

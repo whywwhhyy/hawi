@@ -254,6 +254,12 @@ class DeepSeekOpenAIModel(OpenAIModel):
 
             if p_type == "text":
                 texts.append(part.get("text", ""))
+            elif p_type == "tool_result":
+                # ToolResultPart: extract text from nested content
+                nested_content = part.get("content", [])
+                for nested_part in nested_content:
+                    if nested_part.get("type") == "text":
+                        texts.append(nested_part.get("text", ""))
             elif p_type in {"image", "image_url"}:
                 # DeepSeek 不支持图片
                 logger.warning("DeepSeek API 不支持图片内容，已忽略")

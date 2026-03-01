@@ -353,8 +353,6 @@ class TestStrandsModelMessageConversion:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_calls": None,
-            "tool_call_id": None,
             "metadata": None,
         })
         
@@ -378,7 +376,6 @@ class TestStrandsModelMessageConversion:
                 {"type": "tool_call", "id": "tool-1", "name": "weather", "arguments": {"city": "Beijing"}}
             ],
             "name": None,
-            "tool_call_id": None,
             "metadata": None,
         })
 
@@ -399,10 +396,13 @@ class TestStrandsModelMessageConversion:
         
         hawi_message = cast(Message, {
             "role": "tool",
-            "content": [{"type": "text", "text": "Result: 25°C"}],
-            "tool_call_id": "tool-1",
+            "content": [{
+                "type": "tool_result",
+                "tool_call_id": "tool-1",
+                "content": [{"type": "text", "text": "Result: 25°C"}],
+                "is_error": False,
+            }],
             "name": None,
-            "tool_calls": None,
             "metadata": None,
         })
         

@@ -23,7 +23,6 @@ def _create_user_message(content: str) -> Message:
         "role": "user",
         "content": [{"type": "text", "text": content}],
         "name": None,
-        "tool_call_id": None,
         "metadata": None,
     }
 
@@ -34,7 +33,6 @@ def _create_assistant_message(content: list[ContentPart]) -> Message:
         "role": "assistant",
         "content": content,
         "name": None,
-        "tool_call_id": None,
         "metadata": None,
     }
 

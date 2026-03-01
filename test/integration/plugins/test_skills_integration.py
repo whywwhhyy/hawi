@@ -32,13 +32,22 @@ class MockModel(Model):
         
         # Check if it's a tool result
         if last_message["role"] == "tool":
-             # Extract text from content
+             # Extract text from content (handle ToolResultPart format)
              result_text = ""
              if "content" in last_message:
                  for part in last_message["content"]:
-                     if part["type"] == "text":
+                     if part["type"] == "tool_result":
+                         # Extract text from nested content in ToolResultPart
+                         nested_content = part.get("content", [])
+                         if isinstance(nested_content, str):
+                             result_text += nested_content
+                         else:
+                             for nested_part in nested_content:
+                                 if isinstance(nested_part, dict) and nested_part.get("type") == "text":
+                                     result_text += nested_part.get("text", "")
+                     elif part["type"] == "text":
                          result_text += part["text"]
-            
+
              if "Instructions:" in result_text:
                   content.append(TextPart(type="text", text="Skill loaded successfully."))
              else:

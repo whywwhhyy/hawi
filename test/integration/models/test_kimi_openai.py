@@ -55,7 +55,6 @@ def _create_user_message(
         "role": "user",
         "content": _normalize_content(content),
         "name": name,
-        "tool_call_id": None,
         "metadata": None,
     }
 
@@ -73,7 +72,6 @@ def _create_assistant_message(
         "role": "assistant",
         "content": normalized_content,
         "name": None,
-        "tool_call_id": None,
         "metadata": None,
     }
 
@@ -85,9 +83,13 @@ def _create_tool_result_message(
     """Create a tool result message."""
     return {
         "role": "tool",
-        "content": _normalize_content(content),
+        "content": [{
+            "type": "tool_result",
+            "tool_call_id": tool_call_id,
+            "content": _normalize_content(content),
+            "is_error": False,
+        }],
         "name": None,
-        "tool_call_id": tool_call_id,
         "metadata": None,
     }
 

@@ -275,6 +275,7 @@ def convert_tool_message(message: Message) -> dict[str, Any]:
     """转换 tool 角色消息为 OpenAI 格式
 
     OpenAI API 要求 tool 消息的 content 为字符串格式。
+    tool_call_id 从 content 中的 ToolResultPart 获取。
 
     Args:
         message: tool 角色消息
@@ -282,29 +283,26 @@ def convert_tool_message(message: Message) -> dict[str, Any]:
     Returns:
         OpenAI 格式的 tool 消息
     """
-    openai_content = convert_content_to_openai(message["content"])
-    tool_call_id = message.get("tool_call_id") or ""
+    content = message["content"]
 
-    if isinstance(openai_content, list):
-        has_image = any(
-            isinstance(item, dict) and item.get("type") == "image_url"
-            for item in openai_content
-        )
-        if has_image:
-            return {
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": openai_content,
-            }
-        text_strs = [
-            item.get("text", "")
-            for item in openai_content
-            if isinstance(item, dict) and item.get("type") == "text"
-        ]
-        content_str = "\n".join(s for s in text_strs if s.strip())
-        return {"role": "tool", "tool_call_id": tool_call_id, "content": content_str}
+    # 从第一个 ToolResultPart 获取 tool_call_id 并提取内容
+    tool_call_id = ""
+    text_parts: list[str] = []
 
-    content_str = openai_content if isinstance(openai_content, str) else ""
+    for part in content:
+        if part["type"] == "tool_result":
+            tool_call_id = part.get("tool_call_id") or ""
+            # 提取 ToolResultPart 中的嵌套内容
+            nested_content = part.get("content", [])
+            for nested_part in nested_content:
+                if nested_part.get("type") == "text":
+                    text_parts.append(nested_part.get("text", ""))
+        elif part["type"] == "text":
+            text_parts.append(part.get("text", ""))
+
+    # 合并所有文本内容
+    content_str = "\n".join(s for s in text_parts if s.strip())
+
     return {"role": "tool", "tool_call_id": tool_call_id, "content": content_str}
 
 

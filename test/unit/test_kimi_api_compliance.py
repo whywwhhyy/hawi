@@ -11,8 +11,6 @@ def _user_message() -> Message:
         "role": "user",
         "content": [{"type": "text", "text": "Hello"}],
         "name": None,
-        "tool_calls": None,
-        "tool_call_id": None,
         "metadata": None,
     }
 
