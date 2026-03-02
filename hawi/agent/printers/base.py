@@ -57,7 +57,7 @@ class BasePrinter(ABC):
         """设置是否显示完整的工具调用内容（不省略）。"""
         self.show_full_tool_content = value
 
-    async def handle(self, event: Event) -> None:
+    def handle(self, event: Event) -> None:
         """处理事件"""
         handlers = {
             "model.content_block_start": self._on_content_block_start,
@@ -77,56 +77,57 @@ class BasePrinter(ABC):
 
         handler = handlers.get(event.type)
         if handler:
-            await handler(event)
+            # 现在 handler 是同步的，直接调用
+            handler(event)
 
-    async def _on_stream_start(self, event: Event) -> None:
+    def _on_stream_start(self, event: Event) -> None:
         """Model 流式响应开始"""
         self._reasoning_buffer = ""
         self._active_tool_calls.clear()
 
-    async def _on_stream_stop(self, event: Event) -> None:
+    def _on_stream_stop(self, event: Event) -> None:
         """Model 流式响应结束"""
         self._current_block_type = None
 
     @abstractmethod
-    async def _on_content_block_start(self, event: Event) -> None:
+    def _on_content_block_start(self, event: Event) -> None:
         """内容块开始 - 子类实现"""
         pass
 
     @abstractmethod
-    async def _on_content_block_delta(self, event: Event) -> None:
+    def _on_content_block_delta(self, event: Event) -> None:
         """内容块增量 - 子类实现"""
         pass
 
     @abstractmethod
-    async def _on_content_block_stop(self, event: Event) -> None:
+    def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束 - 子类实现"""
         pass
 
     @abstractmethod
-    async def _on_tool_use_block_start(self, event: Event) -> None:
+    def _on_tool_use_block_start(self, event: Event) -> None:
         """工具调用块开始 - 子类实现"""
         pass
 
     @abstractmethod
-    async def _on_tool_use_block_delta(self, event: Event) -> None:
+    def _on_tool_use_block_delta(self, event: Event) -> None:
         """工具调用块增量 - 子类实现"""
         pass
 
     @abstractmethod
-    async def _on_tool_use_block_stop(self, event: Event) -> None:
+    def _on_tool_use_block_stop(self, event: Event) -> None:
         """工具调用块结束 - 子类实现"""
         pass
 
-    async def _on_run_start(self, event: Event) -> None:
+    def _on_run_start(self, event: Event) -> None:
         """Agent 执行开始"""
         pass
 
-    async def _on_run_stop(self, event: Event) -> None:
+    def _on_run_stop(self, event: Event) -> None:
         """Agent 执行结束"""
         pass
 
-    async def _on_tool_call(self, event: Event) -> None:
+    def _on_tool_call(self, event: Event) -> None:
         """工具调用"""
         if not self.show_tools:
             return
@@ -144,7 +145,7 @@ class BasePrinter(ABC):
             "start_time": time.time(),
         }
 
-    async def _on_tool_result(self, event: Event) -> None:
+    def _on_tool_result(self, event: Event) -> None:
         """工具结果"""
         if not self.show_tools:
             return
@@ -162,10 +163,10 @@ class BasePrinter(ABC):
         if event.tool_call_id in self._active_tool_calls:
             self._active_tool_calls.pop(event.tool_call_id, None)
 
-        await self._print_tool_result(tool_name, success, result_preview, duration, arguments)
+        self._print_tool_result(tool_name, success, result_preview, duration, arguments)
 
     @abstractmethod
-    async def _print_tool_result(
+    def _print_tool_result(
         self,
         tool_name: str,
         success: bool,
@@ -176,7 +177,7 @@ class BasePrinter(ABC):
         """打印工具结果 - 子类实现"""
         pass
 
-    async def _on_error(self, event: Event) -> None:
+    def _on_error(self, event: Event) -> None:
         """错误处理 - 处理 AgentErrorEvent 和 ModelErrorEvent"""
         if not self.show_errors:
             return
@@ -193,16 +194,16 @@ class BasePrinter(ABC):
                 full_message = f"{message}\n\n[Stack Trace]\n{error_obj.stack_trace}"
             else:
                 full_message = message
-            await self._print_error(full_message)
+            self._print_error(full_message)
         elif isinstance(error_obj, Exception):
             # 其他异常对象
             message = str(error_obj)
-            await self._print_error(message)
+            self._print_error(message)
         else:
             # 兼容其他情况
-            await self._print_error(str(error_obj))
+            self._print_error(str(error_obj))
 
     @abstractmethod
-    async def _print_error(self, error: str) -> None:
+    def _print_error(self, error: str) -> None:
         """打印错误 - 子类实现"""
         pass

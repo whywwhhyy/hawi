@@ -213,12 +213,12 @@ class TestEventBus:
         bus = EventBus()
         received_events = []
 
-        async def handler(event: Event) -> None:
+        def handler(event: Event) -> None:
             received_events.append(event)
 
         bus.subscribe(handler)
         event = AgentRunStartEvent.create(run_id="test")
-        await bus.publish(event)
+        bus.publish(event)
 
         # Wait for async handler
         await asyncio.sleep(0.1)
@@ -231,14 +231,14 @@ class TestEventBus:
         bus = EventBus()
         received = []
 
-        async def handler(event: Event) -> None:
+        def handler(event: Event) -> None:
             received.append(event.type)
 
         bus.subscribe(handler, event_types=["agent.tool_call", "agent.tool_result"])
 
-        await bus.publish(AgentRunStartEvent.create(run_id="test"))
-        await bus.publish(AgentToolCallEvent.create(run_id="test", tool_name="calc", arguments={}, tool_call_id="tc-1"))
-        await bus.publish(AgentToolResultEvent.create(run_id="test", tool_name="calc", tool_call_id="tc-1", success=True, result_preview="2", duration_ms=10))
+        bus.publish(AgentRunStartEvent.create(run_id="test"))
+        bus.publish(AgentToolCallEvent.create(run_id="test", tool_name="calc", arguments={}, tool_call_id="tc-1"))
+        bus.publish(AgentToolResultEvent.create(run_id="test", tool_name="calc", tool_call_id="tc-1", success=True, result_preview="2", duration_ms=10))
 
         await asyncio.sleep(0.1)
         assert len(received) == 2
@@ -253,16 +253,16 @@ class TestEventBus:
         handler1_events = []
         handler2_events = []
 
-        async def handler1(event: Event) -> None:
+        def handler1(event: Event) -> None:
             handler1_events.append(event.type)
 
-        async def handler2(event: Event) -> None:
+        def handler2(event: Event) -> None:
             handler2_events.append(event.type)
 
         bus.subscribe(handler1)
         bus.subscribe(handler2)
 
-        await bus.publish(AgentRunStartEvent.create(run_id="test"))
+        bus.publish(AgentRunStartEvent.create(run_id="test"))
         await asyncio.sleep(0.1)
 
         assert len(handler1_events) == 1
@@ -274,16 +274,16 @@ class TestEventBus:
         bus = EventBus()
         received = []
 
-        async def handler(event: Event) -> None:
+        def handler(event: Event) -> None:
             received.append(event.type)
 
         bus.subscribe(handler)
-        await bus.publish(AgentRunStartEvent.create(run_id="test"))
+        bus.publish(AgentRunStartEvent.create(run_id="test"))
         await asyncio.sleep(0.1)
         assert len(received) == 1
 
-        await bus.unsubscribe(handler)
-        await bus.publish(AgentRunStartEvent.create(run_id="test2"))
+        bus.unsubscribe(handler)
+        bus.publish(AgentRunStartEvent.create(run_id="test2"))
         await asyncio.sleep(0.1)
         assert len(received) == 1  # No new events
 
@@ -328,7 +328,7 @@ class TestConversationPrinter:
             request_id="req-1",
             part=part,
         )
-        await printer.handle(event)
+        printer.handle(event)
         assert "Hello World" in output.getvalue()
 
     @pytest.mark.asyncio
@@ -342,7 +342,7 @@ class TestConversationPrinter:
             block_index=0,
             block_type="thinking",
         )
-        await printer.handle(start_event)
+        printer.handle(start_event)
 
         part: StreamThinkingPart = {
             "type": "thinking_delta",
@@ -355,7 +355,7 @@ class TestConversationPrinter:
             request_id="req-1",
             part=part,
         )
-        await printer.handle(delta_event)
+        printer.handle(delta_event)
 
         # Verify content is buffered before stop event
         assert "Let me think..." in printer._reasoning_buffer
@@ -373,7 +373,7 @@ class TestConversationPrinter:
             block_index=0,
             content=[reasoning_part],
         )
-        await printer.handle(stop_event)
+        printer.handle(stop_event)
 
         # Buffer is cleared after printing, but panel was displayed
 
@@ -386,7 +386,7 @@ class TestConversationPrinter:
             arguments={"expression": "1+1"},
             tool_call_id="tc-1",
         )
-        await printer.handle(event)
+        printer.handle(event)
         # Tool calls display a status spinner, no direct output until result
         # Status output is handled by rich's status mechanism
 
@@ -402,7 +402,7 @@ class TestConversationPrinter:
             duration_ms=100.0,
             arguments={"expression": "1+1"},
         )
-        await printer.handle(event)
+        printer.handle(event)
         # Tool result uses console.print via _print_tool_result
         # Verify tool call was tracked
         assert "calculate" in printer._active_tool_calls or len(printer._active_tool_calls) == 0
@@ -419,7 +419,7 @@ class TestConversationPrinter:
             duration_ms=50.0,
             arguments={},
         )
-        await printer.handle(event)
+        printer.handle(event)
         # Just verify no exception is raised
 
     @pytest.mark.asyncio
@@ -442,7 +442,7 @@ class TestConversationPrinter:
             request_id="req-1",
             part=part,
         )
-        await printer.handle(event)
+        printer.handle(event)
         # When reasoning is hidden, buffer should not be populated
         assert printer._reasoning_buffer == ""
 
@@ -459,7 +459,7 @@ class TestConversationPrinter:
             arguments={},
             tool_call_id="tc-1",
         )
-        await printer.handle(event)
+        printer.handle(event)
         # When tools are hidden, no active tracking
         assert len(printer._active_tool_calls) == 0
 
@@ -471,7 +471,7 @@ class TestConversationPrinter:
             run_id="run-1",
             error=error,
         )
-        await printer.handle(event)
+        printer.handle(event)
         # Error uses console.print, verify no exception
 
 
@@ -502,7 +502,8 @@ class TestRichStreamingPrinter:
             part=part,
         )
         # Should not raise any exception
-        await printer.handle(event)
+        # handle is now sync, no await needed
+        printer.handle(event)
 
 
 class TestEventOrdering:
@@ -514,7 +515,7 @@ class TestEventOrdering:
         bus = EventBus()
         received = []
 
-        async def handler(event: Event) -> None:
+        def handler(event: Event) -> None:
             # Access event attributes directly with type checking
             if isinstance(event, AgentRunStartEvent):
                 received.append(event.run_id)
@@ -522,7 +523,7 @@ class TestEventOrdering:
         bus.subscribe(handler)
 
         for i in range(5):
-            await bus.publish(AgentRunStartEvent.create(run_id=f"seq-{i}"))
+            bus.publish(AgentRunStartEvent.create(run_id=f"seq-{i}"))
 
         await asyncio.sleep(0.1)
         assert received == ["seq-0", "seq-1", "seq-2", "seq-3", "seq-4"]

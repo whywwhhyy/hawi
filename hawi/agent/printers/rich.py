@@ -116,7 +116,7 @@ class RichStreamingPrinter(BasePrinter):
                 codes.append(ANSI_COLORS[style])
         return "".join(codes)
 
-    async def _on_content_block_start(self, event: Event) -> None:
+    def _on_content_block_start(self, event: Event) -> None:
         """内容块开始"""
         assert isinstance(event, ModelContentBlockStartEvent)
         block_type = event.block_type
@@ -129,7 +129,7 @@ class RichStreamingPrinter(BasePrinter):
             _stdout.flush()
         self._block_count += 1
 
-    async def _on_content_block_delta(self, event: Event) -> None:
+    def _on_content_block_delta(self, event: Event) -> None:
         """逐字符实时输出"""
         assert isinstance(event, ModelContentBlockDeltaEvent)
         delta_type = event.delta_type
@@ -148,7 +148,8 @@ class RichStreamingPrinter(BasePrinter):
                 _stdout.write(char)
                 _stdout.flush()
                 if self.typing_delay > 0:
-                    await asyncio.sleep(self.typing_delay)
+                    import time
+                    time.sleep(self.typing_delay)
                 if char == "\n" and self._ansi_prefix:
                     _stdout.write(ANSI_COLORS["reset"])
 
@@ -157,7 +158,7 @@ class RichStreamingPrinter(BasePrinter):
                 _stdout.write(ANSI_COLORS["reset"])
             self._reasoning_buffer += delta
 
-    async def _on_content_block_stop(self, event: Event) -> None:
+    def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束"""
         assert isinstance(event, ModelContentBlockStopEvent)
 
@@ -179,25 +180,25 @@ class RichStreamingPrinter(BasePrinter):
 
         self._current_block_type = None
 
-    async def _on_tool_use_block_start(self, event: Event) -> None:
+    def _on_tool_use_block_start(self, event: Event) -> None:
         """工具调用块开始"""
         assert isinstance(event, ModelToolCallBlockStartEvent)
         self._current_block_type = "tool_use"
         self._block_has_received_delta = False
 
-    async def _on_tool_use_block_delta(self, event: Event) -> None:
+    def _on_tool_use_block_delta(self, event: Event) -> None:
         """工具调用块增量"""
         assert isinstance(event, ModelToolCallBlockDeltaEvent)
         # 工具调用参数增量不直接显示，在 stop 时显示完整信息
         if not self._block_has_received_delta:
             self._block_has_received_delta = True
 
-    async def _on_tool_use_block_stop(self, event: Event) -> None:
+    def _on_tool_use_block_stop(self, event: Event) -> None:
         """工具调用块结束"""
         assert isinstance(event, ModelToolCallBlockStopEvent)
         self._current_block_type = None
 
-    async def _on_stream_stop(self, event: Event) -> None:
+    def _on_stream_stop(self, event: Event) -> None:
         """Model 流式响应结束"""
         if self._ansi_prefix:
             _stdout.write(ANSI_COLORS["reset"])
@@ -216,10 +217,10 @@ class RichStreamingPrinter(BasePrinter):
         )
         self._console.print(panel)
 
-    async def _on_run_start(self, event: Event) -> None:
+    def _on_run_start(self, event: Event) -> None:
         """Agent 执行开始"""
 
-    async def _on_run_stop(self, event: Event) -> None:
+    def _on_run_stop(self, event: Event) -> None:
         """Agent 执行结束"""
 
     def _format_tool_arguments(self, arguments: dict[str, Any]) -> str:
@@ -248,7 +249,7 @@ class RichStreamingPrinter(BasePrinter):
 
         return full_text
 
-    async def _print_tool_result(
+    def _print_tool_result(
         self,
         tool_name: str,
         success: bool,
@@ -295,7 +296,7 @@ class RichStreamingPrinter(BasePrinter):
         )
         self._console.print(panel)
 
-    async def _print_error(self, error: str) -> None:
+    def _print_error(self, error: str) -> None:
         """打印错误"""
         panel = Panel(
             Text(error, style="red"),

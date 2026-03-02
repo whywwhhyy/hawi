@@ -214,7 +214,6 @@ def main():
 
         try:
             asyncio.run(run_with_subscription())
-            print()
         except Exception as e:
             print(f"\n❌ Error: {e}")
             if event_dump_file:

@@ -37,20 +37,16 @@ class TestEventBusAdvanced:
         """Test publishing events concurrently."""
         bus = EventBus()
         received: List[str] = []
-        lock = asyncio.Lock()
 
-        async def handler(event: Event) -> None:
-            async with lock:
-                if isinstance(event, AgentRunStartEvent):
-                    received.append(event.run_id)
+        def handler(event: Event) -> None:
+            if isinstance(event, AgentRunStartEvent):
+                received.append(event.run_id)
 
         bus.subscribe(handler)
 
-        # Publish multiple events concurrently
-        await asyncio.gather(*[
+        # Publish multiple events concurrently (sync publish)
+        for i in range(10):
             bus.publish(AgentRunStartEvent.create(run_id=f"event-{i}"))
-            for i in range(10)
-        ])
 
         await asyncio.sleep(0.1)
         assert len(received) == 10
@@ -65,17 +61,17 @@ class TestEventBusAdvanced:
         handler1_calls = []
         handler2_calls = []
 
-        async def failing_handler(event: Event) -> None:
+        def failing_handler(event: Event) -> None:
             handler1_calls.append(event.type)
             raise ValueError("Handler error")
 
-        async def good_handler(event: Event) -> None:
+        def good_handler(event: Event) -> None:
             handler2_calls.append(event.type)
 
         bus.subscribe(failing_handler)
         bus.subscribe(good_handler)
 
-        await bus.publish(AgentRunStartEvent.create(run_id="test"))
+        bus.publish(AgentRunStartEvent.create(run_id="test"))
         await asyncio.sleep(0.1)
 
         # Both handlers should have been called
@@ -331,10 +327,11 @@ class TestConversationPrinterAdvanced:
 
         from hawi.model.message import ReasoningPart
 
-        await printer_with.handle(ModelContentBlockStartEvent.create(
+        # handle is now sync, no await needed
+        printer_with.handle(ModelContentBlockStartEvent.create(
             request_id="r1", block_index=0, block_type="thinking"
         ))
-        await printer_with.handle(ModelContentBlockDeltaEvent.create(
+        printer_with.handle(ModelContentBlockDeltaEvent.create(
             request_id="r1", part={
                 "type": "thinking_delta",
                 "index": 0,
@@ -354,7 +351,7 @@ class TestConversationPrinterAdvanced:
             signature=None,
             redacted_content=None
         )
-        await printer_with.handle(ModelContentBlockStopEvent.create(
+        printer_with.handle(ModelContentBlockStopEvent.create(
             request_id="r1", block_index=0, content=[reasoning_part]
         ))
 
@@ -371,7 +368,7 @@ class TestConversationPrinterAdvanced:
         # With reasoning hidden
         printer_without = ConversationPrinter(show_reasoning=False)
 
-        await printer_without.handle(ModelContentBlockDeltaEvent.create(
+        printer_without.handle(ModelContentBlockDeltaEvent.create(
             request_id="r1", part={
                 "type": "thinking_delta",
                 "index": 0,
@@ -394,7 +391,7 @@ class TestConversationPrinterAdvanced:
 
         printer_hidden = ConversationPrinter(show_tools=False)
 
-        await printer_hidden.handle(AgentToolCallEvent.create(
+        printer_hidden.handle(AgentToolCallEvent.create(
             run_id="r1", tool_name="test", arguments={}, tool_call_id="tc1"
         ))
 
@@ -411,16 +408,16 @@ class TestConversationPrinterAdvanced:
 
         printer = ConversationPrinter()
 
-        # Stream start
-        await printer.handle(ModelStreamStartEvent.create(request_id="r1"))
+        # Stream start (handle is now sync)
+        printer.handle(ModelStreamStartEvent.create(request_id="r1"))
 
         # Content block start
-        await printer.handle(ModelContentBlockStartEvent.create(
+        printer.handle(ModelContentBlockStartEvent.create(
             request_id="r1", block_index=0, block_type="text"
         ))
 
         # Deltas
-        await printer.handle(ModelContentBlockDeltaEvent.create(
+        printer.handle(ModelContentBlockDeltaEvent.create(
             request_id="r1", part={
                 "type": "text_delta",
                 "index": 0,
@@ -429,7 +426,7 @@ class TestConversationPrinterAdvanced:
                 "is_end": False,
             }
         ))
-        await printer.handle(ModelContentBlockDeltaEvent.create(
+        printer.handle(ModelContentBlockDeltaEvent.create(
             request_id="r1", part={
                 "type": "text_delta",
                 "index": 0,
@@ -442,12 +439,12 @@ class TestConversationPrinterAdvanced:
         # Content block stop
         from hawi.model.message import TextPart
         text_part = TextPart(type="text", text="Hello World")
-        await printer.handle(ModelContentBlockStopEvent.create(
+        printer.handle(ModelContentBlockStopEvent.create(
             request_id="r1", block_index=0, content=[text_part]
         ))
 
         # Stream stop
-        await printer.handle(ModelStreamStopEvent.create(
+        printer.handle(ModelStreamStopEvent.create(
             request_id="r1", stop_reason="end_turn"
         ))
 
