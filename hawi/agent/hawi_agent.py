@@ -335,7 +335,7 @@ class HawiAgent:
         print(result.text)
 
         # Streaming
-        for event in agent.run("Hello", stream=True):
+        for event in agent.run("Hello"):
             if event.type == "message":
                 print(event.content)
 

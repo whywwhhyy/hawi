@@ -10,11 +10,9 @@ Events are:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
-from collections.abc import Callable, Coroutine
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, ConfigDict
 

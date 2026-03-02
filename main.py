@@ -138,7 +138,6 @@ Use these tools to help users with coding tasks, data analysis, calculations, et
 Always explain what you're doing before executing code.
 """,
         max_iterations=None,
-        enable_streaming=True,   # Enable streaming for real-time output
         event_dump_file=event_dump_file,
     )
 
@@ -208,12 +207,13 @@ def main():
     # Execute prompt if provided
     def execute_prompt(prompt:str):
         import asyncio
-        async def process_events():
-            async for event in agent.arun(prompt, stream=True):
-                await printer.handle(event)
+
+        async def run_with_subscription():
+            agent.subscribe(printer.handle)
+            await agent.arun(prompt)
 
         try:
-            asyncio.run(process_events())
+            asyncio.run(run_with_subscription())
             print()
         except Exception as e:
             print(f"\n❌ Error: {e}")

@@ -16,6 +16,13 @@ from hawi.model.message import ContentPart, StreamPart, TokenUsage, ContentPartT
 from .event import Event
 
 
+# 内容块类型 - 用于事件系统中 ContentBlock 相关的 block_type 字段
+# 与 ContentPart.type 有所不同：
+# - "reasoning" (ContentPart) -> "thinking" (事件 block_type)
+# - 不包含 tool_call、image 等无法作为内容块出现的类型
+ContentBlockType = Literal["text", "thinking", "redacted_thinking", "tool_use"]
+
+
 class ModelStreamStartEvent(Event):
     """Model 开始流式响应"""
     request_id: str
