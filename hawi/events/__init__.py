@@ -37,13 +37,21 @@ from .agent_events import (
     AgentMessageAddedEvent,
     AgentErrorEvent,
 )
-from .event_bus import EventBus
+from .event_bus import (
+    EventBus,
+    EventHandler,
+    SyncEventHandler,
+    AsyncEventHandler,
+)
 from .dump_manager import DumpManager
 
 __all__ = [
     # Base
     "Event",
     "EventBus",
+    "EventHandler",
+    "SyncEventHandler",
+    "AsyncEventHandler",
     "EventSource",
     "EventType",
     "ModelEventType",

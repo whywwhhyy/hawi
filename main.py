@@ -204,12 +204,13 @@ def main():
     else:
         raise KeyError("printer type should be auto, rich, or plain")
 
+    agent.subscribe(printer.handle)
+
     # Execute prompt if provided
     def execute_prompt(prompt:str):
         import asyncio
 
         async def run_with_subscription():
-            agent.subscribe(printer.handle)
             await agent.arun(prompt)
 
         try:

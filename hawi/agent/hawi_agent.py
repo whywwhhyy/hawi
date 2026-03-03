@@ -41,6 +41,8 @@ from hawi.errors import (
 from hawi.events import (
     Event,
     EventBus,
+    EventHandler,
+    SyncEventHandler,
     AgentErrorEvent,
     AgentMessageAddedEvent,
     AgentRunStartEvent,
@@ -231,7 +233,7 @@ class ContentBlockHandler:
                 )
 
             if event_bus is not None:
-                event_bus.publish(event)
+                await event_bus.publish_async(event)
 
         # 发送 DeltaEvent
         if self.block_type == "tool_use":
@@ -248,7 +250,7 @@ class ContentBlockHandler:
             )
 
         if event_bus is not None:
-            event_bus.publish(event)
+            await event_bus.publish_async(event)
 
         # 累积内容
         self._add_delta(chunk)
@@ -273,7 +275,7 @@ class ContentBlockHandler:
                 )
 
             if event_bus is not None:
-                event_bus.publish(event)
+                await event_bus.publish_async(event)
 
             # 在重置前检查是否为空
             is_empty = self._is_empty()
@@ -566,7 +568,7 @@ class HawiAgent:
 
     def subscribe(
         self,
-        callback: Callable[[Event], None],
+        callback: EventHandler,
         event_types: list[str] | None = None,
         maxsize: int = 100,
     ) -> None:
@@ -581,7 +583,7 @@ class HawiAgent:
 
     def subscribe_blocking(
         self,
-        callback: Callable[[Event], None],
+        callback: SyncEventHandler,
         event_types: list[str] | None = None,
     ) -> None:
         """Subscribe to agent events (blocking, sync handler only).
@@ -600,8 +602,6 @@ class HawiAgent:
     def unsubscribe(
         self,
         callback: Callable[[Event], None],
-        wait: bool = False,
-        timeout: float | None = None,
     ) -> bool:
         """Unsubscribe from agent events (delegates to EventBus).
 
@@ -613,7 +613,7 @@ class HawiAgent:
         Returns:
             True if successfully unsubscribed
         """
-        return self._event_bus.unsubscribe(callback, wait, timeout)
+        return self._event_bus.unsubscribe(callback)
 
     async def _emit_event(
         self,
@@ -627,11 +627,11 @@ class HawiAgent:
         to the provided event_bus if different from self._event_bus.
         """
         # Always publish to self._event_bus
-        self._event_bus.publish(event)
+        await self._event_bus.publish_async(event)
         
         # Also publish to external event_bus if provided and different
         if event_bus is not None and event_bus is not self._event_bus:
-            event_bus.publish(event)
+            await event_bus.publish_async(event)
 
         # Dump event to file if configured
         if self._dump_manager is not None:
@@ -998,7 +998,7 @@ class HawiAgent:
                     # Emit error event and gracefully stop
                     state.error = e
                     if event_bus:
-                        event_bus.publish(ModelErrorEvent.create(error=e))
+                        await event_bus.publish_async(ModelErrorEvent.create(error=e))
                     return
 
                 if attempt < max_retries:
@@ -1009,7 +1009,7 @@ class HawiAgent:
             err = ModelError("network", f"Model call failed after {attempt + 1} attempts: {last_error}")
             state.error = err
             if event_bus:
-                event_bus.publish(ModelErrorEvent.create(error=err))
+                await event_bus.publish_async(ModelErrorEvent.create(error=err))
             return
 
     async def _call_model_with_retry(
