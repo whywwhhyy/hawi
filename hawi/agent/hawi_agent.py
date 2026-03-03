@@ -568,18 +568,34 @@ class HawiAgent:
         self,
         callback: Callable[[Event], None],
         event_types: list[str] | None = None,
-        blocking: bool = False,
         maxsize: int = 100,
     ) -> None:
-        """Subscribe to agent events (delegates to EventBus).
+        """Subscribe to agent events (non-blocking, supports sync/async handlers).
+
+        Args:
+            callback: Callback function to handle events (sync or async)
+            event_types: List of event types to subscribe to, None for all
+            maxsize: Queue size for the handler
+        """
+        self._event_bus.subscribe(callback, event_types, maxsize)
+
+    def subscribe_blocking(
+        self,
+        callback: Callable[[Event], None],
+        event_types: list[str] | None = None,
+    ) -> None:
+        """Subscribe to agent events (blocking, sync handler only).
+
+        The handler executes synchronously in the publisher's thread.
 
         Args:
             callback: Sync callback function to handle events
             event_types: List of event types to subscribe to, None for all
-            blocking: If True, agent waits for this handler to complete
-            maxsize: Queue size for non-blocking handlers
+
+        Raises:
+            ValueError: If callback is an async function
         """
-        self._event_bus.subscribe(callback, event_types, blocking, maxsize)
+        self._event_bus.subscribe_blocking(callback, event_types)
 
     def unsubscribe(
         self,
@@ -604,8 +620,17 @@ class HawiAgent:
         event: Event,
         event_bus: EventBus | None,
     ) -> Event:
-        """Emit event to both generator and event bus."""
-        if event_bus is not None:
+        """Emit event to event bus(es).
+        
+        Always publishes to self._event_bus to ensure events reach
+        subscribers registered via agent.subscribe(). Additionally publishes
+        to the provided event_bus if different from self._event_bus.
+        """
+        # Always publish to self._event_bus
+        self._event_bus.publish(event)
+        
+        # Also publish to external event_bus if provided and different
+        if event_bus is not None and event_bus is not self._event_bus:
             event_bus.publish(event)
 
         # Dump event to file if configured
@@ -708,6 +733,16 @@ class HawiAgent:
                                     AgentErrorEvent.create(run_id=run_id, error=state.error),
                                     event_bus,
                                 )
+                            # Send run_stop event for errors during streaming
+                            await self._emit_event(
+                                AgentRunStopEvent.create(
+                                    run_id=run_id,
+                                    stop_reason="error",
+                                    duration_ms=(time.time() - start_time) * 1000,
+                                    usage=cumulative_usage,
+                                ),
+                                event_bus,
+                            )
                             break
 
                         chunk_type = chunk["type"]
@@ -851,6 +886,16 @@ class HawiAgent:
                 AgentErrorEvent.create(run_id=run_id, error=e),
                 event_bus,
             )
+            # Send run_stop event for errors
+            await self._emit_event(
+                AgentRunStopEvent.create(
+                    run_id=run_id,
+                    stop_reason="error",
+                    duration_ms=(time.time() - start_time) * 1000,
+                    usage=cumulative_usage,
+                ),
+                event_bus,
+            )
             raise
         except Exception as e:
             # 包装为 AgentError，保留原始异常
@@ -858,6 +903,16 @@ class HawiAgent:
             state.error = err
             await self._emit_event(
                 AgentErrorEvent.create(run_id=run_id, error=err),
+                event_bus,
+            )
+            # Send run_stop event for errors
+            await self._emit_event(
+                AgentRunStopEvent.create(
+                    run_id=run_id,
+                    stop_reason="error",
+                    duration_ms=(time.time() - start_time) * 1000,
+                    usage=cumulative_usage,
+                ),
                 event_bus,
             )
             # 使用 raise from 保留原始异常的调用栈

@@ -79,9 +79,12 @@ class TestEventFlowWithAgent:
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("Say 'Hello' and nothing else.")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         # Check event types
         event_types = [e.type for e in events]
@@ -112,9 +115,12 @@ class TestEventFlowWithAgent:
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("What is 5 + 3? Use the calculate tool.")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         event_types = [e.type for e in events]
 
@@ -152,6 +158,9 @@ class TestEventFlowWithAgent:
 
         result = await agent.arun("Say 'Hi'", event_bus=bus)
 
+        # Wait for all events to be processed
+        agent.event_bus.flush()
+
         await asyncio.sleep(0.1)  # Wait for async handlers
 
         # Bus should have received all events
@@ -168,6 +177,9 @@ class TestEventFlowWithAgent:
         agent.subscribe(printer.handle)
 
         result = await agent.arun("Calculate 2+2")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         captured = capsys.readouterr()
         output = captured.out
@@ -186,9 +198,12 @@ class TestEventFlowWithAgent:
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("Say exactly 'Test123'")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         # Find content block events
         delta_events = [e for e in events if e.type == "model.content_block_delta"]
@@ -206,9 +221,12 @@ class TestEventFlowWithAgent:
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("Say 'Hello'")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         run_stop_events = [e for e in events if e.type == "agent.run_stop"]
         assert len(run_stop_events) == 1
@@ -225,9 +243,12 @@ class TestEventFlowWithAgent:
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("Calculate 1+1")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         # All agent events should have the same run_id
         agent_events = [e for e in events if e.source == "agent"]
@@ -244,9 +265,12 @@ class TestEventFlowWithAgent:
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("Say 'Hello'")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         # Both should succeed
         assert result.stop_reason == "end_turn"
@@ -287,6 +311,9 @@ class TestEventFiltering:
 
         result = await agent.arun("Calculate 1+1", event_bus=bus)
 
+        # Wait for all events to be processed
+        agent.event_bus.flush()
+
         await asyncio.sleep(0.1)
 
         # Should only have tool events
@@ -306,6 +333,9 @@ class TestEventFiltering:
         bus.subscribe(catch_all)  # No event_types = wildcard
 
         result = await agent.arun("Say 'Hi'", event_bus=bus)
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         await asyncio.sleep(0.1)
 
@@ -339,9 +369,12 @@ class TestEventWithReasoningModel:
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("What is 15 * 23? Show your thinking.")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         # Find content block events
         block_start_events = [e for e in events if e.type == "model.content_block_start"]

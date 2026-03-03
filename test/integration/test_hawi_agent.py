@@ -167,15 +167,18 @@ class TestHawiAgentIntegration:
             plugins=[calculator_plugin],
         )
 
-        # Collect events via EventBus subscription (blocking=True for sync context)
+        # Collect events via EventBus subscription
         events = []
 
         async def event_handler(e):
             events.append(e)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = agent.run("Count from 1 to 3.")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         # Should have start, message(s), and finish events
         event_types = [e.type for e in events]
@@ -230,15 +233,18 @@ class TestHawiAgentAsync:
     @pytest.mark.asyncio
     async def test_async_streaming(self, agent: HawiAgent):
         """Test async streaming using EventBus."""
-        # Collect events via EventBus subscription (blocking=True to ensure all events captured)
+        # Collect events via EventBus subscription
         events = []
 
         async def event_handler(e):
             events.append(e.type)
 
-        agent.subscribe(event_handler, blocking=True)
+        agent.subscribe(event_handler)
 
         result = await agent.arun("Count to 2.")
+
+        # Wait for all events to be processed
+        agent.event_bus.flush()
 
         assert "agent.run_start" in events
         assert "agent.run_stop" in events

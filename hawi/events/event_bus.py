@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import inspect
 import logging
 import queue
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Awaitable, Literal
 
 from .event import Event
 
@@ -19,8 +20,9 @@ logger = logging.getLogger(__name__)
 # Event Bus（事件总线）
 # =============================================================================
 
-
-EventHandler = Callable[[Event], None]
+SyncEventHandler = Callable[[Event], None]
+AsyncEventHandler = Callable[[Event], Awaitable[None]]
+EventHandler = SyncEventHandler | AsyncEventHandler
 
 
 class EventBus:
@@ -136,17 +138,17 @@ class EventBus:
         self,
         callback: EventHandler,
         event_types: list[str] | None = None,
-        blocking: bool = False,
         maxsize: int = 100,
     ) -> None:
-        """
-        订阅事件（同步接口）。
+        """订阅事件（非阻塞模式，支持 sync/async handler）。
+
+        事件通过队列异步分发，handler 在后台线程执行。
+        支持同步和异步 handler。
 
         Args:
-            callback: 同步回调函数
+            callback: 事件处理函数，可以是 sync 或 async
             event_types: 订阅的事件类型列表，None 表示订阅所有
-            blocking: 是否阻塞模式。阻塞模式下生产者等待消费者处理完成
-            maxsize: 队列大小（仅非阻塞模式有效）
+            maxsize: 队列大小
 
         Raises:
             RuntimeError: 如果 EventBus 已关闭
@@ -156,12 +158,38 @@ class EventBus:
 
         self._ensure_started()
 
-        if blocking:
-            # 阻塞模式：直接存储 handler，不使用队列
-            self._blocking_handlers.append((callback, event_types))
-        else:
-            # 将任务提交到 worker 线程，使用 lambda 包装确保可序列化
-            self._task_queue.put(lambda: self._subscribe_async(callback, event_types, maxsize))
+        # 非阻塞模式：通过 worker 线程处理
+        self._task_queue.put(lambda: self._subscribe_async(callback, event_types, maxsize))
+
+    def subscribe_blocking(
+        self,
+        callback: SyncEventHandler,
+        event_types: list[str] | None = None,
+    ) -> None:
+        """订阅事件（阻塞模式，仅支持同步 handler）。
+
+        事件在发布线程同步执行，handler 执行完成后 publish 才返回。
+        仅支持同步 handler。
+
+        Args:
+            callback: 同步事件处理函数
+            event_types: 订阅的事件类型列表，None 表示订阅所有
+
+        Raises:
+            RuntimeError: 如果 EventBus 已关闭
+            ValueError: 如果 callback 是 async 函数
+        """
+        if self._closed:
+            raise RuntimeError("EventBus is closed")
+
+        if inspect.iscoroutinefunction(callback):
+            raise ValueError(
+                "subscribe_blocking only supports synchronous handlers. "
+                "Use subscribe() for async handlers."
+            )
+
+        self._ensure_started()
+        self._blocking_handlers.append((callback, event_types))
 
     async def _subscribe_async(
         self,
@@ -211,7 +239,10 @@ class EventBus:
                 continue
 
             try:
-                callback(event)  # 同步调用
+                # 支持 async handler
+                result = callback(event)
+                if asyncio.iscoroutine(result):
+                    await result
             except Exception as e:
                 logger.warning(f"Event handler error for {event.type}: {e}")
 
@@ -350,8 +381,8 @@ class EventBus:
         发布事件（同步接口）。
 
         处理顺序：
-        1. 先执行阻塞订阅者（确保关键操作如 DumpManager 完成）
-        2. 再分发给非阻塞队列
+        1. 先同步执行阻塞订阅者（确保关键操作完成）
+        2. 再异步分发给非阻塞队列
 
         Args:
             event: 要发布的事件
@@ -361,8 +392,28 @@ class EventBus:
 
         self._ensure_started()
 
-        # 将任务提交到 worker 线程，使用 lambda 包装确保可序列化
+        # 1. 先同步执行阻塞订阅者（在当前线程中直接调用）
+        self._publish_blocking(event)
+
+        # 2. 将异步任务提交到 worker 线程，用于非阻塞队列
         self._task_queue.put(lambda: self._publish_async(event))
+
+    def _publish_blocking(self, event: Event) -> None:
+        """同步执行阻塞订阅者（在发布者线程中直接调用）。
+        
+        仅支持同步 handler，直接调用并阻塞等待完成。
+        """
+        for handler, event_types in self._blocking_handlers:
+            if event_types is not None and event.type not in event_types:
+                continue
+            try:
+                handler(event)
+            except Exception as e:
+                logger.warning(f"Blocking handler error for {event.type}: {e}")
+
+    async def _await_coro(self, coro) -> None:
+        """等待协程完成（用于 async handler）。"""
+        await coro
 
     async def _publish_async(self, event: Event) -> None:
         """异步发布实现。"""
@@ -374,7 +425,10 @@ class EventBus:
             if event_types is not None and event.type not in event_types:
                 continue
             try:
-                handler(event)  # 同步调用
+                # 支持 async handler
+                result = handler(event)
+                if asyncio.iscoroutine(result):
+                    await result
             except Exception as e:
                 logger.warning(f"Blocking handler error for {event.type}: {e}")
 
@@ -402,6 +456,10 @@ class EventBus:
         if self._closed:
             return
 
+        # 如果需要等待，先 flush 确保所有事件都被处理
+        if wait:
+            self.flush(timeout=timeout)
+
         self._closed = True
         self._stopping = True  # 设置关闭标志
         self._running = False
@@ -425,6 +483,41 @@ class EventBus:
         self._consumer_tasks.clear()
         self._consumer_filters.clear()
         self._blocking_handlers.clear()
+
+    def flush(self, timeout: float | None = None) -> bool:
+        """等待所有待处理的事件被处理完毕。
+
+        只等待非阻塞订阅者的队列（阻塞订阅者是同步执行的，无需等待）。
+        适用于需要确保所有异步事件都已处理的场景（如测试）。
+
+        Args:
+            timeout: 超时时间（秒），None 表示无限等待
+
+        Returns:
+            True 如果所有事件都已处理，False 如果超时
+        """
+        if self._closed:
+            return True
+
+        timeout_val = timeout if timeout else 30.0
+        start_time = time.time()
+
+        # 等待所有非阻塞订阅者的队列变空
+        while True:
+            all_empty = all(q.empty() for q in self._queues.values())
+            if all_empty:
+                break
+            if time.time() - start_time > timeout_val:
+                return False
+            time.sleep(0.01)
+
+        # 等待 worker 线程的任务队列变空
+        while not self._task_queue.empty():
+            if time.time() - start_time > timeout_val:
+                return False
+            time.sleep(0.01)
+
+        return True
 
     def __enter__(self):
         return self
