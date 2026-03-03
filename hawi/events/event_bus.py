@@ -145,7 +145,7 @@ class EventBus:
             try:
                 # 执行 handler
                 result = handler(event)
-                if asyncio.iscoroutine(result):
+                if result is not None and asyncio.iscoroutine(result):
                     await result
             except Exception as e:
                 logger.warning(f"Event handler error for {event.type}: {e}")

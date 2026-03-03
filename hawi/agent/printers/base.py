@@ -57,7 +57,7 @@ class BasePrinter(ABC):
         """设置是否显示完整的工具调用内容（不省略）。"""
         self.show_full_tool_content = value
 
-    def handle(self, event: Event) -> None:
+    async def handle(self, event: Event) -> None:
         """处理事件"""
         handlers = {
             "model.content_block_start": self._on_content_block_start,
@@ -77,57 +77,56 @@ class BasePrinter(ABC):
 
         handler = handlers.get(event.type)
         if handler:
-            # 现在 handler 是同步的，直接调用
-            handler(event)
+            await handler(event)
 
-    def _on_stream_start(self, event: Event) -> None:
+    async def _on_stream_start(self, event: Event) -> None:
         """Model 流式响应开始"""
         self._reasoning_buffer = ""
         self._active_tool_calls.clear()
 
-    def _on_stream_stop(self, event: Event) -> None:
+    async def _on_stream_stop(self, event: Event) -> None:
         """Model 流式响应结束"""
         self._current_block_type = None
 
     @abstractmethod
-    def _on_content_block_start(self, event: Event) -> None:
+    async def _on_content_block_start(self, event: Event) -> None:
         """内容块开始 - 子类实现"""
         pass
 
     @abstractmethod
-    def _on_content_block_delta(self, event: Event) -> None:
+    async def _on_content_block_delta(self, event: Event) -> None:
         """内容块增量 - 子类实现"""
         pass
 
     @abstractmethod
-    def _on_content_block_stop(self, event: Event) -> None:
+    async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束 - 子类实现"""
         pass
 
     @abstractmethod
-    def _on_tool_use_block_start(self, event: Event) -> None:
+    async def _on_tool_use_block_start(self, event: Event) -> None:
         """工具调用块开始 - 子类实现"""
         pass
 
     @abstractmethod
-    def _on_tool_use_block_delta(self, event: Event) -> None:
+    async def _on_tool_use_block_delta(self, event: Event) -> None:
         """工具调用块增量 - 子类实现"""
         pass
 
     @abstractmethod
-    def _on_tool_use_block_stop(self, event: Event) -> None:
+    async def _on_tool_use_block_stop(self, event: Event) -> None:
         """工具调用块结束 - 子类实现"""
         pass
 
-    def _on_run_start(self, event: Event) -> None:
+    async def _on_run_start(self, event: Event) -> None:
         """Agent 执行开始"""
         pass
 
-    def _on_run_stop(self, event: Event) -> None:
+    async def _on_run_stop(self, event: Event) -> None:
         """Agent 执行结束"""
         pass
 
-    def _on_tool_call(self, event: Event) -> None:
+    async def _on_tool_call(self, event: Event) -> None:
         """工具调用"""
         if not self.show_tools:
             return
@@ -145,7 +144,7 @@ class BasePrinter(ABC):
             "start_time": time.time(),
         }
 
-    def _on_tool_result(self, event: Event) -> None:
+    async def _on_tool_result(self, event: Event) -> None:
         """工具结果"""
         if not self.show_tools:
             return
@@ -177,7 +176,7 @@ class BasePrinter(ABC):
         """打印工具结果 - 子类实现"""
         pass
 
-    def _on_error(self, event: Event) -> None:
+    async def _on_error(self, event: Event) -> None:
         """错误处理 - 处理 AgentErrorEvent 和 ModelErrorEvent"""
         if not self.show_errors:
             return

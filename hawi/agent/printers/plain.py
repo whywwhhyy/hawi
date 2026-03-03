@@ -83,7 +83,7 @@ class PlainPrinter(BasePrinter):
         self._spinner_index: int = 0
         self._block_count: int = 0
 
-    def _on_content_block_start(self, event: Event) -> None:
+    async def _on_content_block_start(self, event: Event) -> None:
         """内容块开始"""
         assert isinstance(event, ModelContentBlockStartEvent)
         block_type = event.block_type
@@ -96,7 +96,7 @@ class PlainPrinter(BasePrinter):
             _stdout.flush()
         self._block_count += 1
 
-    def _on_content_block_delta(self, event: Event) -> None:
+    async def _on_content_block_delta(self, event: Event) -> None:
         """逐字符实时输出"""
         assert isinstance(event, ModelContentBlockDeltaEvent)
         delta_type = event.delta_type
@@ -114,7 +114,7 @@ class PlainPrinter(BasePrinter):
         elif delta_type == "thinking" and self.show_reasoning:
             self._reasoning_buffer += delta
 
-    def _on_content_block_stop(self, event: Event) -> None:
+    async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束"""
         assert isinstance(event, ModelContentBlockStopEvent)
         block_type = event.block_type
@@ -127,28 +127,28 @@ class PlainPrinter(BasePrinter):
 
         self._current_block_type = None
 
-    def _on_tool_use_block_start(self, event: Event) -> None:
+    async def _on_tool_use_block_start(self, event: Event) -> None:
         """工具调用块开始"""
         assert isinstance(event, ModelToolCallBlockStartEvent)
         self._current_block_type = "tool_use"
         self._block_has_received_delta = False
 
-    def _on_tool_use_block_delta(self, event: Event) -> None:
+    async def _on_tool_use_block_delta(self, event: Event) -> None:
         """工具调用块增量"""
         assert isinstance(event, ModelToolCallBlockDeltaEvent)
         # 工具调用参数增量不直接显示
         if not self._block_has_received_delta:
             self._block_has_received_delta = True
 
-    def _on_tool_use_block_stop(self, event: Event) -> None:
+    async def _on_tool_use_block_stop(self, event: Event) -> None:
         """工具调用块结束"""
         assert isinstance(event, ModelToolCallBlockStopEvent)
         self._current_block_type = None
 
-    def _on_run_start(self, event: Event) -> None:
+    async def _on_run_start(self, event: Event) -> None:
         """Agent 执行开始"""
 
-    def _on_run_stop(self, event: Event) -> None:
+    async def _on_run_stop(self, event: Event) -> None:
         """Agent 执行结束"""
 
     def _format_tool_arguments(self, arguments: dict[str, Any]) -> str:

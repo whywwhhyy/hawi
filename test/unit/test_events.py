@@ -328,7 +328,7 @@ class TestConversationPrinter:
             request_id="req-1",
             part=part,
         )
-        printer.handle(event)
+        await printer.handle(event)
         assert "Hello World" in output.getvalue()
 
     @pytest.mark.asyncio
@@ -342,7 +342,7 @@ class TestConversationPrinter:
             block_index=0,
             block_type="thinking",
         )
-        printer.handle(start_event)
+        await printer.handle(start_event)
 
         part: StreamThinkingPart = {
             "type": "thinking_delta",
@@ -355,7 +355,7 @@ class TestConversationPrinter:
             request_id="req-1",
             part=part,
         )
-        printer.handle(delta_event)
+        await printer.handle(delta_event)
 
         # Verify content is buffered before stop event
         assert "Let me think..." in printer._reasoning_buffer
@@ -373,7 +373,7 @@ class TestConversationPrinter:
             block_index=0,
             content=[reasoning_part],
         )
-        printer.handle(stop_event)
+        await printer.handle(stop_event)
 
         # Buffer is cleared after printing, but panel was displayed
 
@@ -386,7 +386,7 @@ class TestConversationPrinter:
             arguments={"expression": "1+1"},
             tool_call_id="tc-1",
         )
-        printer.handle(event)
+        await printer.handle(event)
         # Tool calls display a status spinner, no direct output until result
         # Status output is handled by rich's status mechanism
 
@@ -402,7 +402,7 @@ class TestConversationPrinter:
             duration_ms=100.0,
             arguments={"expression": "1+1"},
         )
-        printer.handle(event)
+        await printer.handle(event)
         # Tool result uses console.print via _print_tool_result
         # Verify tool call was tracked
         assert "calculate" in printer._active_tool_calls or len(printer._active_tool_calls) == 0
@@ -419,7 +419,7 @@ class TestConversationPrinter:
             duration_ms=50.0,
             arguments={},
         )
-        printer.handle(event)
+        await printer.handle(event)
         # Just verify no exception is raised
 
     @pytest.mark.asyncio
@@ -442,7 +442,7 @@ class TestConversationPrinter:
             request_id="req-1",
             part=part,
         )
-        printer.handle(event)
+        await printer.handle(event)
         # When reasoning is hidden, buffer should not be populated
         assert printer._reasoning_buffer == ""
 
@@ -459,7 +459,7 @@ class TestConversationPrinter:
             arguments={},
             tool_call_id="tc-1",
         )
-        printer.handle(event)
+        await printer.handle(event)
         # When tools are hidden, no active tracking
         assert len(printer._active_tool_calls) == 0
 
@@ -471,7 +471,7 @@ class TestConversationPrinter:
             run_id="run-1",
             error=error,
         )
-        printer.handle(event)
+        await printer.handle(event)
         # Error uses console.print, verify no exception
 
 
@@ -502,8 +502,7 @@ class TestRichStreamingPrinter:
             part=part,
         )
         # Should not raise any exception
-        # handle is now sync, no await needed
-        printer.handle(event)
+        await printer.handle(event)
 
 
 class TestEventOrdering:
