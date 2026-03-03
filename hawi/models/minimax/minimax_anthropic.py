@@ -30,7 +30,7 @@ from hawi.models.anthropic._streaming import (
     run_async_stream,
 )
 from hawi.models.anthropic._converters import needs_async_conversion
-from hawi.model.message import StreamPart, MessageRequest, MessageResponse
+from hawi.models.message import StreamPart, MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 

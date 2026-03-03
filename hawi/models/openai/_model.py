@@ -11,8 +11,8 @@ from typing import Any, AsyncGenerator, Iterator
 
 from openai import OpenAI, AsyncOpenAI
 
-from hawi.model import Model
-from hawi.model.message import (
+from hawi.models import Model
+from hawi.models import (
     MessageRequest,
     MessageResponse,
     TokenUsage,

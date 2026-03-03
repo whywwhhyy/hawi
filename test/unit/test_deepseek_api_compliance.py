@@ -10,7 +10,7 @@ DeepSeek API 合规性测试
 import pytest
 from unittest.mock import patch
 
-from hawi.model.message import MessageRequest, Message
+from hawi.models.message import MessageRequest, Message
 from hawi.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
 from hawi.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
 

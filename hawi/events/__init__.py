@@ -42,7 +42,7 @@ from .event_bus import (
     EventHandler,
     SyncEventHandler,
     AsyncEventHandler,
-)
+ )
 from .dump_manager import DumpManager
 
 __all__ = [
@@ -56,7 +56,7 @@ __all__ = [
     "EventType",
     "ModelEventType",
     "AgentEventType",
-    # Model (re-exported from hawi.model.message)
+    # Model (re-exported from hawi.models.message)
     "ModelStreamStartEvent",
     "ModelStreamStopEvent",
     "ModelContentBlockStartEvent",

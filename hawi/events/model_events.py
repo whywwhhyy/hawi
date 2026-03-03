@@ -11,7 +11,7 @@ from typing import Any, Literal, overload
 from pydantic import field_serializer
 
 from hawi.errors import ModelError
-from hawi.model.message import ContentPart, StreamPart, TokenUsage, ContentPartType
+from hawi.models.message import ContentPart, StreamPart, TokenUsage, ContentPartType
 
 from .event import Event
 

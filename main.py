@@ -51,7 +51,7 @@ from hawi.agent.printers import (
     RichStreamingPrinter,
     StreamMarkdownPrinter,
 )
-from hawi.model import Model
+from hawi.models import Model
 from hawi.models import get_model_class
 from hawi.utils.terminal import user_select
 

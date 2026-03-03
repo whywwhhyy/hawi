@@ -5,7 +5,7 @@ Hawi Agent 模型实现
 
 Example:
     from hawi.models import OpenAIModel
-    from hawi.agent.model import ModelConfig
+    from hawi.models import ModelConfig
 
     model = OpenAIModel(config=ModelConfig(
         model_id="gpt-4",
@@ -15,7 +15,49 @@ Example:
 
 from typing import Optional
 
-from hawi.model import BalanceInfo
+from .model import (
+    Model,
+    BalanceInfo,
+    ProviderRequest,
+    ProviderResponse,
+    ModelParams,
+    BalanceDetails,
+)
+from .message import (
+    Message,
+    MessageRequest,
+    MessageResponse,
+    ContentPartType,
+    StreamPartType,
+    TokenUsage,
+    ContentPart,
+    TextPart,
+    ImagePart,
+    ImageSource,
+    DocumentPart,
+    DocumentSource,
+    ToolCallPart,
+    ToolResultPart,
+    ReasoningPart,
+    CacheControlPart,
+    CacheControl,
+    AudioPart,
+    AudioSource,
+    VideoPart,
+    VideoSource,
+    FilePart,
+    FileSource,
+    RefusalPart,
+    GuardContentPart,
+    StreamPart,
+    StreamTextPart,
+    StreamThinkingPart,
+    StreamToolCallPart,
+    StreamFinishPart,
+    MessageMetadata,
+    ToolDefinition,
+    ToolChoice,
+)
 from .openai import OpenAIModel
 from .anthropic import AnthropicModel
 from .deepseek import DeepSeekModel
@@ -34,7 +76,48 @@ def get_model_class(name:str) -> Optional[type]:
     }.get(name)
 
 __all__ = [
+    # Base classes
+    "Model",
     "BalanceInfo",
+    "ProviderRequest",
+    "ProviderResponse",
+    "ModelParams",
+    "BalanceDetails",
+    # Message types
+    "Message",
+    "MessageRequest",
+    "MessageResponse",
+    "ContentPartType",
+    "StreamPartType",
+    "TokenUsage",
+    "ContentPart",
+    "TextPart",
+    "ImagePart",
+    "ImageSource",
+    "DocumentPart",
+    "DocumentSource",
+    "ToolCallPart",
+    "ToolResultPart",
+    "ReasoningPart",
+    "CacheControlPart",
+    "CacheControl",
+    "AudioPart",
+    "AudioSource",
+    "VideoPart",
+    "VideoSource",
+    "FilePart",
+    "FileSource",
+    "RefusalPart",
+    "GuardContentPart",
+    "StreamPart",
+    "StreamTextPart",
+    "StreamThinkingPart",
+    "StreamToolCallPart",
+    "StreamFinishPart",
+    "MessageMetadata",
+    "ToolDefinition",
+    "ToolChoice",
+    # Model implementations
     "OpenAIModel",
     "AnthropicModel",
     "DeepSeekModel",

@@ -8,7 +8,7 @@ import pytest
 from typing import Any
 
 from hawi.models.strands import StrandsModel
-from hawi.model.message import (
+from hawi.models import (
     Message,
     ToolDefinition,
     ToolChoice,

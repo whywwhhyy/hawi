@@ -66,7 +66,7 @@ class TestModelEvents:
 
     def test_model_stream_stop_event(self):
         """Test ModelStreamStopEvent creation."""
-        from hawi.model.message import TokenUsage
+        from hawi.models.message import TokenUsage
         event = ModelStreamStopEvent.create(
             request_id="req-123",
             stop_reason="end_turn",
@@ -79,7 +79,7 @@ class TestModelEvents:
 
     def test_model_content_block_delta_event(self):
         """Test ModelContentBlockDeltaEvent creation."""
-        from hawi.model.message import StreamTextPart
+        from hawi.models.message import StreamTextPart
 
         part: StreamTextPart = {
             "type": "text_delta",
@@ -101,7 +101,7 @@ class TestModelEvents:
 
     def test_model_content_block_events_with_reasoning(self):
         """Test content block events for reasoning."""
-        from hawi.model.message import StreamThinkingPart
+        from hawi.models.message import StreamThinkingPart
 
         start = ModelContentBlockStartEvent.create(
             request_id="req-123",
@@ -120,7 +120,7 @@ class TestModelEvents:
             request_id="req-123",
             part=part,
         )
-        from hawi.model.message import ReasoningPart
+        from hawi.models.message import ReasoningPart
         reasoning_part = ReasoningPart(
             type="reasoning",
             reasoning="Let me think...",
@@ -311,7 +311,7 @@ class TestConversationPrinter:
     @pytest.mark.asyncio
     async def test_handle_text_delta(self, printer, monkeypatch):
         """Test printing text delta events."""
-        from hawi.model.message import StreamTextPart
+        from hawi.models.message import StreamTextPart
 
         output = io.StringIO()
         import hawi.agent.printers.rich as rich_module
@@ -334,7 +334,7 @@ class TestConversationPrinter:
     @pytest.mark.asyncio
     async def test_handle_reasoning_delta(self, printer):
         """Test printing reasoning delta events."""
-        from hawi.model.message import StreamThinkingPart
+        from hawi.models.message import StreamThinkingPart
 
         # First send start event to set up state
         start_event = ModelContentBlockStartEvent.create(
@@ -361,7 +361,7 @@ class TestConversationPrinter:
         assert "Let me think..." in printer._reasoning_buffer
 
         # Reasoning is only printed on block stop
-        from hawi.model.message import ReasoningPart
+        from hawi.models.message import ReasoningPart
         reasoning_part = ReasoningPart(
             type="reasoning",
             reasoning="Let me think...",
@@ -429,7 +429,7 @@ class TestConversationPrinter:
         import hawi.agent.printers.rich as rich_module
         monkeypatch.setattr(rich_module, '_stdout', output)
         printer = RichStreamingPrinter(show_reasoning=False)
-        from hawi.model.message import StreamThinkingPart
+        from hawi.models.message import StreamThinkingPart
 
         part: StreamThinkingPart = {
             "type": "thinking_delta",
@@ -487,7 +487,7 @@ class TestRichStreamingPrinter:
     @pytest.mark.asyncio
     async def test_printer_handles_events(self):
         """Test that the printer handles events correctly."""
-        from hawi.model.message import StreamTextPart
+        from hawi.models.message import StreamTextPart
 
         printer = RichStreamingPrinter()
         part: StreamTextPart = {

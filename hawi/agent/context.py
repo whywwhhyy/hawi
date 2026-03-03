@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from hawi.model.message import (
+from hawi.models.message import (
     ContentPart,
     Message,
     MessageRequest,

@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import MagicMock
 
-from hawi.model.message import MessageRequest,Message
+from hawi.models import Message
+from hawi.models.message import MessageRequest
 from hawi.models.kimi.kimi_openai import KimiOpenAIModel
 from hawi.models.kimi.kimi_anthropic import KimiAnthropicModel
 

@@ -11,8 +11,8 @@ from typing import Any
 
 from anthropic import Anthropic, AsyncAnthropic
 
-from hawi.model import Model
-from hawi.model.message import (
+from hawi.models import Model
+from hawi.models import (
     ContentPart,
     MessageRequest,
     MessageResponse,

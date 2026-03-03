@@ -6,7 +6,8 @@ Tests the MiniMax M2.5/M2.1 model implementation using OpenAI-compatible API.
 import pytest
 
 from hawi.models.minimax.minimax_openai import MiniMaxOpenAIModel
-from hawi.model.message import Message, ContentPart
+from hawi.models import Message
+from hawi.models.message import ContentPart
 from test.integration.models import get_minimax_api_key
 
 # Check if API key is available
@@ -139,7 +140,7 @@ class TestMiniMaxM25Integration:
 
     def test_tool_call_formatting(self, model: MiniMaxOpenAIModel):
         """Test tool call request formatting."""
-        from hawi.model.message import ToolDefinition
+        from hawi.models.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

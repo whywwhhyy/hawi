@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import field_serializer
 
 from hawi.errors import AgentError
-from hawi.model.message import ContentPart, TokenUsage
+from hawi.models.message import ContentPart, TokenUsage
 
 from .event import Event
 

@@ -48,7 +48,7 @@ from ..errors import (
     ToolExecutionError,
     ConfigurationError,
 )
-from ..model.message import StreamPart
+from ..models.message import StreamPart
 from .result import AgentRunResult, ToolCallRecord
 
 __all__ = [

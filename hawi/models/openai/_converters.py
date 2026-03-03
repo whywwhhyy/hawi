@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from hawi.model.message import (
+from hawi.models.message import (
     AudioPart,
     ContentPart,
     FilePart,

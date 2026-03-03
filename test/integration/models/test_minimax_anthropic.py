@@ -6,7 +6,8 @@ Tests the MiniMax model implementation using Anthropic-compatible API.
 import pytest
 
 from hawi.models.minimax.minimax_anthropic import MiniMaxAnthropicModel
-from hawi.model.message import Message, ContentPart
+from hawi.models import Message
+from hawi.models.message import ContentPart
 from test.integration import get_minimax_api_key
 
 # Check if API key is available
@@ -60,7 +61,7 @@ class TestMiniMaxAnthropicUnit:
 
     def test_prepare_request_removes_unsupported_params(self):
         """Test that unsupported parameters are removed for MiniMax."""
-        from hawi.model.message import MessageRequest
+        from hawi.models.message import MessageRequest
 
         model = MiniMaxAnthropicModel(
             model_id="MiniMax-M2.5",
@@ -128,7 +129,7 @@ class TestMiniMaxAnthropicM25Integration:
 
     def test_tool_call_formatting(self, model: MiniMaxAnthropicModel):
         """Test tool call request formatting."""
-        from hawi.model.message import ToolDefinition
+        from hawi.models.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

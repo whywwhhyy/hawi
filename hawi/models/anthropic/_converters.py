@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import httpx
 
-from hawi.model.message import (
+from hawi.models.message import (
     CacheControlPart,
     CacheControl,
     ContentPart,

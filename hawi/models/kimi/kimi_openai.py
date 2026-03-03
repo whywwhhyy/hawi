@@ -11,11 +11,11 @@ from typing import Any, AsyncIterator, Iterator
 
 import httpx
 
-from hawi.model import BalanceInfo
-from hawi.model.message import StreamPart
+from hawi.models import BalanceInfo
+from hawi.models import StreamPart
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
-from hawi.model.message import MessageRequest, MessageResponse
+from hawi.models import MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +250,7 @@ class KimiOpenAIModel(OpenAIModel):
                 msg_response.reasoning_content = reasoning
                 # 将 reasoning_content 添加到 content 列表作为 ReasoningPart
                 # 这样 HawiAgent 可以正确处理并显示它
-                from hawi.model.message import ReasoningPart
+                from hawi.models.message import ReasoningPart
                 reasoning_part: ReasoningPart = {
                     "type": "reasoning",
                     "reasoning": reasoning,

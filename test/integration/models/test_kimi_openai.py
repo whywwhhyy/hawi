@@ -8,9 +8,9 @@ import pytest
 from typing import Any
 
 from hawi.models.kimi.kimi_openai import KimiOpenAIModel
-from hawi.model.message import (
+from hawi.models import Message
+from hawi.models.message import (
     ContentPart,
-    Message,
     TextPart,
     ToolCallPart,
     ReasoningPart,
@@ -167,7 +167,7 @@ class TestKimiOpenAIUnit:
 
     def test_prepare_request_with_disabled_thinking(self):
         """Test request preparation with disabled thinking."""
-        from hawi.model.message import MessageRequest
+        from hawi.models.message import MessageRequest
 
         model = KimiOpenAIModel(
             api_key="test-key",
@@ -346,7 +346,7 @@ class TestKimiK25ToolCalls:
 
     def test_tool_call_with_reasoning(self, model: KimiOpenAIModel):
         """Test that tool calls work correctly with reasoning enabled."""
-        from hawi.model.message import ToolDefinition
+        from hawi.models.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -382,7 +382,7 @@ class TestKimiK25ToolCalls:
 
     def test_multi_turn_with_tool_result(self, model: KimiOpenAIModel):
         """Test multi-turn conversation with tool results."""
-        from hawi.model.message import ToolDefinition
+        from hawi.models.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

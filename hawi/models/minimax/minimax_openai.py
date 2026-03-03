@@ -13,7 +13,7 @@ from typing import Any
 
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
-from hawi.model.message import MessageResponse, StreamPart, ContentPart, MessageRequest
+from hawi.models.message import MessageResponse, StreamPart, ContentPart, MessageRequest
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
         if thinking_content:
             msg_response.reasoning_content = thinking_content
             # 将 thinking 内容添加到 content 列表作为 ReasoningPart
-            from hawi.model.message import ReasoningPart
+            from hawi.models.message import ReasoningPart
             reasoning_part: ReasoningPart = {
                 "type": "reasoning",
                 "reasoning": thinking_content,

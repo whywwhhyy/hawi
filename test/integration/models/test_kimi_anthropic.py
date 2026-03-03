@@ -7,9 +7,9 @@ import pytest
 from typing import Any
 
 from hawi.models.kimi.kimi_anthropic import KimiAnthropicModel
-from hawi.model.message import (
+from hawi.models import Message
+from hawi.models.message import (
     ContentPart,
-    Message,
     TextPart,
     ToolCallPart,
     ReasoningPart,
@@ -168,7 +168,7 @@ class TestKimiAnthropicIntegration:
 
     def test_tool_call_formatting(self, model: KimiAnthropicModel):
         """Test tool call request formatting."""
-        from hawi.model.message import ToolDefinition
+        from hawi.models.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -235,7 +235,7 @@ class TestKimiAnthropicToolCalls:
 
     def test_tool_call_with_citations(self, model: KimiAnthropicModel):
         """Test that tool calls work correctly and handle citations."""
-        from hawi.model.message import ToolDefinition
+        from hawi.models.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {
@@ -271,7 +271,7 @@ class TestKimiAnthropicToolCalls:
 
     def test_multi_turn_with_tool_result(self, model: KimiAnthropicModel):
         """Test multi-turn conversation with tool results."""
-        from hawi.model.message import ToolDefinition
+        from hawi.models.message import ToolDefinition
 
         tools: list[ToolDefinition] = [
             {

@@ -145,7 +145,7 @@ class TestModelEventClasses:
 
     def test_model_stream_stop_event(self):
         """Test ModelStreamStopEvent.create()."""
-        from hawi.model.message import TokenUsage
+        from hawi.models.message import TokenUsage
         event = ModelStreamStopEvent.create(
             request_id="req-123",
             stop_reason="tool_calls",
@@ -169,7 +169,7 @@ class TestModelEventClasses:
 
     def test_model_content_block_delta_event(self):
         """Test ModelContentBlockDeltaEvent.create()."""
-        from hawi.model.message import StreamTextPart
+        from hawi.models.message import StreamTextPart
 
         part: StreamTextPart = {
             "type": "text_delta",
@@ -189,7 +189,7 @@ class TestModelEventClasses:
 
     def test_model_content_block_stop_event(self):
         """Test ModelContentBlockStopEvent.create()."""
-        from hawi.model.message import TextPart
+        from hawi.models.message import TextPart
 
         text_part = TextPart(type="text", text="Hello World")
         event = ModelContentBlockStopEvent.create(
@@ -203,7 +203,7 @@ class TestModelEventClasses:
 
     def test_model_metadata_event(self):
         """Test ModelMetadataEvent.create()."""
-        from hawi.model.message import TokenUsage
+        from hawi.models.message import TokenUsage
         event = ModelMetadataEvent.create(
             request_id="req-123",
             usage=TokenUsage(input_tokens=10, output_tokens=20),
@@ -231,7 +231,7 @@ class TestAgentEventClasses:
 
     def test_agent_run_stop_event(self):
         """Test AgentRunStopEvent.create()."""
-        from hawi.model.message import TokenUsage
+        from hawi.models.message import TokenUsage
         event = AgentRunStopEvent.create(
             run_id="run-123",
             stop_reason="max_iterations",
@@ -325,7 +325,7 @@ class TestConversationPrinterAdvanced:
         # With reasoning shown (default)
         printer_with = ConversationPrinter(show_reasoning=True)
 
-        from hawi.model.message import ReasoningPart
+        from hawi.models.message import ReasoningPart
 
         # handle is now sync, no await needed
         printer_with.handle(ModelContentBlockStartEvent.create(
@@ -437,7 +437,7 @@ class TestConversationPrinterAdvanced:
         ))
 
         # Content block stop
-        from hawi.model.message import TextPart
+        from hawi.models.message import TextPart
         text_part = TextPart(type="text", text="Hello World")
         printer.handle(ModelContentBlockStopEvent.create(
             request_id="r1", block_index=0, content=[text_part]

@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Coroutine, Literal, Mapping, Callable
 
 
-from hawi.model import Model
-from hawi.model.message import (
+from hawi.models import Model
+from hawi.models import (
     ContentPart,
     StreamPart,
     TextPart,
@@ -157,7 +157,7 @@ class ContentBlockHandler:
         if self.block_type == "text":
             return TextPart(type="text", text="".join(self._accumulator))
         elif self.block_type == "thinking":
-            from hawi.model.message import ReasoningPart
+            from hawi.models.message import ReasoningPart
             return ReasoningPart(
                 type="reasoning",
                 reasoning="".join(self._accumulator),

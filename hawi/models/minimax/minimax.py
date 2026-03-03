@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal
 
-from hawi.model import Model
+from hawi.models import Model
 from hawi.models._utils import (
     detect_minimax_api_type,
     complete_url_and_api,

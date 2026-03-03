@@ -32,7 +32,7 @@ from anthropic.types import (
     SignatureDelta,
 )
 
-from hawi.model.message import StreamPart
+from hawi.models.message import StreamPart
 
 if TYPE_CHECKING:
     from anthropic import Anthropic, AsyncAnthropic

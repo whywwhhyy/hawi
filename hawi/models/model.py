@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Iterator, List, Literal
 
-from hawi.model.message import (
+from hawi.models.message import (
     ContentPart,
     Message,
     MessageRequest,

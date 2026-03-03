@@ -22,8 +22,8 @@ from typing import Any
 import httpx
 
 from hawi.models.openai import OpenAIModel
-from hawi.model.message import MessageResponse
-from hawi.model import BalanceInfo
+from hawi.models import MessageResponse
+from hawi.models import BalanceInfo
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +283,7 @@ class DeepSeekOpenAIModel(OpenAIModel):
                 msg_response.reasoning_content = reasoning
                 # 将 reasoning_content 添加到 content 列表作为 ReasoningPart
                 # 这样 HawiAgent 可以正确处理并显示它
-                from hawi.model.message import ReasoningPart
+                from hawi.models.message import ReasoningPart
                 reasoning_part: ReasoningPart = {
                     "type": "reasoning",
                     "reasoning": reasoning,

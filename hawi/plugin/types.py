@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, TypedDict, NotRequired, Any, Callable, Union
 if TYPE_CHECKING:
     from hawi.agent import HawiAgent
     from hawi.agent.context import AgentContext
-    from hawi.model import Model
-    from hawi.model.message import MessageResponse
+    from hawi.models import Model
+    from hawi.models import MessageResponse
 
 # ===== Hook types for regular functions =====
 # Function: def hook(agent: HawiAgent) -> None
