@@ -1,7 +1,7 @@
 """
 OpenAI 流式响应处理器
 
-处理 OpenAI 流式 API 响应，将其转换为统一的 StreamPart 流。
+处理 OpenAI 流式 API 响应，将其转换为统一的 DeltaPart 流。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any, Iterator
 
-from hawi.models.message import StreamPart
+from hawi.models.message import DeltaPart
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class StreamProcessor:
     """OpenAI 流式响应处理器
 
-    将 OpenAI 流式响应转换为 StreamPart 增量块流。
+    将 OpenAI 流式响应转换为 DeltaPart 增量块流。
 
     Example:
         processor = StreamProcessor()
@@ -44,14 +44,14 @@ class StreamProcessor:
     def process_chunk(
         self,
         chunk_dict: dict[str, Any]
-    ) -> Iterator[StreamPart]:
+    ) -> Iterator[DeltaPart]:
         """处理单个流式 chunk
 
         Args:
             chunk_dict: OpenAI chunk 的字典表示
 
         Yields:
-            StreamPart 增量块
+            DeltaPart 增量块
         """
         choices = chunk_dict.get("choices", [])
         if not choices:
@@ -202,7 +202,7 @@ class StreamProcessor:
             }
             self._pending_usage = None
 
-    def _close_text_block(self) -> Iterator[StreamPart]:
+    def _close_text_block(self) -> Iterator[DeltaPart]:
         """关闭 text 块"""
         if self._current_block_type == "text":
             yield {
@@ -216,7 +216,7 @@ class StreamProcessor:
             self._current_block_index += 1
             self._current_block_type = None
 
-    def _close_thinking_block(self) -> Iterator[StreamPart]:
+    def _close_thinking_block(self) -> Iterator[DeltaPart]:
         """关闭 thinking 块"""
         if self._current_block_type == "thinking":
             yield {
@@ -230,7 +230,7 @@ class StreamProcessor:
             self._current_block_index += 1
             self._current_block_type = None
 
-    def _close_tool_block(self) -> Iterator[StreamPart]:
+    def _close_tool_block(self) -> Iterator[DeltaPart]:
         """关闭 tool_use 块"""
         if self._current_block_type == "tool_use" and self._tool_call_state:
             yield {

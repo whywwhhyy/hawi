@@ -20,7 +20,7 @@ from typing import Any, Optional, Coroutine, Literal, Mapping, Callable
 from hawi.models import Model
 from hawi.models import (
     ContentPart,
-    StreamPart,
+    DeltaPart,
     TextPart,
     TokenUsage,
     ToolCallPart,
@@ -126,7 +126,7 @@ class ContentBlockHandler:
             return {"id": "", "name": "", "arguments": ""}
         return None
 
-    def _add_delta(self, chunk: StreamPart) -> None:
+    def _add_delta(self, chunk: DeltaPart) -> None:
         """添加 delta 到累积器"""
         if self._accumulator is None:
             return
@@ -195,7 +195,7 @@ class ContentBlockHandler:
 
     async def handle(
         self,
-        chunk: StreamPart,
+        chunk: DeltaPart,
         request_id: str,
         event_bus: EventBus | None,
     ) -> ContentPart | None:
@@ -204,7 +204,7 @@ class ContentBlockHandler:
         事件通过 event_bus 异步发布，不阻塞处理流程。
 
         Args:
-            chunk: StreamPart（必须是匹配的 type）
+            chunk: DeltaPart（必须是匹配的 type）
             request_id: 请求 ID
             event_bus: 事件总线（可为 None）
 
@@ -955,10 +955,10 @@ class HawiAgent:
         state: _ExecutionState,
         request_id: str,
         event_bus: EventBus | None,
-    ) -> AsyncGenerator[StreamPart, None]:
+    ) -> AsyncGenerator[DeltaPart, None]:
         """Call model with streaming and retry logic.
 
-        Yields StreamPart for each chunk of content from the model.
+        Yields DeltaPart for each chunk of content from the model.
         Accumulates content to build complete response for tool call handling.
         """
         last_error = None

@@ -8,7 +8,7 @@ from hawi.agent import HawiAgent
 from hawi.models import Model
 from hawi.models import (
     MessageRequest, MessageResponse, TokenUsage, ToolCallPart, TextPart,
-    StreamPart, StreamTextPart, StreamToolCallPart, StreamFinishPart,
+    DeltaPart, DeltaTextPart, DeltaToolCallPart, DeltaFinishPart,
     ContentPart
 )
 from hawi_plugins.skills_plugin import SkillsPlugin
@@ -130,7 +130,7 @@ class MockModel(Model):
             content=[]
         )
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[StreamPart, None]:
+    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         import json
         response = self._invoke_impl(request)
         

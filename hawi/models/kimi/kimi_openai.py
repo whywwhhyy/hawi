@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator, Iterator
 import httpx
 
 from hawi.models import BalanceInfo
-from hawi.models import StreamPart
+from hawi.models import DeltaPart
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
 from hawi.models import MessageRequest, MessageResponse
@@ -167,7 +167,7 @@ class KimiOpenAIModel(OpenAIModel):
                     "Kimi 在 temperature 接近 0 时不支持 n>1"
                 )
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """
         同步流式调用 Kimi API
 
@@ -186,7 +186,7 @@ class KimiOpenAIModel(OpenAIModel):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[StreamPart]:
+    ) -> AsyncIterator[DeltaPart]:
         """异步流式调用 Kimi API
 
         重写以处理 reasoning_content 的收集和保留。

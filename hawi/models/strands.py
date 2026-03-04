@@ -37,7 +37,7 @@ from hawi.models import (
     MessageRequest,
     MessageResponse,
     ReasoningPart,
-    StreamPart,
+    DeltaPart,
     TextPart,
     TokenUsage,
     ToolCallPart,
@@ -219,7 +219,7 @@ class StrandsModel(Model):
         # 转换响应
         return self._parse_response_impl(strands_response)
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式实现"""
         strands_request = self._prepare_request_impl(request)
 
@@ -250,7 +250,7 @@ class StrandsModel(Model):
 
         return self._parse_response_impl(strands_response)
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[StreamPart, None]:
+    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         """异步流式实现"""
         strands_request = self._prepare_request_impl(request)
 
@@ -565,8 +565,8 @@ class StrandsModel(Model):
 
     def _convert_strands_stream(
         self, strands_stream: Iterator[Any]
-    ) -> Iterator[StreamPart]:
-        """转换 strands 流到 StreamPart 流"""
+    ) -> Iterator[DeltaPart]:
+        """转换 strands 流到 DeltaPart 流"""
         state = {"index": 0, "block_started": False, "pending_usage": None}
 
         for event in strands_stream:
@@ -576,8 +576,8 @@ class StrandsModel(Model):
         self,
         event: Any,
         state: dict[str, Any],
-    ) -> Iterator[StreamPart]:
-        """转换单个 strands 事件到 StreamPart"""
+    ) -> Iterator[DeltaPart]:
+        """转换单个 strands 事件到 DeltaPart"""
         index = state["index"]
         block_started = state["block_started"]
         pending_usage = state["pending_usage"]

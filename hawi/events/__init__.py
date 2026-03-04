@@ -27,6 +27,7 @@ from .model_events import (
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStopEvent,
     ModelMetadataEvent,
+    ModelContentMetadataEvent,
     ModelErrorEvent,
 )
 from .agent_events import (
@@ -66,6 +67,7 @@ __all__ = [
     "ModelToolCallBlockDeltaEvent",
     "ModelToolCallBlockStopEvent",
     "ModelMetadataEvent",
+    "ModelContentMetadataEvent",
     "ModelErrorEvent",
     # Agent
     "AgentRunStartEvent",
@@ -77,4 +79,3 @@ __all__ = [
     # Dump Manager
     "DumpManager",
 ]
-

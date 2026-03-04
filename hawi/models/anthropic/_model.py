@@ -16,7 +16,7 @@ from hawi.models import (
     ContentPart,
     MessageRequest,
     MessageResponse,
-    StreamPart,
+    DeltaPart,
     TextPart,
     TokenUsage,
     ToolCallPart,
@@ -312,7 +312,7 @@ class AnthropicModel(Model):
         response = await self.async_client.messages.create(**req)
         return self._parse_response_impl(response.model_dump())
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用"""
         if needs_async_conversion(
             request.messages, self.enable_image_download
@@ -325,7 +325,7 @@ class AnthropicModel(Model):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncGenerator[StreamPart, None]:
+    ) -> AsyncGenerator[DeltaPart, None]:
         """异步流式调用"""
         req = await self._prepare_request_async(request)
         async for chunk in stream_response_async(self.async_client, req):

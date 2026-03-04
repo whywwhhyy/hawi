@@ -30,7 +30,7 @@ from hawi.models.anthropic._streaming import (
     run_async_stream,
 )
 from hawi.models.anthropic._converters import needs_async_conversion
-from hawi.models.message import StreamPart, MessageRequest, MessageResponse
+from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
     扩展标准 Anthropic 流处理器，处理 MiniMax 特有的事件类型。
     """
     
-    def handle_event(self, event) -> Iterator[StreamPart]:
+    def handle_event(self, event) -> Iterator[DeltaPart]:
         """处理事件，包括 MiniMax 特有的 thinking 和 signature 事件"""
         event_type = event.type
         
@@ -61,7 +61,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
     
     def _handle_content_block_start(
         self, event: RawContentBlockStartEvent
-    ) -> Iterator[StreamPart]:
+    ) -> Iterator[DeltaPart]:
         """处理 content_block_start 事件"""
         block_index = event.index
         block = event.content_block
@@ -109,7 +109,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
     
     def _handle_content_block_delta(
         self, event: RawContentBlockDeltaEvent
-    ) -> Iterator[StreamPart]:
+    ) -> Iterator[DeltaPart]:
         """处理 content_block_delta 事件"""
         block_index = event.index
         delta = event.delta
@@ -133,7 +133,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
 
 def minimax_stream_response(
     client, request: dict[str, Any]
-) -> Iterator[StreamPart]:
+) -> Iterator[DeltaPart]:
     """MiniMax 同步流式响应处理"""
     with client.messages.stream(**request) as stream:
         handler = MiniMaxAnthropicStreamHandler(stream)
@@ -143,7 +143,7 @@ def minimax_stream_response(
 
 async def minimax_stream_response_async(
     client, request: dict[str, Any]
-) -> AsyncGenerator[StreamPart, None]:
+) -> AsyncGenerator[DeltaPart, None]:
     """MiniMax 异步流式响应处理"""
     async with client.messages.stream(**request) as stream:
         handler = MiniMaxAnthropicStreamHandler(stream)
@@ -199,7 +199,7 @@ class MiniMaxAnthropicModel(AnthropicModel):
         
         return req
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用 - 使用 MiniMax 专属的 handler"""
         if needs_async_conversion(
             request.messages, self.enable_image_download
@@ -212,7 +212,7 @@ class MiniMaxAnthropicModel(AnthropicModel):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncGenerator[StreamPart]:
+    ) -> AsyncGenerator[DeltaPart]:
         """异步流式调用 - 使用 MiniMax 专属的 handler"""
         req = await self._prepare_request_async(request)
         async for chunk in minimax_stream_response_async(self.async_client, req):

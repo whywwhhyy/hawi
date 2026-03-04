@@ -17,7 +17,7 @@ from hawi.models import (
     MessageResponse,
     TokenUsage,
     ContentPart,
-    StreamPart,
+    DeltaPart,
 )
 from ._converters import (
     prepare_request,
@@ -216,7 +216,7 @@ class OpenAIModel(Model):
         response = self.client.chat.completions.create(**req)
         return self._parse_response_impl(response.model_dump())
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用 OpenAI API"""
         req = self._prepare_request_impl(request)
         req["stream"] = True
@@ -236,7 +236,7 @@ class OpenAIModel(Model):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncGenerator[StreamPart, None]:
+    ) -> AsyncGenerator[DeltaPart, None]:
         """异步流式调用 OpenAI API"""
         req = self._prepare_request_impl(request)
         req["stream"] = True

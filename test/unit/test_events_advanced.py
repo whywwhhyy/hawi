@@ -169,9 +169,9 @@ class TestModelEventClasses:
 
     def test_model_content_block_delta_event(self):
         """Test ModelContentBlockDeltaEvent.create()."""
-        from hawi.models.message import StreamTextPart
+        from hawi.models.message import DeltaTextPart
 
-        part: StreamTextPart = {
+        part: DeltaTextPart = {
             "type": "text_delta",
             "index": 0,
             "delta": "Hello",

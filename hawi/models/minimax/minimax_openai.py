@@ -13,7 +13,7 @@ from typing import Any
 
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
-from hawi.models.message import MessageResponse, StreamPart, ContentPart, MessageRequest
+from hawi.models.message import MessageResponse, DeltaPart, ContentPart, MessageRequest
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
 
         return msg_response
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用 - 处理 <think> 标签"""
         req = self._prepare_request_impl(request)
         req["stream"] = True
@@ -228,7 +228,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncGenerator[StreamPart, None]:
+    ) -> AsyncGenerator[DeltaPart, None]:
         """异步流式调用 - 处理 <think> 标签"""
         req = self._prepare_request_impl(request)
         req["stream"] = True

@@ -16,7 +16,7 @@ from hawi.models.message import (
     Message,
     MessageRequest,
     MessageResponse,
-    StreamPart,
+    DeltaPart,
     TextPart,
     ToolCallPart,
     ToolDefinition,
@@ -24,7 +24,7 @@ from hawi.models.message import (
 )
 from hawi.errors import ModelError
 
-__all__ = ["Model", "StreamPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
+__all__ = ["Model", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -129,7 +129,7 @@ class Model(ABC):
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
         **kwargs,
-    ) -> Iterator[StreamPart]:
+    ) -> Iterator[DeltaPart]:
         """同步流式调用模型，生成内容增量块"""
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         yield from self._stream_impl(request)
@@ -207,17 +207,17 @@ class Model(ABC):
         with ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(pool, self._invoke_impl, request)
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[StreamPart]:
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式实现（默认不支持）"""
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[StreamPart, None]:
+    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         """异步流式实现（默认使用线程池）"""
         import asyncio
         from concurrent.futures import ThreadPoolExecutor
 
         loop = asyncio.get_event_loop()
-        queue: asyncio.Queue[StreamPart | None] = asyncio.Queue()
+        queue: asyncio.Queue[DeltaPart | None] = asyncio.Queue()
 
         def stream_in_thread():
             try:

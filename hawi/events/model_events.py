@@ -11,7 +11,7 @@ from typing import Any, Literal, overload
 from pydantic import field_serializer
 
 from hawi.errors import ModelError
-from hawi.models.message import ContentPart, StreamPart, TokenUsage, ContentPartType
+from hawi.models.message import ContentPart, DeltaPart, TokenUsage, ContentPartType
 
 from .event import Event
 
@@ -109,14 +109,14 @@ class ModelContentBlockStartEvent(Event):
 class ModelContentBlockDeltaEvent(Event):
     """内容块增量更新
 
-    包含完整的原始 StreamPart，同时提供便捷属性访问常用字段。
+    包含完整的原始 DeltaPart，同时提供便捷属性访问常用字段。
 
     Attributes:
         request_id: 请求 ID
         block_index: 内容块序号
         delta_type: 增量类型（便捷属性，也可从 part 获取）
         delta: 增量内容（便捷属性，也可从 part 获取）
-        part: 完整的 StreamPart，包含 is_start, is_end 等原始信息
+        part: 完整的 DeltaPart，包含 is_start, is_end 等原始信息
 
     便捷属性:
         is_start: 是否是该内容块的开始
@@ -138,7 +138,7 @@ class ModelContentBlockDeltaEvent(Event):
     block_index: int
     delta_type: Literal["text", "thinking", "tool_input", "signature"]
     delta: str
-    part: StreamPart
+    part: DeltaPart
 
     @property
     def is_start(self) -> bool:
@@ -154,13 +154,13 @@ class ModelContentBlockDeltaEvent(Event):
     def create(
         cls,
         request_id: str,
-        part: StreamPart,
+        part: DeltaPart,
     ) -> ModelContentBlockDeltaEvent:
-        """从 StreamPart 创建事件
+        """从 DeltaPart 创建事件
 
         Args:
             request_id: 请求 ID
-            part: StreamPart（StreamTextPart | StreamThinkingPart | StreamToolCallPart）
+            part: DeltaPart（DeltaTextPart | DeltaThinkingPart | DeltaToolCallPart）
 
         Returns:
             ModelContentBlockDeltaEvent 实例
@@ -398,6 +398,66 @@ class ModelMetadataEvent(Event):
             request_id=request_id,
             usage=usage,
             latency_ms=latency_ms,
+        )
+
+
+class ModelContentMetadataEvent(Event):
+    """内容元数据事件 - 携带内容块的元数据（如引用位置）
+
+    用于在流式响应中传递 Citation 等元数据。
+    元数据与对应的 content block 按 block_index 关联。
+
+    Attributes:
+        request_id: 请求 ID
+        block_index: 内容块序号（对应 content 中的索引）
+        metadata: 元数据内容（如 CitationPart）
+        start_char: 被标注文本起始位置（可选，None 表示全文）
+        end_char: 被标注文本结束位置（可选）
+
+    Example:
+        # 流式场景：获取 Citation
+        async for event in agent.run("Hello", stream=True):
+            if isinstance(event, ModelContentMetadataEvent):
+                # 获取 Citation
+                citations = event.metadata.get("citations", [])
+                print(f"引用位置: {event.start_char}-{event.end_char}")
+    """
+
+    request_id: str
+    block_index: int
+    metadata: dict[str, Any]  # 元数据（如 {"citations": [...]}）
+    start_char: int | None = None  # 被标注文本起始位置
+    end_char: int | None = None    # 被标注文本结束位置
+
+    @classmethod
+    def create(
+        cls,
+        request_id: str,
+        block_index: int,
+        metadata: dict[str, Any],
+        start_char: int | None = None,
+        end_char: int | None = None,
+    ) -> ModelContentMetadataEvent:
+        """创建内容元数据事件
+
+        Args:
+            request_id: 请求 ID
+            block_index: 内容块序号
+            metadata: 元数据内容
+            start_char: 被标注文本起始位置（可选）
+            end_char: 被标注文本结束位置（可选）
+
+        Returns:
+            ModelContentMetadataEvent 实例
+        """
+        return cls(
+            type='model.content_metadata',
+            source='model',
+            request_id=request_id,
+            block_index=block_index,
+            metadata=metadata,
+            start_char=start_char,
+            end_char=end_char,
         )
 
 

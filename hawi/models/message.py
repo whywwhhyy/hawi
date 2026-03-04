@@ -4,7 +4,7 @@
 使用 TypedDict 实现 Tagged Union 设计，支持完整的类型检查。
 """
 
-from typing import Any, Iterable, Literal, Required, TypeAlias, TypedDict, cast
+from typing import Any, Sequence, Literal, Required, TypeAlias, TypedDict, cast
 
 from pydantic import BaseModel
 
@@ -42,12 +42,13 @@ ContentPartType = Literal[
     "cache_control",
     "refusal",
     "guard_content",
+    "citation",
 ]
 
 
 # 流式内容块类型 - 事件系统中使用的块类型
 # 注意：这是 ContentPartType 的子集，用于流式块处理
-StreamPartType = Literal["text", "thinking", "tool_use", "redacted_thinking"]
+DeltaPartType = Literal["text", "thinking", "tool_use", "redacted_thinking"]
 
 
 class CacheControl(TypedDict):
@@ -225,23 +226,127 @@ class GuardContentPart(TypedDict):
     qualifiers: list[Literal["grounding_source", "query", "guard_content"]]
 
 
+# =============================================================================
+# Citation 类型 - Anthropic 引用内容
+# =============================================================================
+# Anthropic 支持多种引用位置类型：
+# - char_location: 字符位置（PDF 等文档）
+# - page_location: 页面位置（PDF）
+# - content_block_location: 内容块位置
+# - web_search_result_location: Web 搜索结果
+# - search_result_location: 搜索结果
+
+
+class CitationLocationBase(TypedDict, total=False):
+    """Citation 位置基类 - 所有引用类型的公共字段"""
+
+    cited_text: str  # 被引用的文本
+    document_index: int | None  # 文档索引
+    document_title: str | None  # 文档标题
+    file_id: str | None  # 文件 ID
+    title: str | None  # 标题（用于搜索结果）
+
+
+class CitationCharLocation(CitationLocationBase):
+    """字符位置引用 (Anthropic)
+
+    用于引用 PDF 等文档中的特定字符范围。
+    """
+
+    type: Literal["char_location"]
+    start_char_index: int  # 起始字符索引
+    end_char_index: int    # 结束字符索引
+
+
+class CitationPageLocation(CitationLocationBase):
+    """页面位置引用 (Anthropic)
+
+    用于引用 PDF 等文档中的特定页面。
+    """
+
+    type: Literal["page_location"]
+    start_page_number: int  # 起始页码
+    end_page_number: int    # 结束页码
+
+
+class CitationContentBlockLocation(CitationLocationBase):
+    """内容块位置引用 (Anthropic)
+
+    用于引用消息中的特定内容块。
+    """
+
+    type: Literal["content_block_location"]
+    start_block_index: int  # 起始块索引
+    end_block_index: int    # 结束块索引
+
+
+class CitationsWebSearchResultLocation(TypedDict):
+    """Web 搜索结果引用 (Anthropic)
+
+    用于引用 Web 搜索结果。
+    """
+
+    type: Literal["web_search_result_location"]
+    cited_text: str  # 被引用的文本
+    encrypted_index: str  # 加密的索引
+    url: str  # 引用 URL
+    title: str | None  # 标题
+
+
+class CitationsSearchResultLocation(TypedDict):
+    """搜索结果引用 (Anthropic)
+
+    用于引用搜索结果。
+    """
+
+    type: Literal["search_result_location"]
+    cited_text: str  # 被引用的文本
+    source: str  # 来源
+    search_result_index: int  # 搜索结果索引
+    start_block_index: int  # 起始块索引
+    end_block_index: int    # 结束块索引
+    title: str | None  # 标题
+
+
+# CitationLocation 联合类型 - 所有可能的引用位置类型
+CitationLocation: TypeAlias = (
+    CitationCharLocation |
+    CitationPageLocation |
+    CitationContentBlockLocation |
+    CitationsWebSearchResultLocation |
+    CitationsSearchResultLocation
+)
+
+
+class CitationPart(TypedDict):
+    """引用内容 (Anthropic/Kimi)
+
+    模型输出中引用的来源信息。
+    作为完整内容传递（非流式增量）。
+    """
+
+    type: Literal["citation"]
+    citations: list[CitationLocation]  # 引用列表
+
+
 # ContentPart 联合类型
 ContentPart: TypeAlias = (
     TextPart | ImagePart | DocumentPart | AudioPart | VideoPart | FilePart |
-    ToolCallPart | ToolResultPart | ReasoningPart | CacheControlPart | RefusalPart | GuardContentPart
+    ToolCallPart | ToolResultPart | ReasoningPart | CacheControlPart | 
+    RefusalPart | GuardContentPart | CitationPart
 )
 
 
 # =============================================================================
-# StreamPart 类型 - Model 流式输出的增量内容块
+# DeltaPart 类型 - Model 流式输出的增量内容块
 # =============================================================================
-# StreamPart 与 ContentPart 字段结构保持对应关系：
+# DeltaPart 与 ContentPart 字段结构保持对应关系：
 # - text_delta.delta 对应 TextPart.text
 # - tool_call_delta.arguments_delta 对应 ToolCallPart.arguments（JSON片段）
-# - StreamPart 包含增量标记（is_start, is_end, index），ContentPart 包含完整数据
+# - DeltaPart 包含增量标记（is_start, is_end, index），ContentPart 包含完整数据
 
 
-class StreamTextPart(TypedDict):
+class DeltaTextPart(TypedDict):
     """文本增量块"""
 
     type: Literal["text_delta"]
@@ -251,7 +356,7 @@ class StreamTextPart(TypedDict):
     is_end: bool            # 是否是该块的结束
 
 
-class StreamThinkingPart(TypedDict):
+class DeltaThinkingPart(TypedDict):
     """推理/思考增量块"""
 
     type: Literal["thinking_delta"]
@@ -261,7 +366,22 @@ class StreamThinkingPart(TypedDict):
     is_end: bool
 
 
-class StreamToolCallPart(TypedDict):
+class DeltaSignaturePart(TypedDict):
+    """推理签名增量块 (Anthropic)
+
+    Thinking 块的签名增量，用于验证推理完整性。
+    通常与 thinking_delta 配合使用。
+    """
+
+    type: Literal["signature_delta"]
+    index: int
+    delta: str              # 签名增量
+    is_start: bool
+    is_end: bool
+
+
+
+class DeltaToolCallPart(TypedDict):
     """工具调用增量块"""
 
     type: Literal["tool_call_delta"]
@@ -273,7 +393,27 @@ class StreamToolCallPart(TypedDict):
     is_end: bool
 
 
-class StreamFinishPart(TypedDict):
+class DeltaMetadataPart(TypedDict):
+    """元数据增量块 - 用于携带输出内容的元数据（如引用）
+
+    Citation 是对模型输出的位置标注（字符位置、页面位置等），
+    作为元数据在 Delta 流中传递，而非增量文本。
+
+    示例：
+        - citations: 引用列表（char_location, page_location 等）
+    """
+
+    type: Literal["metadata_delta"]
+    index: int
+    metadata: dict[str, Any]  # 元数据（如 {"citations": [...]}）
+    # 字符位置（可选，None 表示 block 全文）
+    start_char: int | None
+    end_char: int | None
+    is_start: bool
+    is_end: bool
+
+
+class DeltaFinishPart(TypedDict):
     """流式响应结束标记"""
 
     type: Literal["finish"]
@@ -281,8 +421,19 @@ class StreamFinishPart(TypedDict):
     usage: dict[str, int] | None  # {"input_tokens": 100, "output_tokens": 50}
 
 
-# StreamPart 联合类型
-StreamPart: TypeAlias = StreamTextPart | StreamThinkingPart | StreamToolCallPart | StreamFinishPart
+# DeltaPart 联合类型
+# 注意：
+# - refusal、guard_content 等非流式内容类型不在此处
+# - 它们只在非流式响应的 ContentPart 中出现
+# - Citation 作为元数据通过 DeltaMetadataPart 在流中传递
+DeltaPart: TypeAlias = (
+    DeltaTextPart | 
+    DeltaThinkingPart | 
+    DeltaSignaturePart |
+    DeltaToolCallPart | 
+    DeltaMetadataPart |
+    DeltaFinishPart
+)
 
 
 # =============================================================================
@@ -504,7 +655,10 @@ class MessageResponse(BaseModel):
 
     id: str
     role: Literal["assistant"] = "assistant"
-    content: Iterable[ContentPart]
+    content: Sequence[ContentPart]
+    # 内容元数据（如 citations）- 与 content 按索引对应
+    content_metadata: list[ContentPart] | None = None
     stop_reason: str | None = None
     usage: TokenUsage | None = None
     reasoning_content: str | None = None  # DeepSeek/Kimi 思考内容
+
