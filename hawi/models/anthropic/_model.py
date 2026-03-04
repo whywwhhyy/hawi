@@ -295,22 +295,38 @@ class AnthropicModel(Model):
     # 调用实现
     # =======================================================================
 
-    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+    def _invoke_impl(
+        self,
+        request: MessageRequest,
+        event_callback=None,
+    ) -> MessageResponse:
         """同步调用 Anthropic API"""
         if needs_async_conversion(
             request.messages, self.enable_image_download
         ):
-            return asyncio.run(self._ainvoke_impl(request))
+            return asyncio.run(self._ainvoke_impl(request, event_callback=event_callback))
 
         req = self._prepare_request_sync(request)
         response = self.client.messages.create(**req)
-        return self._parse_response_impl(response.model_dump())
+        result = self._parse_response_impl(response.model_dump())
 
-    async def _ainvoke_impl(self, request: MessageRequest) -> MessageResponse:
+        # TODO: Emit events via event_callback if provided
+
+        return result
+
+    async def _ainvoke_impl(
+        self,
+        request: MessageRequest,
+        event_callback=None,
+    ) -> MessageResponse:
         """异步调用 Anthropic API"""
         req = await self._prepare_request_async(request)
         response = await self.async_client.messages.create(**req)
-        return self._parse_response_impl(response.model_dump())
+        result = self._parse_response_impl(response.model_dump())
+
+        # TODO: Emit events via event_callback if provided
+
+        return result
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用"""

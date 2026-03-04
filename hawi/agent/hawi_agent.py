@@ -198,6 +198,7 @@ class ContentBlockHandler:
         chunk: DeltaPart,
         request_id: str,
         event_bus: EventBus | None,
+        is_streaming: bool = True,
     ) -> ContentPart | None:
         """处理单个 chunk，返回完成的 Part（块结束时）或 None。
 
@@ -207,6 +208,7 @@ class ContentBlockHandler:
             chunk: DeltaPart（必须是匹配的 type）
             request_id: 请求 ID
             event_bus: 事件总线（可为 None）
+            is_streaming: 是否来自流式接口（默认 True）
 
         Returns:
             块完成时返回 ContentPart，否则返回 None
@@ -242,11 +244,13 @@ class ContentBlockHandler:
                 block_index=idx,
                 tool_call_id=chunk.get("id") or "",
                 arguments_delta=chunk.get("arguments_delta", ""),
+                is_streaming=is_streaming,
             )
         else:
             event = ModelContentBlockDeltaEvent.create(
                 request_id=request_id,
                 part=chunk,
+                is_streaming=is_streaming,
             )
 
         if event_bus is not None:
@@ -261,11 +265,11 @@ class ContentBlockHandler:
 
             if self.block_type == "tool_use":
                 acc = self._accumulator
+                # ModelToolCallBlockStopEvent 不再包含完整参数
                 event = ModelToolCallBlockStopEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     tool_call_id=acc.get("id") or "",
-                    arguments=acc.get("arguments", ""),
                 )
             else:
                 event = ModelContentBlockStopEvent.create(
@@ -355,6 +359,7 @@ class HawiAgent:
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
         event_dump_file: str | None = None,
+        streaming: bool = True,
     ):
         """Initialize HawiAgent.
 
@@ -366,9 +371,11 @@ class HawiAgent:
             model_error_policy: Error handling policy mapping error_type to config
             event_bus: Event bus for event publishing. If None, creates a default EventBus
             event_dump_file: Path to dump all events for debugging (default: None)
+            streaming: Whether to use streaming mode by default (default: True)
         """
         self._default_model = model
         self._max_iterations = max_iterations
+        self._streaming = streaming
         self._event_bus = event_bus or EventBus()
 
         # Initialize event dump manager
@@ -513,6 +520,7 @@ class HawiAgent:
         model: Model | None = None,
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
+        streaming: bool | None = None,
     ) -> AgentRunResult:
         """Execute agent with a message (synchronous).
 
@@ -521,6 +529,7 @@ class HawiAgent:
             model: Override model for this run
             model_error_policy: Override failure policy for this run
             event_bus: Optional event bus for publishing events (defaults to self.event_bus)
+            streaming: Whether to use streaming mode (defaults to self._streaming)
 
         Returns:
             AgentRunResult containing the execution result
@@ -531,8 +540,11 @@ class HawiAgent:
         # Use provided event_bus or default
         effective_event_bus = event_bus or self._event_bus
 
+        # Use provided streaming or default
+        effective_streaming = streaming if streaming is not None else self._streaming
+
         # Run async execution in sync context
-        return asyncio.run(self._execute(message, model, policy, effective_event_bus))
+        return asyncio.run(self._execute(message, model, policy, effective_event_bus, effective_streaming))
 
     async def arun(
         self,
@@ -541,6 +553,7 @@ class HawiAgent:
         model: Model | None = None,
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
+        streaming: bool | None = None,
     ) -> AgentRunResult:
         """Execute agent asynchronously.
 
@@ -549,6 +562,7 @@ class HawiAgent:
             model: Override model for this run
             model_error_policy: Override failure policy for this run
             event_bus: Optional event bus for publishing events (defaults to self.event_bus)
+            streaming: Whether to use streaming mode (defaults to self._streaming)
 
         Returns:
             AgentRunResult containing the execution result
@@ -559,7 +573,10 @@ class HawiAgent:
         # Use provided event_bus or default
         effective_event_bus = event_bus or self._event_bus
 
-        return await self._execute(message, model, policy, effective_event_bus)
+        # Use provided streaming or default
+        effective_streaming = streaming if streaming is not None else self._streaming
+
+        return await self._execute(message, model, policy, effective_event_bus, effective_streaming)
 
     @property
     def event_bus(self) -> EventBus:
@@ -645,6 +662,7 @@ class HawiAgent:
         model: Model | None,
         model_error_policy_config: Optional[ModelErrorPolicyConfig],
         event_bus: EventBus | None = None,
+        streaming: bool = True,
     ) -> AgentRunResult:
         """Execute agent and return result (pure EventBus-driven)."""
 
@@ -720,90 +738,101 @@ class HawiAgent:
                 thinking_handler = ContentBlockHandler.create_thinking_handler()
                 tool_handler = ContentBlockHandler.create_tool_handler()
 
-                # Use try/finally to ensure proper cleanup of the async generator
-                model_stream_gen = self._call_model_with_retry_streaming(
-                    m, policy, state, request_id, event_bus
-                )
-                try:
-                    async for chunk in model_stream_gen:
-                        if state.error:
-                            # state.error 现在应该是异常对象
-                            if isinstance(state.error, AgentError):
-                                await self._emit_event(
-                                    AgentErrorEvent.create(run_id=run_id, error=state.error),
-                                    event_bus,
-                                )
-                            # Send run_stop event for errors during streaming
-                            await self._emit_event(
-                                AgentRunStopEvent.create(
-                                    run_id=run_id,
-                                    stop_reason="error",
-                                    duration_ms=(time.time() - start_time) * 1000,
-                                    usage=cumulative_usage,
-                                ),
-                                event_bus,
-                            )
-                            break
-
-                        chunk_type = chunk["type"]
-                        idx = chunk.get("index", 0)
-
-                        # Get or create handler for this chunk type
-                        if chunk_type == "text_delta":
-                            handler = text_handler
-                        elif chunk_type == "thinking_delta":
-                            handler = thinking_handler
-                        elif chunk_type == "tool_call_delta":
-                            handler = tool_handler
-                        elif chunk_type == "finish":
-                            stop_reason = chunk.get("stop_reason") or "end_turn"
-                            usage_dict = chunk.get("usage")
-                            if usage_dict:
-                                usage = TokenUsage(
-                                    input_tokens=usage_dict.get("input_tokens", 0),
-                                    output_tokens=usage_dict.get("output_tokens", 0),
-                                    cache_write_tokens=usage_dict.get("cache_write_tokens"),
-                                    cache_read_tokens=usage_dict.get("cache_read_tokens"),
-                                )
-                                # Accumulate usage for multi-turn conversations
-                                if cumulative_usage is None:
-                                    cumulative_usage = usage
-                                else:
-                                    cumulative_usage = TokenUsage(
-                                        input_tokens=cumulative_usage.input_tokens + usage.input_tokens,
-                                        output_tokens=cumulative_usage.output_tokens + usage.output_tokens,
-                                        cache_write_tokens=self._add_optional_tokens(
-                                            cumulative_usage.cache_write_tokens,
-                                            usage.cache_write_tokens,
-                                        ),
-                                        cache_read_tokens=self._add_optional_tokens(
-                                            cumulative_usage.cache_read_tokens,
-                                            usage.cache_read_tokens,
-                                        ),
+                if streaming:
+                    # Streaming path: use async generator
+                    model_stream_gen = self._call_model_with_retry_streaming(
+                        m, policy, state, request_id, event_bus
+                    )
+                    try:
+                        async for chunk in model_stream_gen:
+                            if state.error:
+                                # state.error 现在应该是异常对象
+                                if isinstance(state.error, AgentError):
+                                    await self._emit_event(
+                                        AgentErrorEvent.create(run_id=run_id, error=state.error),
+                                        event_bus,
                                     )
-                            continue
-                        else:
-                            continue  # Unknown chunk type
-
-                        # Handle the chunk with appropriate handler
-                        part = await handler.handle(chunk, request_id, event_bus)
-                        if part is not None:
-                            content_parts.append(part)
-                            if part["type"] == "tool_call":
-                                tool_calls.append(part)
-                                # For tool calls, also send AgentToolCallEvent
+                                # Send run_stop event for errors during streaming
                                 await self._emit_event(
-                                    AgentToolCallEvent.create(
+                                    AgentRunStopEvent.create(
                                         run_id=run_id,
-                                        tool_name=part["name"],
-                                        arguments=part["arguments"],
-                                        tool_call_id=part["id"],
+                                        stop_reason="error",
+                                        duration_ms=(time.time() - start_time) * 1000,
+                                        usage=cumulative_usage,
                                     ),
                                     event_bus,
                                 )
-                finally:
-                    # Ensure the model stream generator is properly closed
-                    await model_stream_gen.aclose()
+                                break
+
+                            chunk_type = chunk["type"]
+                            idx = chunk.get("index", 0)
+
+                            # Get or create handler for this chunk type
+                            if chunk_type == "text_delta":
+                                handler = text_handler
+                            elif chunk_type == "thinking_delta":
+                                handler = thinking_handler
+                            elif chunk_type == "tool_call_delta":
+                                handler = tool_handler
+                            elif chunk_type == "finish":
+                                stop_reason = chunk.get("stop_reason") or "end_turn"
+                                usage_dict = chunk.get("usage")
+                                if usage_dict:
+                                    usage = TokenUsage(
+                                        input_tokens=usage_dict.get("input_tokens", 0),
+                                        output_tokens=usage_dict.get("output_tokens", 0),
+                                        cache_write_tokens=usage_dict.get("cache_write_tokens"),
+                                        cache_read_tokens=usage_dict.get("cache_read_tokens"),
+                                    )
+                                    # Accumulate usage for multi-turn conversations
+                                    if cumulative_usage is None:
+                                        cumulative_usage = usage
+                                    else:
+                                        cumulative_usage = TokenUsage(
+                                            input_tokens=cumulative_usage.input_tokens + usage.input_tokens,
+                                            output_tokens=cumulative_usage.output_tokens + usage.output_tokens,
+                                            cache_write_tokens=self._add_optional_tokens(
+                                                cumulative_usage.cache_write_tokens,
+                                                usage.cache_write_tokens,
+                                            ),
+                                            cache_read_tokens=self._add_optional_tokens(
+                                                cumulative_usage.cache_read_tokens,
+                                                usage.cache_read_tokens,
+                                            ),
+                                        )
+                                continue
+                            else:
+                                continue  # Unknown chunk type
+
+                            # Handle the chunk with appropriate handler
+                            part = await handler.handle(chunk, request_id, event_bus, is_streaming=True)
+                            if part is not None:
+                                content_parts.append(part)
+                                if part["type"] == "tool_call":
+                                    tool_calls.append(part)
+                                    # For tool calls, also send AgentToolCallEvent
+                                    await self._emit_event(
+                                        AgentToolCallEvent.create(
+                                            run_id=run_id,
+                                            tool_name=part["name"],
+                                            arguments=part["arguments"],
+                                            tool_call_id=part["id"],
+                                        ),
+                                        event_bus,
+                                    )
+                    finally:
+                        # Ensure the model stream generator is properly closed
+                        await model_stream_gen.aclose()
+                else:
+                    # Non-streaming path: use ainvoke with event callback
+                    await self._execute_non_streaming(
+                        m, policy, state, request_id, event_bus,
+                        text_handler, thinking_handler, tool_handler,
+                        content_parts, tool_calls
+                    )
+                    # Set stop_reason and usage from the response
+                    stop_reason = "end_turn"
+                    usage = None
 
                 if state.error:
                     # Send error event before breaking (error occurred during streaming)
@@ -947,6 +976,118 @@ class HawiAgent:
             tool_calls=state.tool_calls,
             error=str(state.error) if state.error else None,
         )
+
+    async def _execute_non_streaming(
+        self,
+        model: Model,
+        policy: ModelErrorPolicyConfig,
+        state: _ExecutionState,
+        request_id: str,
+        event_bus: EventBus | None,
+        text_handler: ContentBlockHandler,
+        thinking_handler: ContentBlockHandler,
+        tool_handler: ContentBlockHandler,
+        content_parts: list[ContentPart],
+        tool_calls: list[ToolCallPart],
+    ) -> None:
+        """Execute model call in non-streaming mode with event callback.
+
+        Uses model.ainvoke() with event_callback to emit events all at once.
+        """
+        last_error = None
+        max_retries = 0
+
+        # Calculate max retries from policy
+        for p in policy.values():
+            if p.action == "retry" and isinstance(p, ModelErrorRetryPolicy) and p.retry_count > max_retries:
+                max_retries = p.retry_count
+
+        # Track which handler to use for each block index
+        handlers: dict[int, ContentBlockHandler] = {}
+
+        def event_callback(event_type: str, data: dict) -> None:
+            """Callback to process events from the model's non-streaming response."""
+            # Map event types to handler processing
+            if event_type == "model.content_block_delta":
+                part = data.get("part", {})
+                idx = part.get("index", 0)
+                part_type = part.get("type", "")
+
+                # Get or create handler for this chunk type
+                if idx not in handlers:
+                    if part_type == "text_delta":
+                        handlers[idx] = text_handler
+                    elif part_type == "thinking_delta":
+                        handlers[idx] = thinking_handler
+                    elif part_type == "tool_call_delta":
+                        handlers[idx] = tool_handler
+
+                handler = handlers.get(idx)
+                if handler:
+                    # Use async.run_coroutine_threadsafe since callback is sync
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        asyncio.run_coroutine_threadsafe(
+                            handler.handle(part, request_id, event_bus, is_streaming=False),
+                            loop
+                        )
+                    except RuntimeError:
+                        # No running loop, just call handle directly (it will queue events)
+                        pass
+
+            elif event_type == "model.content_block_stop":
+                # Block completed, add to content_parts
+                block_content = data.get("content", [])
+                for part in block_content:
+                    content_parts.append(part)
+                    if part.get("type") == "tool_call":
+                        tool_calls.append(part)  # type: ignore
+
+            elif event_type == "model.tool_call_block_stop":
+                # Tool call block completed
+                pass  # Already handled in content_block_stop
+
+        attempt = 0
+        for attempt in range(max_retries + 1):
+            try:
+                request = self._context.prepare_request()
+
+                # Call model with event_callback
+                response = await model.ainvoke(
+                    messages=request.messages,
+                    system=[part for part in (request.system or ()) if part['type'] == 'text'],
+                    tools=request.tools,
+                    event_callback=event_callback,
+                )
+
+                # Process response to ensure all parts are captured
+                for part in response.content:
+                    if part.get("type") == "tool_call":
+                        # Check if already added
+                        if part not in tool_calls:
+                            tool_calls.append(part)  # type: ignore[arg-type]
+
+                return
+
+            except ModelError as e:
+                last_error = e
+                policy_for_error = policy[e.error_type]
+
+                if policy_for_error.action == "stop":
+                    state.error = e
+                    if event_bus:
+                        await event_bus.publish_async(ModelErrorEvent.create(error=e))
+                    return
+
+                if attempt < max_retries:
+                    await asyncio.sleep(min(2 ** attempt, 60))
+
+        if last_error:
+            err = ModelError("network", f"Model call failed after {attempt + 1} attempts: {last_error}")
+            state.error = err
+            if event_bus:
+                await event_bus.publish_async(ModelErrorEvent.create(error=err))
 
     async def _call_model_with_retry_streaming(
         self,

@@ -111,27 +111,29 @@ class ModelContentBlockDeltaEvent(Event):
 
     包含完整的原始 DeltaPart，同时提供便捷属性访问常用字段。
 
+    关于 delta 的语义：
+    - streaming=True: delta 表示每一个小碎块的信息
+    - streaming=False: delta 表示完整的内容（非流式模式下一次性返回）
+
     Attributes:
         request_id: 请求 ID
         block_index: 内容块序号
         delta_type: 增量类型（便捷属性，也可从 part 获取）
-        delta: 增量内容（便捷属性，也可从 part 获取）
+        delta: 增量内容（streaming 决定其语义）
         part: 完整的 DeltaPart，包含 is_start, is_end 等原始信息
+        is_streaming: 是否来自流式接口
 
     便捷属性:
         is_start: 是否是该内容块的开始
         is_end: 是否是该内容块的结束
 
     Example:
-        # 简单用法：直接访问便捷属性
-        if event.delta:
+        # 流式模式：累积 delta
+        if event.is_streaming:
+            buffer += event.delta
+        else:
+            # 非流式模式：delta 就是完整内容
             print(event.delta)
-
-        # 高级用法：访问完整 Part 信息
-        if event.part["is_start"]:
-            print("新块开始，准备 UI...")
-        if event.part["is_end"]:
-            print("块结束，刷新 UI...")
     """
 
     request_id: str
@@ -139,6 +141,7 @@ class ModelContentBlockDeltaEvent(Event):
     delta_type: Literal["text", "thinking", "tool_input", "signature"]
     delta: str
     part: DeltaPart
+    is_streaming: bool = True
 
     @property
     def is_start(self) -> bool:
@@ -155,12 +158,14 @@ class ModelContentBlockDeltaEvent(Event):
         cls,
         request_id: str,
         part: DeltaPart,
+        is_streaming: bool = True,
     ) -> ModelContentBlockDeltaEvent:
         """从 DeltaPart 创建事件
 
         Args:
             request_id: 请求 ID
             part: DeltaPart（DeltaTextPart | DeltaThinkingPart | DeltaToolCallPart）
+            is_streaming: 是否来自流式接口（默认 True）
 
         Returns:
             ModelContentBlockDeltaEvent 实例
@@ -191,6 +196,7 @@ class ModelContentBlockDeltaEvent(Event):
             delta_type=delta_type,
             delta=delta,
             part=part,
+            is_streaming=is_streaming,
         )
 
 
@@ -238,12 +244,24 @@ class ModelToolCallBlockDeltaEvent(Event):
     """工具调用内容块增量
 
     专门用于 tool_call 类型的增量更新。
+
+    关于 arguments_delta 的语义：
+    - streaming=True: arguments_delta 表示每一个小碎块的信息
+    - streaming=False: arguments_delta 表示完整的参数 JSON
+
+    Attributes:
+        request_id: 请求 ID
+        block_index: 内容块序号
+        tool_call_id: 工具调用 ID
+        arguments_delta: 参数增量（JSON 片段或完整 JSON）
+        is_streaming: 是否来自流式接口
     """
 
     request_id: str
     block_index: int
     tool_call_id: str
     arguments_delta: str
+    is_streaming: bool = True
 
     @classmethod
     def create(
@@ -252,6 +270,7 @@ class ModelToolCallBlockDeltaEvent(Event):
         block_index: int,
         tool_call_id: str,
         arguments_delta: str,
+        is_streaming: bool = True,
     ) -> ModelToolCallBlockDeltaEvent:
         """创建工具调用内容块增量事件
 
@@ -259,7 +278,8 @@ class ModelToolCallBlockDeltaEvent(Event):
             request_id: 请求 ID
             block_index: 内容块序号
             tool_call_id: 工具调用 ID
-            arguments_delta: 参数增量（JSON 片段）
+            arguments_delta: 参数增量（JSON 片段或完整 JSON）
+            is_streaming: 是否来自流式接口（默认 True）
 
         Returns:
             ModelToolCallBlockDeltaEvent 实例
@@ -271,19 +291,20 @@ class ModelToolCallBlockDeltaEvent(Event):
             block_index=block_index,
             tool_call_id=tool_call_id,
             arguments_delta=arguments_delta,
+            is_streaming=is_streaming,
         )
 
 
 class ModelToolCallBlockStopEvent(Event):
     """工具调用内容块结束
 
-    专门用于 tool_call 类型的结束事件，包含完整的参数。
+    专门用于 tool_call 类型的结束事件。
+    注意：此事件不再包含完整的参数信息，参数应在 delta 事件中累积获取。
     """
 
     request_id: str
     block_index: int
     tool_call_id: str
-    arguments: str  # 完整的 JSON 参数
 
     @classmethod
     def create(
@@ -291,7 +312,6 @@ class ModelToolCallBlockStopEvent(Event):
         request_id: str,
         block_index: int,
         tool_call_id: str,
-        arguments: str,
     ) -> ModelToolCallBlockStopEvent:
         """创建工具调用内容块结束事件
 
@@ -299,7 +319,6 @@ class ModelToolCallBlockStopEvent(Event):
             request_id: 请求 ID
             block_index: 内容块序号
             tool_call_id: 工具调用 ID
-            arguments: 完整的参数 JSON 字符串
 
         Returns:
             ModelToolCallBlockStopEvent 实例
@@ -310,7 +329,6 @@ class ModelToolCallBlockStopEvent(Event):
             request_id=request_id,
             block_index=block_index,
             tool_call_id=tool_call_id,
-            arguments=arguments,
         )
 
 

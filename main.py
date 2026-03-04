@@ -114,7 +114,7 @@ def create_model(argv:list[str]):
     print(f"quick arguments: {' '.join(quick_arguments)}")
     return provider_config['key'], model_class(**model_params)
 
-def create_agent(model: Model, event_dump_file: str | None = None) -> HawiAgent:
+def create_agent(model: Model, event_dump_file: str | None = None, streaming: bool = True) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
     # print(model.get_balance())
 
@@ -139,6 +139,7 @@ Always explain what you're doing before executing code.
 """,
         max_iterations=None,
         event_dump_file=event_dump_file,
+        streaming=streaming,
     )
 
 
@@ -149,6 +150,7 @@ def main():
     printer_type = "auto"  # auto, rich, text
     loop = False
     event_dump_file = None
+    streaming = True  # Default to streaming mode
 
     # Parse printer type
     if "--printer" in argv:
@@ -160,6 +162,14 @@ def main():
     if "--continue" in argv:
         argv.remove("--continue")
         loop = True
+
+    # Parse streaming flag
+    if "--no-streaming" in argv:
+        argv.remove("--no-streaming")
+        streaming = False
+    elif "--streaming" in argv:
+        argv.remove("--streaming")
+        streaming = True
 
     # Parse event dump file
     if "--dump-events" in argv:
@@ -185,16 +195,20 @@ def main():
     else:
         actual_printer = printer_type
 
-    agent = create_agent(model, event_dump_file=event_dump_file)
+    agent = create_agent(model, event_dump_file=event_dump_file, streaming=streaming)
     print(f"Using provider: {llm_provider}")
     print(f"Model: {model.model_id}")
-    print(f"Printer: {actual_printer}" + (" (auto-detected)" if printer_type == "auto" else ""))
+    if streaming:
+        print(f"Printer: {actual_printer}" + (" (auto-detected)" if printer_type == "auto" else ""))
+    else:
+        print("Mode: non-streaming")
     if event_dump_file:
         print(f"Event dump: {event_dump_file}")
     print("Type 'exit', 'quit', or 'q' to exit\n")
 
+    # Setup printer for output display
+    # Printer handles events from both streaming and non-streaming modes
     if actual_printer == 'rich':
-        # printer = StreamMarkdownPrinter()
         printer = RichStreamingPrinter()
     elif actual_printer == 'plain':
         printer = PlainPrinter(
@@ -210,11 +224,8 @@ def main():
     def execute_prompt(prompt:str):
         import asyncio
 
-        async def run_with_subscription():
-            await agent.arun(prompt)
-
         try:
-            asyncio.run(run_with_subscription())
+            asyncio.run(agent.arun(prompt))
         except Exception as e:
             print(f"\n❌ Error: {e}")
             if event_dump_file:

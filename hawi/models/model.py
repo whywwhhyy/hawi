@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Iterator, List, Literal
+from typing import Any, AsyncGenerator, Iterator, List, Literal, Callable
 
 from hawi.models.message import (
     ContentPart,
@@ -24,7 +24,11 @@ from hawi.models.message import (
 )
 from hawi.errors import ModelError
 
-__all__ = ["Model", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
+__all__ = ["Model", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError", "ModelEventCallback"]
+
+# Model 事件回调类型：用于非流式接口输出事件
+# 回调函数接收 (event_type: str, data: dict) 参数
+ModelEventCallback = Callable[[str, dict[str, Any]], None]
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -116,11 +120,21 @@ class Model(ABC):
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
+        event_callback: ModelEventCallback | None = None,
         **kwargs,
     ) -> MessageResponse:
-        """同步调用模型"""
+        """同步调用模型
+
+        Args:
+            messages: 消息列表
+            system: 系统提示
+            tools: 工具定义列表
+            tool_choice: 工具选择策略
+            event_callback: 事件回调函数，用于输出 model 事件（非流式接口也能产生事件）
+            **kwargs: 其他参数
+        """
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
-        return self._invoke_impl(request)
+        return self._invoke_impl(request, event_callback=event_callback)
 
     def stream(
         self,
@@ -144,11 +158,21 @@ class Model(ABC):
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
+        event_callback: ModelEventCallback | None = None,
         **kwargs,
     ) -> MessageResponse:
-        """异步调用模型"""
+        """异步调用模型
+
+        Args:
+            messages: 消息列表
+            system: 系统提示
+            tools: 工具定义列表
+            tool_choice: 工具选择策略
+            event_callback: 事件回调函数，用于输出 model 事件（非流式接口也能产生事件）
+            **kwargs: 其他参数
+        """
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
-        return await self._ainvoke_impl(request)
+        return await self._ainvoke_impl(request, event_callback=event_callback)
 
     @asynccontextmanager
     async def astream(
@@ -190,22 +214,42 @@ class Model(ABC):
     # ==========================================================================
 
     @abstractmethod
-    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
-        """同步调用实现"""
+    def _invoke_impl(
+        self,
+        request: MessageRequest,
+        event_callback: ModelEventCallback | None = None,
+    ) -> MessageResponse:
+        """同步调用实现
+
+        Args:
+            request: 消息请求
+            event_callback: 事件回调函数，用于输出 model 事件
+        """
         pass
 
     # ==========================================================================
     # 调用实现 - 子类可选实现（默认提供基于 sync 的 fallback）
     # ==========================================================================
 
-    async def _ainvoke_impl(self, request: MessageRequest) -> MessageResponse:
-        """异步调用实现（默认使用线程池）"""
+    async def _ainvoke_impl(
+        self,
+        request: MessageRequest,
+        event_callback: ModelEventCallback | None = None,
+    ) -> MessageResponse:
+        """异步调用实现（默认使用线程池）
+
+        Args:
+            request: 消息请求
+            event_callback: 事件回调函数，用于输出 model 事件
+        """
         import asyncio
         from concurrent.futures import ThreadPoolExecutor
+        from functools import partial
 
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as pool:
-            return await loop.run_in_executor(pool, self._invoke_impl, request)
+            func = partial(self._invoke_impl, event_callback=event_callback)
+            return await loop.run_in_executor(pool, func, request)
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式实现（默认不支持）"""

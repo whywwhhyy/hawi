@@ -106,6 +106,11 @@ class RichStreamingPrinter(BasePrinter):
         self._block_has_received_delta: bool = False
         self._block_count: int = 0
 
+        # Buffer for non-streaming mode: accumulate content and print at stream_stop
+        self._text_buffer: str = ""
+        self._pending_reasoning: str = ""
+        self._is_streaming_mode: bool = True
+
     def _build_ansi_prefix(self) -> str:
         """构建 ANSI 转义码前缀"""
         if not self.text_style:
@@ -123,8 +128,8 @@ class RichStreamingPrinter(BasePrinter):
         self._current_block_type = block_type
         self._block_has_received_delta = False
 
-        # 在每个 block 前添加额外换行（第一个除外）
-        if self._block_count > 0:
+        # 在每个 block 前添加额外换行（第一个除外，仅在流式模式）
+        if self._is_streaming_mode and self._block_count > 0:
             _stdout.write("\n")
             _stdout.flush()
         self._block_count += 1
@@ -134,6 +139,7 @@ class RichStreamingPrinter(BasePrinter):
         assert isinstance(event, ModelContentBlockDeltaEvent)
         delta_type = event.delta_type
         delta = event.delta
+        is_streaming = getattr(event, 'is_streaming', True)
 
         if not self._block_has_received_delta:
             self._block_has_received_delta = True
@@ -141,22 +147,36 @@ class RichStreamingPrinter(BasePrinter):
         if not delta:
             return
 
+        # Detect streaming mode from first delta event
+        if hasattr(event, 'is_streaming'):
+            self._is_streaming_mode = is_streaming
+
         if delta_type == "text":
-            if self._ansi_prefix:
-                _stdout.write(self._ansi_prefix)
-            for char in delta:
-                _stdout.write(char)
-                _stdout.flush()
-                if self.typing_delay > 0:
-                    import time
-                    time.sleep(self.typing_delay)
-                if char == "\n" and self._ansi_prefix:
-                    _stdout.write(ANSI_COLORS["reset"])
+            if is_streaming:
+                # Streaming mode: print immediately
+                if self._ansi_prefix:
+                    _stdout.write(self._ansi_prefix)
+                for char in delta:
+                    _stdout.write(char)
+                    _stdout.flush()
+                    if self.typing_delay > 0:
+                        import time
+                        time.sleep(self.typing_delay)
+                    if char == "\n" and self._ansi_prefix:
+                        _stdout.write(ANSI_COLORS["reset"])
+            else:
+                # Non-streaming mode: buffer for later output
+                self._text_buffer += delta
 
         elif delta_type == "thinking" and self.show_reasoning:
-            if self._ansi_prefix:
-                _stdout.write(ANSI_COLORS["reset"])
-            self._reasoning_buffer += delta
+            if is_streaming:
+                # Streaming mode: accumulate and print at block stop
+                if self._ansi_prefix:
+                    _stdout.write(ANSI_COLORS["reset"])
+                self._reasoning_buffer += delta
+            else:
+                # Non-streaming mode: buffer for later output
+                self._pending_reasoning += delta
 
     async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束"""
@@ -167,16 +187,19 @@ class RichStreamingPrinter(BasePrinter):
             _stdout.flush()
 
         block_type = event.block_type
+        is_streaming = getattr(event, 'is_streaming', True)
 
         if block_type == "reasoning" and self.show_reasoning:
-            # 从 content 中提取 reasoning 文本
-            reasoning_content = ""
-            for part in event.content:
-                if part.get("type") == "reasoning":
-                    reasoning_content = part.get("reasoning") or ""
-                    break
-            self._print_thinking_panel(self._reasoning_buffer or reasoning_content)
-            self._reasoning_buffer = ""
+            if is_streaming:
+                # Streaming mode: print accumulated reasoning
+                reasoning_content = ""
+                for part in event.content:
+                    if part.get("type") == "reasoning":
+                        reasoning_content = part.get("reasoning") or ""
+                        break
+                self._print_thinking_panel(self._reasoning_buffer or reasoning_content)
+                self._reasoning_buffer = ""
+            # Non-streaming mode: reasoning will be printed at stream_stop
 
         self._current_block_type = None
 
@@ -200,10 +223,28 @@ class RichStreamingPrinter(BasePrinter):
 
     async def _on_stream_stop(self, event: Event) -> None:
         """Model 流式响应结束"""
+        # In non-streaming mode, print buffered content in correct order:
+        # reasoning first, then text
+        if not self._is_streaming_mode:
+            # Print reasoning first (if any)
+            if self._pending_reasoning and self.show_reasoning:
+                self._print_thinking_panel(self._pending_reasoning)
+                self._pending_reasoning = ""
+            # Then print text
+            if self._text_buffer:
+                if self._ansi_prefix:
+                    _stdout.write(self._ansi_prefix)
+                _stdout.write(self._text_buffer)
+                _stdout.flush()
+                self._text_buffer = ""
+
         if self._ansi_prefix:
             _stdout.write(ANSI_COLORS["reset"])
             _stdout.flush()
         self._current_block_type = None
+        # Add newline at the end of the stream to separate from next output
+        _stdout.write("\n")
+        _stdout.flush()
 
     def _print_thinking_panel(self, content: str) -> None:
         """打印 thinking 面板"""
@@ -216,6 +257,18 @@ class RichStreamingPrinter(BasePrinter):
             padding=(0, 1),
         )
         self._console.print(panel)
+
+    async def _on_stream_start(self, event: Event) -> None:
+        """Model 流式响应开始 - 重置状态"""
+        # Call parent to reset reasoning_buffer and active_tool_calls
+        self._reasoning_buffer = ""
+        self._active_tool_calls.clear()
+        # Reset Rich printer specific state
+        self._text_buffer = ""
+        self._pending_reasoning = ""
+        self._is_streaming_mode = True
+        self._block_count = 0
+        self._block_has_received_delta = False
 
     async def _on_run_start(self, event: Event) -> None:
         """Agent 执行开始"""

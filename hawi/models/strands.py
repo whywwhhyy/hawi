@@ -200,7 +200,11 @@ class StrandsModel(Model):
     # 调用实现
     # ==========================================================================
 
-    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+    def _invoke_impl(
+        self,
+        request: MessageRequest,
+        event_callback=None,
+    ) -> MessageResponse:
         """同步调用实现"""
         # 准备 strands 格式的请求
         strands_request = self._prepare_request_impl(request)
@@ -217,7 +221,11 @@ class StrandsModel(Model):
             )
 
         # 转换响应
-        return self._parse_response_impl(strands_response)
+        result = self._parse_response_impl(strands_response)
+
+        # TODO: Emit events via event_callback if provided
+
+        return result
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式实现"""
@@ -236,7 +244,11 @@ class StrandsModel(Model):
         # 转换流事件
         yield from self._convert_strands_stream(strands_stream)
 
-    async def _ainvoke_impl(self, request: MessageRequest) -> MessageResponse:
+    async def _ainvoke_impl(
+        self,
+        request: MessageRequest,
+        event_callback=None,
+    ) -> MessageResponse:
         """异步调用实现"""
         strands_request = self._prepare_request_impl(request)
 
@@ -246,9 +258,13 @@ class StrandsModel(Model):
             strands_response = await self.strands_model.ainvoke(**strands_request)
         else:
             # Fallback 到 sync 版本
-            return self._invoke_impl(request)
+            return self._invoke_impl(request, event_callback=event_callback)
 
-        return self._parse_response_impl(strands_response)
+        result = self._parse_response_impl(strands_response)
+
+        # TODO: Emit events via event_callback if provided
+
+        return result
 
     async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         """异步流式实现"""

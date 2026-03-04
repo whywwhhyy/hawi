@@ -29,8 +29,8 @@ ModelEventType = Literal[
     'model.tool_call_block_start',
     'model.tool_call_block_delta',
     'model.tool_call_block_stop',
-    'model.metadata',
     'model.content_metadata',
+    'model.metadata',
     'model.stream_stop',
     'model.error',
 ]
