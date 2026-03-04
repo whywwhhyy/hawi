@@ -31,7 +31,8 @@ from .context import AgentContext
 # )
 from .printers import (
     PlainPrinter,
-    RichStreamingPrinter,
+    RichPrinter,
+    BlockPrinter,
     StreamMarkdownPrinter,
 )
 from ..errors import (
@@ -59,7 +60,8 @@ __all__ = [
     # "Event",
     # "EventBus",
     "PlainPrinter",
-    "RichStreamingPrinter",
+    "RichPrinter",
+    "BlockPrinter",
     "StreamMarkdownPrinter",
     # # Model events
     # "ModelStreamStartEvent",

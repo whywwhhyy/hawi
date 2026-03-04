@@ -2,21 +2,22 @@
 Hawi Printer Implementations
 
 提供多种事件打印机实现：
-- RichStreamingPrinter: 原始 ANSI 颜色流式打印
-- MarkdownStreamingPrinter: Markdown 实时渲染打印机
+- RichPrinter: 动态流式渲染输出 (Markdown + Live)
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any
-
 import sys
+from typing import Any, Optional
 
-from rich.console import Console
+from rich.console import Console, RenderableType, Group
+from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
+from rich.json import JSON
+from rich.rule import Rule
 
 from hawi.events import (
     Event,
@@ -30,51 +31,16 @@ from hawi.events import (
 from hawi.agent.printers.base import BasePrinter
 
 logger = logging.getLogger(__name__)
-_stdout = sys.stdout
 
-_console = Console()
-
-ANSI_COLORS = {
-    "black": "\033[30m",
-    "red": "\033[31m",
-    "green": "\033[32m",
-    "yellow": "\033[33m",
-    "blue": "\033[34m",
-    "magenta": "\033[35m",
-    "cyan": "\033[36m",
-    "white": "\033[37m",
-    "bright_black": "\033[90m",
-    "bright_red": "\033[91m",
-    "bright_green": "\033[92m",
-    "bright_yellow": "\033[93m",
-    "bright_blue": "\033[94m",
-    "bright_magenta": "\033[95m",
-    "bright_cyan": "\033[96m",
-    "bright_white": "\033[97m",
-    "bold": "\033[1m",
-    "dim": "\033[2m",
-    "italic": "\033[3m",
-    "underline": "\033[4m",
-    "reset": "\033[0m",
-}
-
-
-class RichStreamingPrinter(BasePrinter):
+class RichPrinter(BasePrinter):
     """
-    Rich 流式打印机 - 唯一推荐的交互式打印机。
-
+    Rich Printer: 使用 rich 库输出真正的动态用户界面。
+    
     特性：
-    - ANSI 转义码实现文本颜色/样式
-    - 逐字符实时输出
-    - rich Panel 显示 reasoning 和 tool 结果
-    - 可选打字机效果
-
-    使用示例：
-        printer = RichStreamingPrinter(text_style="green")
-        async for event in agent.arun("prompt", stream=True):
-            await printer.handle(event)
+    - 支持流式输出渲染过的 markdown 到终端
+    - 实时流式显示输出（backtrack/re-render）
     """
-
+    
     def __init__(
         self,
         *,
@@ -84,10 +50,9 @@ class RichStreamingPrinter(BasePrinter):
         show_error_stack: bool = True,
         max_arg_length: int = 80,
         max_result_length: int = 200,
-        console: Console | None = None,
-        typing_delay: float = 0.0,
-        text_style: str | None = "green",
         show_full_tool_content: bool = True,
+        console: Console | None = None,
+        refresh_per_second: float = 12.5,
     ):
         super().__init__(
             show_reasoning=show_reasoning,
@@ -98,183 +63,34 @@ class RichStreamingPrinter(BasePrinter):
             max_result_length=max_result_length,
             show_full_tool_content=show_full_tool_content,
         )
-        self._console = console or _console
-        self.typing_delay = typing_delay
-        self.text_style = text_style
-        self._ansi_prefix = self._build_ansi_prefix() if text_style else ""
+        self._console = console or Console()
+        self._refresh_per_second = refresh_per_second
+        
+        self._live: Optional[Live] = None
+        self._current_content = ""
+        self._current_tool_name = ""
+        # 缓存 tool args 用于 Live 持续显示
+        self._pending_tool_calls: dict[str, str] = {} # tool_name -> args_json
 
-        self._block_has_received_delta: bool = False
-        self._block_count: int = 0
-
-        # Buffer for non-streaming mode: accumulate content and print at stream_stop
-        self._text_buffer: str = ""
-        self._pending_reasoning: str = ""
-        self._is_streaming_mode: bool = True
-
-    def _build_ansi_prefix(self) -> str:
-        """构建 ANSI 转义码前缀"""
-        if not self.text_style:
-            return ""
-        codes = []
-        for style in self.text_style.lower().split():
-            if style in ANSI_COLORS:
-                codes.append(ANSI_COLORS[style])
-        return "".join(codes)
-
-    async def _on_content_block_start(self, event: Event) -> None:
-        """内容块开始"""
-        assert isinstance(event, ModelContentBlockStartEvent)
-        block_type = event.block_type
-        self._current_block_type = block_type
-        self._block_has_received_delta = False
-
-        # 在每个 block 前添加额外换行（第一个除外，仅在流式模式）
-        if self._is_streaming_mode and self._block_count > 0:
-            _stdout.write("\n")
-            _stdout.flush()
-        self._block_count += 1
-
-    async def _on_content_block_delta(self, event: Event) -> None:
-        """逐字符实时输出"""
-        assert isinstance(event, ModelContentBlockDeltaEvent)
-        delta_type = event.delta_type
-        delta = event.delta
-        is_streaming = getattr(event, 'is_streaming', True)
-
-        if not self._block_has_received_delta:
-            self._block_has_received_delta = True
-
-        if not delta:
-            return
-
-        # Detect streaming mode from first delta event
-        if hasattr(event, 'is_streaming'):
-            self._is_streaming_mode = is_streaming
-
-        if delta_type == "text":
-            if is_streaming:
-                # Streaming mode: print immediately
-                if self._ansi_prefix:
-                    _stdout.write(self._ansi_prefix)
-                for char in delta:
-                    _stdout.write(char)
-                    _stdout.flush()
-                    if self.typing_delay > 0:
-                        import time
-                        time.sleep(self.typing_delay)
-                    if char == "\n" and self._ansi_prefix:
-                        _stdout.write(ANSI_COLORS["reset"])
-            else:
-                # Non-streaming mode: buffer for later output
-                self._text_buffer += delta
-
-        elif delta_type == "thinking" and self.show_reasoning:
-            if is_streaming:
-                # Streaming mode: accumulate and print at block stop
-                if self._ansi_prefix:
-                    _stdout.write(ANSI_COLORS["reset"])
-                self._reasoning_buffer += delta
-            else:
-                # Non-streaming mode: buffer for later output
-                self._pending_reasoning += delta
-
-    async def _on_content_block_stop(self, event: Event) -> None:
-        """内容块结束"""
-        assert isinstance(event, ModelContentBlockStopEvent)
-
-        if self._ansi_prefix:
-            _stdout.write(ANSI_COLORS["reset"])
-            _stdout.flush()
-
-        block_type = event.block_type
-        is_streaming = getattr(event, 'is_streaming', True)
-
-        if block_type == "reasoning" and self.show_reasoning:
-            if is_streaming:
-                # Streaming mode: print accumulated reasoning
-                reasoning_content = ""
-                for part in event.content:
-                    if part.get("type") == "reasoning":
-                        reasoning_content = part.get("reasoning") or ""
-                        break
-                self._print_thinking_panel(self._reasoning_buffer or reasoning_content)
-                self._reasoning_buffer = ""
-            # Non-streaming mode: reasoning will be printed at stream_stop
-
-        self._current_block_type = None
-
-    async def _on_tool_use_block_start(self, event: Event) -> None:
-        """工具调用块开始"""
-        assert isinstance(event, ModelToolCallBlockStartEvent)
-        self._current_block_type = "tool_use"
-        self._block_has_received_delta = False
-
-    async def _on_tool_use_block_delta(self, event: Event) -> None:
-        """工具调用块增量"""
-        assert isinstance(event, ModelToolCallBlockDeltaEvent)
-        # 工具调用参数增量不直接显示，在 stop 时显示完整信息
-        if not self._block_has_received_delta:
-            self._block_has_received_delta = True
-
-    async def _on_tool_use_block_stop(self, event: Event) -> None:
-        """工具调用块结束"""
-        assert isinstance(event, ModelToolCallBlockStopEvent)
-        self._current_block_type = None
-
-    async def _on_stream_stop(self, event: Event) -> None:
-        """Model 流式响应结束"""
-        # In non-streaming mode, print buffered content in correct order:
-        # reasoning first, then text
-        if not self._is_streaming_mode:
-            # Print reasoning first (if any)
-            if self._pending_reasoning and self.show_reasoning:
-                self._print_thinking_panel(self._pending_reasoning)
-                self._pending_reasoning = ""
-            # Then print text
-            if self._text_buffer:
-                if self._ansi_prefix:
-                    _stdout.write(self._ansi_prefix)
-                _stdout.write(self._text_buffer)
-                _stdout.flush()
-                self._text_buffer = ""
-
-        if self._ansi_prefix:
-            _stdout.write(ANSI_COLORS["reset"])
-            _stdout.flush()
-        self._current_block_type = None
-        # Add newline at the end of the stream to separate from next output
-        _stdout.write("\n")
-        _stdout.flush()
-
-    def _print_thinking_panel(self, content: str) -> None:
-        """打印 thinking 面板"""
-        if not content.strip():
-            return
-        panel = Panel(
-            Text(content.strip()),
-            title="[bold yellow]🤔 Thinking[/bold yellow]",
-            border_style="yellow",
-            padding=(0, 1),
+    def _start_live(self, renderable: RenderableType) -> None:
+        if self._live:
+            self._live.stop()
+        self._live = Live(
+            renderable,
+            console=self._console,
+            refresh_per_second=self._refresh_per_second,
+            transient=False, # Final output persists
         )
-        self._console.print(panel)
+        self._live.start()
 
-    async def _on_stream_start(self, event: Event) -> None:
-        """Model 流式响应开始 - 重置状态"""
-        # Call parent to reset reasoning_buffer and active_tool_calls
-        self._reasoning_buffer = ""
-        self._active_tool_calls.clear()
-        # Reset Rich printer specific state
-        self._text_buffer = ""
-        self._pending_reasoning = ""
-        self._is_streaming_mode = True
-        self._block_count = 0
-        self._block_has_received_delta = False
+    def _update_live(self, renderable: RenderableType) -> None:
+        if self._live:
+            self._live.update(renderable, refresh=True)
 
-    async def _on_run_start(self, event: Event) -> None:
-        """Agent 执行开始"""
-
-    async def _on_run_stop(self, event: Event) -> None:
-        """Agent 执行结束"""
+    def _stop_live(self) -> None:
+        if self._live:
+            self._live.stop()
+            self._live = None
 
     def _format_tool_arguments(self, arguments: dict[str, Any]) -> str:
         """格式化工具参数为易读的格式。
@@ -302,6 +118,99 @@ class RichStreamingPrinter(BasePrinter):
 
         return full_text
 
+    async def _on_content_block_start(self, event: Event) -> None:
+        assert isinstance(event, ModelContentBlockStartEvent)
+        self._current_content = ""
+        
+        if event.block_type == "text":
+            self._start_live(Markdown(""))
+        elif event.block_type == "thinking" and self.show_reasoning:
+            self._start_live(Panel(Markdown(""), title="[bold yellow]🤔 Thinking[/bold yellow]", border_style="yellow"))
+
+    async def _on_content_block_delta(self, event: Event) -> None:
+        assert isinstance(event, ModelContentBlockDeltaEvent)
+        if not event.delta: return
+
+        if event.delta_type == "text":
+            self._current_content += event.delta
+            # Only update live if we have content
+            if self._current_content:
+                self._update_live(Markdown(self._current_content))
+            
+        elif event.delta_type == "thinking" and self.show_reasoning:
+            self._current_content += event.delta
+            if self._current_content:
+                self._update_live(Panel(
+                    Markdown(self._current_content),
+                    title="[bold yellow]🤔 Thinking[/bold yellow]",
+                    border_style="yellow"
+                ))
+
+    async def _on_content_block_stop(self, event: Event) -> None:
+        self._stop_live()
+        self._current_content = ""
+        # Add a newline after text blocks if not present?
+        # Rich's Live output usually ends with newline when stopped?
+        # We might need explicit spacing.
+        # self._console.print()
+
+    async def _on_tool_use_block_start(self, event: Event) -> None:
+        assert isinstance(event, ModelToolCallBlockStartEvent)
+        self._current_tool_name = event.tool_name
+        self._current_content = ""
+        
+        if self.show_tools:
+            self._start_live(Panel(
+                Text(""),
+                title=f"[bold blue]🔧 Tool Call: {self._current_tool_name}[/bold blue]",
+                border_style="blue"
+            ))
+
+    async def _on_tool_use_block_delta(self, event: Event) -> None:
+        assert isinstance(event, ModelToolCallBlockDeltaEvent)
+        self._current_content += event.arguments_delta
+        
+        if self.show_tools and self._live:
+            # During delta, we only have partial JSON string, so we display it as is
+            # Or try to format it if valid JSON? Usually delta is partial so invalid.
+            self._update_live(Panel(
+                Text(self._current_content),
+                title=f"[bold blue]🔧 Tool Call: {self._current_tool_name}[/bold blue]",
+                border_style="blue"
+            ))
+
+    async def _on_tool_use_block_stop(self, event: Event) -> None:
+        """工具调用块结束 - 保持 Live 状态直到结果返回"""
+        if self.show_tools and self._live:
+            # Final update with pretty JSON and 'Executing...' status
+            try:
+                content = JSON(self._current_content)
+            except:
+                content = Text(self._current_content)
+            
+            # 保存 content 到 buffer，以便 print_result 时使用
+            self._pending_tool_calls[self._current_tool_name] = self._current_content
+
+            # 更新 Panel 显示 "Executing..."
+            content_group = Group(
+                content,
+                Rule(style="dim"),
+                Text("Executing...", style="dim italic")
+            )
+            
+            self._update_live(Panel(
+                content_group,
+                title=f"[bold blue]🔧 Tool Call: {self._current_tool_name}[/bold blue]",
+                border_style="blue"
+            ))
+            
+        # 注意：这里我们故意不调用 self._stop_live()，保持 Live 活跃等待结果
+        # 但这要求 tool_use_block_stop 和 tool_result 之间没有其他 block 输出
+        # 如果有，其他 block 的 start 会先调用 _stop_live (在 _start_live 中)
+        
+        self._current_content = ""
+        self._current_tool_name = ""
+
     def _print_tool_result(
         self,
         tool_name: str,
@@ -310,47 +219,66 @@ class RichStreamingPrinter(BasePrinter):
         duration: float,
         arguments: dict[str, Any] | None = None
     ) -> None:
-        """打印工具结果"""
+        """打印工具结果 - 更新 Live 并结束"""
         from rich.table import Table
 
         status_emoji = "✅" if success else "❌"
         status_color = "green" if success else "red"
-        status_text = "成功" if success else "失败"
+        status_text = "OK" if success else "FAILED"
 
-        table = Table(show_header=False, box=None, expand=True, padding=(0, 1))
-        table.add_column("label", width=10, style="dim cyan")
-        table.add_column("content", ratio=1)
-
-        table.add_row("工具", Text(tool_name, style="bold cyan"))
+        # 1. 获取参数内容 (优先使用传入的 arguments 字典并格式化)
         if arguments:
+            # 使用自定义格式化
             args_text = self._format_tool_arguments(arguments)
-            table.add_row("参数", Text.from_markup(args_text))
+            args_content = Text.from_markup(args_text)
+        else:
+            # 尝试从 pending buffer 获取原始 JSON 字符串
+            args_json_str = self._pending_tool_calls.pop(tool_name, "{}")
+            try:
+                args_content = JSON(args_json_str)
+            except Exception:
+                args_content = Text(args_json_str)
 
-        table.add_row("", "")
-        table.add_row("结果", f"{status_emoji} {status_text}", style=f"bold {status_color}")
+        # 2. 准备结果部分
+        result_table = Table(show_header=False, box=None, expand=True, padding=(0, 1))
+        result_table.add_column("label", width=10, style="dim cyan")
+        result_table.add_column("content", ratio=1)
+
+        result_table.add_row("Status", f"{status_emoji} {status_text} ({duration:.0f}ms)", style=f"bold {status_color}")
 
         if result_preview:
             preview = str(result_preview)
             if not self.show_full_tool_content and len(preview) > self.max_result_length:
                 preview = preview[: self.max_result_length - 3] + "..."
-            table.add_row("", Text(preview, style="white"))
+            result_table.add_row("Output", Text(preview, style="white"))
 
-        table.add_row("", "")
-        table.add_row("耗时", Text(f"{duration:.0f}ms", style="dim"))
-
-        # 在 tool result 前添加额外换行，与前面的文本/block 分隔
-        self._console.print()
+        # 3. 组合
+        content_group = Group(
+            args_content,
+            Rule(style="dim"),
+            result_table
+        )
 
         panel = Panel(
-            table,
-            title=f"[bold {'blue' if success else 'red'}]🔧 Tool Call[/bold {'blue' if success else 'red'}]",
+            content_group,
+            title=f"[bold blue]🔧 Tool Call: {tool_name}[/bold blue]",
             border_style="blue" if success else "red",
-            padding=(0, 0),
+            padding=(0, 1),
         )
-        self._console.print(panel)
+        
+        if self._live:
+            # 如果 Live 还在运行，更新它并停止
+            self._update_live(panel)
+            self._stop_live()
+        else:
+            # 如果 Live 已经停止（例如被打断），直接打印 Panel
+            self._console.print(panel)
 
     def _print_error(self, error: str) -> None:
         """打印错误"""
+        # 如果有正在运行的 Live，先停止它
+        self._stop_live()
+        
         panel = Panel(
             Text(error, style="red"),
             title="[bold red]❌ Error[/bold red]",

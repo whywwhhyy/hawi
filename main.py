@@ -48,7 +48,8 @@ def _supports_color() -> bool:
 from hawi.agent import HawiAgent
 from hawi.agent.printers import (
     PlainPrinter,
-    RichStreamingPrinter,
+    BlockPrinter,
+    RichPrinter,
     StreamMarkdownPrinter,
 )
 from hawi.models import Model
@@ -209,14 +210,16 @@ def main():
     # Setup printer for output display
     # Printer handles events from both streaming and non-streaming modes
     if actual_printer == 'rich':
-        printer = RichStreamingPrinter()
+        printer = RichPrinter()
+    elif actual_printer == 'block':
+        printer = BlockPrinter()
     elif actual_printer == 'plain':
         printer = PlainPrinter(
             show_reasoning=True,
             show_tools=True,
         )
     else:
-        raise KeyError("printer type should be auto, rich, or plain")
+        raise KeyError("printer type should be auto, rich, block, or plain")
 
     agent.subscribe(printer.handle)
 
