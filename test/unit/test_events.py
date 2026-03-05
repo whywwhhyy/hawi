@@ -27,8 +27,11 @@ from hawi.events import (
     AgentMessageAddedEvent,
     AgentErrorEvent,
 )
-from hawi.agent.printers import RichStreamingPrinter
+from hawi.agent.printers import RichPrinter
 from hawi.errors import AgentError, ModelError
+
+# Backward compatibility alias for tests
+RichStreamingPrinter = RichPrinter
 
 
 class TestEvent:
@@ -180,18 +183,15 @@ class TestAgentEvents:
         """Test AgentToolResultEvent creation."""
         event = AgentToolResultEvent.create(
             run_id="run-123",
-            tool_name="calculate",
             tool_call_id="tc-123",
             success=True,
             result_preview="2",
             duration_ms=100.0,
-            arguments={"expression": "1+1"},
         )
         assert event.type == "agent.tool_result"
         assert event.success is True
         assert event.result_preview == "2"
-        assert event.arguments is not None
-        assert event.arguments["expression"] == "1+1"
+        assert event.tool_call_id == "tc-123"
 
     def test_agent_error_event(self):
         """Test AgentErrorEvent creation."""
@@ -238,7 +238,7 @@ class TestEventBus:
 
         bus.publish(AgentRunStartEvent.create(run_id="test"))
         bus.publish(AgentToolCallEvent.create(run_id="test", tool_name="calc", arguments={}, tool_call_id="tc-1"))
-        bus.publish(AgentToolResultEvent.create(run_id="test", tool_name="calc", tool_call_id="tc-1", success=True, result_preview="2", duration_ms=10))
+        bus.publish(AgentToolResultEvent.create(run_id="test", tool_call_id="tc-1", success=True, result_preview="2", duration_ms=10))
 
         await asyncio.sleep(0.1)
         assert len(received) == 2
@@ -393,31 +393,45 @@ class TestConversationPrinter:
     @pytest.mark.asyncio
     async def test_handle_tool_result(self, printer):
         """Test printing tool result events."""
-        event = AgentToolResultEvent.create(
+        # First emit tool call to populate cache
+        call_event = AgentToolCallEvent.create(
             run_id="run-1",
             tool_name="calculate",
+            arguments={"expression": "1+1"},
+            tool_call_id="tc-1",
+        )
+        await printer.handle(call_event)
+
+        event = AgentToolResultEvent.create(
+            run_id="run-1",
             tool_call_id="tc-1",
             success=True,
             result_preview="2",
             duration_ms=100.0,
-            arguments={"expression": "1+1"},
         )
         await printer.handle(event)
         # Tool result uses console.print via _print_tool_result
-        # Verify tool call was tracked
-        assert "calculate" in printer._active_tool_calls or len(printer._active_tool_calls) == 0
+        # Verify tool call was tracked and removed after result
+        assert "tc-1" not in printer._active_tool_calls
 
     @pytest.mark.asyncio
     async def test_handle_tool_result_failure(self, printer):
         """Test printing failed tool result."""
-        event = AgentToolResultEvent.create(
+        # First emit tool call to populate cache
+        call_event = AgentToolCallEvent.create(
             run_id="run-1",
             tool_name="calculate",
+            arguments={},
+            tool_call_id="tc-1",
+        )
+        await printer.handle(call_event)
+
+        event = AgentToolResultEvent.create(
+            run_id="run-1",
             tool_call_id="tc-1",
             success=False,
             result_preview="Error",
             duration_ms=50.0,
-            arguments={},
         )
         await printer.handle(event)
         # Just verify no exception is raised

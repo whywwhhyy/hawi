@@ -25,7 +25,7 @@ from hawi.events import (
     AgentMessageAddedEvent,
     AgentErrorEvent,
 )
-from hawi.agent.printers import RichStreamingPrinter as ConversationPrinter
+from hawi.agent.printers import RichPrinter as ConversationPrinter
 from hawi.errors import AgentError
 
 
@@ -259,12 +259,10 @@ class TestAgentEventClasses:
         """Test AgentToolResultEvent.create()."""
         event = AgentToolResultEvent.create(
             run_id="run-123",
-            tool_name="calculator",
             tool_call_id="tc-789",
             success=True,
             result_preview="2",
             duration_ms=50.5,
-            arguments={"expression": "1+1"}
         )
         assert event.type == "agent.tool_result"
         assert event.success is True
@@ -275,12 +273,10 @@ class TestAgentEventClasses:
         """Test AgentToolResultEvent.create() for failure case."""
         event = AgentToolResultEvent.create(
             run_id="run-123",
-            tool_name="calculator",
             tool_call_id="tc-789",
             success=False,
             result_preview="Error: Division by zero",
             duration_ms=10.0,
-            arguments={"expression": "1/0"}
         )
         assert event.type == "agent.tool_result"
         assert event.success is False

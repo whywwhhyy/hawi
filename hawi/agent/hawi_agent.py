@@ -672,6 +672,9 @@ class HawiAgent:
         run_id = str(uuid.uuid4())[:8]
         start_time = time.time()
 
+        # Record initial message count to track delta for this invocation
+        initial_message_count = len(self._context.messages)
+
         # Track cumulative usage across all model calls (for multi-turn conversations)
         cumulative_usage: TokenUsage | None = None
 
@@ -897,12 +900,11 @@ class HawiAgent:
                     await self._emit_event(
                         AgentToolResultEvent.create(
                             run_id=run_id,
-                            tool_name=record.tool_name,
                             tool_call_id=record.tool_call_id,
                             success=record.result.success,
-                            result_preview=str(record.result.output)[:100],
+                            result_preview=str(record.result.output),
                             duration_ms=record.duration_ms,
-                            arguments=record.arguments,
+                            result_obj=record.result,
                         ),
                         event_bus,
                     )
@@ -961,16 +963,19 @@ class HawiAgent:
             stop_reason = "tool_use"
 
         # Get the last assistant message as response
-        messages = self._context.messages
+        all_messages = self._context.messages
         response = None
-        for msg in reversed(messages):
+        for msg in reversed(all_messages):
             if msg["role"] == "assistant":
                 response = msg
                 break
 
+        # Return only the delta messages added in this invocation
+        delta_messages = all_messages[initial_message_count:]
+
         return AgentRunResult(
             stop_reason=stop_reason,
-            messages=messages,
+            messages=delta_messages,
             response=response,
             usage=cumulative_usage,
             tool_calls=state.tool_calls,
@@ -1360,12 +1365,11 @@ class HawiAgent:
                 await self._emit_event(
                     AgentToolResultEvent.create(
                         run_id="audit",
-                        tool_name=record.tool_name,
                         tool_call_id=record.tool_call_id,
                         success=record.result.success,
                         result_preview=str(record.result.output)[:100],
                         duration_ms=record.duration_ms,
-                        arguments=record.arguments,
+                        result_obj=record.result,
                     ),
                     event_bus,
                 )
@@ -1383,69 +1387,6 @@ class HawiAgent:
         """
         _, rejected = self._context.audit_pending_tool_calls(approve=[], reject=tool_call_ids)
         return [r.tool_call_id for r in rejected]
-
-    def _build_result_from_events(self, events: list[Event]) -> AgentRunResult:
-        """Build AgentRunResult from collected events."""
-        tool_calls: list[ToolCallRecord] = []
-        stop_reason = "unknown"
-        error = None
-        total_usage: TokenUsage | None = None
-
-        for event in events:
-            if isinstance(event, AgentToolResultEvent):
-                tool_calls.append(
-                    ToolCallRecord(
-                        tool_name=event.tool_name,
-                        arguments=event.arguments or {},
-                        result=ToolResult(
-                            success=event.success,
-                            output=event.result_preview,
-                        ),
-                        duration_ms=event.duration_ms,
-                        tool_call_id=event.tool_call_id,
-                    )
-                )
-            elif isinstance(event, AgentRunStopEvent):
-                stop_reason = event.stop_reason
-            elif isinstance(event, AgentErrorEvent):
-                error = str(event.error) if event.error else None
-                stop_reason = "error"
-            elif isinstance(event, ModelStreamStopEvent):
-                # Accumulate usage from each model call (for multi-turn conversations)
-                usage = event.usage
-                if usage:
-                    if total_usage is None:
-                        total_usage = usage
-                    else:
-                        # Accumulate token counts
-                        total_usage = TokenUsage(
-                            input_tokens=total_usage.input_tokens + usage.input_tokens,
-                            output_tokens=total_usage.output_tokens + usage.output_tokens,
-                            cache_write_tokens=self._add_optional_tokens(
-                                total_usage.cache_write_tokens,
-                                usage.cache_write_tokens,
-                            ),
-                            cache_read_tokens=self._add_optional_tokens(
-                                total_usage.cache_read_tokens,
-                                usage.cache_read_tokens,
-                            ),
-                        )
-
-        # Get final response (last assistant message)
-        response = None
-        for msg in reversed(self._context.messages):
-            if msg["role"] == "assistant":
-                response = msg
-                break
-
-        return AgentRunResult(
-            stop_reason=stop_reason,
-            messages=self._context.messages.copy(),
-            response=response,
-            usage=total_usage,
-            tool_calls=tool_calls,
-            error=error,
-        )
 
     @staticmethod
     def _add_optional_tokens(a: int | None, b: int | None) -> int | None:

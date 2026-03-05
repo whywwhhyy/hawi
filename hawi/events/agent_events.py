@@ -12,6 +12,7 @@ from pydantic import field_serializer
 
 from hawi.errors import AgentError
 from hawi.models.message import ContentPart, TokenUsage
+from hawi.tool.types import ToolResult
 
 from .event import Event
 
@@ -86,36 +87,37 @@ class AgentToolCallEvent(Event):
 
 
 class AgentToolResultEvent(Event):
-    """Agent 收到工具结果"""
+    """Agent 收到工具结果
+
+    通过 tool_call_id 关联到之前的 AgentToolCallEvent。
+    工具名称和参数信息可以通过 AgentToolCallEvent 或 Printer 缓存获取。
+    """
     run_id: str
-    tool_name: str
     tool_call_id: str
-    success: bool
     result_preview: str
+    result: "ToolResult | None" = None
+    success: bool
     duration_ms: float
-    arguments: dict[str, Any] | None = None
 
     @classmethod
     def create(
         cls,
         run_id: str,
-        tool_name: str,
         tool_call_id: str,
         success: bool,
         result_preview: str,
         duration_ms: float,
-        arguments: dict[str, Any] | None = None,
+        result_obj: "ToolResult | None" = None,
     ) -> AgentToolResultEvent:
         return cls(
             type="agent.tool_result",
             source="agent",
             run_id=run_id,
-            tool_name=tool_name,
             tool_call_id=tool_call_id,
-            success=success,
             result_preview=result_preview,
+            result=result_obj,
+            success=success,
             duration_ms=duration_ms,
-            arguments=arguments or {},
         )
 
 

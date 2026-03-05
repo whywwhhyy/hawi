@@ -152,17 +152,19 @@ class BasePrinter(ABC):
         # 类型断言以访问具体属性
         assert isinstance(event, AgentToolResultEvent)
 
-        tool_name = event.tool_name
+        tool_call_id = event.tool_call_id
         success = event.success
-        result_preview = event.result_preview
         duration = event.duration_ms
-        arguments = event.arguments
 
-        # 清理已完成的 tool call
-        if event.tool_call_id in self._active_tool_calls:
-            self._active_tool_calls.pop(event.tool_call_id, None)
+        # 优先使用完整的 result.output，如果不存在则回退到 result_preview
+        result_output = event.result.output if event.result is not None else event.result_preview
 
-        self._print_tool_result(tool_name, success, result_preview, duration, arguments)
+        # 从缓存获取调用信息
+        call_info = self._active_tool_calls.pop(tool_call_id, None)
+        tool_name = call_info["tool_name"] if call_info else tool_call_id
+        arguments = call_info.get("arguments") if call_info else None
+
+        self._print_tool_result(tool_name, success, result_output, duration, arguments)
 
     @abstractmethod
     def _print_tool_result(
@@ -171,7 +173,7 @@ class BasePrinter(ABC):
         success: bool,
         result_preview: Any,
         duration: float,
-        arguments: dict[str, Any] | None = None
+        arguments: dict[str, Any] | None = None,
     ) -> None:
         """打印工具结果 - 子类实现"""
         pass

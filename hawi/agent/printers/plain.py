@@ -153,7 +153,7 @@ class PlainPrinter(BasePrinter):
         status = "OK" if success else "FAILED"
         _stdout.write(f"[Tool Result: {tool_name}] {status} ({duration:.0f}ms)\n")
 
-        if result_preview:
+        if result_preview is not None:
             preview = str(result_preview)
             if not self.show_full_tool_content and len(preview) > self.max_result_length:
                 preview = preview[: self.max_result_length - 3] + "..."

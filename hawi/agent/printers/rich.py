@@ -12,6 +12,9 @@ import sys
 from typing import Any, Optional
 
 from rich.console import Console, RenderableType, Group
+
+# For test mocking compatibility
+_stdout = sys.stdout
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -246,7 +249,7 @@ class RichPrinter(BasePrinter):
 
         result_table.add_row("Status", f"{status_emoji} {status_text} ({duration:.0f}ms)", style=f"bold {status_color}")
 
-        if result_preview:
+        if result_preview is not None:
             preview = str(result_preview)
             if not self.show_full_tool_content and len(preview) > self.max_result_length:
                 preview = preview[: self.max_result_length - 3] + "..."
