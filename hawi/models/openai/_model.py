@@ -55,6 +55,7 @@ class OpenAIModel(Model):
         base_url: str | None = None,
         timeout: float = 60.0,
         max_retries: int = 3,
+        require_usage: bool = True,
         **params,
     ):
         """初始化 OpenAI 模型
@@ -65,6 +66,7 @@ class OpenAIModel(Model):
             base_url: API 基础 URL
             timeout: 请求超时时间
             max_retries: 最大重试次数
+            require_usage: 是否要求获取 token 使用量（用于计费），默认 True
             **params: 其他参数，如 temperature, max_tokens 等
         """
         self._model_id = model_id
@@ -72,6 +74,7 @@ class OpenAIModel(Model):
         self.base_url = base_url
         self.timeout = timeout
         self.max_retries = max_retries
+        self.require_usage = require_usage
         self.params = params
         self._client: OpenAI | None = None
         self._async_client: AsyncOpenAI | None = None
@@ -403,11 +406,27 @@ class OpenAIModel(Model):
             "usage": usage_dict,
         })
 
-    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
-        """同步流式调用 OpenAI API"""
+    def _prepare_stream_request(self, request: MessageRequest) -> dict[str, Any]:
+        """准备流式请求的通用配置
+
+        子类可以调用此方法获取基础请求配置，然后添加自己的特殊处理。
+
+        Args:
+            request: 消息请求
+
+        Returns:
+            包含 stream=True 的请求字典
+        """
         req = self._prepare_request_impl(request)
         req["stream"] = True
-        req["stream_options"] = {"include_usage": True}
+        # 根据 require_usage 设置 stream_options
+        if self.require_usage:
+            req["stream_options"] = {"include_usage": True}
+        return req
+
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
+        """同步流式调用 OpenAI API"""
+        req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
 
@@ -440,9 +459,7 @@ class OpenAIModel(Model):
         self, request: MessageRequest
     ) -> AsyncGenerator[DeltaPart, None]:
         """异步流式调用 OpenAI API"""
-        req = self._prepare_request_impl(request)
-        req["stream"] = True
-        req["stream_options"] = {"include_usage": True}
+        req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
 

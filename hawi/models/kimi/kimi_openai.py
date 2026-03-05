@@ -174,9 +174,7 @@ class KimiOpenAIModel(OpenAIModel):
         重写以处理 reasoning_content 的收集和保留，并使用 ToolCallAccumulator
         确保 tool_call 参数完整性。
         """
-        req = self._prepare_request_impl(request)
-        req["stream"] = True
-        req["stream_options"] = {"include_usage": True}
+        req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
 
@@ -191,9 +189,7 @@ class KimiOpenAIModel(OpenAIModel):
 
         重写以处理 reasoning_content 的收集和保留。
         """
-        req = self._prepare_request_impl(request)
-        req["stream"] = True
-        req["stream_options"] = {"include_usage": True}
+        req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
 

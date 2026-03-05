@@ -114,9 +114,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用 - 处理 <think> 标签"""
-        req = self._prepare_request_impl(request)
-        req["stream"] = True
-        req["stream_options"] = {"include_usage": True}
+        req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
         
@@ -230,9 +228,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
         self, request: MessageRequest
     ) -> AsyncGenerator[DeltaPart, None]:
         """异步流式调用 - 处理 <think> 标签"""
-        req = self._prepare_request_impl(request)
-        req["stream"] = True
-        req["stream_options"] = {"include_usage": True}
+        req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
         
