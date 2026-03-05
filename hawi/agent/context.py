@@ -5,8 +5,11 @@ Provides conversation state management and request preparation.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 from hawi.models.message import (
     ContentPart,
@@ -363,3 +366,251 @@ class AgentContext:
             system_prompt=self.system_prompt,
             cache_tool_definitions=self.cache_tool_definitions,
         )
+
+    def save(
+        self,
+        filepath: str | Path,
+        format: Literal["markdown", "json"] = "markdown",
+    ) -> None:
+        """Save the entire context to a file.
+
+        Supports two formats:
+        - markdown: Human-readable format with formatted structure (default)
+        - json: Complete serialization for state restoration
+
+        Args:
+            filepath: Path to the output file
+            format: Output format - "markdown" or "json"
+        """
+        path = Path(filepath)
+
+        if format == "json":
+            self._save_json(path)
+        else:
+            self._save_markdown(path)
+
+    def _save_json(self, path: Path) -> None:
+        """Save context as JSON for complete state restoration."""
+        data = {
+            "version": "1.0",
+            "saved_at": datetime.now().isoformat(),
+            "system_prompt": self.system_prompt,
+            "messages": self.messages,
+        }
+
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _save_markdown(self, path: Path) -> None:
+        """Save context as human-readable markdown."""
+        lines: list[str] = []
+
+        # Header
+        lines.append("# Agent Context History")
+        lines.append(f"\n*Saved at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+        lines.append("\n---\n")
+
+        # System Prompt Section
+        lines.append("## System Prompt\n")
+        if self.system_prompt:
+            for part in self.system_prompt:
+                lines.extend(self._format_content_part(part))
+        else:
+            lines.append("*No system prompt set*")
+        lines.append("\n---\n")
+
+        # Tools Section
+        lines.append("## Available Tools\n")
+        if self.tools:
+            lines.append(f"**Total tools:** {len(self.tools)}\n")
+            for tool in self.tools:
+                lines.extend(self._format_tool_info(tool))
+        else:
+            lines.append("*No tools available*")
+        lines.append("\n---\n")
+
+        # Conversation History Section
+        lines.append("## Conversation History\n")
+        if self.messages:
+            lines.append(f"**Total messages:** {len(self.messages)}\n")
+            for i, msg in enumerate(self.messages, 1):
+                lines.extend(self._format_message(i, msg))
+        else:
+            lines.append("*No messages in conversation*")
+
+        # Write to file
+        path.write_text("\n".join(lines), encoding="utf-8")
+
+    def load(self, filepath: str | Path) -> None:
+        """Load context state from a JSON file into this instance.
+
+        Restores messages and system_prompt from the file.
+        Tools and cache_tool_definitions remain unchanged.
+
+        Args:
+            filepath: Path to the JSON file
+
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            ValueError: If JSON is invalid or has unsupported version
+        """
+        path = Path(filepath)
+        if not path.exists():
+            raise FileNotFoundError(f"Context file not found: {filepath}")
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in context file: {e}")
+
+        # Validate version
+        version = data.get("version", "1.0")
+        if version != "1.0":
+            raise ValueError(f"Unsupported context version: {version}")
+
+        # Restore state into this instance (preserve tools and cache setting)
+        self.messages = data.get("messages", [])
+        self.system_prompt = data.get("system_prompt")
+
+    def _format_content_part(self, part: ContentPart) -> list[str]:
+        """Format a single ContentPart as markdown lines."""
+        lines: list[str] = []
+        part_type = part.get("type")
+
+        if part_type == "text":
+            lines.append(part.get("text", ""))
+        elif part_type == "image":
+            source = part.get("source", {})
+            url = source.get("url", "")
+            detail = source.get("detail", "auto")
+            lines.append(f"*[Image: {url} (detail: {detail})]*")
+        elif part_type == "document":
+            source = part.get("source", {})
+            url = source.get("url", "")
+            title = part.get("title", "Untitled")
+            mime_type = source.get("mime_type", "unknown")
+            lines.append(f"*[Document: {title} ({mime_type}) - {url}]*")
+        elif part_type == "audio":
+            source = part.get("source", {})
+            transcript = source.get("transcript", "")
+            if transcript:
+                lines.append(f"*[Audio: {transcript}]*")
+            else:
+                lines.append("*[Audio message]*")
+        elif part_type == "video":
+            source = part.get("source", {})
+            url = source.get("url", "")
+            fmt = source.get("format", "unknown")
+            lines.append(f"*[Video: {url} (format: {fmt})]*")
+        elif part_type == "tool_call":
+            lines.append(f"\n\n**Tool Call:** `{part.get('name', 'unknown')}`")
+            lines.append(f"- ID: `{part.get('id', 'N/A')}`")
+            args = part.get("arguments", {})
+            if args:
+                lines.append("- Arguments:")
+                for key, value in args.items():
+                    value_str = str(value)
+                    if '\n' in value_str:
+                        # 有换行符的参数，冒号后换行
+                        lines.append(f"  - **{key}**:")
+                        lines.append(f"```\n{value_str}\n```")
+                    else:
+                        # 无换行符的参数，单行显示
+                        lines.append(f"  - **{key}**: {value_str}")
+        elif part_type == "tool_result":
+            content = part.get("content", "")
+            is_error = part.get("is_error", False)
+            prefix = "**Tool Result**" if not is_error else "**Tool Result (Error)**"
+            lines.append(f"{prefix} (ID: `{part.get('tool_call_id', 'N/A')}`):")
+            if isinstance(content, list):
+                # 多模态内容：递归格式化后用代码块包裹
+                content_lines: list[str] = []
+                for sub_part in content:
+                    content_lines.extend(self._format_content_part(sub_part))
+                content_str = "\n".join(content_lines)
+                lines.append(f"```\n{content_str}\n```")
+            else:
+                lines.append(f"```\n{content}\n```")
+        elif part_type == "reasoning":
+            reasoning = part.get("reasoning", "")
+            if reasoning:
+                lines.append(f"> **Reasoning:** {reasoning}")
+            elif part.get("redacted_content"):
+                lines.append("> **[Redacted reasoning content]**")
+        elif part_type == "refusal":
+            lines.append(f"**Model Refusal:** {part.get('refusal', 'Unknown')}")
+        elif part_type == "citation":
+            citations = part.get("citations", [])
+            lines.append(f"*[Citations: {len(citations)} reference(s)]*")
+        elif part_type == "cache_control":
+            lines.append("*[Cache control marker]*")
+        else:
+            lines.append(f"*[Content type: {part_type}]*")
+
+        return lines
+
+    def _format_tool_info(self, tool: AgentTool) -> list[str]:
+        """Format tool information as markdown lines."""
+        lines: list[str] = []
+        lines.append(f"### `{tool.name}`\n")
+        lines.append(f"**Description:** {tool.description}\n")
+        if tool.parameters_schema:
+            try:
+                schema_str = json.dumps(
+                    tool.parameters_schema,
+                    ensure_ascii=False,
+                    indent=2
+                )
+                lines.append(f"**Parameters Schema:**\n```json\n{schema_str}\n```\n")
+            except (TypeError, ValueError):
+                lines.append(f"**Parameters Schema:** {tool.parameters_schema}\n")
+        return lines
+
+    def _format_message(self, index: int, msg: Message) -> list[str]:
+        """Format a message as markdown lines."""
+        lines: list[str] = []
+        role = msg.get("role", "unknown")
+        name = msg.get("name")
+        metadata = msg.get("metadata")
+
+        # Message header
+        header = f"### Message {index}: **{role.upper()}**"
+        if name:
+            header += f" (name: `{name}`)"
+        lines.append(header)
+
+        # Metadata
+        if metadata:
+            meta_parts = []
+            tokens = metadata.get("tokens")
+            if tokens:
+                meta_parts.append(f"tokens: {tokens}")
+            timestamp = metadata.get("timestamp")
+            if timestamp:
+                ts = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                meta_parts.append(f"time: {ts}")
+            importance = metadata.get("importance")
+            if importance:
+                meta_parts.append(f"importance: {importance:.2f}")
+            source = metadata.get("source")
+            if source:
+                meta_parts.append(f"source: {source}")
+            if metadata.get("summarized"):
+                meta_parts.append("summarized: yes")
+            if meta_parts:
+                lines.append(f"*{', '.join(meta_parts)}*")
+
+        lines.append("")
+
+        # Message content
+        content = msg.get("content", [])
+        if content:
+            for part in content:
+                lines.extend(self._format_content_part(part))
+        else:
+            lines.append("*No content*")
+
+        lines.append("\n---\n")
+        return lines

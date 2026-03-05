@@ -71,8 +71,8 @@ def load_apikey_yaml() -> list[dict[str, Any]]:
 
     return []
 
+QUICK_ARGUMENTS = []
 def create_model(argv:list[str]):
-    quick_arguments = []
     def take_item(items, name:str):
         def select_from_argv_or_user(keys):
             for key in keys:
@@ -84,7 +84,7 @@ def create_model(argv:list[str]):
                 if key is None:
                     print("")
                     exit()
-            quick_arguments.append(key)
+            QUICK_ARGUMENTS.append(key)
             return key
 
         if not isinstance(items, list):
@@ -99,7 +99,6 @@ def create_model(argv:list[str]):
 
     provider_config = take_item(load_apikey_yaml(), "provider")
 
-    get_by_key = lambda config, key: take_item(key, config[key])
     apikey = take_item(provider_config['apikey'], 'apikey')
     model_config = take_item(provider_config['model'], 'model')
     adapter = take_item(model_config['adapter'], 'adapter')
@@ -112,7 +111,7 @@ def create_model(argv:list[str]):
     if not model_class:
         raise Exception(f"unknown model adapter {adapter}")
     
-    print(f"quick arguments: {' '.join(quick_arguments)}")
+    print(f"quick arguments: {' '.join(QUICK_ARGUMENTS)}")
     return provider_config['key'], model_class(**model_params)
 
 def create_agent(model: Model, event_dump_file: str | None = None, streaming: bool = True) -> HawiAgent:
@@ -246,6 +245,60 @@ def main():
         try:
             prompt = input(">>> ")
             if not prompt.strip():
+                continue
+            if prompt.startswith('/'):
+                commands = {
+                    'model': (
+                        "show model arguments",
+                        lambda: print(' '.join(QUICK_ARGUMENTS))
+                    ),
+                    'clear': (
+                        "clear conversation",
+                        lambda: agent.context.clear()
+                    ),
+                    'save_markdown': (
+                        "save conversation as markdown",
+                        lambda: agent.context.save("history.md", format='markdown')
+                    ),
+                    'save': (
+                        "save conversation",
+                        lambda: agent.context.save("session.md", format='json')
+                    ),
+                    'load': (
+                        "load conversation",
+                        lambda: agent.context.load("session.md")
+                    ),
+                    'exit': (
+                        "quit agent cli",
+                        lambda: exit()
+                    ),
+                    'quit': 'exit',
+                    'q': 'exit',
+                }
+                def print_help():
+                    aliases = {}
+                    for k,v in commands.items():
+                        if isinstance(v,str):
+                            aliases.setdefault(v, []).append(k)
+                        else:
+                            aliases.setdefault(k, []).append(k)
+                    for k,v in aliases.items():
+                        desc,_ = commands[k]
+                        k = ','.join(v)
+                        print(f"{k}: {desc}")
+                cmd = prompt.lower().lstrip('/')
+                if cmd in ('help','h'):
+                    print_help()
+                    continue
+                command = commands.get(cmd)
+                if command:
+                    if isinstance(command,str):
+                        command = commands[command]
+                    _,func = command
+                    func()
+                    continue
+                print("unknown '/' command")
+                print_help()
                 continue
             if prompt.lower() in ['exit', 'quit', 'q']:
                 break
