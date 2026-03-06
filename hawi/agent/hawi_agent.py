@@ -24,6 +24,7 @@ from hawi.models import (
     TextPart,
     TokenUsage,
     ToolCallPart,
+    ToolDefinition,
 )
 from hawi.plugin import HawiPlugin
 from hawi.tool.types import AgentTool, ToolResult
@@ -401,11 +402,13 @@ class HawiAgent:
 
         self._system_prompt = system_prompt_parts
 
-        # Initialize context with tools from plugins
+        # Collect tools from plugins and store them in the agent
+        self._tools = self._collect_tools_from_plugins()
+
+        # Initialize context with tool definitions
         self._context = AgentContext(
             system_prompt=system_prompt_parts,
-            tools=self._collect_tools_from_plugins(),
-            cache_tool_definitions=True,
+            tool_definitions=self._convert_tools_to_definitions() if self._tools else None,
         )
 
         # Set up tool call context for runtime injection
@@ -435,6 +438,36 @@ class HawiAgent:
                 self._hooks[hook_type] = hook_fn
 
         return list(tools_by_name.values())
+
+    def _convert_tools_to_definitions(self) -> list[ToolDefinition]:
+        """Convert AgentTool instances to ToolDefinition format.
+
+        Returns:
+            List of ToolDefinition for model consumption
+        """
+        return [
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "schema": tool.parameters_schema,
+            }
+            for tool in self._tools
+        ]
+
+    def get_tool(self, name: str) -> AgentTool | None:
+        """Get a tool by name.
+
+        Args:
+            name: Tool name
+
+        Returns:
+            AgentTool if found, None otherwise
+        """
+        for tool in self._tools:
+            if tool.name == name:
+                return tool
+        return None
 
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
@@ -1221,7 +1254,7 @@ class HawiAgent:
         self._invoke_hook("before_tool_calling", self, tool_name, arguments)
 
         # Find tool
-        tool = self._context.get_tool(tool_name)
+        tool = self.get_tool(tool_name)
         if tool is None:
             err = ToolNotFoundError(f"Tool '{tool_name}' not found")
             result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
@@ -1318,7 +1351,7 @@ class HawiAgent:
 
         for pending in approved:
             # Execute the approved tool
-            tool = self._context.get_tool(pending.tool_name)
+            tool = self.get_tool(pending.tool_name)
             if tool is None:
                 result = ToolResult(
                     success=False,

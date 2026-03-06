@@ -311,15 +311,15 @@ class TestConversationPrinterAdvanced:
     """Advanced tests for ConversationPrinter."""
 
     @pytest.mark.asyncio
-    async def test_printer_reasoning_visibility(self, monkeypatch):
+    async def test_printer_reasoning_visibility(self):
         """Test reasoning visibility toggle."""
+        from rich.console import Console
         import io
-        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(rich_module, '_stdout', output)
+        console = Console(file=output, force_terminal=True, width=80)
 
         # With reasoning shown (default)
-        printer_with = ConversationPrinter(show_reasoning=True)
+        printer_with = ConversationPrinter(show_reasoning=True, console=console)
 
         from hawi.models.message import ReasoningPart
 
@@ -338,7 +338,7 @@ class TestConversationPrinterAdvanced:
         ))
 
         # Verify reasoning was captured in buffer before stop event
-        assert "Thinking..." in printer_with._reasoning_buffer
+        assert "Thinking..." in printer_with._current_content
 
         # Reasoning is buffered and displayed on stop event
         reasoning_part = ReasoningPart(
@@ -354,15 +354,15 @@ class TestConversationPrinterAdvanced:
         # Buffer is cleared after printing
 
     @pytest.mark.asyncio
-    async def test_printer_reasoning_hidden(self, monkeypatch):
+    async def test_printer_reasoning_hidden(self):
         """Test reasoning hidden."""
+        from rich.console import Console
         import io
-        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(rich_module, '_stdout', output)
+        console = Console(file=output, force_terminal=True, width=80)
 
         # With reasoning hidden
-        printer_without = ConversationPrinter(show_reasoning=False)
+        printer_without = ConversationPrinter(show_reasoning=False, console=console)
 
         await printer_without.handle(ModelContentBlockDeltaEvent.create(
             request_id="r1", part={
@@ -375,34 +375,33 @@ class TestConversationPrinterAdvanced:
         ))
 
         # Verify reasoning buffer is empty when hidden
-        assert printer_without._reasoning_buffer == ""
+        assert printer_without._current_content == ""
 
     @pytest.mark.asyncio
-    async def test_printer_tool_visibility(self, monkeypatch):
+    async def test_printer_tool_visibility(self):
         """Test tool visibility toggle."""
+        from rich.console import Console
         import io
-        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(rich_module, '_stdout', output)
+        console = Console(file=output, force_terminal=True, width=80)
 
-        printer_hidden = ConversationPrinter(show_tools=False)
+        printer_hidden = ConversationPrinter(show_tools=False, console=console)
 
         await printer_hidden.handle(AgentToolCallEvent.create(
             run_id="r1", tool_name="test", arguments={}, tool_call_id="tc1"
         ))
 
         # Verify no active tool calls when hidden
-        assert len(printer_hidden._active_tool_calls) == 0
+        assert len(printer_hidden._pending_tool_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_printer_stream_lifecycle(self, monkeypatch):
+    async def test_printer_stream_lifecycle(self):
         """Test complete stream lifecycle handling."""
+        from rich.console import Console
         import io
-        import hawi.agent.printers.rich as rich_module
         output = io.StringIO()
-        monkeypatch.setattr(rich_module, '_stdout', output)
-
-        printer = ConversationPrinter()
+        console = Console(file=output, force_terminal=True, width=80)
+        printer = ConversationPrinter(console=console)
 
         # Stream start (handle is now sync)
         await printer.handle(ModelStreamStartEvent.create(request_id="r1"))

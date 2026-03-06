@@ -300,23 +300,23 @@ class TestConversationPrinter:
     @pytest.fixture
     def printer(self, monkeypatch):
         """Create a RichStreamingPrinter with captured stdout for testing."""
+        from rich.console import Console
         output = io.StringIO()
-        import hawi.agent.printers.rich as rich_module
-        monkeypatch.setattr(rich_module, '_stdout', output)
-        printer = RichStreamingPrinter()
-        # Store reference to output for test assertions using monkeypatch
-        monkeypatch.setattr(printer, '_test_output', output, raising=False)
+        console = Console(file=output, force_terminal=True, width=80)
+        printer = RichStreamingPrinter(console=console)
+        # Store reference to output for test assertions
         return printer
 
     @pytest.mark.asyncio
-    async def test_handle_text_delta(self, printer, monkeypatch):
+    async def test_handle_text_delta(self, printer):
         """Test printing text delta events."""
         from hawi.models.message import DeltaTextPart
 
-        output = io.StringIO()
-        import hawi.agent.printers.rich as rich_module
-        monkeypatch.setattr(rich_module, '_stdout', output)
-        
+        # First send start event to set up state
+        await printer.handle(ModelContentBlockStartEvent.create(
+            request_id="req-1", block_index=0, block_type="text"
+        ))
+
         part: DeltaTextPart = {
             "type": "text_delta",
             "index": 0,
@@ -329,7 +329,8 @@ class TestConversationPrinter:
             part=part,
         )
         await printer.handle(event)
-        assert "Hello World" in output.getvalue()
+        # Verify content is captured in buffer
+        assert "Hello World" in printer._current_content
 
     @pytest.mark.asyncio
     async def test_handle_reasoning_delta(self, printer):
@@ -358,7 +359,7 @@ class TestConversationPrinter:
         await printer.handle(delta_event)
 
         # Verify content is buffered before stop event
-        assert "Let me think..." in printer._reasoning_buffer
+        assert "Let me think..." in printer._current_content
 
         # Reasoning is only printed on block stop
         from hawi.models.message import ReasoningPart

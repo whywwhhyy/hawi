@@ -32,7 +32,9 @@ class AuditTool(AgentTool):
             "required": ["command"]
         }
 
-    def run(self, command: str, target: str = "") -> ToolResult:
+    def run(self, **kwargs) -> ToolResult:
+        command = kwargs.get("command", "")
+        target = kwargs.get("target", "")
         return ToolResult(success=True, output=f"Executed: {command} on {target}")
 
 
@@ -56,8 +58,9 @@ class NonAuditTool(AgentTool):
             "properties": {"input": {"type": "string"}}
         }
 
-    def run(self, input: str) -> ToolResult:
-        return ToolResult(success=True, output=f"Result: {input}")
+    def run(self, **kwargs) -> ToolResult:
+        input_val = kwargs.get("input", "")
+        return ToolResult(success=True, output=f"Result: {input_val}")
 
 
 class TestPendingToolCall:
@@ -249,7 +252,7 @@ class TestAuditWorkflow:
 
     def test_audit_workflow_scenario(self):
         """Test a complete audit workflow scenario."""
-        context = AgentContext(tools=[AuditTool()])
+        context = AgentContext()
 
         # Simulate tool call requests
         tool_calls = [

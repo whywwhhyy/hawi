@@ -11,7 +11,7 @@ from hawi.events import (
     Event,
     EventBus,
 )
-from hawi.agent.printers import RichStreamingPrinter as ConversationPrinter
+from hawi.agent.printers import RichPrinter as ConversationPrinter
 from hawi.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool

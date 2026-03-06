@@ -19,7 +19,7 @@ from hawi.models.message import (
     ToolCallPart,
     ToolResultPart,
 )
-from hawi.tool.types import AgentTool, PendingToolCall
+from hawi.tool.types import PendingToolCall
 
 if TYPE_CHECKING:
     from .hawi_agent import HawiAgent
@@ -43,25 +43,18 @@ class ToolCallContext:
 class AgentContext:
     """Conversation context for agent execution.
 
-    Manages message history, tools, and system prompt.
+    Manages message history, tool definitions, and system prompt.
     Provides methods for context manipulation.
 
     Attributes:
         messages: Conversation history (不支持 role="system")
-        tools: Available tools (AgentTool instances)
+        tool_definitions: Available tool definitions for model consumption
         system_prompt: System prompt as list of ContentPart
-        cache_tool_definitions: Whether to cache converted ToolDefinitions
     """
 
     messages: list[Message] = field(default_factory=list)
-    tools: list[AgentTool] = field(default_factory=list)
+    tool_definitions: list[ToolDefinition] | None = None
     system_prompt: list[ContentPart] | None = None
-    cache_tool_definitions: bool = True
-
-    # Internal cache for ToolDefinition conversion
-    _cached_tool_definitions: list[ToolDefinition] | None = field(
-        default=None, repr=False, compare=False
-    )
 
     # Pending tool calls for audit mechanism
     _pending_tool_calls: dict[str, PendingToolCall] = field(
@@ -122,70 +115,6 @@ class AgentContext:
         """Clear all pending tool calls."""
         self._pending_tool_calls.clear()
 
-    def _convert_tools_to_definitions(self) -> list[ToolDefinition]:
-        """Convert AgentTool instances to ToolDefinition format.
-
-        Returns:
-            List of ToolDefinition for model consumption
-        """
-        return [
-            {
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "schema": tool.parameters_schema,
-            }
-            for tool in self.tools
-        ]
-
-    def get_tool_definitions(self) -> list[ToolDefinition]:
-        """Get ToolDefinition list for model request.
-
-        Uses cache if cache_tool_definitions is True.
-
-        Returns:
-            List of ToolDefinition
-        """
-        if self.cache_tool_definitions:
-            if self._cached_tool_definitions is None:
-                self._cached_tool_definitions = self._convert_tools_to_definitions()
-            return self._cached_tool_definitions
-        return self._convert_tools_to_definitions()
-
-    def invalidate_tool_cache(self) -> None:
-        """Invalidate the tool definition cache.
-
-        Call this after modifying tools list.
-        """
-        self._cached_tool_definitions = None
-
-    def add_tool(self, tool: AgentTool) -> None:
-        """Add a tool to the context.
-
-        Args:
-            tool: Tool to add
-        """
-        self.tools.append(tool)
-        if self.cache_tool_definitions:
-            self.invalidate_tool_cache()
-
-    def remove_tool(self, tool_name: str) -> bool:
-        """Remove a tool by name.
-
-        Args:
-            tool_name: Name of tool to remove
-
-        Returns:
-            True if tool was found and removed
-        """
-        for i, tool in enumerate(self.tools):
-            if tool.name == tool_name:
-                del self.tools[i]
-                if self.cache_tool_definitions:
-                    self.invalidate_tool_cache()
-                return True
-        return False
-
     def set_system_prompt(self, content: str | list[ContentPart]) -> None:
         """设置系统提示词。
 
@@ -205,20 +134,6 @@ class AgentContext:
         """
         return self.system_prompt
 
-    def get_tool(self, name: str) -> AgentTool | None:
-        """Get a tool by name.
-
-        Args:
-            name: Tool name
-
-        Returns:
-            AgentTool if found, None otherwise
-        """
-        for tool in self.tools:
-            if tool.name == name:
-                return tool
-        return None
-
     def prepare_request(self) -> MessageRequest:
         """Build MessageRequest from current context.
 
@@ -228,7 +143,7 @@ class AgentContext:
         return MessageRequest(
             messages=self.messages.copy(),
             system=self.system_prompt,
-            tools=self.get_tool_definitions() if self.tools else None,
+            tools=self.tool_definitions,
         )
 
     def add_message(self, message: Message) -> None:
@@ -362,9 +277,8 @@ class AgentContext:
         """
         return AgentContext(
             messages=self.messages.copy(),
-            tools=self.tools.copy(),
+            tool_definitions=self.tool_definitions.copy() if self.tool_definitions else None,
             system_prompt=self.system_prompt,
-            cache_tool_definitions=self.cache_tool_definitions,
         )
 
     def save(
@@ -423,10 +337,10 @@ class AgentContext:
 
         # Tools Section
         lines.append("## Available Tools\n")
-        if self.tools:
-            lines.append(f"**Total tools:** {len(self.tools)}\n")
-            for tool in self.tools:
-                lines.extend(self._format_tool_info(tool))
+        if self.tool_definitions:
+            lines.append(f"**Total tools:** {len(self.tool_definitions)}\n")
+            for tool_def in self.tool_definitions:
+                lines.extend(self._format_tool_definition_info(tool_def))
         else:
             lines.append("*No tools available*")
         lines.append("\n---\n")
@@ -551,21 +465,22 @@ class AgentContext:
 
         return lines
 
-    def _format_tool_info(self, tool: AgentTool) -> list[str]:
-        """Format tool information as markdown lines."""
+    def _format_tool_definition_info(self, tool_def: ToolDefinition) -> list[str]:
+        """Format tool definition information as markdown lines."""
         lines: list[str] = []
-        lines.append(f"### `{tool.name}`\n")
-        lines.append(f"**Description:** {tool.description}\n")
-        if tool.parameters_schema:
+        lines.append(f"### `{tool_def['name']}`\n")
+        lines.append(f"**Description:** {tool_def.get('description', '')}\n")
+        schema = tool_def.get('schema')
+        if schema:
             try:
                 schema_str = json.dumps(
-                    tool.parameters_schema,
+                    schema,
                     ensure_ascii=False,
                     indent=2
                 )
                 lines.append(f"**Parameters Schema:**\n```json\n{schema_str}\n```\n")
             except (TypeError, ValueError):
-                lines.append(f"**Parameters Schema:** {tool.parameters_schema}\n")
+                lines.append(f"**Parameters Schema:** {schema}\n")
         return lines
 
     def _format_message(self, index: int, msg: Message) -> list[str]:
