@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 
 from hawi.events import (
@@ -56,6 +57,10 @@ class BasePrinter(ABC):
     def set_show_full_tool_content(self, value: bool) -> None:
         """设置是否显示完整的工具调用内容（不省略）。"""
         self.show_full_tool_content = value
+
+    def _get_timestamp(self) -> str:
+        """获取当前时间字符串（精确到秒）。"""
+        return datetime.now().strftime("%H:%M:%S")
 
     async def handle(self, event: Event) -> None:
         """处理事件"""

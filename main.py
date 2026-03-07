@@ -46,12 +46,7 @@ def _supports_color() -> bool:
     return True
 
 from hawi.agent import HawiAgent
-from hawi.agent.printers import (
-    PlainPrinter,
-    BlockPrinter,
-    RichPrinter,
-    StreamMarkdownPrinter,
-)
+from hawi.agent.printers import create_printer
 from hawi.models import Model
 from hawi.models import get_model_class
 from hawi.utils.terminal import user_select
@@ -186,39 +181,19 @@ def main():
     # Create agent
     llm_provider, model = create_model(argv)
 
-    # Determine actual printer to use
-    if printer_type == 'auto':
-        if sys.stdout.isatty():
-            actual_printer = 'rich'
-        else:
-            actual_printer = 'plain'
-    else:
-        actual_printer = printer_type
-
     agent = create_agent(model, event_dump_file=event_dump_file, streaming=streaming)
     print(f"Using provider: {llm_provider}")
     print(f"Model: {model.model_id}")
-    if streaming:
-        print(f"Printer: {actual_printer}" + (" (auto-detected)" if printer_type == "auto" else ""))
-    else:
-        print("Mode: non-streaming")
     if event_dump_file:
         print(f"Event dump: {event_dump_file}")
     print("Type 'exit', 'quit', or 'q' to exit\n")
 
     # Setup printer for output display
     # Printer handles events from both streaming and non-streaming modes
-    if actual_printer == 'rich':
-        printer = RichPrinter()
-    elif actual_printer == 'block':
-        printer = BlockPrinter()
-    elif actual_printer == 'plain':
-        printer = PlainPrinter(
-            show_reasoning=True,
-            show_tools=True,
-        )
-    else:
-        raise KeyError("printer type should be auto, rich, block, or plain")
+    # Note: create_printer automatically selects appropriate printer based on environment
+    assert printer_type in ['auto','rich','block','plain']
+    printer = create_printer(cast(Literal['auto','rich','block','plain'], printer_type), streaming=streaming)
+    print(f"Printer: {type(printer).__name__}", file=sys.stderr)
 
     agent.subscribe(printer.handle)
 

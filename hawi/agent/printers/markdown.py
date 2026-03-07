@@ -525,9 +525,10 @@ class StreamMarkdownPrinter(BasePrinter):
         """打印 thinking 面板"""
         if not content.strip():
             return
+        timestamp = self._get_timestamp()
         panel = Panel(
             Text(content.strip()),
-            title="[bold yellow]🤔 Thinking[/bold yellow]",
+            title=f"[bold yellow]🤔 Thinking ({timestamp})[/bold yellow]",
             border_style="yellow",
             padding=(0, 1),
         )
@@ -548,6 +549,7 @@ class StreamMarkdownPrinter(BasePrinter):
         arguments: dict[str, Any] | None = None
     ) -> None:
         """打印工具结果面板"""
+        timestamp = self._get_timestamp()
         status_emoji = "✅" if success else "❌"
         status_color = "green" if success else "red"
         status_text = "成功" if success else "失败"
@@ -575,7 +577,7 @@ class StreamMarkdownPrinter(BasePrinter):
 
         panel = Panel(
             table,
-            title=f"[bold {'blue' if success else 'red'}]🔧 Tool Call[/bold {'blue' if success else 'red'}]",
+            title=f"[bold {'blue' if success else 'red'}]🔧 Tool Call ({timestamp})[/bold {'blue' if success else 'red'}]",
             border_style="blue" if success else "red",
             padding=(0, 0),
         )
@@ -584,9 +586,10 @@ class StreamMarkdownPrinter(BasePrinter):
 
     async def _print_error(self, error: str) -> None:
         """打印错误"""
+        timestamp = self._get_timestamp()
         panel = Panel(
             Text(error, style="red"),
-            title="[bold red]❌ Error[/bold red]",
+            title=f"[bold red]❌ Error ({timestamp})[/bold red]",
             border_style="red",
             padding=(0, 1),
         )

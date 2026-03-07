@@ -74,6 +74,8 @@ class RichPrinter(BasePrinter):
         self._current_tool_name = ""
         # 缓存 tool args 用于 Live 持续显示
         self._pending_tool_calls: dict[str, str] = {} # tool_name -> args_json
+        # 当前正在执行的 tool 信息（用于 Live 更新）
+        self._current_tool_info: dict[str, Any] | None = None
 
     def _start_live(self, renderable: RenderableType) -> None:
         if self._live:
@@ -124,11 +126,12 @@ class RichPrinter(BasePrinter):
     async def _on_content_block_start(self, event: Event) -> None:
         assert isinstance(event, ModelContentBlockStartEvent)
         self._current_content = ""
-        
+        timestamp = self._get_timestamp()
+
         if event.block_type == "text":
-            self._start_live(Markdown(""))
+            self._start_live(Markdown(f"*{timestamp}* "))
         elif event.block_type == "thinking" and self.show_reasoning:
-            self._start_live(Panel(Markdown(""), title="[bold yellow]🤔 Thinking[/bold yellow]", border_style="yellow"))
+            self._start_live(Panel(Markdown(""), title=f"[bold yellow]🤔 Thinking ({timestamp})[/bold yellow]", border_style="yellow"))
 
     async def _on_content_block_delta(self, event: Event) -> None:
         assert isinstance(event, ModelContentBlockDeltaEvent)
@@ -152,20 +155,19 @@ class RichPrinter(BasePrinter):
     async def _on_content_block_stop(self, event: Event) -> None:
         self._stop_live()
         self._current_content = ""
-        # Add a newline after text blocks if not present?
-        # Rich's Live output usually ends with newline when stopped?
-        # We might need explicit spacing.
-        # self._console.print()
+        # Add newline after content block for proper separation in piped output
+        self._console.print()
 
     async def _on_tool_use_block_start(self, event: Event) -> None:
         assert isinstance(event, ModelToolCallBlockStartEvent)
         self._current_tool_name = event.tool_name
         self._current_content = ""
-        
+        timestamp = self._get_timestamp()
+
         if self.show_tools:
             self._start_live(Panel(
                 Text(""),
-                title=f"[bold blue]🔧 Tool Call: {self._current_tool_name}[/bold blue]",
+                title=f"[bold blue]🔧 Tool Call: {self._current_tool_name} ({timestamp})[/bold blue]",
                 border_style="blue"
             ))
 
@@ -183,55 +185,32 @@ class RichPrinter(BasePrinter):
             ))
 
     async def _on_tool_use_block_stop(self, event: Event) -> None:
-        """工具调用块结束 - 保持 Live 状态直到结果返回"""
-        if self.show_tools and self._live:
-            # Final update with pretty JSON and 'Executing...' status
-            try:
-                content = JSON(self._current_content)
-            except:
-                content = Text(self._current_content)
-            
-            # 保存 content 到 buffer，以便 print_result 时使用
+        """工具调用块结束 - 保存参数，等待 tool_call 事件"""
+        if self.show_tools:
+            # 保存 content 到 buffer，以便 _on_tool_call 时使用
             self._pending_tool_calls[self._current_tool_name] = self._current_content
 
-            # 更新 Panel 显示 "Executing..."
-            content_group = Group(
-                content,
-                Rule(style="dim"),
-                Text("Executing...", style="dim italic")
-            )
-            
-            self._update_live(Panel(
-                content_group,
-                title=f"[bold blue]🔧 Tool Call: {self._current_tool_name}[/bold blue]",
-                border_style="blue"
-            ))
-            
-        # 注意：这里我们故意不调用 self._stop_live()，保持 Live 活跃等待结果
-        # 但这要求 tool_use_block_stop 和 tool_result 之间没有其他 block 输出
-        # 如果有，其他 block 的 start 会先调用 _stop_live (在 _start_live 中)
-        
         self._current_content = ""
         self._current_tool_name = ""
 
-    def _print_tool_result(
-        self,
-        tool_name: str,
-        success: bool,
-        result_preview: Any,
-        duration: float,
-        arguments: dict[str, Any] | None = None
-    ) -> None:
-        """打印工具结果 - 更新 Live 并结束"""
-        from rich.table import Table
+    async def _on_tool_call(self, event: Event) -> None:
+        """工具调用 - 启动 Live 显示 tool call 面板（含 Executing... 状态）"""
+        if not self.show_tools:
+            return
 
-        status_emoji = "✅" if success else "❌"
-        status_color = "green" if success else "red"
-        status_text = "OK" if success else "FAILED"
+        from hawi.events import AgentToolCallEvent
+        assert isinstance(event, AgentToolCallEvent)
 
-        # 1. 获取参数内容 (优先使用传入的 arguments 字典并格式化)
+        tool_call_id = event.tool_call_id
+        tool_name = event.tool_name
+        arguments = event.arguments
+        timestamp = self._get_timestamp()
+
+        # 如果有正在运行的 Live，先停止它
+        self._stop_live()
+
+        # 获取参数内容
         if arguments:
-            # 使用自定义格式化
             args_text = self._format_tool_arguments(arguments)
             args_content = Text.from_markup(args_text)
         else:
@@ -242,7 +221,65 @@ class RichPrinter(BasePrinter):
             except Exception:
                 args_content = Text(args_json_str)
 
-        # 2. 准备结果部分
+        # 保存当前 tool 信息供 result 更新使用（用 tool_call_id 作为 key）
+        self._current_tool_info = {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "args_content": args_content,
+            "timestamp": timestamp,
+        }
+
+        # 创建带有 "Executing..." 状态的 panel 并启动 Live
+        content_group = Group(
+            args_content,
+            Rule(style="dim"),
+            Text("Executing...", style="dim italic")
+        )
+
+        panel = Panel(
+            content_group,
+            title=f"[bold blue]🔧 Tool Call: {tool_name} ({timestamp})[/bold blue]",
+            border_style="yellow"
+        )
+
+        self._start_live(panel)
+
+    def _print_tool_result(
+        self,
+        tool_name: str,
+        success: bool,
+        result_preview: Any,
+        duration: float,
+        arguments: dict[str, Any] | None = None
+    ) -> None:
+        """打印工具结果 - 更新 Live 显示最终结果"""
+        from rich.table import Table
+
+        # 清理 pending 记录
+        self._pending_tool_calls.pop(tool_name, None)
+
+        # 获取之前保存的 tool 信息
+        tool_info = self._current_tool_info
+        if tool_info:
+            # 使用保存的参数和时间戳
+            args_content = tool_info["args_content"]
+            timestamp = tool_info["timestamp"]
+            # 更新 tool_name 为保存的（保持一致）
+            tool_name = tool_info["tool_name"]
+        else:
+            # 如果没有保存的信息，使用传入的参数或空内容
+            if arguments:
+                args_text = self._format_tool_arguments(arguments)
+                args_content = Text.from_markup(args_text)
+            else:
+                args_content = Text("(no arguments)", style="dim")
+            timestamp = self._get_timestamp()
+
+        status_emoji = "✅" if success else "❌"
+        status_color = "green" if success else "red"
+        status_text = "OK" if success else "FAILED"
+
+        # 准备结果部分
         result_table = Table(show_header=False, box=None, expand=True, padding=(0, 1))
         result_table.add_column("label", width=10, style="dim cyan")
         result_table.add_column("content", ratio=1)
@@ -255,7 +292,7 @@ class RichPrinter(BasePrinter):
                 preview = preview[: self.max_result_length - 3] + "..."
             result_table.add_row("Output", Text(preview, style="white"))
 
-        # 3. 组合
+        # 组合最终 panel（参数 + 结果）
         content_group = Group(
             args_content,
             Rule(style="dim"),
@@ -264,28 +301,35 @@ class RichPrinter(BasePrinter):
 
         panel = Panel(
             content_group,
-            title=f"[bold blue]🔧 Tool Call: {tool_name}[/bold blue]",
+            title=f"[bold blue]🔧 Tool Call: {tool_name} ({timestamp})[/bold blue]",
             border_style="blue" if success else "red",
             padding=(0, 1),
         )
-        
+
+        # 更新 Live 并停止
         if self._live:
-            # 如果 Live 还在运行，更新它并停止
             self._update_live(panel)
             self._stop_live()
         else:
-            # 如果 Live 已经停止（例如被打断），直接打印 Panel
+            # 如果没有 Live（可能被打断），直接打印
             self._console.print(panel)
+            self._console.print()
+
+        # 清理 tool 信息
+        self._current_tool_info = None
 
     def _print_error(self, error: str) -> None:
         """打印错误"""
         # 如果有正在运行的 Live，先停止它
         self._stop_live()
-        
+
+        timestamp = self._get_timestamp()
         panel = Panel(
             Text(error, style="red"),
-            title="[bold red]❌ Error[/bold red]",
+            title=f"[bold red]❌ Error ({timestamp})[/bold red]",
             border_style="red",
             padding=(0, 1),
         )
         self._console.print(panel)
+        # Add newline after error for proper separation in piped output
+        self._console.print()

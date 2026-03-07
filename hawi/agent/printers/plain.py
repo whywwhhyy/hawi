@@ -22,6 +22,7 @@ from hawi.events import (
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStopEvent,
+    AgentToolCallEvent,
 )
 from hawi.agent.printers.base import BasePrinter
 
@@ -71,14 +72,15 @@ class PlainPrinter(BasePrinter):
         """内容块开始"""
         assert isinstance(event, ModelContentBlockStartEvent)
         self._current_block_type = event.block_type
-        
+        timestamp = self._get_timestamp()
+
         # 块之间添加换行（除了第一个）
         if self._has_printed_first_block:
             _stdout.write("\n")
         self._has_printed_first_block = True
 
         if event.block_type == "thinking" and self.show_reasoning:
-            _stdout.write("[Thinking]\n")
+            _stdout.write(f"[{timestamp}] [Thinking]\n")
             _stdout.flush()
 
     async def _on_content_block_delta(self, event: Event) -> None:
@@ -110,33 +112,40 @@ class PlainPrinter(BasePrinter):
         self._current_block_type = None
 
     async def _on_tool_use_block_start(self, event: Event) -> None:
-        """工具调用块开始"""
+        """工具调用块开始 - 记录状态，不打印"""
         assert isinstance(event, ModelToolCallBlockStartEvent)
         self._current_block_type = "tool_use"
-        
+
+    async def _on_tool_use_block_delta(self, event: Event) -> None:
+        """工具调用块增量 - 忽略，在 _on_tool_call 中统一打印"""
+        pass
+
+    async def _on_tool_use_block_stop(self, event: Event) -> None:
+        """工具调用块结束 - 忽略，在 _on_tool_call 中统一打印"""
+        pass
+
+    async def _on_tool_call(self, event: Event) -> None:
+        """工具调用 - 立即打印工具名、格式化参数和执行状态"""
+        if not self.show_tools:
+            return
+
+        from hawi.events import AgentToolCallEvent
+        assert isinstance(event, AgentToolCallEvent)
+
+        timestamp = self._get_timestamp()
+        tool_name = event.tool_name
+        arguments = event.arguments
+
         if self._has_printed_first_block:
             _stdout.write("\n")
         self._has_printed_first_block = True
 
-        if self.show_tools:
-            _stdout.write(f"[Tool Call: {event.tool_name}]\nArguments: ")
-            _stdout.flush()
-
-    async def _on_tool_use_block_delta(self, event: Event) -> None:
-        """工具调用块增量"""
-        assert isinstance(event, ModelToolCallBlockDeltaEvent)
-        if self.show_tools:
-            _stdout.write(event.arguments_delta)
-            _stdout.flush()
-
-    async def _on_tool_use_block_stop(self, event: Event) -> None:
-        """工具调用块结束"""
-        assert isinstance(event, ModelToolCallBlockStopEvent)
-        if self.show_tools:
-            # 仅添加分隔符，不再输出 [/Tool Call]，因为 Result 会紧接着
-            _stdout.write("\n---")
-            _stdout.flush()
-        self._current_block_type = None
+        _stdout.write(f"[{timestamp}] [Tool Call: {tool_name}]\n")
+        if arguments:
+            for key, value in arguments.items():
+                _stdout.write(f"  {key}: {value}\n")
+        _stdout.write("  Status: Executing...")
+        _stdout.flush()
 
     def _print_tool_result(
         self,
@@ -147,23 +156,23 @@ class PlainPrinter(BasePrinter):
         arguments: dict[str, Any] | None = None
     ) -> None:
         """打印工具结果"""
-        # 在 tool result 前添加额外换行
-        _stdout.write("\n")
-
+        timestamp = self._get_timestamp()
         status = "OK" if success else "FAILED"
-        _stdout.write(f"[Tool Result: {tool_name}] {status} ({duration:.0f}ms)\n")
+
+        # 在同一行更新状态
+        _stdout.write(f"\r  Status: {status} ({duration:.0f}ms)\n")
 
         if result_preview is not None:
             preview = str(result_preview)
             if not self.show_full_tool_content and len(preview) > self.max_result_length:
                 preview = preview[: self.max_result_length - 3] + "..."
-            _stdout.write(f"Result: {preview}\n")
-        
-        # 结束 Tool Call 块
+            _stdout.write(f"  Result: {preview}\n")
+
         _stdout.write("[/Tool Call]\n")
         _stdout.flush()
 
     def _print_error(self, error: str) -> None:
         """打印错误"""
-        _stdout.write(f"\n[Error] {error}\n")
+        timestamp = self._get_timestamp()
+        _stdout.write(f"\n[{timestamp}] [Error] {error}\n")
         _stdout.flush()

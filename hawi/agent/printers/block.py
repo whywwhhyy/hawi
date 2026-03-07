@@ -62,8 +62,8 @@ class BlockPrinter(BasePrinter):
         self._console = console or Console()
         self._tool_args_buffer = ""
         self._current_tool_name = ""
-        # 缓存 tool args 以便在 result 时一起显示
-        self._pending_tool_calls: dict[str, str] = {} # tool_name -> args_json
+        # 缓存 tool call 信息以便在 result 时使用
+        self._pending_tool_calls: dict[str, dict[str, Any]] = {} # tool_name -> call_info
 
     def _format_tool_arguments(self, arguments: dict[str, Any]) -> str:
         """格式化工具参数为易读的格式。"""
@@ -112,11 +112,12 @@ class BlockPrinter(BasePrinter):
             for part in event.content:
                 if part.get("type") == "reasoning":
                     reasoning_content += part.get("reasoning", "")
-            
+
             if reasoning_content:
+                timestamp = self._get_timestamp()
                 panel = Panel(
                     Markdown(reasoning_content),
-                    title="[bold yellow]🤔 Thinking[/bold yellow]",
+                    title=f"[bold yellow]🤔 Thinking ({timestamp})[/bold yellow]",
                     border_style="yellow",
                     padding=(0, 1),
                 )
@@ -133,16 +134,47 @@ class BlockPrinter(BasePrinter):
         assert isinstance(event, ModelToolCallBlockDeltaEvent)
         self._tool_args_buffer += event.arguments_delta
 
+    async def _on_tool_call(self, event: Event) -> None:
+        """工具调用 - 立即打印 tool call 面板"""
+        if not self.show_tools:
+            return
+
+        from hawi.events import AgentToolCallEvent
+        assert isinstance(event, AgentToolCallEvent)
+
+        timestamp = self._get_timestamp()
+        tool_name = event.tool_name
+        arguments = event.arguments
+
+        # 保存当前 tool call 信息供 result 使用
+        self._pending_tool_calls[tool_name] = {
+            "arguments": arguments,
+            "timestamp": timestamp,
+        }
+
+        # 立即打印 tool call 面板（不含结果）
+        from rich.table import Table
+
+        if arguments:
+            args_text = self._format_tool_arguments(arguments)
+            args_content = Text.from_markup(args_text)
+        else:
+            args_content = Text("(no arguments)", style="dim")
+
+        content_group = Group(
+            args_content,
+        )
+
+        panel = Panel(
+            content_group,
+            title=f"[bold blue]🔧 Tool Call: {tool_name} ({timestamp})[/bold blue]",
+            border_style="yellow",
+            padding=(0, 1),
+        )
+        self._console.print(panel)
+
     async def _on_tool_use_block_stop(self, event: Event) -> None:
-        """工具调用块结束 - 缓存参数，暂不输出"""
-        assert isinstance(event, ModelToolCallBlockStopEvent)
-        
-        if self.show_tools:
-            # 仅缓存，等待 result 一起输出
-            # 注意：如果 result 不来（如 crash），这些信息会丢失。
-            # 这是一个权衡。
-            self._pending_tool_calls[self._current_tool_name] = self._tool_args_buffer
-            
+        """工具调用块结束 - 忽略，已在 _on_tool_call 中处理"""
         self._current_tool_name = ""
         self._tool_args_buffer = ""
 
@@ -154,31 +186,23 @@ class BlockPrinter(BasePrinter):
         duration: float,
         arguments: dict[str, Any] | None = None
     ) -> None:
-        """打印工具结果 - 合并参数和结果输出"""
+        """打印工具结果 - 单独输出结果面板"""
         from rich.table import Table
 
+        timestamp = self._get_timestamp()
         status_emoji = "✅" if success else "❌"
         status_color = "green" if success else "red"
         status_text = "OK" if success else "FAILED"
 
-        # 1. 准备参数部分 (优先使用传入的 arguments 字典并格式化)
-        if arguments:
-            # 使用自定义格式化
-            args_text = self._format_tool_arguments(arguments)
-            args_content = Text.from_markup(args_text)
-        else:
-            # 尝试从 pending buffer 获取原始 JSON 字符串
-            args_json_str = self._pending_tool_calls.pop(tool_name, "{}")
-            try:
-                args_content = JSON(args_json_str)
-            except Exception:
-                args_content = Text(args_json_str)
+        # 清理已完成的 tool call 记录
+        self._pending_tool_calls.pop(tool_name, None)
 
-        # 2. 准备结果部分
+        # 准备结果面板
         result_table = Table(show_header=False, box=None, expand=True, padding=(0, 1))
         result_table.add_column("label", width=10, style="dim cyan")
         result_table.add_column("content", ratio=1)
-        
+
+        result_table.add_row("Tool", Text(tool_name, style="bold cyan"))
         result_table.add_row("Status", f"{status_emoji} {status_text} ({duration:.0f}ms)", style=f"bold {status_color}")
 
         if result_preview is not None:
@@ -187,26 +211,20 @@ class BlockPrinter(BasePrinter):
                 preview = preview[: self.max_result_length - 3] + "..."
             result_table.add_row("Output", Text(preview, style="white"))
 
-        # 3. 组合
-        content_group = Group(
-            args_content,
-            Rule(style="dim"),
-            result_table
-        )
-
         panel = Panel(
-            content_group,
-            title=f"[bold blue]🔧 Tool Call: {tool_name}[/bold blue]",
-            border_style="blue" if success else "red",
+            result_table,
+            title=f"[bold {'green' if success else 'red'}]📋 Tool Result ({timestamp})[/bold {'green' if success else 'red'}]",
+            border_style="green" if success else "red",
             padding=(0, 1),
         )
         self._console.print(panel)
 
     def _print_error(self, error: str) -> None:
         """打印错误"""
+        timestamp = self._get_timestamp()
         panel = Panel(
             Text(error, style="red"),
-            title="[bold red]❌ Error[/bold red]",
+            title=f"[bold red]❌ Error ({timestamp})[/bold red]",
             border_style="red",
             padding=(0, 1),
         )
