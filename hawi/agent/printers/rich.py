@@ -76,6 +76,8 @@ class RichPrinter(BasePrinter):
         self._pending_tool_calls: dict[str, str] = {} # tool_name -> args_json
         # 当前正在执行的 tool 信息（用于 Live 更新）
         self._current_tool_info: dict[str, Any] | None = None
+        # 存储流式工具结果片段
+        self._streaming_tool_parts: dict[str, list[str]] = {} # tool_call_id -> parts
 
     def _start_live(self, renderable: RenderableType) -> None:
         if self._live:
@@ -243,6 +245,66 @@ class RichPrinter(BasePrinter):
         )
 
         self._start_live(panel)
+
+    async def _on_tool_result_part(self, event: Event) -> None:
+        """处理流式工具结果片段（异步生成器工具）"""
+        if not self.show_tools:
+            return
+
+        from hawi.events import AgentToolResultPartEvent
+        assert isinstance(event, AgentToolResultPartEvent)
+
+        tool_call_id = event.tool_call_id
+        part = event.part
+        is_final = event.is_final
+
+        # 存储片段
+        if tool_call_id not in self._streaming_tool_parts:
+            self._streaming_tool_parts[tool_call_id] = []
+        if part:
+            self._streaming_tool_parts[tool_call_id].append(part)
+
+        # 如果有 Live 正在运行，更新显示
+        if self._live and self._current_tool_info:
+            # 获取工具信息
+            args_content = self._current_tool_info["args_content"]
+            timestamp = self._current_tool_info["timestamp"]
+            tool_name = self._current_tool_info["tool_name"]
+
+            # 构建当前累积的结果文本
+            all_parts = self._streaming_tool_parts.get(tool_call_id, [])
+            current_output = "".join(all_parts)
+
+            # 准备结果部分（流式更新，不显示状态）
+            result_text = Text(current_output, style="white")
+
+            if is_final:
+                # 最终片段：显示完成状态
+                status_text = Text("✓ Complete", style="dim italic green")
+            else:
+                # 中间片段：显示接收中状态
+                status_text = Text("Receiving...", style="dim italic")
+
+            # 组合 panel
+            content_group = Group(
+                args_content,
+                Rule(style="dim"),
+                result_text,
+                Rule(style="dim"),
+                status_text
+            )
+
+            panel = Panel(
+                content_group,
+                title=f"[bold blue]🔧 Tool Call: {tool_name} ({timestamp})[/bold blue]",
+                border_style="yellow"
+            )
+
+            self._update_live(panel)
+
+        # 如果是最终片段，清理缓存
+        if is_final:
+            self._streaming_tool_parts.pop(tool_call_id, None)
 
     def _print_tool_result(
         self,

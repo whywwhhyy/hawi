@@ -125,6 +125,8 @@ class StreamMarkdownPrinter(BasePrinter):
         self._current_block_type: str | None = None
         self._reasoning_buffer: str = ""
         self._block_count: int = 0
+        # 缓存流式工具结果片段
+        self._streaming_tool_parts: dict[str, list[str]] = {}  # tool_call_id -> parts
 
     async def handle(self, event: Event) -> None:
         handlers = {
@@ -539,6 +541,29 @@ class StreamMarkdownPrinter(BasePrinter):
 
     async def _on_run_stop(self, event: Event) -> None:
         """Agent 执行结束"""
+
+    async def _on_tool_result_part(self, event: Event) -> None:
+        """处理流式工具结果片段（异步生成器工具）"""
+        if not self.show_tools:
+            return
+
+        from hawi.events import AgentToolResultPartEvent
+        assert isinstance(event, AgentToolResultPartEvent)
+
+        tool_call_id = event.tool_call_id
+        part = event.part
+        is_final = event.is_final
+
+        # 存储片段
+        if tool_call_id not in self._streaming_tool_parts:
+            self._streaming_tool_parts[tool_call_id] = []
+        if part:
+            self._streaming_tool_parts[tool_call_id].append(part)
+
+        # 可以在这里添加流式显示逻辑（如果需要）
+        # 目前简单收集，在最终结果时统一显示
+
+        # 如果是最终片段，不清理缓存（由 _print_tool_result 处理）
 
     async def _print_tool_result(
         self,

@@ -9,6 +9,7 @@ from typing import Any
 from hawi.events import (
     Event,
     AgentToolCallEvent,
+    AgentToolResultPartEvent,
     AgentToolResultEvent,
     AgentErrorEvent,
     ModelErrorEvent,
@@ -76,6 +77,7 @@ class BasePrinter(ABC):
             "agent.run_start": self._on_run_start,
             "agent.run_stop": self._on_run_stop,
             "agent.tool_call": self._on_tool_call,
+            "agent.tool_result_part": self._on_tool_result_part,
             "agent.tool_result": self._on_tool_result,
             "agent.error": self._on_error,
         }
@@ -148,6 +150,14 @@ class BasePrinter(ABC):
             "status": "running",
             "start_time": time.time(),
         }
+
+    async def _on_tool_result_part(self, event: Event) -> None:
+        """工具结果分片（异步生成器工具）
+
+        子类可以重写此方法以支持流式显示工具结果。
+        默认实现不执行任何操作。
+        """
+        pass
 
     async def _on_tool_result(self, event: Event) -> None:
         """工具结果"""

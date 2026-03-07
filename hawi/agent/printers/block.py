@@ -64,6 +64,8 @@ class BlockPrinter(BasePrinter):
         self._current_tool_name = ""
         # 缓存 tool call 信息以便在 result 时使用
         self._pending_tool_calls: dict[str, dict[str, Any]] = {} # tool_name -> call_info
+        # 缓存流式工具结果片段
+        self._streaming_tool_parts: dict[str, list[str]] = {} # tool_call_id -> parts
 
     def _format_tool_arguments(self, arguments: dict[str, Any]) -> str:
         """格式化工具参数为易读的格式。"""
@@ -177,6 +179,26 @@ class BlockPrinter(BasePrinter):
         """工具调用块结束 - 忽略，已在 _on_tool_call 中处理"""
         self._current_tool_name = ""
         self._tool_args_buffer = ""
+
+    async def _on_tool_result_part(self, event: Event) -> None:
+        """处理流式工具结果片段（异步生成器工具）- BlockPrinter 仅收集片段"""
+        if not self.show_tools:
+            return
+
+        from hawi.events import AgentToolResultPartEvent
+        assert isinstance(event, AgentToolResultPartEvent)
+
+        tool_call_id = event.tool_call_id
+        part = event.part
+        is_final = event.is_final
+
+        # 存储片段
+        if tool_call_id not in self._streaming_tool_parts:
+            self._streaming_tool_parts[tool_call_id] = []
+        if part:
+            self._streaming_tool_parts[tool_call_id].append(part)
+
+        # 如果是最终片段，不清理缓存（由 _print_tool_result 处理）
 
     def _print_tool_result(
         self,

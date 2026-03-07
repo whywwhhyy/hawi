@@ -147,6 +147,36 @@ class PlainPrinter(BasePrinter):
         _stdout.write("  Status: Executing...")
         _stdout.flush()
 
+        # 标记为等待第一个结果片段
+        self._awaiting_first_part = True
+
+    async def _on_tool_result_part(self, event: Event) -> None:
+        """处理流式工具结果片段（异步生成器工具）"""
+        if not self.show_tools:
+            return
+
+        from hawi.events import AgentToolResultPartEvent
+        assert isinstance(event, AgentToolResultPartEvent)
+
+        part = event.part
+        is_final = event.is_final
+
+        # 第一次收到片段时，清除 Executing... 状态
+        if getattr(self, '_awaiting_first_part', False):
+            _stdout.write("\r  Status: Receiving...\n")
+            _stdout.write("  Output: ")
+            self._awaiting_first_part = False
+
+        # 打印片段（不换行，连续输出）
+        if part:
+            _stdout.write(part)
+            _stdout.flush()
+
+        # 如果是最终片段，添加换行
+        if is_final:
+            _stdout.write("\n")
+            _stdout.flush()
+
     def _print_tool_result(
         self,
         tool_name: str,

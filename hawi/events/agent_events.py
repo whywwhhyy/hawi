@@ -86,6 +86,38 @@ class AgentToolCallEvent(Event):
         )
 
 
+class AgentToolResultPartEvent(Event):
+    """Agent 收到工具结果的分片（用于异步生成器工具）
+
+    当工具函数是异步生成器时，每产生一个结果片段就发送一次此事件。
+    通过 tool_call_id 关联到之前的 AgentToolCallEvent。
+    """
+    run_id: str
+    tool_call_id: str
+    part: str           # 当前片段内容
+    part_index: int     # 片段序号（从0开始）
+    is_final: bool      # 是否是最后一个片段
+
+    @classmethod
+    def create(
+        cls,
+        run_id: str,
+        tool_call_id: str,
+        part: str,
+        part_index: int,
+        is_final: bool,
+    ) -> AgentToolResultPartEvent:
+        return cls(
+            type="agent.tool_result_part",
+            source="agent",
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            part=part,
+            part_index=part_index,
+            is_final=is_final,
+        )
+
+
 class AgentToolResultEvent(Event):
     """Agent 收到工具结果
 

@@ -61,6 +61,7 @@ class FunctionAgentTool(AgentTool):
         self._description = description
         self._parameters_schema = parameters_schema
         self._is_async = inspect.iscoroutinefunction(func)
+        self._is_async_gen = inspect.isasyncgenfunction(func)
         self.audit = audit
         self.context = context
         self.timeout = timeout
@@ -91,61 +92,51 @@ class FunctionAgentTool(AgentTool):
             return {}
         return schema
 
-    def _execute_function(self, *args: Any, **kwargs: Any) -> ToolResult:
-        """Execute the wrapped function and convert result to ToolResult."""
-        try:
-            result = self._func(*args, **kwargs)
-
-            # Convert result to ToolResult
-            if isinstance(result, ToolResult):
-                return result
-            else:
-                return ToolResult(success=True, output=result)
-
-        except Exception as e:
-            return ToolResult(
-                success=False,
-                error=f"{type(e).__name__}: {e}",
-            )
-
-    async def _execute_function_async(self, **kwargs: Any) -> ToolResult:
-        """Execute the wrapped async function and convert result to ToolResult."""
-        try:
-            result = await self._func(**kwargs)
-
-            # Convert result to ToolResult
-            if isinstance(result, ToolResult):
-                return result
-            else:
-                return ToolResult(success=True, output=result)
-
-        except Exception as e:
-            return ToolResult(
-                success=False,
-                error=f"{type(e).__name__}: {e}",
-            )
-
     def run(self, **kwargs: Any) -> ToolResult:
         """Execute the wrapped function synchronously.
 
         Only implemented for sync functions. For async functions,
         base class will route to arun().
         """
-        if self._is_async:
+        if self._is_async or self._is_async_gen:
             # Let base class handle the async case
             return super().run(**kwargs)
-        return self._execute_function(**kwargs)
 
-    async def arun(self, **kwargs: Any) -> ToolResult:
+        # Normal sync function: execute and wrap in ToolResult
+        try:
+            result = self._func(**kwargs)
+            if isinstance(result, ToolResult):
+                return result
+            return ToolResult(success=True, output=result)
+        except Exception as e:
+            return ToolResult(success=False, error=f"{type(e).__name__}: {e}")
+
+    async def arun(self, **kwargs: Any) -> Any:
         """Execute the wrapped function asynchronously.
 
         Only implemented for async functions. For sync functions,
         base class will route to run() in thread pool.
+
+        Note: For async generator functions, returns the async generator directly
+        (not ToolResult), so callers must check with inspect.isasyncgen().
         """
-        if not self._is_async:
+        if not self._is_async and not self._is_async_gen:
             # Let base class handle the sync case
             return await super().arun(**kwargs)
-        return await self._execute_function_async(**kwargs)
+
+        # For async generators, return the async generator directly (don't await)
+        # The caller (agent) will iterate over it
+        if self._is_async_gen:
+            return self._func(**kwargs)
+
+        # Normal async function: execute and wrap in ToolResult
+        try:
+            result = await self._func(**kwargs)
+            if isinstance(result, ToolResult):
+                return result
+            return ToolResult(success=True, output=result)
+        except Exception as e:
+            return ToolResult(success=False, error=f"{type(e).__name__}: {e}")
 
 
 @overload

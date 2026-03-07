@@ -10,7 +10,7 @@ import select
 import os
 import tempfile
 import shutil
-from typing import Optional
+from typing import Optional, AsyncGenerator
 from threading import Lock
 
 from rich.console import Console
@@ -42,6 +42,9 @@ import io
 import contextlib
 import traceback
 import struct
+import threading
+import queue
+import time
 
 # 初始化命名空间，保持状态
 namespace = {
@@ -76,6 +79,71 @@ def send_response(data):
     sys.stdout.buffer.write(encoded)
     sys.stdout.buffer.flush()
 
+class StreamingBuffer:
+    """流式输出缓冲区，将输出实时发送到队列"""
+    def __init__(self, output_queue):
+        self.queue = output_queue
+        self.buffer = []
+        self._closed = False
+
+    def write(self, data):
+        if self._closed:
+            return
+        self.buffer.append(data)
+        # 立即发送
+        self.flush()
+
+    def flush(self):
+        if self.buffer and not self._closed:
+            text = ''.join(self.buffer)
+            self.buffer = []
+            if text:
+                self.queue.put({"chunk": text, "stream": True})
+
+    def close(self):
+        self._closed = True
+        self.flush()
+
+def execute_code_streaming(code, output_queue):
+    """在线程中执行代码，通过队列流式输出"""
+    stdout_buffer = StreamingBuffer(output_queue)
+    stderr_buffer = StreamingBuffer(output_queue)
+
+    result = {"output": "", "error": "", "success": False}
+    full_output = []
+    full_error = []
+
+    try:
+        with contextlib.redirect_stdout(stdout_buffer), \
+             contextlib.redirect_stderr(stderr_buffer):
+
+            # 先尝试作为表达式求值
+            try:
+                compiled = compile(code, '<string>', 'eval')
+                eval_result = eval(compiled, namespace)
+                if eval_result is not None:
+                    print(repr(eval_result))
+            except SyntaxError:
+                # 不是表达式，用exec执行
+                exec(code, namespace)
+
+        # 等待缓冲区 flush
+        time.sleep(0.01)
+
+        result["success"] = True
+
+    except Exception as e:
+        result["error"] = traceback.format_exc()
+        result["success"] = False
+
+    # 关闭缓冲区
+    stdout_buffer.close()
+    stderr_buffer.close()
+
+    # 发送最终结果
+    result["stream"] = False
+    output_queue.put(result)
+
 while True:
     # 读取4字节长度头
     length_bytes = read_exact(4)
@@ -91,43 +159,77 @@ while True:
 
     code = code_bytes.decode('utf-8')
 
-    # 执行代码
-    stdout_capture = io.StringIO()
-    stderr_capture = io.StringIO()
+    # 检查是否是流式模式（代码以 # __STREAMING__\\n 开头）
+    streaming_mode = code.startswith("# __STREAMING__\\n")
+    if streaming_mode:
+        code = code.replace("# __STREAMING__\\n", "", 1)
 
-    result = {
-        "output": "",
-        "error": "",
-        "success": False
-    }
+    if streaming_mode:
+        # 流式执行模式
+        output_queue = queue.Queue()
 
-    try:
-        with contextlib.redirect_stdout(stdout_capture), \
-             contextlib.redirect_stderr(stderr_capture):
+        # 在后台线程执行代码
+        exec_thread = threading.Thread(
+            target=execute_code_streaming,
+            args=(code, output_queue)
+        )
+        exec_thread.start()
 
-            # 先尝试作为表达式求值
+        # 从队列读取输出并发送
+        while True:
             try:
-                compiled = compile(code, '<string>', 'eval')
-                eval_result = eval(compiled, namespace)
-                if eval_result is not None:
-                    print(repr(eval_result))
-            except SyntaxError:
-                # 不是表达式，用exec执行
-                exec(code, namespace)
+                chunk = output_queue.get(timeout=0.001)
+                send_response(chunk)
+                if not chunk.get("stream", False):
+                    # 最终响应
+                    break
+            except queue.Empty:
+                # 检查线程是否结束
+                if not exec_thread.is_alive():
+                    # 线程结束但没有数据，发送空结果
+                    send_response({"output": "", "error": "", "success": True, "stream": False})
+                    break
+                continue
 
-        result["output"] = stdout_capture.getvalue()
-        result["success"] = True
+        exec_thread.join(timeout=1.0)
+    else:
+        # 传统同步模式
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
 
-    except Exception as e:
-        result["error"] = traceback.format_exc()
-        result["success"] = False
+        result = {
+            "output": "",
+            "error": "",
+            "success": False
+        }
 
-    # 添加stderr内容
-    stderr_content = stderr_capture.getvalue()
-    if stderr_content:
-        result["error"] = stderr_content + "\\n" + result["error"]
+        try:
+            with contextlib.redirect_stdout(stdout_capture), \
+                 contextlib.redirect_stderr(stderr_capture):
 
-    send_response(result)
+                # 先尝试作为表达式求值
+                try:
+                    compiled = compile(code, '<string>', 'eval')
+                    eval_result = eval(compiled, namespace)
+                    if eval_result is not None:
+                        print(repr(eval_result))
+                except SyntaxError:
+                    # 不是表达式，用exec执行
+                    exec(code, namespace)
+
+            result["output"] = stdout_capture.getvalue()
+            result["success"] = True
+
+        except Exception as e:
+            result["error"] = traceback.format_exc()
+            result["success"] = False
+
+        # 添加stderr内容
+        stderr_content = stderr_capture.getvalue()
+        if stderr_content:
+            result["error"] = stderr_content + "\\n" + result["error"]
+
+        send_response(result)
 '''
 
     def __init__(self, work_dir: Optional[str] = None, print_execution=False):
@@ -369,6 +471,140 @@ while True:
             content = Group(syntax, Text(""), divider, Text(""), result_text)
 
             _console.print(Panel(content, title="[bold blue]Python 执行[/bold blue]", border_style="blue"))
+
+        return result
+
+    async def execute_streaming(
+        self, code: str, timeout: Optional[float] = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        异步流式执行 Python 代码，产生输出片段
+
+        **重要提示：解释器会保留之前运行过的结果。**
+        所有变量、函数定义、导入的模块等都会在多次执行之间保持状态。
+
+        Args:
+            code: 要执行的 Python 代码
+            timeout: 超时时间（秒），None 表示不超时
+
+        Yields:
+            输出片段字符串
+        """
+        import asyncio
+
+        if self._closed:
+            raise RuntimeError("Interpreter has been closed")
+
+        if not code or not code.strip():
+            return
+
+        with self._lock:
+            assert self._proc
+            # 检查进程是否还活着
+            if self._proc.poll() is not None:
+                # 进程已退出，尝试重启
+                self._start_server()
+                yield "Error: Subprocess died and was restarted\n"
+                return
+
+            # 添加流式标记
+            streaming_code = "# __STREAMING__\n" + code
+            code_bytes = streaming_code.encode("utf-8")
+            length_prefix = struct.pack(">I", len(code_bytes))
+
+            try:
+                assert self._proc.stdin
+                self._proc.stdin.write(length_prefix)
+                self._proc.stdin.write(code_bytes)
+                self._proc.stdin.flush()
+            except BrokenPipeError:
+                self._start_server()
+                yield "Error: Subprocess connection broken, restarted\n"
+                return
+
+            # 读取流式响应
+            start_time = asyncio.get_event_loop().time()
+            while True:
+                try:
+                    # 检查超时
+                    if timeout is not None:
+                        elapsed = asyncio.get_event_loop().time() - start_time
+                        if elapsed > timeout:
+                            self._close_proc()
+                            self._start_server()
+                            yield f"\n[Timeout after {timeout}s]\n"
+                            return
+
+                    # 读取响应长度（4字节）
+                    length_bytes = await asyncio.wait_for(
+                        self._read_async(4),
+                        timeout=1.0 if timeout is None else min(1.0, timeout),
+                    )
+                    if length_bytes is None:
+                        continue
+
+                    response_length = struct.unpack(">I", length_bytes)[0]
+
+                    # 读取响应数据
+                    response_bytes = await asyncio.wait_for(
+                        self._read_async(response_length),
+                        timeout=1.0 if timeout is None else min(1.0, timeout),
+                    )
+                    if response_bytes is None:
+                        continue
+
+                    response = json.loads(response_bytes.decode("utf-8"))
+
+                    if response.get("stream", False):
+                        # 流式片段
+                        chunk = response.get("chunk", "")
+                        if chunk:
+                            yield chunk
+                    else:
+                        # 最终响应
+                        if response.get("error"):
+                            yield f"\n[Error]\n{response['error']}\n"
+                        elif response.get("output"):
+                            yield response["output"]
+                        return
+
+                except asyncio.TimeoutError:
+                    continue
+                except Exception as e:
+                    yield f"\n[Communication error: {str(e)}]\n"
+                    return
+
+    async def _read_async(self, n: int) -> Optional[bytes]:
+        """异步读取 n 字节"""
+        import asyncio
+
+        assert self._proc
+        if self._proc.stdout is None:
+            return None
+
+        # 在非阻塞模式下读取
+        loop = asyncio.get_event_loop()
+        result = b""
+
+        while len(result) < n:
+            try:
+                # 使用 run_in_executor 进行同步读取，设置超时防止卡住
+                chunk = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._proc.stdout.read, n - len(result)),
+                    timeout=5.0
+                )
+                if not chunk:
+                    return None
+                result += chunk
+            except asyncio.TimeoutError:
+                # 读取超时，检查进程是否还活着
+                if self._proc.poll() is not None:
+                    # 进程已退出，返回 None
+                    return None
+                # 进程还活着，继续尝试读取
+                continue
+            except Exception:
+                return None
 
         return result
 

@@ -39,6 +39,7 @@ AgentEventType = Literal[
     'agent.run_start',
     'agent.message_added',
     'agent.tool_call',
+    'agent.tool_result_part',
     'agent.tool_result',
     'agent.run_stop',
     'agent.error',

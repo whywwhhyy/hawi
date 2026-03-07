@@ -1,7 +1,7 @@
 import os
 import tempfile
 import shutil
-from typing import Optional, Dict, Literal
+from typing import Optional, Dict, Literal, AsyncGenerator
 from threading import Lock
 
 from hawi.utils.lifecycle import ExitHandler
@@ -200,28 +200,31 @@ class PythonInterpreterPlugin(HawiPlugin):
             return instance.executor.restart_server()
 
     @plugin.tool
-    def execute(
+    async def execute(
         self,
         code: str,
         interpreter_name: Optional[str] = None,
         timeout: Optional[float] = None
-    ) -> ToolResult:
-        """在指定解释器实例中执行 Python 代码
+    ):
+        """在指定解释器实例中执行 Python 代码（流式输出）
 
         **重要提示：解释器会保留之前运行过的结果。**
         所有变量、函数定义、导入的模块等都会在多次执行之间保持状态。
+
+        此工具以流式方式返回执行结果，可以实时看到代码输出。
 
         Args:
             code: 要执行的 Python 代码
             interpreter_name: 解释器实例名称，None表示默认实例
             timeout: 超时时间（秒），None表示不超时
 
-        Returns:
-            ToolResult: 执行结果
+        Yields:
+            str: 代码执行的输出片段
         """
         instance = self._get_instance(interpreter_name)
         with instance.lock:
-            return instance.executor.execute(code, timeout)
+            async for chunk in instance.executor.execute_streaming(code, timeout):
+                yield chunk
 
     # ==================== 脚本管理方法（统一存储，不绑定特定解释器） ====================
 
@@ -255,13 +258,13 @@ class PythonInterpreterPlugin(HawiPlugin):
         return f"Script '{os.path.basename(script_path)}' saved"
 
     @plugin.tool
-    def execute_script(
+    async def execute_script(
         self,
         script_name: str,
         interpreter_name: Optional[str] = None,
         timeout: Optional[float] = None
-    ) -> ToolResult:
-        """执行脚本目录中的脚本
+    ):
+        """执行脚本目录中的脚本（流式输出）
 
         脚本内容会被读取并在指定解释器中执行。
 
@@ -270,8 +273,8 @@ class PythonInterpreterPlugin(HawiPlugin):
             interpreter_name: 解释器实例名称，None表示默认实例
             timeout: 超时时间（秒）
 
-        Returns:
-            ToolResult: 执行结果
+        Yields:
+            str: 脚本执行的输出片段
         """
         script_path = self._get_script_path(script_name)
         if not os.path.exists(script_path):
@@ -280,8 +283,9 @@ class PythonInterpreterPlugin(HawiPlugin):
         with open(script_path, 'r', encoding='utf-8') as f:
             code = f.read()
 
-        # 在指定解释器中执行脚本内容
-        return self.execute(code, interpreter_name, timeout)
+        # 在指定解释器中执行脚本内容（流式）
+        async for chunk in self.execute(code, interpreter_name, timeout):
+            yield chunk
 
     @plugin.tool
     def delete_script(self, script_name: str) -> str:
