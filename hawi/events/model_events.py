@@ -299,12 +299,21 @@ class ModelToolCallBlockStopEvent(Event):
     """工具调用内容块结束
 
     专门用于 tool_call 类型的结束事件。
-    注意：此事件不再包含完整的参数信息，参数应在 delta 事件中累积获取。
+    包含完整的工具调用信息，包括工具名和解析后的参数。
+
+    Attributes:
+        request_id: 请求 ID
+        block_index: 内容块序号
+        tool_call_id: 工具调用 ID
+        tool_name: 工具名称
+        arguments: 完整解析后的参数（dict 类型）
     """
 
     request_id: str
     block_index: int
     tool_call_id: str
+    tool_name: str
+    arguments: dict[str, Any]
 
     @classmethod
     def create(
@@ -312,6 +321,8 @@ class ModelToolCallBlockStopEvent(Event):
         request_id: str,
         block_index: int,
         tool_call_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
     ) -> ModelToolCallBlockStopEvent:
         """创建工具调用内容块结束事件
 
@@ -319,6 +330,8 @@ class ModelToolCallBlockStopEvent(Event):
             request_id: 请求 ID
             block_index: 内容块序号
             tool_call_id: 工具调用 ID
+            tool_name: 工具名称
+            arguments: 完整解析后的参数
 
         Returns:
             ModelToolCallBlockStopEvent 实例
@@ -329,6 +342,8 @@ class ModelToolCallBlockStopEvent(Event):
             request_id=request_id,
             block_index=block_index,
             tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments=arguments,
         )
 
 

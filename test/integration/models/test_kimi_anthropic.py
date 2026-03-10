@@ -157,7 +157,8 @@ class TestKimiAnthropicIntegration:
 
     def test_streaming_response(self, model: KimiAnthropicModel):
         """Test streaming response."""
-        events = list(model.stream(
+        events = list(model.invoke(
+            streaming=True,
             messages=[_create_user_message("Count from 1 to 3.")],
         ))
 

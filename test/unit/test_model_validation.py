@@ -74,18 +74,16 @@ class TestAgentErrorHandling:
         """
         from hawi.errors import AgentError
 
-        # Create a mock model that fails during preparation
+        # Create a mock model that fails during streaming
         mock_model = MagicMock()
         mock_model.model_id = "test-model"
 
-        # Make astream return an async context manager that raises on enter
-        class FailingAsyncContextManager:
-            async def __aenter__(self):
-                raise AttributeError("'list' object has no attribute 'startswith'")
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
+        # Make ainvoke(streaming=True) raise an exception immediately
+        # (simulating a model preparation error)
+        async def failing_ainvoke(*args, **kwargs):
+            raise AttributeError("'list' object has no attribute 'startswith'")
 
-        mock_model.astream = MagicMock(return_value=FailingAsyncContextManager())
+        mock_model.ainvoke = MagicMock(side_effect=failing_ainvoke)
 
         agent = HawiAgent(
             model=mock_model,
@@ -103,23 +101,20 @@ class TestAgentErrorHandling:
     async def test_model_init_error_is_not_silent(self):
         """Test that model initialization errors are not silently swallowed.
 
-        This ensures that if a model's __init__ or astream raises an exception,
+        This ensures that if a model's __init__ or ainvoke raises an exception,
         the error propagates properly rather than being silently ignored.
         """
         from hawi.errors import AgentError
 
-        # Create a mock model that fails when astream is called
+        # Create a mock model that fails when ainvoke is called
         mock_model = MagicMock()
         mock_model.model_id = "test-model"
 
-        # Make astream return an async context manager that raises on enter
-        class BrokenAsyncContextManager:
-            async def __aenter__(self):
-                raise AttributeError("'list' object has no attribute 'startswith'")
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
+        # Make ainvoke(streaming=True) raise an exception immediately
+        async def failing_ainvoke(*args, **kwargs):
+            raise AttributeError("'list' object has no attribute 'startswith'")
 
-        mock_model.astream = MagicMock(return_value=BrokenAsyncContextManager())
+        mock_model.ainvoke = MagicMock(side_effect=failing_ainvoke)
 
         agent = HawiAgent(
             model=mock_model,

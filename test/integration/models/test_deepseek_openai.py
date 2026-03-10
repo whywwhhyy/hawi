@@ -190,8 +190,9 @@ class TestDeepSeekOpenAIIntegration:
 
     def test_streaming_response(self, model: DeepSeekOpenAIModel):
         """Test streaming response."""
-        events = list(model.stream(
+        events = list(model.invoke(
             messages=[_create_user_message("Count from 1 to 3.")],
+            streaming=True,
         ))
 
         # Should have content block events and finish event

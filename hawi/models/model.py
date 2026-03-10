@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Iterator, List, Literal, Callable
+from typing import Any, AsyncGenerator, Iterator, List, Literal, Callable, overload, Union
 
 from hawi.models.message import (
     ContentPart,
@@ -114,86 +114,123 @@ class Model(ABC):
     # 公共 API - 同步方法
     # ==========================================================================
 
+    @overload
     def invoke(
         self,
         messages: list[Message],
+        *,
+        streaming: Literal[False] = False,
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
         event_callback: ModelEventCallback | None = None,
         **kwargs,
-    ) -> MessageResponse:
+    ) -> MessageResponse: ...
+
+    @overload
+    def invoke(
+        self,
+        messages: list[Message],
+        *,
+        streaming: Literal[True],
+        system: str | List[ContentPart] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = None,
+        event_callback: ModelEventCallback | None = None,
+        **kwargs,
+    ) -> Iterator[DeltaPart]: ...
+
+    def invoke(
+        self,
+        messages: list[Message],
+        *,
+        streaming: bool = False,
+        system: str | List[ContentPart] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = None,
+        event_callback: ModelEventCallback | None = None,
+        **kwargs,
+    ) -> MessageResponse | Iterator[DeltaPart]:
         """同步调用模型
 
         Args:
             messages: 消息列表
+            streaming: 是否使用流式模式。False 返回 MessageResponse，True 返回 Iterator[DeltaPart]
             system: 系统提示
             tools: 工具定义列表
             tool_choice: 工具选择策略
-            event_callback: 事件回调函数，用于输出 model 事件（非流式接口也能产生事件）
+            event_callback: 事件回调函数，用于输出 model 事件
             **kwargs: 其他参数
+
+        Returns:
+            streaming=False: MessageResponse
+            streaming=True: Iterator[DeltaPart]
         """
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
+        if streaming:
+            return self._stream_impl(request)
         return self._invoke_impl(request, event_callback=event_callback)
-
-    def stream(
-        self,
-        messages: list[Message],
-        system: str | List[ContentPart] | None = None,
-        tools: list[ToolDefinition] | None = None,
-        tool_choice: ToolChoice | None = None,
-        **kwargs,
-    ) -> Iterator[DeltaPart]:
-        """同步流式调用模型，生成内容增量块"""
-        request = self._build_request(messages, system, tools, tool_choice, kwargs)
-        yield from self._stream_impl(request)
 
     # ==========================================================================
     # 公共 API - 异步方法
     # ==========================================================================
 
+    @overload
     async def ainvoke(
         self,
         messages: list[Message],
+        *,
+        streaming: Literal[False] = False,
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
         event_callback: ModelEventCallback | None = None,
         **kwargs,
-    ) -> MessageResponse:
+    ) -> MessageResponse: ...
+
+    @overload
+    async def ainvoke(
+        self,
+        messages: list[Message],
+        *,
+        streaming: Literal[True],
+        system: str | List[ContentPart] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = None,
+        event_callback: ModelEventCallback | None = None,
+        **kwargs,
+    ) -> AsyncGenerator[DeltaPart, None]: ...
+
+    async def ainvoke(
+        self,
+        messages: list[Message],
+        *,
+        streaming: bool = False,
+        system: str | List[ContentPart] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = None,
+        event_callback: ModelEventCallback | None = None,
+        **kwargs,
+    ) -> MessageResponse | AsyncGenerator[DeltaPart, None]:
         """异步调用模型
 
         Args:
             messages: 消息列表
+            streaming: 是否使用流式模式。False 返回 MessageResponse，True 返回 AsyncGenerator[DeltaPart]
             system: 系统提示
             tools: 工具定义列表
             tool_choice: 工具选择策略
-            event_callback: 事件回调函数，用于输出 model 事件（非流式接口也能产生事件）
+            event_callback: 事件回调函数，用于输出 model 事件
             **kwargs: 其他参数
+
+        Returns:
+            streaming=False: MessageResponse
+            streaming=True: AsyncGenerator[DeltaPart, None]
         """
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
+        if streaming:
+            return self._astream_impl(request)
         return await self._ainvoke_impl(request, event_callback=event_callback)
-
-    @asynccontextmanager
-    async def astream(
-        self,
-        messages: list[Message],
-        system: str | List[ContentPart] | None = None,
-        tools: list[ToolDefinition] | None = None,
-        tool_choice: ToolChoice | None = None,
-        **kwargs,
-    ):
-        """异步流式调用模型，生成内容增量块"""
-        request = self._build_request(messages, system, tools, tool_choice, kwargs)
-        
-        # 获取底层生成器
-        gen = self._astream_impl(request)
-        
-        try:
-            yield gen
-        finally:
-            # 确保生成器被关闭
-            await gen.aclose()
 
     # ==========================================================================
     # 请求/响应转换 - 子类必须实现
@@ -210,7 +247,7 @@ class Model(ABC):
         pass
 
     # ==========================================================================
-    # 调用实现 - 子类必须实现同步版本
+    # 调用实现
     # ==========================================================================
 
     @abstractmethod
@@ -226,10 +263,6 @@ class Model(ABC):
             event_callback: 事件回调函数，用于输出 model 事件
         """
         pass
-
-    # ==========================================================================
-    # 调用实现 - 子类可选实现（默认提供基于 sync 的 fallback）
-    # ==========================================================================
 
     async def _ainvoke_impl(
         self,

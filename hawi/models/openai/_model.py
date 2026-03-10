@@ -375,7 +375,7 @@ class OpenAIModel(Model):
                     "arguments_delta": args_str,  # 完整参数 JSON
                     "is_streaming": False,
                 })
-                # tool_call_block_stop (不包含完整参数)
+                # tool_call_block_stop (包含完整参数)
                 event_callback("model.tool_call_block_stop", {
                     "type": "model.tool_call_block_stop",
                     "source": "model",
@@ -383,6 +383,8 @@ class OpenAIModel(Model):
                     "request_id": request_id,
                     "block_index": idx,
                     "tool_call_id": tool_id,
+                    "tool_name": tool_name,
+                    "arguments": arguments,
                 })
 
         # stream_stop

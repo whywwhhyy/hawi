@@ -268,11 +268,13 @@ class ContentBlockHandler:
 
             if self.block_type == "tool_use":
                 acc = self._accumulator
-                # ModelToolCallBlockStopEvent 不再包含完整参数
+                # ModelToolCallBlockStopEvent 包含完整参数
                 event = ModelToolCallBlockStopEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     tool_call_id=acc.get("id") or "",
+                    tool_name=acc.get("name") or "",
+                    arguments=self._parse_tool_arguments(acc.get("arguments", "")),
                 )
             else:
                 event = ModelContentBlockStopEvent.create(
@@ -1032,8 +1034,8 @@ class HawiAgent:
     ) -> None:
         """Execute model call in non-streaming mode.
 
-        Uses model.ainvoke() and processes response.content directly.
-        Events are emitted by iterating over response parts.
+        Uses model.ainvoke() with event_callback to emit complete event sequence.
+        This ensures compatibility with streaming mode's event flow.
         """
         last_error = None
         max_retries = 0
@@ -1043,48 +1045,34 @@ class HawiAgent:
             if p.action == "retry" and isinstance(p, ModelErrorRetryPolicy) and p.retry_count > max_retries:
                 max_retries = p.retry_count
 
+        # Create event callback to forward model events to event_bus
+        def model_event_callback(event_type: str, data: dict[str, Any]) -> None:
+            """Forward model events to event_bus and collect content parts"""
+            # Convert raw event data to proper Event objects and emit
+            self._forward_model_event(
+                event_type=event_type,
+                data=data,
+                event_bus=event_bus,
+                request_id=request_id,
+                content_parts=content_parts,
+                tool_calls=tool_calls,
+            )
+
         attempt = 0
         for attempt in range(max_retries + 1):
             try:
                 request = self._context.prepare_request()
 
-                # Call model (non-streaming)
-                response = await model.ainvoke(
+                # Call model (non-streaming) with event callback
+                # This will emit complete event sequence via callback
+                await model.ainvoke(
                     messages=request.messages,
                     system=[part for part in (request.system or ()) if part['type'] == 'text'],
                     tools=request.tools,
+                    event_callback=model_event_callback,
                 )
 
-                # Process response.content directly
-                content_parts.extend(response.content)
-                tool_calls.extend(
-                    p for p in response.content if p.get("type") == "tool_call"  # type: ignore[arg-type]
-                )
-
-                # Emit events for observability (non-streaming mode sends all at once)
-                for idx, part in enumerate(response.content):
-                    part_type = part.get("type")
-                    if part_type == "text":
-                        delta_part: DeltaPart = {"type": "text_delta", "index": idx, "delta": part.get("text", ""), "is_start": True, "is_end": True}
-                        await self._emit_event(
-                            ModelContentBlockDeltaEvent.create(
-                                request_id=request_id,
-                                part=delta_part,
-                                is_streaming=False,
-                            ),
-                            event_bus,
-                        )
-                    elif part_type == "tool_call":
-                        await self._emit_event(
-                            AgentToolCallEvent.create(
-                                run_id=getattr(self, '_current_run_id', ''),
-                                tool_name=part.get("name", ""),
-                                arguments=part.get("arguments", {}),
-                                tool_call_id=part.get("id", ""),
-                            ),
-                            event_bus,
-                        )
-
+                # Content parts are collected via event callback
                 return
 
             except ModelError as e:
@@ -1105,6 +1093,102 @@ class HawiAgent:
             state.error = err
             if event_bus:
                 await event_bus.publish_async(ModelErrorEvent.create(error=err))
+
+    def _forward_model_event(
+        self,
+        event_type: str,
+        data: dict[str, Any],
+        event_bus: EventBus | None,
+        request_id: str,
+        content_parts: list[ContentPart],
+        tool_calls: list[ToolCallPart],
+    ) -> None:
+        """Forward model event to event_bus and collect content parts.
+
+        This method converts raw model event data to proper Event objects
+        and emits them through the event_bus. It also collects content parts
+        for building the final response.
+        """
+        import asyncio
+
+        # Get the event class based on event_type
+        event: Event | None = None
+
+        if event_type == "model.stream_start":
+            event = ModelStreamStartEvent.create(
+                request_id=data.get("request_id", request_id),
+            )
+        elif event_type == "model.content_block_start":
+            event = ModelContentBlockStartEvent.create(
+                request_id=data.get("request_id", request_id),
+                block_index=data.get("block_index", 0),
+                block_type=data.get("block_type", "text"),
+            )
+        elif event_type == "model.content_block_delta":
+            event = ModelContentBlockDeltaEvent.create(
+                request_id=data.get("request_id", request_id),
+                part=data.get("part", {}),
+                is_streaming=data.get("is_streaming", False),
+            )
+        elif event_type == "model.content_block_stop":
+            event = ModelContentBlockStopEvent.create(
+                request_id=data.get("request_id", request_id),
+                block_index=data.get("block_index", 0),
+                content=data.get("content", []),
+            )
+            # Collect content parts
+            content_parts.extend(data.get("content", []))
+        elif event_type == "model.tool_call_block_start":
+            event = ModelToolCallBlockStartEvent.create(
+                request_id=data.get("request_id", request_id),
+                block_index=data.get("block_index", 0),
+                tool_call_id=data.get("tool_call_id", ""),
+                tool_name=data.get("tool_name", ""),
+            )
+        elif event_type == "model.tool_call_block_delta":
+            event = ModelToolCallBlockDeltaEvent.create(
+                request_id=data.get("request_id", request_id),
+                block_index=data.get("block_index", 0),
+                tool_call_id=data.get("tool_call_id", ""),
+                arguments_delta=data.get("arguments_delta", ""),
+                is_streaming=data.get("is_streaming", False),
+            )
+        elif event_type == "model.tool_call_block_stop":
+            event = ModelToolCallBlockStopEvent.create(
+                request_id=data.get("request_id", request_id),
+                block_index=data.get("block_index", 0),
+                tool_call_id=data.get("tool_call_id", ""),
+                tool_name=data.get("tool_name", ""),
+                arguments=data.get("arguments", {}),
+            )
+            # Create ToolCallPart and add to tool_calls
+            tool_call_part: ToolCallPart = {
+                "type": "tool_call",
+                "id": data.get("tool_call_id", ""),
+                "name": data.get("tool_name", ""),
+                "arguments": data.get("arguments", {}),
+            }
+            content_parts.append(tool_call_part)
+            tool_calls.append(tool_call_part)
+            # Also emit AgentToolCallEvent for tool calls
+            if event_bus:
+                tool_call_event = AgentToolCallEvent.create(
+                    run_id=getattr(self, '_current_run_id', ''),
+                    tool_name=data.get("tool_name", ""),
+                    arguments=data.get("arguments", {}),
+                    tool_call_id=data.get("tool_call_id", ""),
+                )
+                asyncio.create_task(event_bus.publish_async(tool_call_event))
+        elif event_type == "model.stream_stop":
+            event = ModelStreamStopEvent.create(
+                request_id=data.get("request_id", request_id),
+                stop_reason=data.get("stop_reason", "end_turn"),
+                usage=data.get("usage"),
+            )
+
+        # Emit the event through event_bus
+        if event and event_bus:
+            asyncio.create_task(event_bus.publish_async(event))
 
     async def _call_model_with_retry_streaming(
         self,
@@ -1133,15 +1217,15 @@ class HawiAgent:
             try:
                 request = self._context.prepare_request()
 
-                # Use astream() for streaming output
-                # Store generator reference for proper cleanup
-                async with model.astream(
+                # Use ainvoke(streaming=True) for streaming output
+                stream_gen = await model.ainvoke(
                     messages=request.messages,
+                    streaming=True,
                     system=[part for part in (request.system or ()) if part['type'] == 'text'],
                     tools=request.tools,
-                ) as stream_gen:
-                    async for chunk in stream_gen:
-                        yield chunk
+                )
+                async for chunk in stream_gen:
+                    yield chunk
 
                 return  # Success, exit retry loop
 

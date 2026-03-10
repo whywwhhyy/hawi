@@ -355,7 +355,7 @@ class TestIntegration:
             "tool_call_id": None,
             "metadata": None,
         }]
-        events = list(adapter.stream(messages=messages))
+        events = list(adapter.invoke(messages=messages, streaming=True))
 
         # Verify strands model was called
         assert strands_model.last_call is not None

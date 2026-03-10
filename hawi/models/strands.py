@@ -46,6 +46,7 @@ from hawi.models import (
     ToolResultPart,
     VideoPart,
 )
+from hawi.models.model import ModelEventCallback
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,9 @@ class StrandsModel(Model):
         # 转换响应
         result = self._parse_response_impl(strands_response)
 
-        # TODO: Emit events via event_callback if provided
+        # Emit events via event_callback if provided
+        if event_callback is not None:
+            self._emit_events_from_response(result, event_callback)
 
         return result
 
@@ -262,9 +265,184 @@ class StrandsModel(Model):
 
         result = self._parse_response_impl(strands_response)
 
-        # TODO: Emit events via event_callback if provided
+        # Emit events via event_callback if provided
+        if event_callback is not None:
+            self._emit_events_from_response(result, event_callback)
 
         return result
+
+    def _emit_events_from_response(
+        self,
+        response: MessageResponse,
+        event_callback: "ModelEventCallback",
+    ) -> None:
+        """从非流式响应生成事件
+
+        在非流式模式下，将完整响应转换为事件序列：
+        - model.stream_start
+        - model.content_block_start
+        - model.content_block_delta (一次性包含完整内容，is_streaming=False)
+        - model.content_block_stop
+        - model.stream_stop
+
+        Args:
+            response: 解析后的消息响应
+            event_callback: 事件回调函数
+        """
+        import time
+        import json
+
+        request_id = response.id
+
+        # stream_start
+        event_callback("model.stream_start", {
+            "type": "model.stream_start",
+            "source": "model",
+            "timestamp": time.time(),
+            "request_id": request_id,
+        })
+
+        # 为每个 content part 生成事件
+        for idx, part in enumerate(response.content):
+            part_type = part.get("type")
+
+            if part_type == "text":
+                text = part.get("text", "")
+                # content_block_start
+                event_callback("model.content_block_start", {
+                    "type": "model.content_block_start",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "block_type": "text",
+                })
+                # content_block_delta (非流式，一次性发送完整内容)
+                event_callback("model.content_block_delta", {
+                    "type": "model.content_block_delta",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "delta_type": "text",
+                    "delta": text,  # 完整内容
+                    "part": {
+                        "type": "text_delta",
+                        "index": idx,
+                        "delta": text,
+                        "is_start": True,
+                        "is_end": True,
+                    },
+                    "is_streaming": False,  # 非流式
+                })
+                # content_block_stop
+                event_callback("model.content_block_stop", {
+                    "type": "model.content_block_stop",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "content": [part],
+                })
+
+            elif part_type == "reasoning":
+                reasoning = part.get("reasoning", "")
+                # content_block_start
+                event_callback("model.content_block_start", {
+                    "type": "model.content_block_start",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "block_type": "thinking",
+                })
+                # content_block_delta (非流式)
+                event_callback("model.content_block_delta", {
+                    "type": "model.content_block_delta",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "delta_type": "thinking",
+                    "delta": reasoning,
+                    "part": {
+                        "type": "thinking_delta",
+                        "index": idx,
+                        "delta": reasoning,
+                        "is_start": True,
+                        "is_end": True,
+                    },
+                    "is_streaming": False,
+                })
+                # content_block_stop
+                event_callback("model.content_block_stop", {
+                    "type": "model.content_block_stop",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "content": [part],
+                })
+
+            elif part_type == "tool_call":
+                tool_id = part.get("id", "")
+                tool_name = part.get("name", "")
+                arguments = part.get("arguments", {})
+                args_str = json.dumps(arguments) if isinstance(arguments, dict) else str(arguments)
+
+                # tool_call_block_start
+                event_callback("model.tool_call_block_start", {
+                    "type": "model.tool_call_block_start",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "tool_call_id": tool_id,
+                    "tool_name": tool_name,
+                })
+                # tool_call_block_delta (非流式，一次性发送完整参数)
+                event_callback("model.tool_call_block_delta", {
+                    "type": "model.tool_call_block_delta",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "tool_call_id": tool_id,
+                    "arguments_delta": args_str,  # 完整参数 JSON
+                    "is_streaming": False,
+                })
+                # tool_call_block_stop (包含完整参数)
+                event_callback("model.tool_call_block_stop", {
+                    "type": "model.tool_call_block_stop",
+                    "source": "model",
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "block_index": idx,
+                    "tool_call_id": tool_id,
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                })
+
+        # stream_stop
+        usage_dict = None
+        if response.usage:
+            usage_dict = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
+            if response.usage.cache_write_tokens is not None:
+                usage_dict["cache_write_tokens"] = response.usage.cache_write_tokens
+            if response.usage.cache_read_tokens is not None:
+                usage_dict["cache_read_tokens"] = response.usage.cache_read_tokens
+
+        event_callback("model.stream_stop", {
+            "type": "model.stream_stop",
+            "source": "model",
+            "timestamp": time.time(),
+            "request_id": request_id,
+            "stop_reason": response.stop_reason,
+            "usage": usage_dict,
+        })
 
     async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         """异步流式实现"""

@@ -127,7 +127,8 @@ class TestMiniMaxM25Integration:
 
     def test_streaming_response(self, model: MiniMaxOpenAIModel):
         """Test streaming response."""
-        events = list(model.stream(
+        events = list(model.invoke(
+            streaming=True,
             messages=[_create_user_message("Count from 1 to 3.")],
         ))
 
@@ -223,7 +224,8 @@ class TestMiniMaxM21Integration:
 
     def test_streaming_response(self, model: MiniMaxOpenAIModel):
         """Test streaming response with M2.1."""
-        events = list(model.stream(
+        events = list(model.invoke(
+            streaming=True,
             messages=[_create_user_message("Tell me a short joke.")],
         ))
 
