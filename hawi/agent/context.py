@@ -177,7 +177,8 @@ class AgentContext:
         """Add an assistant message.
 
         Args:
-            content: Content parts (may include ToolCallPart items)
+            content: Content parts (text/reasoning/tool_call/etc)
+                  Tool calls should already be included as ToolCallPart items in content.
         """
         self.messages.append({
             "role": "assistant",

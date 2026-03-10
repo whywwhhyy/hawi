@@ -1030,9 +1030,10 @@ class HawiAgent:
         content_parts: list[ContentPart],
         tool_calls: list[ToolCallPart],
     ) -> None:
-        """Execute model call in non-streaming mode with event callback.
+        """Execute model call in non-streaming mode.
 
-        Uses model.ainvoke() with event_callback to emit events all at once.
+        Uses model.ainvoke() and processes response.content directly.
+        Events are emitted by iterating over response parts.
         """
         last_error = None
         max_retries = 0
@@ -1042,71 +1043,47 @@ class HawiAgent:
             if p.action == "retry" and isinstance(p, ModelErrorRetryPolicy) and p.retry_count > max_retries:
                 max_retries = p.retry_count
 
-        # Track which handler to use for each block index
-        handlers: dict[int, ContentBlockHandler] = {}
-
-        def event_callback(event_type: str, data: dict) -> None:
-            """Callback to process events from the model's non-streaming response."""
-            # Map event types to handler processing
-            if event_type == "model.content_block_delta":
-                part = data.get("part", {})
-                idx = part.get("index", 0)
-                part_type = part.get("type", "")
-
-                # Get or create handler for this chunk type
-                if idx not in handlers:
-                    if part_type == "text_delta":
-                        handlers[idx] = text_handler
-                    elif part_type == "thinking_delta":
-                        handlers[idx] = thinking_handler
-                    elif part_type == "tool_call_delta":
-                        handlers[idx] = tool_handler
-
-                handler = handlers.get(idx)
-                if handler:
-                    # Use async.run_coroutine_threadsafe since callback is sync
-                    import asyncio
-                    try:
-                        loop = asyncio.get_running_loop()
-                        asyncio.run_coroutine_threadsafe(
-                            handler.handle(part, request_id, event_bus, is_streaming=False),
-                            loop
-                        )
-                    except RuntimeError:
-                        # No running loop, just call handle directly (it will queue events)
-                        pass
-
-            elif event_type == "model.content_block_stop":
-                # Block completed, add to content_parts
-                block_content = data.get("content", [])
-                for part in block_content:
-                    content_parts.append(part)
-                    if part.get("type") == "tool_call":
-                        tool_calls.append(part)  # type: ignore
-
-            elif event_type == "model.tool_call_block_stop":
-                # Tool call block completed
-                pass  # Already handled in content_block_stop
-
         attempt = 0
         for attempt in range(max_retries + 1):
             try:
                 request = self._context.prepare_request()
 
-                # Call model with event_callback
+                # Call model (non-streaming)
                 response = await model.ainvoke(
                     messages=request.messages,
                     system=[part for part in (request.system or ()) if part['type'] == 'text'],
                     tools=request.tools,
-                    event_callback=event_callback,
                 )
 
-                # Process response to ensure all parts are captured
-                for part in response.content:
-                    if part.get("type") == "tool_call":
-                        # Check if already added
-                        if part not in tool_calls:
-                            tool_calls.append(part)  # type: ignore[arg-type]
+                # Process response.content directly
+                content_parts.extend(response.content)
+                tool_calls.extend(
+                    p for p in response.content if p.get("type") == "tool_call"  # type: ignore[arg-type]
+                )
+
+                # Emit events for observability (non-streaming mode sends all at once)
+                for idx, part in enumerate(response.content):
+                    part_type = part.get("type")
+                    if part_type == "text":
+                        delta_part: DeltaPart = {"type": "text_delta", "index": idx, "delta": part.get("text", ""), "is_start": True, "is_end": True}
+                        await self._emit_event(
+                            ModelContentBlockDeltaEvent.create(
+                                request_id=request_id,
+                                part=delta_part,
+                                is_streaming=False,
+                            ),
+                            event_bus,
+                        )
+                    elif part_type == "tool_call":
+                        await self._emit_event(
+                            AgentToolCallEvent.create(
+                                run_id=getattr(self, '_current_run_id', ''),
+                                tool_name=part.get("name", ""),
+                                arguments=part.get("arguments", {}),
+                                tool_call_id=part.get("id", ""),
+                            ),
+                            event_bus,
+                        )
 
                 return
 

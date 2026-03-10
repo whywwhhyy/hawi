@@ -460,17 +460,18 @@ class Message(TypedDict):
     - content 始终为 list[ContentPart]，简化处理逻辑
     - 构造函数接受 str | list[ContentPart]，自动规范化
     - metadata 可选，用于上下文管理
+    - tool_calls 作为 ToolCallPart 存储在 content 中
 
     Role 设计：
     - user: 用户输入
-    - assistant: AI 响应
+    - assistant: AI 响应（包含 ToolCallPart 表示 tool_calls）
     - tool: 工具调用结果（包含 ToolResultPart，其中带有 tool_call_id）
 
     注意：系统提示词通过 MessageRequest.system 传递，不在 messages 中使用 role=system
     """
 
     role: Literal["user", "assistant", "tool"]
-    content: list[ContentPart]  # 始终为数组，内部统一
+    content: list[ContentPart]  # 始终为数组，包含 text/image/tool_call/tool_result 等
 
     # 以下字段仅在特定 role 下使用
     name: str | None  # 区分同名角色的不同参与者
