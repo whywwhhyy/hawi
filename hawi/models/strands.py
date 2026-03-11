@@ -302,20 +302,10 @@ class StrandsModel(Model):
                     )
 
             # Yield finish part
-            usage_dict: dict[str, int] | None = None
-            if result.usage:
-                usage_dict = {
-                    "input_tokens": result.usage.input_tokens,
-                    "output_tokens": result.usage.output_tokens,
-                }
-                if result.usage.cache_write_tokens is not None:
-                    usage_dict["cache_write_tokens"] = result.usage.cache_write_tokens
-                if result.usage.cache_read_tokens is not None:
-                    usage_dict["cache_read_tokens"] = result.usage.cache_read_tokens
             yield DeltaFinishPart(
                 type="finish",
                 stop_reason=result.stop_reason or "end_turn",
-                usage=usage_dict,
+                usage=result.usage,
             )
             return
 
@@ -356,20 +346,10 @@ class StrandsModel(Model):
                 )
 
         # Yield finish part
-        usage_dict2: dict[str, int] | None = None
-        if result.usage:
-            usage_dict2 = {
-                "input_tokens": result.usage.input_tokens,
-                "output_tokens": result.usage.output_tokens,
-            }
-            if result.usage.cache_write_tokens is not None:
-                usage_dict2["cache_write_tokens"] = result.usage.cache_write_tokens
-            if result.usage.cache_read_tokens is not None:
-                usage_dict2["cache_read_tokens"] = result.usage.cache_read_tokens
         yield DeltaFinishPart(
             type="finish",
             stop_reason=result.stop_reason or "end_turn",
-            usage=usage_dict2,
+            usage=result.usage,
         )
 
     async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:

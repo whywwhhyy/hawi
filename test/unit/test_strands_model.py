@@ -49,10 +49,10 @@ class TestStrandsModelTokenUsage:
         response = model._parse_response_impl(strands_response)
         
         assert response.usage is not None
-        assert response.usage.input_tokens == 100
-        assert response.usage.output_tokens == 50
-        assert response.usage.cache_write_tokens == 80
-        assert response.usage.cache_read_tokens == 20
+        assert response.usage["input_tokens"] == 100
+        assert response.usage["output_tokens"] == 50
+        assert response.usage["cache_write_tokens"] == 80
+        assert response.usage["cache_read_tokens"] == 20
 
     def test_parse_response_without_cache_tokens(self):
         """Response without cache tokens should have None for cache fields."""
@@ -75,10 +75,10 @@ class TestStrandsModelTokenUsage:
         response = model._parse_response_impl(strands_response)
         
         assert response.usage is not None
-        assert response.usage.input_tokens == 100
-        assert response.usage.output_tokens == 50
-        assert response.usage.cache_write_tokens is None
-        assert response.usage.cache_read_tokens is None
+        assert response.usage["input_tokens"] == 100
+        assert response.usage["output_tokens"] == 50
+        assert response.usage["cache_write_tokens"] is None
+        assert response.usage["cache_read_tokens"] is None
 
     def test_parse_response_without_usage(self):
         """Response without usage should have None usage."""

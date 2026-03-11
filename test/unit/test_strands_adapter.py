@@ -238,8 +238,8 @@ class TestResponseConversion:
         assert content_list[0]["text"] == "Hello world"  # type: ignore
         assert result.stop_reason == "end_turn"
         assert result.usage is not None
-        assert result.usage.input_tokens == 10
-        assert result.usage.output_tokens == 5
+        assert result.usage["input_tokens"] == 10
+        assert result.usage["output_tokens"] == 5
 
     def test_convert_tool_call_response(self):
         """测试转换 tool call 响应 - Strands使用content块中的toolUse"""

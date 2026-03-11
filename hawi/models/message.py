@@ -13,13 +13,13 @@ from pydantic import BaseModel
 # Token Usage 类型
 # =============================================================================
 
-class TokenUsage(BaseModel):
+class TokenUsage(TypedDict):
     """Token 使用统计"""
 
-    input_tokens: int
-    output_tokens: int
-    cache_write_tokens: int | None = None  # Prompt caching: tokens written to cache
-    cache_read_tokens: int | None = None  # Prompt caching: tokens read from cache
+    input_tokens: Required[int]
+    output_tokens: Required[int]
+    cache_write_tokens: int | None  # Prompt caching: tokens written to cache
+    cache_read_tokens: int | None  # Prompt caching: tokens read from cache
 
 
 # =============================================================================
@@ -418,7 +418,7 @@ class DeltaFinishPart(TypedDict):
 
     type: Literal["finish"]
     stop_reason: str
-    usage: dict[str, int] | None  # {"input_tokens": 100, "output_tokens": 50}
+    usage: TokenUsage | dict[str, int] | None  # {"input_tokens": 100, "output_tokens": 50}
 
 
 # DeltaPart 联合类型

@@ -58,7 +58,7 @@ class MockModel(Model):
             id="resp-123",
             content=[TextPart(type="text", text=response.get("text", "Hello"))],
             stop_reason="end_turn",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
+            usage=TokenUsage(input_tokens=10, output_tokens=5, cache_write_tokens=None, cache_read_tokens=None),
         )
 
     def _invoke_impl(self, request) -> MessageResponse:
@@ -67,7 +67,7 @@ class MockModel(Model):
             id="resp-123",
             content=[TextPart(type="text", text="Hello, world!")],
             stop_reason="end_turn",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
+            usage=TokenUsage(input_tokens=10, output_tokens=5, cache_write_tokens=None, cache_read_tokens=None),
         )
 
     async def _ainvoke_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:
@@ -102,7 +102,7 @@ class MockModel(Model):
         yield ModelStreamStopEvent.create(
             request_id=request_id,
             stop_reason="end_turn",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
+            usage=TokenUsage(input_tokens=10, output_tokens=5, cache_write_tokens=None, cache_read_tokens=None),
         )
 
     async def _astream_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:
@@ -144,7 +144,7 @@ class MockModel(Model):
         yield ModelStreamStopEvent.create(
             request_id=request_id,
             stop_reason="end_turn",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
+            usage=TokenUsage(input_tokens=10, output_tokens=5, cache_write_tokens=None, cache_read_tokens=None),
         )
 
     def _stream_impl(self, request) -> Iterator[DeltaPart]:

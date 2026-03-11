@@ -146,15 +146,16 @@ class TestModelEventClasses:
     def test_model_stream_stop_event(self):
         """Test ModelStreamStopEvent.create()."""
         from hawi.models.message import TokenUsage
+        usage: TokenUsage = {"input_tokens": 10, "output_tokens": 20, "cache_write_tokens": None, "cache_read_tokens": None}
         event = ModelStreamStopEvent.create(
             request_id="req-123",
             stop_reason="tool_calls",
-            usage=TokenUsage(input_tokens=10, output_tokens=20)
+            usage=usage
         )
         assert event.type == "model.stream_stop"
         assert event.stop_reason == "tool_calls"
         assert event.usage is not None
-        assert event.usage.input_tokens == 10
+        assert event.usage["input_tokens"] == 10
 
     def test_model_content_block_start_event(self):
         """Test ModelContentBlockStartEvent.create()."""
@@ -204,14 +205,15 @@ class TestModelEventClasses:
     def test_model_metadata_event(self):
         """Test ModelMetadataEvent.create()."""
         from hawi.models.message import TokenUsage
+        usage: TokenUsage = {"input_tokens": 10, "output_tokens": 20, "cache_write_tokens": None, "cache_read_tokens": None}
         event = ModelMetadataEvent.create(
             request_id="req-123",
-            usage=TokenUsage(input_tokens=10, output_tokens=20),
+            usage=usage,
             latency_ms=500.0
         )
         assert event.type == "model.metadata"
         assert event.usage is not None
-        assert event.usage.output_tokens == 20
+        assert event.usage["output_tokens"] == 20
         assert event.latency_ms == 500.0
 
 
@@ -232,11 +234,12 @@ class TestAgentEventClasses:
     def test_agent_run_stop_event(self):
         """Test AgentRunStopEvent.create()."""
         from hawi.models.message import TokenUsage
+        usage: TokenUsage = {"input_tokens": 10, "output_tokens": 20, "cache_write_tokens": None, "cache_read_tokens": None}
         event = AgentRunStopEvent.create(
             run_id="run-123",
             stop_reason="max_iterations",
             duration_ms=1234.5,
-            usage=TokenUsage(input_tokens=10, output_tokens=20)
+            usage=usage
         )
         assert event.type == "agent.run_stop"
         assert event.stop_reason == "max_iterations"

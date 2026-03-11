@@ -328,16 +328,10 @@ class OpenAIModel(Model):
                 )
 
         # Yield finish part with usage
-        usage_data = result.usage
         yield DeltaFinishPart(
             type="finish",
             stop_reason=result.stop_reason or "end_turn",
-            usage={
-                "input_tokens": usage_data.input_tokens if usage_data else 0,
-                "output_tokens": usage_data.output_tokens if usage_data else 0,
-                "cache_write_tokens": usage_data.cache_write_tokens if usage_data else None,
-                "cache_read_tokens": usage_data.cache_read_tokens if usage_data else None,
-            } if usage_data else None,
+            usage=result.usage,
         )
 
     async def _astream_impl(

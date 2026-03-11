@@ -15,7 +15,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Optional, Coroutine, Literal, Mapping, Callable
+from typing import Any, Optional, Coroutine, Literal, Mapping, Callable, cast
 
 
 from hawi.models import Model
@@ -812,30 +812,28 @@ class HawiAgent:
                             handler = tool_handler
                         elif chunk_type == "finish":
                             stop_reason = chunk.get("stop_reason") or "end_turn"
-                            usage_dict = chunk.get("usage")
-                            if usage_dict:
-                                usage = TokenUsage(
-                                    input_tokens=usage_dict.get("input_tokens", 0),
-                                    output_tokens=usage_dict.get("output_tokens", 0),
-                                    cache_write_tokens=usage_dict.get("cache_write_tokens"),
-                                    cache_read_tokens=usage_dict.get("cache_read_tokens"),
-                                )
+                            usage_data = chunk.get("usage")
+                            if usage_data:
+                                # usage_data can be TokenUsage (TypedDict) or dict[str, int]
+                                usage = cast(TokenUsage, usage_data)
                                 # Accumulate usage for multi-turn conversations
                                 if cumulative_usage is None:
                                     cumulative_usage = usage
                                 else:
-                                    cumulative_usage = TokenUsage(
-                                        input_tokens=cumulative_usage.input_tokens + usage.input_tokens,
-                                        output_tokens=cumulative_usage.output_tokens + usage.output_tokens,
-                                        cache_write_tokens=self._add_optional_tokens(
-                                            cumulative_usage.cache_write_tokens,
-                                            usage.cache_write_tokens,
+                                    # Use a temp variable to help type checker
+                                    current = cumulative_usage
+                                    cumulative_usage = {
+                                        "input_tokens": current["input_tokens"] + usage["input_tokens"],
+                                        "output_tokens": current["output_tokens"] + usage["output_tokens"],
+                                        "cache_write_tokens": self._add_optional_tokens(
+                                            current["cache_write_tokens"],
+                                            usage["cache_write_tokens"],
                                         ),
-                                        cache_read_tokens=self._add_optional_tokens(
-                                            cumulative_usage.cache_read_tokens,
-                                            usage.cache_read_tokens,
+                                        "cache_read_tokens": self._add_optional_tokens(
+                                            current["cache_read_tokens"],
+                                            usage["cache_read_tokens"],
                                         ),
-                                    )
+                                    }
                             continue
                         else:
                             continue  # Unknown chunk type

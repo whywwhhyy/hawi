@@ -144,6 +144,11 @@ class SkillsPlugin(HawiPlugin):
                 capture_output=True,
                 text=True
             )
-            return f"Stdout:\n{result.stdout}\nStderr:\n{result.stderr}"
+            ret = []
+            if result.stdout:
+                ret.append(f"Stdout:\n{result.stdout}")
+            if result.stderr:
+                ret.append(f"Stderr:\n{result.stderr}")
+            return '\n\n'.join(ret)
         except Exception as e:
             return f"Error running command: {e}"
