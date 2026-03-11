@@ -213,3 +213,6 @@ apikey.yaml
 # Others
 .python_vm/
 .dumps/
+
+# Claude
+.claude/
