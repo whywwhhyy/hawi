@@ -3,6 +3,7 @@
 使用长度前缀协议进行进程间通信，支持多次调用间保持状态
 """
 
+import asyncio
 import subprocess
 import json
 import struct
@@ -241,6 +242,7 @@ while True:
         """
         self._proc: Optional[subprocess.Popen] = None
         self._lock = Lock()
+        self._async_lock: Optional[asyncio.Lock] = None
         self._closed = False
         self._owns_temp_dir = work_dir is None
         self.print_execution = print_execution
@@ -498,7 +500,11 @@ while True:
         if not code or not code.strip():
             return
 
-        with self._lock:
+        # 使用异步锁避免阻塞事件循环
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+
+        async with self._async_lock:
             assert self._proc
             # 检查进程是否还活着
             if self._proc.poll() is not None:
@@ -541,6 +547,7 @@ while True:
                         timeout=1.0 if timeout is None else min(1.0, timeout),
                     )
                     if length_bytes is None:
+                        await asyncio.sleep(0.01)
                         continue
 
                     response_length = struct.unpack(">I", length_bytes)[0]
@@ -551,6 +558,7 @@ while True:
                         timeout=1.0 if timeout is None else min(1.0, timeout),
                     )
                     if response_bytes is None:
+                        await asyncio.sleep(0.01)
                         continue
 
                     response = json.loads(response_bytes.decode("utf-8"))
@@ -569,6 +577,7 @@ while True:
                         return
 
                 except asyncio.TimeoutError:
+                    await asyncio.sleep(0.01)
                     continue
                 except Exception as e:
                     yield f"\n[Communication error: {str(e)}]\n"
@@ -582,27 +591,29 @@ while True:
         if self._proc.stdout is None:
             return None
 
-        # 在非阻塞模式下读取
-        loop = asyncio.get_event_loop()
         result = b""
+        start_time = asyncio.get_event_loop().time()
 
         while len(result) < n:
+            # 检查超时（总超时 5 秒）
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > 5.0:
+                return None
+
+            # 使用 select 检查是否有数据可读
+            ready, _, _ = select.select([self._proc.stdout], [], [], 0.1)
+            if not ready:
+                # 检查进程是否还活着
+                if self._proc.poll() is not None:
+                    return None
+                await asyncio.sleep(0.01)
+                continue
+
             try:
-                # 使用 run_in_executor 进行同步读取，设置超时防止卡住
-                chunk = await asyncio.wait_for(
-                    loop.run_in_executor(None, self._proc.stdout.read, n - len(result)),
-                    timeout=5.0
-                )
+                chunk = self._proc.stdout.read(n - len(result))
                 if not chunk:
                     return None
                 result += chunk
-            except asyncio.TimeoutError:
-                # 读取超时，检查进程是否还活着
-                if self._proc.poll() is not None:
-                    # 进程已退出，返回 None
-                    return None
-                # 进程还活着，继续尝试读取
-                continue
             except Exception:
                 return None
 
