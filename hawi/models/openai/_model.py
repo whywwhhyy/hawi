@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncGenerator, Iterator
+from typing import Any, AsyncGenerator, Iterator, cast
 
 from openai import OpenAI, AsyncOpenAI
 
@@ -19,8 +19,14 @@ from hawi.models import (
     TokenUsage,
     ContentPart,
     DeltaPart,
+    DeltaTextPart,
+    DeltaThinkingPart,
+    DeltaToolCallPart,
+    DeltaFinishPart,
+    TextPart,
+    ToolCallPart,
+    ReasoningPart,
 )
-from hawi.models.model import ModelEventCallback
 from ._converters import (
     prepare_request,
     convert_openai_content_to_part,
@@ -218,195 +224,18 @@ class OpenAIModel(Model):
     def _invoke_impl(
         self,
         request: MessageRequest,
-        event_callback: ModelEventCallback | None = None,
     ) -> MessageResponse:
         """同步调用 OpenAI API
 
         Args:
             request: 消息请求
-            event_callback: 事件回调函数，用于输出 model 事件（非流式接口也能产生事件）
+
+        Returns:
+            MessageResponse: 完整的模型响应
         """
         req = self._prepare_request_impl(request)
         response = self.client.chat.completions.create(**req)
-        result = self._parse_response_impl(response.model_dump())
-
-        # 如果提供了 event_callback，发送事件（非流式模式下一次性发送）
-        if event_callback is not None:
-            self._emit_events_from_response(result, event_callback)
-
-        return result
-
-    def _emit_events_from_response(
-        self,
-        response: MessageResponse,
-        event_callback: ModelEventCallback,
-    ) -> None:
-        """从非流式响应生成事件
-
-        在非流式模式下，将完整响应转换为事件序列：
-        - model.stream_start
-        - model.content_block_start
-        - model.content_block_delta (一次性包含完整内容，is_streaming=False)
-        - model.content_block_stop
-        - model.stream_stop
-
-        Args:
-            response: 解析后的消息响应
-            event_callback: 事件回调函数
-        """
-        import time
-
-        request_id = response.id
-
-        # stream_start
-        event_callback("model.stream_start", {
-            "type": "model.stream_start",
-            "source": "model",
-            "timestamp": time.time(),
-            "request_id": request_id,
-        })
-
-        # 为每个 content part 生成事件
-        for idx, part in enumerate(response.content):
-            part_type = part.get("type")
-
-            if part_type == "text":
-                text = part.get("text", "")
-                # content_block_start
-                event_callback("model.content_block_start", {
-                    "type": "model.content_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "block_type": "text",
-                })
-                # content_block_delta (非流式，一次性发送完整内容)
-                event_callback("model.content_block_delta", {
-                    "type": "model.content_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "delta_type": "text",
-                    "delta": text,  # 完整内容
-                    "part": {
-                        "type": "text_delta",
-                        "index": idx,
-                        "delta": text,
-                        "is_start": True,
-                        "is_end": True,
-                    },
-                    "is_streaming": False,  # 非流式
-                })
-                # content_block_stop
-                event_callback("model.content_block_stop", {
-                    "type": "model.content_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "content": [part],
-                })
-
-            elif part_type == "reasoning":
-                reasoning = part.get("reasoning", "")
-                # content_block_start
-                event_callback("model.content_block_start", {
-                    "type": "model.content_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "block_type": "thinking",
-                })
-                # content_block_delta (非流式)
-                event_callback("model.content_block_delta", {
-                    "type": "model.content_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "delta_type": "thinking",
-                    "delta": reasoning,
-                    "part": {
-                        "type": "thinking_delta",
-                        "index": idx,
-                        "delta": reasoning,
-                        "is_start": True,
-                        "is_end": True,
-                    },
-                    "is_streaming": False,
-                })
-                # content_block_stop
-                event_callback("model.content_block_stop", {
-                    "type": "model.content_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "content": [part],
-                })
-
-            elif part_type == "tool_call":
-                tool_id = part.get("id", "")
-                tool_name = part.get("name", "")
-                arguments = part.get("arguments", {})
-                args_str = json.dumps(arguments) if isinstance(arguments, dict) else str(arguments)
-
-                # tool_call_block_start
-                event_callback("model.tool_call_block_start", {
-                    "type": "model.tool_call_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_name,
-                })
-                # tool_call_block_delta (非流式，一次性发送完整参数)
-                event_callback("model.tool_call_block_delta", {
-                    "type": "model.tool_call_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "arguments_delta": args_str,  # 完整参数 JSON
-                    "is_streaming": False,
-                })
-                # tool_call_block_stop (包含完整参数)
-                event_callback("model.tool_call_block_stop", {
-                    "type": "model.tool_call_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_name,
-                    "arguments": arguments,
-                })
-
-        # stream_stop
-        usage_dict = None
-        if response.usage:
-            usage_dict = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            }
-            if response.usage.cache_write_tokens is not None:
-                usage_dict["cache_write_tokens"] = response.usage.cache_write_tokens
-            if response.usage.cache_read_tokens is not None:
-                usage_dict["cache_read_tokens"] = response.usage.cache_read_tokens
-
-        event_callback("model.stream_stop", {
-            "type": "model.stream_stop",
-            "source": "model",
-            "timestamp": time.time(),
-            "request_id": request_id,
-            "stop_reason": response.stop_reason,
-            "usage": usage_dict,
-        })
+        return self._parse_response_impl(response.model_dump())
 
     def _prepare_stream_request(self, request: MessageRequest) -> dict[str, Any]:
         """准备流式请求的通用配置
@@ -439,36 +268,98 @@ class OpenAIModel(Model):
     async def _ainvoke_impl(
         self,
         request: MessageRequest,
-        event_callback: ModelEventCallback | None = None,
-    ) -> MessageResponse:
-        """异步调用 OpenAI API
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步非流式调用 OpenAI API - 将完整响应拆分为 DeltaPart 序列
 
         Args:
             request: 消息请求
-            event_callback: 事件回调函数，用于输出 model 事件（非流式接口也能产生事件）
+
+        Yields:
+            DeltaPart 增量块序列
         """
+        import time
+        import asyncio
+
+        # 在线程池中执行同步 API 调用
+        loop = asyncio.get_event_loop()
         req = self._prepare_request_impl(request)
-        response = await self.async_client.chat.completions.create(**req)
+
+        response = await loop.run_in_executor(
+            None,
+            lambda: self.client.chat.completions.create(**req)
+        )
+
         result = self._parse_response_impl(response.model_dump())
 
-        # 如果提供了 event_callback，发送事件（非流式模式下一次性发送）
-        if event_callback is not None:
-            self._emit_events_from_response(result, event_callback)
+        # Yield content blocks as DeltaPart sequence
+        for idx, part in enumerate(result.content):
+            part_type = part["type"]
 
-        return result
+            if part_type == "text":
+                text_part = cast(TextPart, part)
+                yield DeltaTextPart(
+                    type="text_delta",
+                    index=idx,
+                    delta=text_part["text"],
+                    is_start=True,
+                    is_end=True,
+                )
+
+            elif part_type == "reasoning":
+                reasoning_part = cast(ReasoningPart, part)
+                yield DeltaThinkingPart(
+                    type="thinking_delta",
+                    index=idx,
+                    delta=reasoning_part.get("reasoning") or "",
+                    is_start=True,
+                    is_end=True,
+                )
+
+            elif part_type == "tool_call":
+                tool_part = cast(ToolCallPart, part)
+                yield DeltaToolCallPart(
+                    type="tool_call_delta",
+                    index=idx,
+                    id=tool_part["id"],
+                    name=tool_part["name"],
+                    arguments_delta=json.dumps(tool_part["arguments"]),
+                    is_start=True,
+                    is_end=True,
+                )
+
+        # Yield finish part with usage
+        usage_data = result.usage
+        yield DeltaFinishPart(
+            type="finish",
+            stop_reason=result.stop_reason or "end_turn",
+            usage={
+                "input_tokens": usage_data.input_tokens if usage_data else 0,
+                "output_tokens": usage_data.output_tokens if usage_data else 0,
+                "cache_write_tokens": usage_data.cache_write_tokens if usage_data else None,
+                "cache_read_tokens": usage_data.cache_read_tokens if usage_data else None,
+            } if usage_data else None,
+        )
 
     async def _astream_impl(
         self, request: MessageRequest
     ) -> AsyncGenerator[DeltaPart, None]:
-        """异步流式调用 OpenAI API"""
+        """异步流式调用 OpenAI API - 实时转发 DeltaPart
+
+        Args:
+            request: 消息请求
+
+        Yields:
+            DeltaPart 流式增量块
+        """
         req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
 
         # OpenAI async streaming: await the coroutine first, then use async with
         stream = await self.async_client.chat.completions.create(**req)
+
         async with stream:
             async for chunk in stream:
                 chunk_dict = chunk.model_dump()
-                for event in processor.process_chunk(chunk_dict):
-                    yield event
+                for delta_part in processor.process_chunk(chunk_dict):
+                    yield delta_part

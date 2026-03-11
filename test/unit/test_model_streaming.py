@@ -5,7 +5,7 @@ with streaming=True and streaming=False parameters.
 """
 
 import pytest
-from typing import Iterator, cast
+from typing import Iterator, cast, AsyncGenerator
 
 from hawi.models import Model
 from hawi.models.message import (
@@ -17,6 +17,13 @@ from hawi.models.message import (
 )
 from hawi.errors import ModelError
 from hawi.models.message import TokenUsage
+from hawi.events.event import Event
+from hawi.events.model_events import (
+    ModelStreamStartEvent,
+    ModelStreamStopEvent,
+    ModelContentBlockStartEvent,
+    ModelContentBlockStopEvent,
+)
 
 
 # Helper to create valid Message objects
@@ -54,33 +61,88 @@ class MockModel(Model):
             usage=TokenUsage(input_tokens=10, output_tokens=5),
         )
 
-    def _invoke_impl(self, request, event_callback=None) -> MessageResponse:
+    def _invoke_impl(self, request) -> MessageResponse:
         """Mock non-streaming implementation."""
-        if event_callback:
-            # Simulate event sequence for non-streaming
-            event_callback("model.stream_start", {"request_id": "test-123"})
-            event_callback("model.content_block_start", {"request_id": "test-123", "block_index": 0, "type": "text"})
-            event_callback("model.content_block_delta", {
-                "request_id": "test-123",
-                "block_index": 0,
-                "delta": {
-                    "type": "text_delta",
-                    "text": "Hello, world!",
-                    "index": 0,
-                    "is_start": True,
-                    "is_end": True,
-                },
-            })
-            event_callback("model.content_block_stop", {
-                "request_id": "test-123",
-                "block_index": 0,
-                "content": [{"type": "text", "text": "Hello, world!"}],
-            })
-            event_callback("model.stream_stop", {"request_id": "test-123", "stop_reason": "end_turn"})
-
         return MessageResponse(
             id="resp-123",
             content=[TextPart(type="text", text="Hello, world!")],
+            stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=10, output_tokens=5),
+        )
+
+    async def _ainvoke_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:
+        """Mock async non-streaming implementation."""
+        import time
+        request_id = f"test-{int(time.time() * 1000)}"
+
+        # Yield stream_start
+        yield ModelStreamStartEvent.create(request_id=request_id)
+
+        # Yield content block
+        yield ModelContentBlockStartEvent.create(
+            request_id=request_id,
+            block_index=0,
+            block_type="text",
+        )
+
+        yield cast(DeltaPart, {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "Hello, world!",
+            "is_start": True,
+            "is_end": True,
+        })
+
+        yield ModelContentBlockStopEvent.create(
+            request_id=request_id,
+            block_index=0,
+            content=[{"type": "text", "text": "Hello, world!"}],
+        )
+
+        yield ModelStreamStopEvent.create(
+            request_id=request_id,
+            stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=10, output_tokens=5),
+        )
+
+    async def _astream_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:
+        """Mock async streaming implementation."""
+        import time
+        request_id = f"test-{int(time.time() * 1000)}"
+
+        # Yield stream_start
+        yield ModelStreamStartEvent.create(request_id=request_id)
+
+        # Stream in small chunks
+        chunks = ["Hello", ", ", "world", "!"]
+        for i, chunk in enumerate(chunks):
+            is_start = i == 0
+            is_end = i == len(chunks) - 1
+
+            if is_start:
+                yield ModelContentBlockStartEvent.create(
+                    request_id=request_id,
+                    block_index=0,
+                    block_type="text",
+                )
+
+            yield cast(DeltaPart, {
+                "type": "text_delta",
+                "delta": chunk,
+                "index": 0,
+                "is_start": is_start,
+                "is_end": is_end,
+            })
+
+            if is_end:
+                yield ModelContentBlockStopEvent.create(
+                    request_id=request_id,
+                    block_index=0,
+                    content=[{"type": "text", "text": "Hello, world!"}],
+                )
+
+        yield ModelStreamStopEvent.create(
+            request_id=request_id,
             stop_reason="end_turn",
             usage=TokenUsage(input_tokens=10, output_tokens=5),
         )
@@ -164,47 +226,56 @@ class TestInvokeStreaming:
         assert isinstance(result, MessageResponse)
 
     def test_invoke_with_event_callback(self):
-        """Test that invoke() calls event_callback in non-streaming mode."""
+        """Test that invoke() works without event_callback in non-streaming mode.
+
+        Note: event_callback parameter has been removed in the refactor.
+        Now Model always returns events through the generator interface.
+        """
         model = MockModel()
         messages = [create_user_message("Hi")]
-        events = []
 
-        def event_callback(event_type: str, data: dict):
-            events.append((event_type, data))
-
-        result = model.invoke(messages=messages, streaming=False, event_callback=event_callback)
+        result = model.invoke(messages=messages, streaming=False)
 
         assert isinstance(result, MessageResponse)
-        assert len(events) > 0
-
-        # Check event sequence
-        event_types = [e[0] for e in events]
-        assert "model.stream_start" in event_types
-        assert "model.content_block_start" in event_types
-        assert "model.content_block_delta" in event_types
-        assert "model.content_block_stop" in event_types
-        assert "model.stream_stop" in event_types
-
-        # Check that delta has correct flags for non-streaming
-        delta_event = next(e for e in events if e[0] == "model.content_block_delta")
-        delta = delta_event[1]["delta"]
-        assert delta["is_start"] is True
-        assert delta["is_end"] is True
+        assert result.content[0]["text"] == "Hello, world!"
 
 
 class TestAinvokeStreaming:
-    """Tests for ainvoke() with streaming parameter."""
+    """Tests for ainvoke() with streaming parameter.
+
+    Note: After refactor, ainvoke() always returns AsyncGenerator[DeltaPart | Event, None].
+    Both streaming=True and streaming=False return async generators.
+    """
 
     @pytest.mark.asyncio
-    async def test_ainvoke_streaming_false_returns_message_response(self):
-        """Test that ainvoke(streaming=False) returns MessageResponse."""
+    async def test_ainvoke_streaming_false_returns_async_generator(self):
+        """Test that ainvoke(streaming=False) returns AsyncGenerator with events."""
         model = MockModel()
         messages = [create_user_message("Hi")]
 
-        result = await model.ainvoke(messages=messages, streaming=False)
+        result = model.ainvoke(messages=messages, streaming=False)
 
-        assert isinstance(result, MessageResponse)
-        assert result.stop_reason == "end_turn"
+        # Should be an async generator (has __aiter__ and __anext__)
+        assert hasattr(result, "__aiter__")
+        assert hasattr(result, "__anext__")
+
+        # Collect all events using async for
+        events = []
+        async for event in result:
+            events.append(event)
+
+        # Should have events: stream_start, block_start, delta, block_stop, stream_stop
+        assert len(events) == 5
+
+        # Check event types (handle both DeltaPart dict access and ModelEvent attribute access)
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        assert get_type(events[0]) == "model.stream_start"
+        assert get_type(events[1]) == "model.content_block_start"
+        assert get_type(events[2]) == "text_delta"
+        assert get_type(events[3]) == "model.content_block_stop"
+        assert get_type(events[4]) == "model.stream_stop"
 
     @pytest.mark.asyncio
     async def test_ainvoke_streaming_true_returns_async_generator(self):
@@ -212,7 +283,7 @@ class TestAinvokeStreaming:
         model = MockModel()
         messages = [create_user_message("Hi")]
 
-        result = await model.ainvoke(messages=messages, streaming=True)
+        result = model.ainvoke(messages=messages, streaming=True)
 
         # Should be an async generator (has __aiter__ and __anext__)
         assert hasattr(result, "__aiter__")
@@ -223,11 +294,11 @@ class TestAinvokeStreaming:
         async for chunk in result:
             chunks.append(chunk)
 
-        # Should have text deltas + finish delta
-        assert len(chunks) == 5  # 4 text chunks + 1 finish
+        # Should have events: stream_start, block_start, 4 text deltas, block_stop, stream_stop = 8
+        assert len(chunks) == 8
 
-        # Check text deltas
-        text_chunks = [c for c in chunks if c["type"] == "text_delta"]
+        # Check text deltas (filter out ModelEvent objects)
+        text_chunks = [c for c in chunks if isinstance(c, dict) and c.get("type") == "text_delta"]
         assert len(text_chunks) == 4
 
         # Check streaming flags
@@ -235,64 +306,56 @@ class TestAinvokeStreaming:
         assert text_chunks[3]["is_end"] is True
 
     @pytest.mark.asyncio
-    async def test_ainvoke_default_is_non_streaming(self):
-        """Test that ainvoke() without streaming parameter defaults to non-streaming."""
+    async def test_ainvoke_default_is_async_generator(self):
+        """Test that ainvoke() without streaming parameter defaults to async generator."""
         model = MockModel()
         messages = [create_user_message("Hi")]
 
-        result = await model.ainvoke(messages=messages)
+        result = model.ainvoke(messages=messages)
 
-        assert isinstance(result, MessageResponse)
+        # Should be an async generator
+        assert hasattr(result, "__aiter__")
 
-    @pytest.mark.asyncio
-    async def test_ainvoke_with_event_callback(self):
-        """Test that ainvoke() calls event_callback in non-streaming mode."""
-        model = MockModel()
-        messages = [create_user_message("Hi")]
+        # Collect events
         events = []
+        async for event in result:
+            events.append(event)
 
-        def event_callback(event_type: str, data: dict):
-            events.append((event_type, data))
-
-        result = await model.ainvoke(messages=messages, streaming=False, event_callback=event_callback)
-
-        assert isinstance(result, MessageResponse)
+        # Should have events
         assert len(events) > 0
-        assert any(e[0] == "model.stream_start" for e in events)
-        assert any(e[0] == "model.stream_stop" for e in events)
+
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+        assert get_type(events[0]) == "model.stream_start"
 
 
 class TestStreamingConsistency:
     """Tests for consistency between streaming and non-streaming modes."""
 
     def test_event_sequence_consistency(self):
-        """Test that both modes produce compatible event sequences."""
+        """Test that both modes produce compatible event sequences.
+
+        Note: After refactor, invoke() still returns MessageResponse for non-streaming,
+        but the internal implementation has changed.
+        """
         model = MockModel()
         messages = [create_user_message("Hi")]
 
-        # Collect non-streaming events
-        non_streaming_events = []
-        def non_streaming_callback(event_type: str, data: dict):
-            non_streaming_events.append((event_type, data))
-
-        model.invoke(messages=messages, streaming=False, event_callback=non_streaming_callback)
+        # Non-streaming returns MessageResponse
+        result = model.invoke(messages=messages, streaming=False)
+        assert isinstance(result, MessageResponse)
+        assert result.content[0]["text"] == "Hello, world!"
 
         # Collect streaming events (from iterator)
         streaming_events = []
         for chunk in model.invoke(messages=messages, streaming=True):
-            if chunk["type"] == "text_delta":
-                streaming_events.append(("delta", chunk["delta"]))
-            elif chunk["type"] == "finish":
-                streaming_events.append(("finish", chunk["stop_reason"]))
+            if isinstance(chunk, dict):
+                if chunk.get("type") == "text_delta":
+                    streaming_events.append(chunk["delta"])
 
         # Both should produce complete content
-        non_streaming_content = "".join(
-            e[1]["delta"]["text"] for e in non_streaming_events
-            if e[0] == "model.content_block_delta"
-        )
-        streaming_content = "".join(e[1] for e in streaming_events if e[0] == "delta")
-
-        assert non_streaming_content == streaming_content == "Hello, world!"
+        streaming_content = "".join(streaming_events)
+        assert streaming_content == "Hello, world!"
 
     @pytest.mark.asyncio
     async def test_async_event_sequence_consistency(self):
@@ -300,29 +363,30 @@ class TestStreamingConsistency:
         model = MockModel()
         messages = [create_user_message("Hi")]
 
-        # Non-streaming async
+        # Non-streaming async (now also returns async generator)
         non_streaming_events = []
-        def non_streaming_callback(event_type: str, data: dict):
-            non_streaming_events.append((event_type, data))
-
-        await model.ainvoke(messages=messages, streaming=False, event_callback=non_streaming_callback)
+        async for event in model.ainvoke(messages=messages, streaming=False):
+            non_streaming_events.append(event)
 
         # Streaming async
         streaming_events = []
-        async for chunk in await model.ainvoke(messages=messages, streaming=True):
-            if chunk["type"] == "text_delta":
-                streaming_events.append(("delta", chunk["delta"]))
-            elif chunk["type"] == "finish":
-                streaming_events.append(("finish", chunk["stop_reason"]))
+        async for chunk in model.ainvoke(messages=messages, streaming=True):
+            streaming_events.append(chunk)
 
-        # Verify consistency
-        non_streaming_content = "".join(
-            e[1]["delta"]["text"] for e in non_streaming_events
-            if e[0] == "model.content_block_delta"
-        )
-        streaming_content = "".join(e[1] for e in streaming_events if e[0] == "delta")
+        # Verify we get events from both modes
+        assert len(non_streaming_events) > 0
+        assert len(streaming_events) > 0
 
-        assert non_streaming_content == streaming_content
+        # Helper to get type
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        # Non-streaming should have ModelEvent types
+        assert get_type(non_streaming_events[0]) == "model.stream_start"
+
+        # Streaming should have DeltaPart types
+        text_deltas = [e for e in streaming_events if isinstance(e, dict) and e.get("type") == "text_delta"]
+        assert len(text_deltas) > 0
 
 
 class TestModelNotImplemented:
@@ -344,7 +408,7 @@ class TestModelNotImplemented:
         def _parse_response_impl(self, response: dict) -> MessageResponse:
             return MessageResponse(id="no-stream-1", content=[], stop_reason="end_turn")
 
-        def _invoke_impl(self, request, event_callback=None) -> MessageResponse:
+        def _invoke_impl(self, request) -> MessageResponse:
             return MessageResponse(id="no-stream-1", content=[], stop_reason="end_turn")
 
         # _stream_impl not overridden - should raise NotImplementedError
@@ -359,18 +423,14 @@ class TestModelNotImplemented:
 
     @pytest.mark.asyncio
     async def test_async_streaming_not_supported(self):
-        """Test that async streaming handles unsupported models gracefully."""
+        """Test that async streaming raises NotImplementedError when not supported."""
         model = self.NoStreamingModel()
         messages = [create_user_message("Hi")]
 
-        result = await model.ainvoke(messages=messages, streaming=True)
-
-        # When streaming is not supported, the generator yields no chunks
-        # (the base class _astream_impl swallows thread errors)
-        chunks = []
-        async for chunk in result:
-            chunks.append(chunk)
-        assert len(chunks) == 0
+        # When streaming is not supported, the generator should raise NotImplementedError
+        with pytest.raises(NotImplementedError):
+            async for chunk in model.ainvoke(messages=messages, streaming=True):
+                pass
 
 
 class TestTypeAnnotations:
@@ -390,16 +450,31 @@ class TestTypeAnnotations:
         assert isinstance(result_true, Iterator)
 
     @pytest.mark.asyncio
-    async def test_ainvoke_overload_resolution(self):
-        """Test that type overloads resolve correctly for ainvoke."""
+    async def test_ainvoke_returns_async_generator(self):
+        """Test that ainvoke always returns AsyncGenerator.
+
+        Note: After refactor, ainvoke() always returns AsyncGenerator[DeltaPart | Event, None]
+        regardless of streaming parameter.
+        """
         model = MockModel()
         messages = [create_user_message("Hi")]
 
-        # streaming=False should return MessageResponse
-        result_false = await model.ainvoke(messages=messages, streaming=False)
-        assert isinstance(result_false, MessageResponse)
+        # Both streaming=True and streaming=False return AsyncGenerator
+        result_false = model.ainvoke(messages=messages, streaming=False)
+        result_true = model.ainvoke(messages=messages, streaming=True)
 
-        # streaming=True should return AsyncGenerator
-        result_true = await model.ainvoke(messages=messages, streaming=True)
-        # AsyncGenerator is both an async iterator and an async iterable
+        # Both should be async generators (have __aiter__)
+        assert hasattr(result_false, "__aiter__")
         assert hasattr(result_true, "__aiter__")
+
+        # Both should produce events when iterated
+        events_false = []
+        async for event in result_false:
+            events_false.append(event)
+
+        events_true = []
+        async for event in result_true:
+            events_true.append(event)
+
+        assert len(events_false) > 0
+        assert len(events_true) > 0

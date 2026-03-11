@@ -82,8 +82,9 @@ class TestAgentErrorHandling:
         # (simulating a model preparation error)
         async def failing_ainvoke(*args, **kwargs):
             raise AttributeError("'list' object has no attribute 'startswith'")
+            yield  # Make it an async generator
 
-        mock_model.ainvoke = MagicMock(side_effect=failing_ainvoke)
+        mock_model.ainvoke = failing_ainvoke
 
         agent = HawiAgent(
             model=mock_model,
@@ -113,8 +114,9 @@ class TestAgentErrorHandling:
         # Make ainvoke(streaming=True) raise an exception immediately
         async def failing_ainvoke(*args, **kwargs):
             raise AttributeError("'list' object has no attribute 'startswith'")
+            yield  # Make it an async generator
 
-        mock_model.ainvoke = MagicMock(side_effect=failing_ainvoke)
+        mock_model.ainvoke = failing_ainvoke
 
         agent = HawiAgent(
             model=mock_model,

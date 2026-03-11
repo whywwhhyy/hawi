@@ -38,8 +38,44 @@ class StreamProcessor:
         self._text_buffer: str = ""
         self._thinking_buffer: str = ""
         self._tool_arguments_buffer: str = ""
+        # 存储每个块的完整内容
+        self._block_contents: dict[int, dict[str, Any]] = {}
         # 存储 usage 数据，在 finish 时一起发送
         self._pending_usage: dict[str, int] | None = None
+        # 存储停止原因
+        self._stop_reason: str | None = None
+
+    @property
+    def stop_reason(self) -> str | None:
+        """获取停止原因"""
+        return self._stop_reason
+
+    @property
+    def usage(self) -> dict[str, int] | None:
+        """获取 usage 数据"""
+        return self._pending_usage
+
+    def get_block_text(self, index: int) -> str:
+        """获取指定索引文本块的完整内容"""
+        return self._block_contents.get(index, {}).get("text", "")
+
+    def get_block_thinking(self, index: int) -> str:
+        """获取指定索引思考块的完整内容"""
+        return self._block_contents.get(index, {}).get("thinking", "")
+
+    def get_tool_call_info(self, index: int) -> dict[str, Any]:
+        """获取指定索引工具调用的完整信息"""
+        info = self._block_contents.get(index, {})
+        args_str = info.get("arguments", "")
+        try:
+            args = json.loads(args_str) if args_str else {}
+        except json.JSONDecodeError:
+            args = {}
+        return {
+            "id": info.get("id", ""),
+            "name": info.get("name", ""),
+            "arguments": args,
+        }
 
     def process_chunk(
         self,
@@ -95,6 +131,10 @@ class StreamProcessor:
                 }
 
             self._thinking_buffer += reasoning_content
+            # 存储思考块内容
+            if self._current_block_index not in self._block_contents:
+                self._block_contents[self._current_block_index] = {}
+            self._block_contents[self._current_block_index]["thinking"] = self._thinking_buffer
             yield {
                 "type": "thinking_delta",
                 "index": self._current_block_index,
@@ -124,6 +164,10 @@ class StreamProcessor:
                 }
 
             self._text_buffer += content
+            # 存储文本块内容
+            if self._current_block_index not in self._block_contents:
+                self._block_contents[self._current_block_index] = {}
+            self._block_contents[self._current_block_index]["text"] = self._text_buffer
             yield {
                 "type": "text_delta",
                 "index": self._current_block_index,
@@ -184,9 +228,20 @@ class StreamProcessor:
                 if func.get("name"):
                     self._tool_call_state["name"] = func["name"]
 
+                # 存储工具调用信息
+                if self._current_block_index not in self._block_contents:
+                    self._block_contents[self._current_block_index] = {}
+                self._block_contents[self._current_block_index].update({
+                    "id": self._tool_call_state["id"],
+                    "name": self._tool_call_state["name"],
+                    "arguments": self._tool_arguments_buffer,
+                })
+
         # 处理完成
         finish_reason = choice.get("finish_reason")
         if finish_reason:
+            # 存储停止原因
+            self._stop_reason = self._map_stop_reason(finish_reason)
             # 结束当前块
             if self._current_block_type == "text":
                 yield from self._close_text_block()

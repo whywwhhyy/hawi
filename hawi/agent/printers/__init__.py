@@ -6,7 +6,6 @@ from .base import BasePrinter as BasePrinter
 from .plain import PlainPrinter as PlainPrinter
 from .block import BlockPrinter as BlockPrinter
 from .rich import RichPrinter as RichPrinter
-from .markdown import StreamMarkdownPrinter as StreamMarkdownPrinter
 
 
 def create_printer(
@@ -75,7 +74,5 @@ def create_printer(
         return BlockPrinter(**common_args)
     elif actual_printer == "plain":
         return PlainPrinter(**common_args)
-    elif actual_printer == "markdown":
-        return StreamMarkdownPrinter(**common_args)
     else:
         raise ValueError(f"Unknown printer type: {printer_type}")

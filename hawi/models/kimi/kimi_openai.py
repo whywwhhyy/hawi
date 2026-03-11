@@ -7,7 +7,8 @@ Kimi/Moonshot API 兼容模型实现
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Iterator
+from collections.abc import AsyncGenerator
+from typing import Any, Iterator
 
 import httpx
 
@@ -184,7 +185,7 @@ class KimiOpenAIModel(OpenAIModel):
 
     async def _astream_impl(
         self, request: MessageRequest
-    ) -> AsyncIterator[DeltaPart]:
+    ) -> AsyncGenerator[DeltaPart, None]:
         """异步流式调用 Kimi API
 
         重写以处理 reasoning_content 的收集和保留。

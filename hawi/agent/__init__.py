@@ -10,30 +10,10 @@ This package provides:
 
 from .hawi_agent import HawiAgent
 from .context import AgentContext
-# from ..events import (
-#     Event,
-#     EventBus,
-#     # Model events
-#     ModelStreamStartEvent,
-#     ModelStreamStopEvent,
-#     ModelContentBlockStartEvent,
-#     ModelContentBlockDeltaEvent,
-#     ModelContentBlockStopEvent,
-#     ModelMetadataEvent,
-#     ModelErrorEvent,
-#     # Agent events
-#     AgentRunStartEvent,
-#     AgentRunStopEvent,
-#     AgentToolCallEvent,
-#     AgentToolResultEvent,
-#     AgentMessageAddedEvent,
-#     AgentErrorEvent,
-# )
 from .printers import (
     PlainPrinter,
     RichPrinter,
     BlockPrinter,
-    StreamMarkdownPrinter,
 )
 from ..errors import (
     HawiError,
@@ -56,28 +36,9 @@ __all__ = [
     # Core
     "HawiAgent",
     "AgentContext",
-    # # Events
-    # "Event",
-    # "EventBus",
     "PlainPrinter",
     "RichPrinter",
     "BlockPrinter",
-    "StreamMarkdownPrinter",
-    # # Model events
-    # "ModelStreamStartEvent",
-    # "ModelStreamStopEvent",
-    # "ModelContentBlockStartEvent",
-    # "ModelContentBlockDeltaEvent",
-    # "ModelContentBlockStopEvent",
-    # "ModelMetadataEvent",
-    # "ModelErrorEvent",
-    # # Agent events
-    # "AgentRunStartEvent",
-    # "AgentRunStopEvent",
-    # "AgentToolCallEvent",
-    # "AgentToolResultEvent",
-    # "AgentMessageAddedEvent",
-    # "AgentErrorEvent",
     # Results
     "AgentRunResult",
     "ToolCallRecord",

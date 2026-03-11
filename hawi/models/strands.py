@@ -45,8 +45,11 @@ from hawi.models import (
     ToolDefinition,
     ToolResultPart,
     VideoPart,
+    DeltaTextPart,
+    DeltaThinkingPart,
+    DeltaToolCallPart,
+    DeltaFinishPart,
 )
-from hawi.models.model import ModelEventCallback
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +207,6 @@ class StrandsModel(Model):
     def _invoke_impl(
         self,
         request: MessageRequest,
-        event_callback=None,
     ) -> MessageResponse:
         """同步调用实现"""
         # 准备 strands 格式的请求
@@ -222,13 +224,7 @@ class StrandsModel(Model):
             )
 
         # 转换响应
-        result = self._parse_response_impl(strands_response)
-
-        # Emit events via event_callback if provided
-        if event_callback is not None:
-            self._emit_events_from_response(result, event_callback)
-
-        return result
+        return self._parse_response_impl(strands_response)
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式实现"""
@@ -250,9 +246,17 @@ class StrandsModel(Model):
     async def _ainvoke_impl(
         self,
         request: MessageRequest,
-        event_callback=None,
-    ) -> MessageResponse:
-        """异步调用实现"""
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步非流式实现 - 将完整响应拆分为 DeltaPart 序列
+
+        Args:
+            request: 消息请求
+
+        Yields:
+            DeltaPart 增量块序列
+        """
+        from typing import cast
+
         strands_request = self._prepare_request_impl(request)
 
         if hasattr(self.strands_model, "run_async"):
@@ -261,188 +265,112 @@ class StrandsModel(Model):
             strands_response = await self.strands_model.ainvoke(**strands_request)
         else:
             # Fallback 到 sync 版本
-            return self._invoke_impl(request, event_callback=event_callback)
+            result = self._invoke_impl(request)
+
+            # Yield content blocks as DeltaPart
+            for idx, part in enumerate(result.content):
+                part_type = part["type"]
+
+                if part_type == "text":
+                    text_part = cast(TextPart, part)
+                    yield DeltaTextPart(
+                        type="text_delta",
+                        index=idx,
+                        delta=text_part["text"],
+                        is_start=True,
+                        is_end=True,
+                    )
+                elif part_type == "reasoning":
+                    reasoning_part = cast(ReasoningPart, part)
+                    yield DeltaThinkingPart(
+                        type="thinking_delta",
+                        index=idx,
+                        delta=reasoning_part.get("reasoning") or "",
+                        is_start=True,
+                        is_end=True,
+                    )
+                elif part_type == "tool_call":
+                    tool_part = cast(ToolCallPart, part)
+                    yield DeltaToolCallPart(
+                        type="tool_call_delta",
+                        index=idx,
+                        id=tool_part["id"],
+                        name=tool_part["name"],
+                        arguments_delta=json.dumps(tool_part["arguments"]),
+                        is_start=True,
+                        is_end=True,
+                    )
+
+            # Yield finish part
+            usage_dict: dict[str, int] | None = None
+            if result.usage:
+                usage_dict = {
+                    "input_tokens": result.usage.input_tokens,
+                    "output_tokens": result.usage.output_tokens,
+                }
+                if result.usage.cache_write_tokens is not None:
+                    usage_dict["cache_write_tokens"] = result.usage.cache_write_tokens
+                if result.usage.cache_read_tokens is not None:
+                    usage_dict["cache_read_tokens"] = result.usage.cache_read_tokens
+            yield DeltaFinishPart(
+                type="finish",
+                stop_reason=result.stop_reason or "end_turn",
+                usage=usage_dict,
+            )
+            return
 
         result = self._parse_response_impl(strands_response)
 
-        # Emit events via event_callback if provided
-        if event_callback is not None:
-            self._emit_events_from_response(result, event_callback)
-
-        return result
-
-    def _emit_events_from_response(
-        self,
-        response: MessageResponse,
-        event_callback: "ModelEventCallback",
-    ) -> None:
-        """从非流式响应生成事件
-
-        在非流式模式下，将完整响应转换为事件序列：
-        - model.stream_start
-        - model.content_block_start
-        - model.content_block_delta (一次性包含完整内容，is_streaming=False)
-        - model.content_block_stop
-        - model.stream_stop
-
-        Args:
-            response: 解析后的消息响应
-            event_callback: 事件回调函数
-        """
-        import time
-        import json
-
-        request_id = response.id
-
-        # stream_start
-        event_callback("model.stream_start", {
-            "type": "model.stream_start",
-            "source": "model",
-            "timestamp": time.time(),
-            "request_id": request_id,
-        })
-
-        # 为每个 content part 生成事件
-        for idx, part in enumerate(response.content):
-            part_type = part.get("type")
+        # Yield content blocks as DeltaPart
+        for idx, part in enumerate(result.content):
+            part_type = part["type"]
 
             if part_type == "text":
-                text = part.get("text", "")
-                # content_block_start
-                event_callback("model.content_block_start", {
-                    "type": "model.content_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "block_type": "text",
-                })
-                # content_block_delta (非流式，一次性发送完整内容)
-                event_callback("model.content_block_delta", {
-                    "type": "model.content_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "delta_type": "text",
-                    "delta": text,  # 完整内容
-                    "part": {
-                        "type": "text_delta",
-                        "index": idx,
-                        "delta": text,
-                        "is_start": True,
-                        "is_end": True,
-                    },
-                    "is_streaming": False,  # 非流式
-                })
-                # content_block_stop
-                event_callback("model.content_block_stop", {
-                    "type": "model.content_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "content": [part],
-                })
-
+                text_part = cast(TextPart, part)
+                yield DeltaTextPart(
+                    type="text_delta",
+                    index=idx,
+                    delta=text_part["text"],
+                    is_start=True,
+                    is_end=True,
+                )
             elif part_type == "reasoning":
-                reasoning = part.get("reasoning", "")
-                # content_block_start
-                event_callback("model.content_block_start", {
-                    "type": "model.content_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "block_type": "thinking",
-                })
-                # content_block_delta (非流式)
-                event_callback("model.content_block_delta", {
-                    "type": "model.content_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "delta_type": "thinking",
-                    "delta": reasoning,
-                    "part": {
-                        "type": "thinking_delta",
-                        "index": idx,
-                        "delta": reasoning,
-                        "is_start": True,
-                        "is_end": True,
-                    },
-                    "is_streaming": False,
-                })
-                # content_block_stop
-                event_callback("model.content_block_stop", {
-                    "type": "model.content_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "content": [part],
-                })
-
+                reasoning_part = cast(ReasoningPart, part)
+                yield DeltaThinkingPart(
+                    type="thinking_delta",
+                    index=idx,
+                    delta=reasoning_part.get("reasoning") or "",
+                    is_start=True,
+                    is_end=True,
+                )
             elif part_type == "tool_call":
-                tool_id = part.get("id", "")
-                tool_name = part.get("name", "")
-                arguments = part.get("arguments", {})
-                args_str = json.dumps(arguments) if isinstance(arguments, dict) else str(arguments)
+                tool_part = cast(ToolCallPart, part)
+                yield DeltaToolCallPart(
+                    type="tool_call_delta",
+                    index=idx,
+                    id=tool_part["id"],
+                    name=tool_part["name"],
+                    arguments_delta=json.dumps(tool_part["arguments"]),
+                    is_start=True,
+                    is_end=True,
+                )
 
-                # tool_call_block_start
-                event_callback("model.tool_call_block_start", {
-                    "type": "model.tool_call_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_name,
-                })
-                # tool_call_block_delta (非流式，一次性发送完整参数)
-                event_callback("model.tool_call_block_delta", {
-                    "type": "model.tool_call_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "arguments_delta": args_str,  # 完整参数 JSON
-                    "is_streaming": False,
-                })
-                # tool_call_block_stop (包含完整参数)
-                event_callback("model.tool_call_block_stop", {
-                    "type": "model.tool_call_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_name,
-                    "arguments": arguments,
-                })
-
-        # stream_stop
-        usage_dict = None
-        if response.usage:
-            usage_dict = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
+        # Yield finish part
+        usage_dict2: dict[str, int] | None = None
+        if result.usage:
+            usage_dict2 = {
+                "input_tokens": result.usage.input_tokens,
+                "output_tokens": result.usage.output_tokens,
             }
-            if response.usage.cache_write_tokens is not None:
-                usage_dict["cache_write_tokens"] = response.usage.cache_write_tokens
-            if response.usage.cache_read_tokens is not None:
-                usage_dict["cache_read_tokens"] = response.usage.cache_read_tokens
-
-        event_callback("model.stream_stop", {
-            "type": "model.stream_stop",
-            "source": "model",
-            "timestamp": time.time(),
-            "request_id": request_id,
-            "stop_reason": response.stop_reason,
-            "usage": usage_dict,
-        })
+            if result.usage.cache_write_tokens is not None:
+                usage_dict2["cache_write_tokens"] = result.usage.cache_write_tokens
+            if result.usage.cache_read_tokens is not None:
+                usage_dict2["cache_read_tokens"] = result.usage.cache_read_tokens
+        yield DeltaFinishPart(
+            type="finish",
+            stop_reason=result.stop_reason or "end_turn",
+            usage=usage_dict2,
+        )
 
     async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         """异步流式实现"""

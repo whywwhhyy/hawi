@@ -8,6 +8,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Iterator
 from typing import Any
+import json
 
 from anthropic import Anthropic, AsyncAnthropic
 
@@ -22,13 +23,17 @@ from hawi.models import (
     ToolCallPart,
     ReasoningPart,
 )
-from hawi.models.model import ModelEventCallback
 from ._converters import (
     AsyncContentConverter,
     ContentConverter,
     needs_async_conversion,
 )
-from ._streaming import run_async_stream, stream_response, stream_response_async
+from ._streaming import (
+    run_async_stream,
+    stream_response,
+    stream_response_async,
+    _AnthropicStreamHandler,
+)
 from ._utils import convert_system_prompt, map_stop_reason
 
 logger = logging.getLogger(__name__)
@@ -299,219 +304,110 @@ class AnthropicModel(Model):
     def _invoke_impl(
         self,
         request: MessageRequest,
-        event_callback=None,
     ) -> MessageResponse:
         """同步调用 Anthropic API"""
         if needs_async_conversion(
             request.messages, self.enable_image_download
         ):
-            return asyncio.run(self._ainvoke_impl(request, event_callback=event_callback))
+            return asyncio.run(self._async_invoke_impl(request))
 
         req = self._prepare_request_sync(request)
         response = self.client.messages.create(**req)
         result = self._parse_response_impl(response.model_dump())
-
-        # Emit events via event_callback if provided
-        if event_callback is not None:
-            self._emit_events_from_response(result, event_callback)
-
         return result
+
+    async def _async_invoke_impl(
+        self,
+        request: MessageRequest,
+    ) -> MessageResponse:
+        """异步辅助方法，用于同步调用中的异步转换"""
+        req = await self._prepare_request_async(request)
+        response = await self.async_client.messages.create(**req)
+        return self._parse_response_impl(response.model_dump())
 
     async def _ainvoke_impl(
         self,
         request: MessageRequest,
-        event_callback=None,
-    ) -> MessageResponse:
-        """异步调用 Anthropic API"""
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步非流式调用 Anthropic API - 将完整响应拆分为 DeltaPart 序列
+
+        Args:
+            request: 消息请求
+
+        Yields:
+            DeltaPart 增量块序列
+        """
+        from typing import cast
+
         req = await self._prepare_request_async(request)
         response = await self.async_client.messages.create(**req)
         result = self._parse_response_impl(response.model_dump())
 
-        # Emit events via event_callback if provided
-        if event_callback is not None:
-            self._emit_events_from_response(result, event_callback)
-
-        return result
-
-    def _emit_events_from_response(
-        self,
-        response: MessageResponse,
-        event_callback: "ModelEventCallback",
-    ) -> None:
-        """从非流式响应生成事件
-
-        在非流式模式下，将完整响应转换为事件序列：
-        - model.stream_start
-        - model.content_block_start
-        - model.content_block_delta (一次性包含完整内容，is_streaming=False)
-        - model.content_block_stop
-        - model.stream_stop
-
-        Args:
-            response: 解析后的消息响应
-            event_callback: 事件回调函数
-        """
-        import time
-        import json
-
-        request_id = response.id
-
-        # stream_start
-        event_callback("model.stream_start", {
-            "type": "model.stream_start",
-            "source": "model",
-            "timestamp": time.time(),
-            "request_id": request_id,
-        })
-
-        # 为每个 content part 生成事件
-        for idx, part in enumerate(response.content):
-            part_type = part.get("type")
+        # Yield content blocks as DeltaPart sequence
+        for idx, part in enumerate(result.content):
+            part_type = part["type"]
 
             if part_type == "text":
-                text = part.get("text", "")
-                # content_block_start
-                event_callback("model.content_block_start", {
-                    "type": "model.content_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "block_type": "text",
-                })
-                # content_block_delta (非流式，一次性发送完整内容)
-                event_callback("model.content_block_delta", {
-                    "type": "model.content_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "delta_type": "text",
-                    "delta": text,  # 完整内容
-                    "part": {
-                        "type": "text_delta",
-                        "index": idx,
-                        "delta": text,
-                        "is_start": True,
-                        "is_end": True,
-                    },
-                    "is_streaming": False,  # 非流式
-                })
-                # content_block_stop
-                event_callback("model.content_block_stop", {
-                    "type": "model.content_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "content": [part],
-                })
+                text_part = cast(TextPart, part)
+                from hawi.models.message import DeltaTextPart
+                yield DeltaTextPart(
+                    type="text_delta",
+                    index=idx,
+                    delta=text_part["text"],
+                    is_start=True,
+                    is_end=True,
+                )
 
             elif part_type == "reasoning":
-                reasoning = part.get("reasoning", "")
-                # content_block_start
-                event_callback("model.content_block_start", {
-                    "type": "model.content_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "block_type": "thinking",
-                })
-                # content_block_delta (非流式)
-                event_callback("model.content_block_delta", {
-                    "type": "model.content_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "delta_type": "thinking",
-                    "delta": reasoning,
-                    "part": {
-                        "type": "thinking_delta",
-                        "index": idx,
-                        "delta": reasoning,
-                        "is_start": True,
-                        "is_end": True,
-                    },
-                    "is_streaming": False,
-                })
-                # content_block_stop
-                event_callback("model.content_block_stop", {
-                    "type": "model.content_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "content": [part],
-                })
+                reasoning_part = cast(ReasoningPart, part)
+                from hawi.models.message import DeltaThinkingPart
+                yield DeltaThinkingPart(
+                    type="thinking_delta",
+                    index=idx,
+                    delta=reasoning_part.get("reasoning") or "",
+                    is_start=True,
+                    is_end=True,
+                )
 
             elif part_type == "tool_call":
-                tool_id = part.get("id", "")
-                tool_name = part.get("name", "")
-                arguments = part.get("arguments", {})
-                args_str = json.dumps(arguments) if isinstance(arguments, dict) else str(arguments)
+                tool_part = cast(ToolCallPart, part)
+                from hawi.models.message import DeltaToolCallPart
+                yield DeltaToolCallPart(
+                    type="tool_call_delta",
+                    index=idx,
+                    id=tool_part["id"],
+                    name=tool_part["name"],
+                    arguments_delta=json.dumps(tool_part["arguments"]),
+                    is_start=True,
+                    is_end=True,
+                )
 
-                # tool_call_block_start
-                event_callback("model.tool_call_block_start", {
-                    "type": "model.tool_call_block_start",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_name,
-                })
-                # tool_call_block_delta (非流式，一次性发送完整参数)
-                event_callback("model.tool_call_block_delta", {
-                    "type": "model.tool_call_block_delta",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "arguments_delta": args_str,  # 完整参数 JSON
-                    "is_streaming": False,
-                })
-                # tool_call_block_stop (包含完整参数)
-                event_callback("model.tool_call_block_stop", {
-                    "type": "model.tool_call_block_stop",
-                    "source": "model",
-                    "timestamp": time.time(),
-                    "request_id": request_id,
-                    "block_index": idx,
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_name,
-                    "arguments": arguments,
-                })
-
-        # stream_stop
-        usage_dict = None
-        if response.usage:
-            usage_dict = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            }
-            if response.usage.cache_write_tokens is not None:
-                usage_dict["cache_write_tokens"] = response.usage.cache_write_tokens
-            if response.usage.cache_read_tokens is not None:
-                usage_dict["cache_read_tokens"] = response.usage.cache_read_tokens
-
-        event_callback("model.stream_stop", {
-            "type": "model.stream_stop",
-            "source": "model",
-            "timestamp": time.time(),
-            "request_id": request_id,
-            "stop_reason": response.stop_reason,
-            "usage": usage_dict,
-        })
+        # Yield finish part
+        from hawi.models.message import DeltaFinishPart
+        usage_data = result.usage
+        yield DeltaFinishPart(
+            type="finish",
+            stop_reason=result.stop_reason or "end_turn",
+            usage={
+                "input_tokens": usage_data.input_tokens if usage_data else 0,
+                "output_tokens": usage_data.output_tokens if usage_data else 0,
+                "cache_write_tokens": usage_data.cache_write_tokens if usage_data else None,
+                "cache_read_tokens": usage_data.cache_read_tokens if usage_data else None,
+            } if usage_data else None,
+        )
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用"""
         if needs_async_conversion(
             request.messages, self.enable_image_download
         ):
-            yield from run_async_stream(self._astream_impl(request))
+            # Filter out Event types, only yield DeltaPart for sync streaming
+            async def _filtered_stream():
+                async for item in self._astream_impl(request):
+                    if isinstance(item, dict):  # DeltaPart is a dict
+                        yield item
+
+            yield from run_async_stream(_filtered_stream())
             return
 
         req = self._prepare_request_sync(request)
@@ -520,7 +416,19 @@ class AnthropicModel(Model):
     async def _astream_impl(
         self, request: MessageRequest
     ) -> AsyncGenerator[DeltaPart, None]:
-        """异步流式调用"""
+        """异步流式调用 - 实时转发 DeltaPart
+
+        Args:
+            request: 消息请求
+
+        Yields:
+            DeltaPart 流式增量块
+        """
         req = await self._prepare_request_async(request)
-        async for chunk in stream_response_async(self.async_client, req):
-            yield chunk
+        req["stream"] = True
+
+        async with self.async_client.messages.stream(**req) as stream:
+            handler = _AnthropicStreamHandler(stream)
+            async for event in stream:
+                for delta_part in handler.handle_event(event):
+                    yield delta_part

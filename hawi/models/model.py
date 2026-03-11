@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Iterator, List, Literal, Callable, overload, Union
+from typing import Any, AsyncGenerator, Iterator, List, Literal, overload
 
 from hawi.models.message import (
     ContentPart,
@@ -23,12 +23,9 @@ from hawi.models.message import (
     ToolChoice,
 )
 from hawi.errors import ModelError
+from hawi.events.event import Event
 
-__all__ = ["Model", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError", "ModelEventCallback"]
-
-# Model 事件回调类型：用于非流式接口输出事件
-# 回调函数接收 (event_type: str, data: dict) 参数
-ModelEventCallback = Callable[[str, dict[str, Any]], None]
+__all__ = ["Model", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -123,7 +120,6 @@ class Model(ABC):
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
-        event_callback: ModelEventCallback | None = None,
         **kwargs,
     ) -> MessageResponse: ...
 
@@ -136,7 +132,6 @@ class Model(ABC):
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
-        event_callback: ModelEventCallback | None = None,
         **kwargs,
     ) -> Iterator[DeltaPart]: ...
 
@@ -148,7 +143,6 @@ class Model(ABC):
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
-        event_callback: ModelEventCallback | None = None,
         **kwargs,
     ) -> MessageResponse | Iterator[DeltaPart]:
         """同步调用模型
@@ -159,7 +153,6 @@ class Model(ABC):
             system: 系统提示
             tools: 工具定义列表
             tool_choice: 工具选择策略
-            event_callback: 事件回调函数，用于输出 model 事件
             **kwargs: 其他参数
 
         Returns:
@@ -169,37 +162,11 @@ class Model(ABC):
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         if streaming:
             return self._stream_impl(request)
-        return self._invoke_impl(request, event_callback=event_callback)
+        return self._invoke_impl(request)
 
     # ==========================================================================
     # 公共 API - 异步方法
     # ==========================================================================
-
-    @overload
-    async def ainvoke(
-        self,
-        messages: list[Message],
-        *,
-        streaming: Literal[False] = False,
-        system: str | List[ContentPart] | None = None,
-        tools: list[ToolDefinition] | None = None,
-        tool_choice: ToolChoice | None = None,
-        event_callback: ModelEventCallback | None = None,
-        **kwargs,
-    ) -> MessageResponse: ...
-
-    @overload
-    async def ainvoke(
-        self,
-        messages: list[Message],
-        *,
-        streaming: Literal[True],
-        system: str | List[ContentPart] | None = None,
-        tools: list[ToolDefinition] | None = None,
-        tool_choice: ToolChoice | None = None,
-        event_callback: ModelEventCallback | None = None,
-        **kwargs,
-    ) -> AsyncGenerator[DeltaPart, None]: ...
 
     async def ainvoke(
         self,
@@ -209,28 +176,30 @@ class Model(ABC):
         system: str | List[ContentPart] | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: ToolChoice | None = None,
-        event_callback: ModelEventCallback | None = None,
         **kwargs,
-    ) -> MessageResponse | AsyncGenerator[DeltaPart, None]:
-        """异步调用模型
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步调用模型，返回 DeltaPart 流
 
         Args:
             messages: 消息列表
-            streaming: 是否使用流式模式。False 返回 MessageResponse，True 返回 AsyncGenerator[DeltaPart]
+            streaming: 是否使用流式 HTTP API。True=流式API，False=非流式API
             system: 系统提示
             tools: 工具定义列表
             tool_choice: 工具选择策略
-            event_callback: 事件回调函数，用于输出 model 事件
             **kwargs: 其他参数
 
-        Returns:
-            streaming=False: MessageResponse
-            streaming=True: AsyncGenerator[DeltaPart, None]
+        Yields:
+            DeltaPart 增量块
+            - streaming=True: 实时转发 LLM API 的流式响应
+            - streaming=False: 将完整响应拆分为 DeltaPart 序列
         """
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         if streaming:
-            return self._astream_impl(request)
-        return await self._ainvoke_impl(request, event_callback=event_callback)
+            async for delta in self._astream_impl(request):
+                yield delta
+        else:
+            async for delta in self._ainvoke_impl(request):
+                yield delta
 
     # ==========================================================================
     # 请求/响应转换 - 子类必须实现
@@ -254,62 +223,60 @@ class Model(ABC):
     def _invoke_impl(
         self,
         request: MessageRequest,
-        event_callback: ModelEventCallback | None = None,
     ) -> MessageResponse:
         """同步调用实现
 
         Args:
             request: 消息请求
-            event_callback: 事件回调函数，用于输出 model 事件
+
+        Returns:
+            MessageResponse: 完整的模型响应
         """
         pass
 
     async def _ainvoke_impl(
         self,
         request: MessageRequest,
-        event_callback: ModelEventCallback | None = None,
-    ) -> MessageResponse:
-        """异步调用实现（默认使用线程池）
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步非流式实现
+
+        调用非流式 API，将完整响应拆分为 DeltaPart 序列 yield。
+        子类必须重写此方法。
 
         Args:
             request: 消息请求
-            event_callback: 事件回调函数，用于输出 model 事件
-        """
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
-        from functools import partial
 
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as pool:
-            func = partial(self._invoke_impl, event_callback=event_callback)
-            return await loop.run_in_executor(pool, func, request)
+        Yields:
+            DeltaPart 增量块序列
+        """
+        # This is an async generator, so we need to yield something
+        # Subclasses should override this method
+        raise NotImplementedError(f"{self.__class__.__name__} does not support async non-streaming")
+        yield  # Make this an async generator
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式实现（默认不支持）"""
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
 
-    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
-        """异步流式实现（默认使用线程池）"""
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步流式实现
 
-        loop = asyncio.get_event_loop()
-        queue: asyncio.Queue[DeltaPart | None] = asyncio.Queue()
+        调用流式 API，实时转发 DeltaPart。
+        子类必须重写此方法。
 
-        def stream_in_thread():
-            try:
-                for chunk in self._stream_impl(request):
-                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop)
-            finally:
-                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+        Args:
+            request: 消息请求
 
-        with ThreadPoolExecutor() as pool:
-            pool.submit(stream_in_thread)
-            while True:
-                chunk = await queue.get()
-                if chunk is None:
-                    break
-                yield chunk
+        Yields:
+            DeltaPart 流式增量块
+        """
+        # This is an async generator, so we need to yield something
+        # Subclasses should override this method
+        raise NotImplementedError(f"{self.__class__.__name__} does not support async streaming")
+        yield  # Make this an async generator
 
     # ==========================================================================
     # 内部工具方法
