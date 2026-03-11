@@ -15,7 +15,7 @@ from rich.text import Text
 from rich.json import JSON
 from rich.rule import Rule
 
-from hawi.events import (
+from hawi.agent.events import (
     Event,
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
@@ -141,7 +141,7 @@ class BlockPrinter(BasePrinter):
         if not self.show_tools:
             return
 
-        from hawi.events import AgentToolCallEvent
+        from hawi.agent.events import AgentToolCallEvent
         assert isinstance(event, AgentToolCallEvent)
 
         timestamp = self._get_timestamp()
@@ -185,7 +185,7 @@ class BlockPrinter(BasePrinter):
         if not self.show_tools:
             return
 
-        from hawi.events import AgentToolResultPartEvent
+        from hawi.agent.events import AgentToolResultPartEvent
         assert isinstance(event, AgentToolResultPartEvent)
 
         tool_call_id = event.tool_call_id

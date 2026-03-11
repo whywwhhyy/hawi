@@ -14,7 +14,7 @@ from typing import Any
 
 import sys
 
-from hawi.events import (
+from hawi.agent.events import (
     Event,
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
@@ -129,7 +129,7 @@ class PlainPrinter(BasePrinter):
         if not self.show_tools:
             return
 
-        from hawi.events import AgentToolCallEvent
+        from hawi.agent.events import AgentToolCallEvent
         assert isinstance(event, AgentToolCallEvent)
 
         timestamp = self._get_timestamp()
@@ -155,7 +155,7 @@ class PlainPrinter(BasePrinter):
         if not self.show_tools:
             return
 
-        from hawi.events import AgentToolResultPartEvent
+        from hawi.agent.events import AgentToolResultPartEvent
         assert isinstance(event, AgentToolResultPartEvent)
 
         part = event.part

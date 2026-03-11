@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
 
-from hawi.events import (
+from hawi.agent.events import (
     Event,
     AgentToolCallEvent,
     AgentToolResultPartEvent,

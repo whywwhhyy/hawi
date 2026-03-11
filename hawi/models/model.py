@@ -23,7 +23,6 @@ from hawi.models.message import (
     ToolChoice,
 )
 from hawi.errors import ModelError
-from hawi.events.event import Event
 
 __all__ = ["Model", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
 

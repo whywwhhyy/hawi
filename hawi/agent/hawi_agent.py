@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Coroutine, Literal, Mapping, Callable, cast
 
 
-from hawi.models import Model
 from hawi.models import (
+    Model,
     ContentPart,
     DeltaPart,
     TextPart,
@@ -40,7 +40,7 @@ from hawi.errors import (
     ToolNotFoundError,
     ToolExecutionError,
 )
-from hawi.events import (
+from .events import (
     Event,
     EventBus,
     EventHandler,

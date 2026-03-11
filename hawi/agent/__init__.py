@@ -8,14 +8,7 @@ This package provides:
 - Result: Execution result types
 """
 
-from .hawi_agent import HawiAgent
-from .context import AgentContext
-from .printers import (
-    PlainPrinter,
-    RichPrinter,
-    BlockPrinter,
-)
-from ..errors import (
+from hawi.errors import (
     HawiError,
     AgentError,
     MaxIterationsError,
@@ -29,7 +22,13 @@ from ..errors import (
     ToolExecutionError,
     ConfigurationError,
 )
-from ..models.message import DeltaPart
+from .hawi_agent import HawiAgent
+from .context import AgentContext
+from .printers import (
+    PlainPrinter,
+    RichPrinter,
+    BlockPrinter,
+)
 from .result import AgentRunResult, ToolCallRecord
 
 __all__ = [

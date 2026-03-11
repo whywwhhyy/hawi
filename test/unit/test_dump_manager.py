@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from hawi.events import DumpManager, AgentRunStartEvent
+from hawi.agent.events import DumpManager, AgentRunStartEvent
 
 
 def _parse_jsonl_records(content: str) -> list[dict]:

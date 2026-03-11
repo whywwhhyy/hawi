@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from hawi.agent import HawiAgent
-from hawi.events import (
+from hawi.agent.events import (
     Event,
     EventBus,
 )
