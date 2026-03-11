@@ -263,8 +263,8 @@ class TestKimiOpenAIIntegration:
         # When thinking is enabled, reasoning_content comes first
         assert content_list[0]["type"] in ["text", "reasoning"]
         assert response.usage is not None
-        assert response.usage.input_tokens > 0
-        assert response.usage.output_tokens > 0
+        assert response.usage["input_tokens"] > 0
+        assert response.usage["output_tokens"] > 0
 
     def test_simple_chat_without_thinking(self, model_no_thinking: KimiOpenAIModel):
         """Test basic chat completion with thinking disabled."""

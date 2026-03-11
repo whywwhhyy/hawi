@@ -77,8 +77,8 @@ class TestStrandsModelTokenUsage:
         assert response.usage is not None
         assert response.usage["input_tokens"] == 100
         assert response.usage["output_tokens"] == 50
-        assert response.usage["cache_write_tokens"] is None
-        assert response.usage["cache_read_tokens"] is None
+        assert response.usage.get("cache_write_tokens") is None
+        assert response.usage.get("cache_read_tokens") is None
 
     def test_parse_response_without_usage(self):
         """Response without usage should have None usage."""

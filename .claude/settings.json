@@ -2,6 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(done)"
+    ],
+    "additionalDirectories": [
+      "/Users/hayden/Projects/Python/Hawi/test/integration/models"
     ]
   }
 }

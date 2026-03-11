@@ -4,7 +4,7 @@
 使用 TypedDict 实现 Tagged Union 设计，支持完整的类型检查。
 """
 
-from typing import Any, Sequence, Literal, Required, TypeAlias, TypedDict, cast
+from typing import Any, Sequence, Literal, Required, NotRequired, TypeAlias, TypedDict, cast
 
 from pydantic import BaseModel
 
@@ -16,10 +16,10 @@ from pydantic import BaseModel
 class TokenUsage(TypedDict):
     """Token 使用统计"""
 
-    input_tokens: Required[int]
-    output_tokens: Required[int]
-    cache_write_tokens: int | None  # Prompt caching: tokens written to cache
-    cache_read_tokens: int | None  # Prompt caching: tokens read from cache
+    input_tokens: int
+    output_tokens: int
+    cache_write_tokens: NotRequired[int | None]  # Prompt caching: tokens written to cache
+    cache_read_tokens: NotRequired[int | None]  # Prompt caching: tokens read from cache
 
 
 # =============================================================================

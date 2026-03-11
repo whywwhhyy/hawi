@@ -822,16 +822,22 @@ class HawiAgent:
                                 else:
                                     # Use a temp variable to help type checker
                                     current = cumulative_usage
+
+                                    def add_optional_tokens(a: int | None, b: int | None) -> int | None:
+                                        """Add two optional token counts, returning None if both are None."""
+                                        if a is None and b is None:
+                                            return None
+                                        return (a or 0) + (b or 0)
                                     cumulative_usage = {
                                         "input_tokens": current["input_tokens"] + usage["input_tokens"],
                                         "output_tokens": current["output_tokens"] + usage["output_tokens"],
-                                        "cache_write_tokens": self._add_optional_tokens(
-                                            current["cache_write_tokens"],
-                                            usage["cache_write_tokens"],
+                                        "cache_write_tokens": add_optional_tokens(
+                                            current.get("cache_write_tokens"),
+                                            usage.get("cache_write_tokens"),
                                         ),
-                                        "cache_read_tokens": self._add_optional_tokens(
-                                            current["cache_read_tokens"],
-                                            usage["cache_read_tokens"],
+                                        "cache_read_tokens": add_optional_tokens(
+                                            current.get("cache_read_tokens"),
+                                            usage.get("cache_read_tokens"),
                                         ),
                                     }
                             continue
@@ -1402,10 +1408,3 @@ class HawiAgent:
         """
         _, rejected = self._context.audit_pending_tool_calls(approve=[], reject=tool_call_ids)
         return [r.tool_call_id for r in rejected]
-
-    @staticmethod
-    def _add_optional_tokens(a: int | None, b: int | None) -> int | None:
-        """Add two optional token counts, returning None if both are None."""
-        if a is None and b is None:
-            return None
-        return (a or 0) + (b or 0)

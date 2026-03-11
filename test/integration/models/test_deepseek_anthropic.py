@@ -212,8 +212,8 @@ class TestDeepSeekAnthropicIntegration:
         assert "Hello" in content_list[0]["text"] or "World" in content_list[0]["text"]
         assert response.stop_reason == "end_turn"
         assert response.usage is not None
-        assert response.usage.input_tokens > 0
-        assert response.usage.output_tokens > 0
+        assert response.usage["input_tokens"] > 0
+        assert response.usage["output_tokens"] > 0
 
     def test_reasoner_chat_completion(self, reasoner_model: DeepSeekAnthropicModel):
         """Test Reasoner model chat completion with reasoning."""

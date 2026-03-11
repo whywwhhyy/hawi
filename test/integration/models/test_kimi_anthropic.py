@@ -151,9 +151,9 @@ class TestKimiAnthropicIntegration:
         assert response.stop_reason == "end_turn"
         assert response.usage is not None
         # Kimi may report input_tokens as 0 when using cache - check total tokens instead
-        total_input = response.usage.input_tokens + (response.usage.cache_read_tokens or 0)
+        total_input = response.usage["input_tokens"] + (response.usage["cache_read_tokens"] or 0)
         assert total_input >= 0
-        assert response.usage.output_tokens > 0
+        assert response.usage["output_tokens"] > 0
 
     def test_streaming_response(self, model: KimiAnthropicModel):
         """Test streaming response."""

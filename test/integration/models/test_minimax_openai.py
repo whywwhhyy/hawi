@@ -122,8 +122,8 @@ class TestMiniMaxM25Integration:
         assert "Hello" in text_content or "World" in text_content
         assert response.stop_reason == "end_turn"
         assert response.usage is not None
-        assert response.usage.input_tokens > 0
-        assert response.usage.output_tokens > 0
+        assert response.usage["input_tokens"] > 0
+        assert response.usage["output_tokens"] > 0
 
     def test_streaming_response(self, model: MiniMaxOpenAIModel):
         """Test streaming response."""

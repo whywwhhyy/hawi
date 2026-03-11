@@ -57,7 +57,7 @@ class MockModel(Model):
                 id=f"msg_{self.call_count}",
                 role="assistant",
                 content=content,
-                usage=TokenUsage(input_tokens=10, output_tokens=10)
+                usage=TokenUsage(input_tokens=10, output_tokens=10, cache_write_tokens=None, cache_read_tokens=None)
             )
 
         # Extract text from the last message (user message)
@@ -117,7 +117,7 @@ class MockModel(Model):
             id=f"msg_{self.call_count}",
             role="assistant",
             content=content,
-            usage=TokenUsage(input_tokens=10, output_tokens=10)
+            usage=TokenUsage(input_tokens=10, output_tokens=10, cache_write_tokens=None, cache_read_tokens=None)
         )
 
     def _prepare_request_impl(self, request):
