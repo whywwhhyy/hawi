@@ -9,6 +9,9 @@ import json
 import struct
 import select
 import os
+import sys
+import signal
+import time
 import tempfile
 import shutil
 from typing import Optional, AsyncGenerator
@@ -24,6 +27,13 @@ from hawi.utils.lifecycle import ExitHandler
 
 # 创建 rich console 实例用于美化输出
 _console = Console()
+
+
+def _sigint_handler(_signum: int, _frame) -> None:
+    """SIGINT 处理器，抛出 KeyboardInterrupt。"""
+    # 恢复默认处理器，以便下次 SIGINT 能正常终止进程
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    raise KeyboardInterrupt
 
 
 class PythonInterpreter:
@@ -244,6 +254,7 @@ while True:
         self._lock = Lock()
         self._async_lock: Optional[asyncio.Lock] = None
         self._closed = False
+        self._interrupted = False  # 标记是否被中断
         self._owns_temp_dir = work_dir is None
         self.print_execution = print_execution
 
@@ -298,33 +309,51 @@ while True:
             bufsize=0  # 无缓冲
         )
 
-    def _read_with_timeout(self, n: int, timeout: Optional[float] = None) -> Optional[bytes]:
+    def _read_with_timeout(self, n: int, timeout: Optional[float] = None, check_interval: float = 0.1) -> Optional[bytes]:
         """
         从stdout读取n个字节，带超时
 
+        使用短超时轮询策略，确保即使在阻塞等待时也能响应中断信号（如Ctrl+C）。
+        这是因为Python的信号处理器只能在主线程从系统调用返回后才能执行。
+
         Args:
             n: 要读取的字节数
-            timeout: 超时时间（秒），None表示阻塞
+            timeout: 超时时间（秒），None表示不超时（但会使用check_interval轮询）
+            check_interval: 轮询间隔（秒），默认为0.1秒
 
         Returns:
-            读取的数据，超时返回None
+            读取的数据，超时或子进程终止返回None
         """
         assert self._proc
         if self._proc.stdout is None:
             return None
 
         result = b''
-        remaining = timeout
+        start_time = time.time()
+        has_timeout = timeout is not None
 
         while len(result) < n:
-            # 使用select检查是否有数据可读
-            if remaining is not None and remaining <= 0:
-                return None  # 超时
+            # 检查子进程是否已被终止（例如通过 interrupt()）
+            if self._proc.poll() is not None:
+                return None  # 子进程已终止
+
+            # 计算当前应该使用的超时时间
+            if has_timeout:
+                elapsed = time.time() - start_time
+                remaining = timeout - elapsed  # type: ignore[operator]
+                if remaining <= 0:
+                    return None  # 超时
+                current_timeout = min(check_interval, remaining)
+            else:
+                current_timeout = check_interval
 
             try:
-                ready, _, _ = select.select([self._proc.stdout], [], [], remaining)
+                # 使用短超时进行轮询，允许信号中断（如Ctrl+C）
+                ready, _, _ = select.select([self._proc.stdout], [], [], current_timeout)
+
                 if not ready:
-                    return None  # 超时
+                    # 没有数据可读，继续轮询（这给了信号处理器执行的机会）
+                    continue
 
                 # 有数据可读
                 chunk = self._proc.stdout.read(n - len(result))
@@ -332,9 +361,6 @@ while True:
                     return None  # EOF
                 result += chunk
 
-                if remaining is not None:
-                    # 简单处理：不精确计算耗时
-                    remaining = max(0, remaining - 0.001)
             except (OSError, ValueError):
                 return None
 
@@ -384,9 +410,17 @@ while True:
             try:
                 length_bytes = self._read_with_timeout(4, timeout)
                 if length_bytes is None:
+                    # 检查是否是被中断的
+                    was_interrupted = self._interrupted
                     # 超时或读取失败，杀死进程
                     self._close_proc()
                     self._start_server()
+                    if was_interrupted:
+                        return ToolResult(
+                            output="",
+                            error="Execution interrupted",
+                            success=False
+                        )
                     return ToolResult(
                         output="",
                         error=f"Timeout after {timeout}s" if timeout else "Failed to read response length",
@@ -436,7 +470,13 @@ while True:
         Returns:
             ToolResult: 执行结果
         """
-        result = self._execute(code, timeout)
+        # 保存原始信号处理器并设置我们自己的
+        original_handler = signal.signal(signal.SIGINT, _sigint_handler)
+        try:
+            result = self._execute(code, timeout)
+        finally:
+            # 恢复原始信号处理器
+            signal.signal(signal.SIGINT, original_handler)
 
         if self.print_execution:
             # 构建统一的内容面板
@@ -731,9 +771,68 @@ while True:
             except:
                 pass
 
+    def interrupt(self, timeout: float = 0.5) -> bool:
+        """
+        中断当前正在执行的代码。
+
+        尝试优雅地中断子进程中的代码执行。首先发送 SIGINT，
+        如果在指定时间内子进程没有停止，则强制终止子进程。
+
+        Args:
+            timeout: 等待子进程响应的时间（秒），默认0.5秒
+
+        Returns:
+            是否成功中断（如果子进程已停止也返回 True）
+        """
+        if self._closed or self._proc is None:
+            return True  # 已经停止
+
+        if self._proc.poll() is not None:
+            return True  # 已经停止
+
+        try:
+            # 首先尝试发送 SIGINT 信号
+            self._proc.send_signal(signal.SIGINT)
+
+            # 等待子进程响应
+            start = time.time()
+            while time.time() - start < timeout:
+                if self._proc.poll() is not None:
+                    return True  # 子进程已停止
+                time.sleep(0.05)
+
+            # 超时，强制终止
+            self._close_proc()
+            return True
+        except Exception:
+            # 发生异常，强制关闭
+            self._close_proc()
+            return True
+
     def close(self) -> None:
         """关闭解释器，释放资源"""
-        with self._lock:
+        # 使用非阻塞方式获取锁，避免在信号处理时发生死锁
+        # 如果锁被占用（如 _execute 正在运行），立即返回，由 _execute 自己处理清理
+        acquired = self._lock.acquire(blocking=False)
+        if not acquired:
+            # 锁被其他线程占用，标记为需要关闭
+            # 如果 _interrupted 已设置，说明是在中断场景下
+            if not self._interrupted:
+                # 不是中断场景，等待一下再试一次
+                import time
+                time.sleep(0.1)
+                acquired = self._lock.acquire(blocking=False)
+                if not acquired:
+                    # 仍然无法获取，设置标志让持有锁的操作自行处理
+                    self._closed = True
+                    return
+            else:
+                # 中断场景，不等待，直接返回
+                # 设置标志，让 _execute 检测到后自行清理
+                self._closed = True
+                return
+
+        try:
             if self._closed:
                 return
             self._closed = True
@@ -745,15 +844,9 @@ while True:
                     shutil.rmtree(self._work_dir)
                 except Exception:
                     pass  # 忽略清理失败的错误
-
-            # 从退出处理器中注销清理函数（如果已注册）
-            if hasattr(self, '_exit_handler'):
-                try:
-                    # 注意：ExitHandler 目前没有注销单个函数的方法
-                    # 我们可以在 close() 中设置标志，让清理函数检查
-                    pass
-                except Exception:
-                    pass
+        finally:
+            if acquired:
+                self._lock.release()
 
     def __enter__(self):
         """上下文管理器入口"""

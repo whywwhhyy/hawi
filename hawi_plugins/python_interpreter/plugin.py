@@ -1,7 +1,7 @@
 import os
 import tempfile
 import shutil
-from typing import Optional, Dict, Literal, AsyncGenerator
+from typing import Optional, Dict, Literal, AsyncGenerator, Any
 from threading import Lock
 
 from hawi.utils.lifecycle import ExitHandler
@@ -25,7 +25,8 @@ class PythonInterpreterPlugin(HawiPlugin):
 
     class Instance:
         def __init__(self, *args, **kwargs):
-            self.lock = Lock()
+            self.lock = Lock()  # 同步锁，用于线程安全
+            self.async_lock: Any = None  # 异步锁，用于协程安全（延迟创建）
             self.executor = PythonInterpreter(*args, **kwargs)
             self.running: bool = False
 
@@ -221,8 +222,15 @@ class PythonInterpreterPlugin(HawiPlugin):
         Yields:
             str: 代码执行的输出片段
         """
+        import asyncio
+
         instance = self._get_instance(interpreter_name)
-        with instance.lock:
+
+        # 使用异步锁避免阻塞事件循环（允许响应 Ctrl+C）
+        if instance.async_lock is None:
+            instance.async_lock = asyncio.Lock()
+
+        async with instance.async_lock:
             async for chunk in instance.executor.execute_streaming(code, timeout):
                 yield chunk
 
