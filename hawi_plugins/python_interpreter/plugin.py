@@ -418,6 +418,28 @@ class PythonInterpreterPlugin(HawiPlugin):
                 except Exception:
                     pass  # 忽略清理失败
 
+    def clone(self) -> 'PythonInterpreterPlugin':
+        """创建此插件的新实例用于 fork/clone 操作。
+
+        返回一个全新的 PythonInterpreterPlugin 实例，具有：
+        - 新的独立工作目录
+        - 空的解释器字典（没有预创建的解释器）
+        - 相同的 print_execution 配置
+
+        这是 HawiPlugin.clone() 的实现，确保在 agent fork/clone 时
+        不会共享 Python 解释器子进程状态。
+
+        Returns:
+            全新的 PythonInterpreterPlugin 实例
+        """
+        # 创建新实例，不传递 work_dir 以创建新的临时目录
+        # 这样脚本目录也是独立的
+        new_plugin = PythonInterpreterPlugin(
+            work_dir=None,  # 创建新的临时工作目录
+            print_execution=self.print_execution
+        )
+        return new_plugin
+
     def __enter__(self):
         """上下文管理器入口"""
         return self

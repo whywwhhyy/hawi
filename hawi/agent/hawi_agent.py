@@ -359,6 +359,7 @@ class HawiAgent:
         model: Model,
         *,
         plugins: list[HawiPlugin] | None = None,
+        plugin_factories: list[Callable[[], HawiPlugin]] | None = None,
         system_prompt: str | list[ContentPart] | None = None,
         max_iterations: int | None = None,
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
@@ -370,13 +371,21 @@ class HawiAgent:
 
         Args:
             model: Default model for agent execution
-            plugins: List of plugins providing tools and hooks (default: empty list)
+            plugins: List of plugins providing tools and hooks (default: empty list).
+                On clone, `plugin.clone()` is called for each plugin.
+            plugin_factories: List of factory functions that create plugins (default: empty list).
+                Factories are called during init and clone to create fresh instances.
+                Useful for stateful plugins that need complete isolation on fork.
             system_prompt: Default system prompt (str or list[ContentPart])
             max_iterations: Maximum tool execution iterations (None for unlimited)
             model_error_policy: Error handling policy mapping error_type to config
             event_bus: Event bus for event publishing. If None, creates a default EventBus
             event_dump_file: Path to dump all events for debugging (default: None)
             streaming: Whether to use streaming mode by default (default: True)
+
+        Note:
+            Both `plugins` and `plugin_factories` can be used together.
+            Factories are invoked first during initialization.
         """
         self._default_model = model
         self._max_iterations = max_iterations
@@ -392,9 +401,14 @@ class HawiAgent:
         else:
             self._model_error_policy = model_error_policy
 
-        # Initialize plugins and collect tools/hooks
+        # Store factory functions for clone/fork operations
+        self._plugin_factories: list[Callable[[], HawiPlugin]] = plugin_factories or []
+        # Store original plugins param for clone (these will have clone() called on them)
+        self._original_plugins: list[HawiPlugin] = plugins or []
+
+        # Initialize plugins: factories are called to create instances, plus any directly passed plugins
         # Use empty list if None to avoid mutable default argument issue
-        self._plugins: list[HawiPlugin] = plugins or []
+        self._plugins: list[HawiPlugin] = [f() for f in self._plugin_factories] + self._original_plugins
         self._hooks: dict[str, Any] = {}
 
         # Convert system_prompt to list[ContentPart] if needed
@@ -502,12 +516,20 @@ class HawiAgent:
 
         The cloned agent has:
         - Copied context (messages, tools, system_prompt)
-        - Same plugins (shared reference)
+        - Cloned plugins (each plugin's `clone()` method is called)
+        - Re-invoked plugin factories to create fresh instances
         - Same default model
         - Same configuration (max_iterations, etc.)
 
         The clone is independent - modifications to the clone's context
         do not affect the original agent.
+
+        Plugin handling:
+        - Plugins passed via `plugins` param: `plugin.clone()` is called for each.
+          Default `clone()` returns self (safe for stateless plugins).
+          Stateful plugins should override `clone()` to return a fresh copy.
+        - Plugins passed via `plugin_factories`: factories are re-invoked to
+          create fresh instances, ensuring complete state isolation.
 
         Returns:
             New HawiAgent instance with copied state
@@ -515,7 +537,8 @@ class HawiAgent:
         # Copy configuration
         new_agent = HawiAgent(
             model=self._default_model,
-            plugins=self._plugins,  # Shared - plugins are typically stateless
+            plugins=[plugin.clone() for plugin in self._original_plugins],
+            plugin_factories=self._plugin_factories.copy(),  # Copy factories list
             system_prompt=self._system_prompt,
             max_iterations=self._max_iterations,
             event_bus=self._event_bus,

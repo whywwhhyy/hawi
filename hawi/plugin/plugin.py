@@ -14,6 +14,12 @@ class HawiPlugin:
     - hooks: Lifecycle hooks
     - tools: Custom tools for agents to use
     - resources: Contextual data/resources for agents (MCP-compatible)
+
+    For fork/clone support, plugins can be used in two ways:
+    1. **Clone mode**: Implement `clone()` to return a copy of the plugin.
+       Default implementation returns self (safe for stateless plugins).
+    2. **Factory mode**: Pass `plugin_factories` to HawiAgent instead of `plugins`.
+       Factories are called during init and clone to create fresh instances.
     """
     _cached_hooks:PluginHooks
     _cached_tools:list[AgentTool]
@@ -60,3 +66,15 @@ class HawiPlugin:
         They can be text or binary, static or dynamic.
         """
         return []
+
+    def clone(self) -> HawiPlugin:
+        """Create a copy of this plugin for agent fork/clone operations.
+
+        Default implementation returns self, which is safe for stateless plugins.
+        Stateful plugins (e.g., with subprocess, file handles) should override
+        this to return a fresh instance or a proper deep copy.
+
+        Returns:
+            A plugin instance for the cloned agent. Default returns self.
+        """
+        return self

@@ -214,6 +214,26 @@ class MCPPlugin(HawiPlugin):
         self._tool_wrappers.clear()
         self._resource_wrappers.clear()
 
+    def clone(self) -> 'MCPPlugin':
+        """创建此插件的新实例用于 fork/clone 操作。
+
+        返回一个全新的 MCPPlugin 实例，具有：
+        - 复制的服务器配置（但未连接）
+        - 未初始化的客户端池
+        - 需要手动调用 connect() 建立连接
+
+        这是 HawiPlugin.clone() 的实现，确保在 agent fork/clone 时
+        不会共享 MCP 连接状态。
+
+        Returns:
+            全新的 MCPPlugin 实例
+        """
+        new_plugin = MCPPlugin()
+        # 复制服务器配置，但不复制连接状态
+        new_plugin._server_configs = self._server_configs.copy()
+        # 新实例未连接，需要手动 connect()
+        return new_plugin
+
     def _ensure_connected(self) -> None:
         """确保已连接（同步上下文中使用）"""
         if not self._connected:
