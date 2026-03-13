@@ -214,5 +214,6 @@ apikey.yaml
 .python_vm/
 .dumps/
 
-# Claude
+# Agents
 .claude/
+.clinerules/

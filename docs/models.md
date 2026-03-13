@@ -239,3 +239,77 @@ model = StrandsModel(strands_agent)
 
 agent = HawiAgent(model=model)
 ```
+
+## 模型注册表 (ModelRegistry)
+
+Hawi 提供模型注册表功能，支持通过名字和参数字典动态创建模型实例。
+
+### 基本用法
+
+```python
+from hawi.models import model_registry, get_global_registry
+
+# 使用模块级全局单例（预置所有内置模型）
+model = model_registry.create("DeepSeekModel", {"model_id": "deepseek-chat", "api_key": "..."})
+
+# 或获取全局注册表实例
+registry = get_global_registry()
+model = registry.create("OpenAIModel", {"model_id": "gpt-4o", "api_key": "..."})
+```
+
+### 创建独立注册表
+
+```python
+from hawi.models import ModelRegistry
+
+# 创建空的独立注册表
+registry = ModelRegistry()
+registry.register(DeepSeekModel)
+registry.register(OpenAIModel, alias="gpt")
+model = registry.create("gpt", {"model_id": "gpt-4o", "api_key": "..."})
+```
+
+### 别名管理
+
+```python
+# 注册时指定别名
+registry.register(DeepSeekModel, aliases=["deepseek", "ds"])
+
+# 动态添加别名
+registry.alias("OpenAIModel", "openai")
+registry.alias("OpenAIModel", "gpt")
+
+# 检查是否已注册
+if "deepseek" in registry:
+    print("DeepSeek is registered")
+```
+
+### 默认参数
+
+```python
+# 为特定模型设置全局默认参数
+registry.set_defaults("DeepSeekModel", {"temperature": 0.7, "max_tokens": 2048})
+
+# 创建实例时会自动合并默认参数（传入参数优先级更高）
+model = registry.create("DeepSeekModel", {"model_id": "deepseek-chat"})
+# 等同于: DeepSeekModel(temperature=0.7, max_tokens=2048, model_id="deepseek-chat", ...)
+
+# 获取默认参数
+defaults = registry.get_defaults("DeepSeekModel")
+
+# 清除默认参数
+registry.clear_defaults("DeepSeekModel")  # 清除特定模型
+registry.clear_defaults()  # 清除所有默认参数
+```
+
+### 列出已注册的模型
+
+```python
+# 列出所有已注册的模型类
+models = registry.list_models()
+print(list(models.keys()))  # ['OpenAIModel', 'AnthropicModel', 'DeepSeekModel', ...]
+
+# 列出所有别名
+aliases = registry.list_aliases()
+print(aliases)  # {'gpt': 'OpenAIModel', 'deepseek': 'DeepSeekModel', ...}
+```

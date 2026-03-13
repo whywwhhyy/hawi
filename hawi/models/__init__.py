@@ -73,6 +73,7 @@ from .deepseek import DeepSeekModel
 from .kimi import KimiModel
 from .minimax import MiniMaxModel
 from .strands import StrandsModel
+from .registry import ModelRegistry, model_registry, get_global_registry
 
 def get_model_class(name:str) -> Optional[type]:
     return {
@@ -143,4 +144,8 @@ __all__ = [
     "MiniMaxModel",
     "StrandsModel",
     "get_model_class",
+    # Registry
+    "ModelRegistry",
+    "model_registry",
+    "get_global_registry",
 ]
