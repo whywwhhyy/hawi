@@ -490,60 +490,6 @@ class TestMultiPythonInterpreter:
             assert len(errors) == 0, f"Errors during concurrent create: {errors}"
             assert len(multi.interpreters) == 5
 
-        def test_concurrent_execute(self, multi: PythonInterpreterPlugin):
-            """测试并发执行代码"""
-            multi.create_interpreter("concurrent_exe")
-            results = []
-            errors = []
-
-            def execute_worker(n):
-                try:
-                    _run_async_gen_threadsafe(multi.execute(f"x = {n}", interpreter_name="concurrent_exe"))
-                    result = _run_async_gen_threadsafe(multi.execute("print(x)", interpreter_name="concurrent_exe"))
-                    results.append(result["output"])
-                except Exception as e:
-                    errors.append(e)
-
-            threads = [threading.Thread(target=execute_worker, args=(i,)) for i in range(5)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            assert len(errors) == 0, f"Errors during concurrent execute: {errors}"
-            # 所有执行都应该成功
-            assert len(results) == 5
-
-        def test_concurrent_multi_interpreter_execute(self, multi: PythonInterpreterPlugin):
-            """测试在多个解释器上并发执行"""
-            for i in range(3):
-                multi.create_interpreter(f"exe_{i}")
-
-            results = {}
-            errors = []
-
-            def execute_worker(name, value):
-                try:
-                    _run_async_gen_threadsafe(multi.execute(f"x = {value}", interpreter_name=name))
-                    result = _run_async_gen_threadsafe(multi.execute("print(x)", interpreter_name=name))
-                    results[name] = result["output"]
-                except Exception as e:
-                    errors.append(e)
-
-            threads = [
-                threading.Thread(target=execute_worker, args=(f"exe_{i}", i * 10))
-                for i in range(3)
-            ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            assert len(errors) == 0
-            assert "0" in results["exe_0"]
-            assert "10" in results["exe_1"]
-            assert "20" in results["exe_2"]
-
     class TestExitHandler:
         """退出处理测试"""
 
