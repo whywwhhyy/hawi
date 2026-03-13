@@ -227,11 +227,58 @@ class StrandsModel(Model):
         return self._parse_response_impl(strands_response)
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
-        """同步流式实现 - Strands 只支持异步流，同步方法不支持"""
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support synchronous streaming. "
-            "Use ainvoke(streaming=True) instead."
-        )
+        """同步流式实现 - 通过 asyncio 桥接异步流"""
+        import asyncio
+
+        async_gen = self._astream_impl(request)
+
+        # 尝试获取当前运行的事件循环
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is None:
+            # 没有事件循环，创建新的来运行异步生成器
+            async def collect():
+                result = []
+                async for item in async_gen:
+                    result.append(item)
+                return result
+
+            items = asyncio.run(collect())
+            yield from items
+        else:
+            # 已有事件循环，使用 nest-asyncio 风格的桥接
+            # 创建一个队列来缓冲事件
+            queue: list[DeltaPart | None] = []
+            exhausted = False
+
+            async def pump():
+                nonlocal exhausted
+                try:
+                    async for item in async_gen:
+                        queue.append(item)
+                finally:
+                    queue.append(None)
+                    exhausted = True
+
+            # 在事件循环中调度任务
+            task = asyncio.ensure_future(pump(), loop=loop)
+
+            # 同步迭代，通过忙等待从队列获取数据
+            import time
+            while True:
+                if queue:
+                    item = queue.pop(0)
+                    if item is None:
+                        break
+                    yield item
+                elif exhausted:
+                    break
+                else:
+                    # 短暂让步，允许其他任务运行
+                    time.sleep(0.001)
 
     async def _ainvoke_impl(
         self,
@@ -353,8 +400,17 @@ class StrandsModel(Model):
         elif hasattr(self.strands_model, "astream"):
             strands_stream = self.strands_model.astream(**strands_request)
         else:
-            # Fallback: call sync stream() but handle async generator properly
-            strands_stream = self.strands_model.stream(**strands_request)
+            # Fallback: call sync stream() and wrap in async generator
+            sync_stream = self.strands_model.stream(**strands_request)
+            # Convert sync generator to async by iterating in executor
+            import asyncio
+            loop = asyncio.get_event_loop()
+
+            async def async_wrapper():
+                for event in sync_stream:
+                    yield event
+
+            strands_stream = async_wrapper()
 
         state = {"index": 0, "block_started": False, "pending_usage": None}
         async for event in strands_stream:
@@ -674,24 +730,33 @@ class StrandsModel(Model):
         block_started = state["block_started"]
         pending_usage = state["pending_usage"]
 
-        # strands 事件格式: {event_type: event_data}
-        # e.g., {'contentBlockDelta': {'delta': {'text': '...'}}}
+        # strands 事件格式:
+        # 1. 嵌套格式: {event_type: event_data} e.g., {'contentBlockDelta': {'delta': {'text': '...'}}}
+        # 2. 平铺格式: {'type': event_type, ...} e.g., {'type': 'contentBlockDelta', 'delta': {'text': '...'}}
+        # 3. 对象格式: event.type, event.delta, etc.
+        event_type = ""
+        event_data = {}
+
         if isinstance(event, dict):
-            # 找到事件类型键（不是 'delta', 'start' 等数据键）
-            event_type_keys = [
-                "contentBlockDelta", "contentBlockStart", "contentBlockStop",
-                "messageStart", "messageStop", "metadata",
-                "internalServerException", "modelStreamErrorException",
-                "serviceUnavailableException", "throttlingException", "validationException",
-                "finish",  # 向后兼容：旧版自定义事件格式
-            ]
-            event_type = ""
-            event_data = {}
-            for key in event_type_keys:
-                if key in event:
-                    event_type = key
-                    event_data = event[key]
-                    break
+            # 先检查平铺格式 (type 字段)
+            if "type" in event:
+                event_type = event["type"]
+                # event_data 包含除 type 外的所有字段
+                event_data = {k: v for k, v in event.items() if k != "type"}
+            else:
+                # 嵌套格式: 找到事件类型键（不是 'delta', 'start' 等数据键）
+                event_type_keys = [
+                    "contentBlockDelta", "contentBlockStart", "contentBlockStop",
+                    "messageStart", "messageStop", "metadata",
+                    "internalServerException", "modelStreamErrorException",
+                    "serviceUnavailableException", "throttlingException", "validationException",
+                    "finish",  # 向后兼容：旧版自定义事件格式
+                ]
+                for key in event_type_keys:
+                    if key in event:
+                        event_type = key
+                        event_data = event[key]
+                        break
         else:
             # 处理对象形式的事件（直接访问属性）
             event_type = getattr(event, "type", "")

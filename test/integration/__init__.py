@@ -4,10 +4,11 @@ Integration test utilities for loading API keys.
 If apikey.yaml exists in the project root, API keys will be loaded from it.
 Otherwise, falls back to environment variables.
 
-Structure matches main.py implementation:
-- key: provider identifier
-- apikey: the API key string
-- model: list of model configurations
+Structure matches the new format:
+providers:
+  provider_name:
+    apikey: the API key string
+    templates: list of template names
 """
 
 import os
@@ -17,8 +18,12 @@ from typing import Any
 import yaml
 
 
-def load_apikey_yaml() -> list[dict[str, Any]]:
-    """Load apikey.yaml from project root if it exists."""
+def load_apikey_yaml() -> dict[str, dict[str, Any]]:
+    """Load apikey.yaml from project root if it exists.
+
+    Returns:
+        Dict of provider_name -> provider_config
+    """
     # Find project root (where apikey.yaml is located)
     current_file = Path(__file__).resolve()
     # Go up from test/integration/__init__.py to project root
@@ -28,9 +33,16 @@ def load_apikey_yaml() -> list[dict[str, Any]]:
 
     if apikey_path.exists():
         with open(apikey_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or []
+            data = yaml.safe_load(f) or {}
+            # New format: providers dict
+            if isinstance(data, dict) and "providers" in data:
+                return data["providers"]
+            # Old format: list of configs (fallback)
+            if isinstance(data, list):
+                return {c.get("key", "unknown"): c for c in data if isinstance(c, dict)}
+            return {}
 
-    return []
+    return {}
 
 
 def get_api_key(provider_key: str, env_var: str | None = None) -> str | None:
@@ -42,7 +54,7 @@ def get_api_key(provider_key: str, env_var: str | None = None) -> str | None:
     2. apikey.yaml (if file exists and contains matching entry)
 
     Args:
-        provider_key: Provider key in apikey.yaml (e.g., "deepseek", "moonshot", "kimi-code")
+        provider_key: Provider name in apikey.yaml (e.g., "deepseek", "moonshot", "kimi-code")
         env_var: Environment variable name to check first
 
     Returns:
@@ -54,11 +66,11 @@ def get_api_key(provider_key: str, env_var: str | None = None) -> str | None:
         if key and key.strip():
             return key
 
-    # Then, try apikey.yaml - match by 'key' field (not 'name')
-    configs = load_apikey_yaml()
-    for config in configs:
-        if config.get("key") == provider_key:
-            return config.get("apikey")
+    # Then, try apikey.yaml - match by provider name
+    providers = load_apikey_yaml()
+    provider_config = providers.get(provider_key)
+    if provider_config and isinstance(provider_config, dict):
+        return provider_config.get("apikey")
 
     return None
 
@@ -68,26 +80,26 @@ def find_model_config(provider_key: str, model_key: str | None = None) -> dict[s
     Find a specific model configuration from apikey.yaml.
 
     Args:
-        provider_key: Provider key in apikey.yaml
+        provider_key: Provider name in apikey.yaml
         model_key: Optional model key to select specific model config
 
     Returns:
         Model configuration dict or None if not found
     """
-    configs = load_apikey_yaml()
-    for config in configs:
-        if config.get("key") == provider_key:
-            models = config.get("model", [])
-            if not models:
-                return None
-            # If model_key specified, find matching model
-            if model_key:
-                for model in models:
-                    if model.get("key") == model_key:
-                        return model
-                return None
-            # Otherwise return first model
-            return models[0]
+    providers = load_apikey_yaml()
+    provider_config = providers.get(provider_key)
+    if provider_config and isinstance(provider_config, dict):
+        templates = provider_config.get("templates", [])
+        if not templates:
+            return None
+        # If model_key specified, find matching template
+        if model_key:
+            for template in templates:
+                if template == model_key:
+                    return {"template": template}
+            return None
+        # Otherwise return first template
+        return {"template": templates[0]}
     return None
 
 
@@ -115,10 +127,10 @@ def get_kimi_openai_api_key() -> str | None:
         return key
 
     # Try siliconflow provider with kimi model
-    configs = load_apikey_yaml()
-    for config in configs:
-        if config.get("key") == "siliconflow":
-            return config.get("apikey")
+    providers = load_apikey_yaml()
+    siliconflow = providers.get("siliconflow")
+    if siliconflow and isinstance(siliconflow, dict):
+        return siliconflow.get("apikey")
 
     return None
 
@@ -136,10 +148,10 @@ def get_kimi_anthropic_api_key() -> str | None:
         return key
 
     # Try siliconflow
-    configs = load_apikey_yaml()
-    for config in configs:
-        if config.get("key") == "siliconflow":
-            return config.get("apikey")
+    providers = load_apikey_yaml()
+    siliconflow = providers.get("siliconflow")
+    if siliconflow and isinstance(siliconflow, dict):
+        return siliconflow.get("apikey")
 
     return None
 

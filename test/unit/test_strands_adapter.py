@@ -41,6 +41,9 @@ class MockStrandsModel:
         yield {"type": "contentBlockDelta", "delta": {"text": "Hello"}}
         yield {"type": "messageStop", "stopReason": "end_turn"}
 
+    # Alias for compatibility with _astream_impl fallback
+    stream = run_stream
+
 
 class TestStrandsModel:
     """StrandsModel 基础测试"""
