@@ -227,21 +227,11 @@ class StrandsModel(Model):
         return self._parse_response_impl(strands_response)
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
-        """同步流式实现"""
-        strands_request = self._prepare_request_impl(request)
-
-        # 获取 strands 流
-        if hasattr(self.strands_model, "run_stream"):
-            strands_stream = self.strands_model.run_stream(**strands_request)
-        elif hasattr(self.strands_model, "stream"):
-            strands_stream = self.strands_model.stream(**strands_request)
-        else:
-            raise NotImplementedError(
-                f"Strands model {type(self.strands_model)} does not support streaming"
-            )
-
-        # 转换流事件
-        yield from self._convert_strands_stream(strands_stream)
+        """同步流式实现 - Strands 只支持异步流，同步方法不支持"""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support synchronous streaming. "
+            "Use ainvoke(streaming=True) instead."
+        )
 
     async def _ainvoke_impl(
         self,
@@ -264,48 +254,50 @@ class StrandsModel(Model):
         elif hasattr(self.strands_model, "ainvoke"):
             strands_response = await self.strands_model.ainvoke(**strands_request)
         else:
-            # Fallback 到 sync 版本
-            result = self._invoke_impl(request)
+            # Fallback: use streaming API and collect response
+            full_text_parts: list[str] = []
+            full_thinking_parts: list[str] = []
+            tool_calls: list[DeltaToolCallPart] = []
+            final_stop_reason = "end_turn"
+            final_usage = None
 
-            # Yield content blocks as DeltaPart
-            for idx, part in enumerate(result.content):
-                part_type = part["type"]
+            async for chunk in self._astream_impl(request):
+                chunk_type = chunk["type"]
+                if chunk_type == "text_delta":
+                    full_text_parts.append(chunk["delta"])
+                elif chunk_type == "thinking_delta":
+                    full_thinking_parts.append(chunk["delta"])
+                elif chunk_type == "tool_call_delta":
+                    tool_calls.append(chunk)
+                elif chunk_type == "finish":
+                    final_stop_reason = chunk.get("stop_reason") or "end_turn"
+                    final_usage = chunk.get("usage")
 
-                if part_type == "text":
-                    text_part = cast(TextPart, part)
-                    yield DeltaTextPart(
-                        type="text_delta",
-                        index=idx,
-                        delta=text_part["text"],
-                        is_start=True,
-                        is_end=True,
-                    )
-                elif part_type == "reasoning":
-                    reasoning_part = cast(ReasoningPart, part)
-                    yield DeltaThinkingPart(
-                        type="thinking_delta",
-                        index=idx,
-                        delta=reasoning_part.get("reasoning") or "",
-                        is_start=True,
-                        is_end=True,
-                    )
-                elif part_type == "tool_call":
-                    tool_part = cast(ToolCallPart, part)
-                    yield DeltaToolCallPart(
-                        type="tool_call_delta",
-                        index=idx,
-                        id=tool_part["id"],
-                        name=tool_part["name"],
-                        arguments_delta=json.dumps(tool_part["arguments"]),
-                        is_start=True,
-                        is_end=True,
-                    )
+            # Yield collected content as complete parts
+            if full_text_parts:
+                yield DeltaTextPart(
+                    type="text_delta",
+                    index=0,
+                    delta="".join(full_text_parts),
+                    is_start=True,
+                    is_end=True,
+                )
+            if full_thinking_parts:
+                yield DeltaThinkingPart(
+                    type="thinking_delta",
+                    index=1 if full_text_parts else 0,
+                    delta="".join(full_thinking_parts),
+                    is_start=True,
+                    is_end=True,
+                )
+            # TODO: Aggregate tool calls properly
+            for tc in tool_calls:
+                yield tc
 
-            # Yield finish part
             yield DeltaFinishPart(
                 type="finish",
-                stop_reason=result.stop_reason or "end_turn",
-                usage=result.usage,
+                stop_reason=final_stop_reason,
+                usage=final_usage,
             )
             return
 
@@ -361,10 +353,8 @@ class StrandsModel(Model):
         elif hasattr(self.strands_model, "astream"):
             strands_stream = self.strands_model.astream(**strands_request)
         else:
-            # Fallback 到 sync 版本
-            for chunk in self._stream_impl(request):
-                yield chunk
-            return
+            # Fallback: call sync stream() but handle async generator properly
+            strands_stream = self.strands_model.stream(**strands_request)
 
         state = {"index": 0, "block_started": False, "pending_usage": None}
         async for event in strands_stream:
@@ -684,10 +674,24 @@ class StrandsModel(Model):
         block_started = state["block_started"]
         pending_usage = state["pending_usage"]
 
-        # strands 事件可能是 dict 或对象
+        # strands 事件格式: {event_type: event_data}
+        # e.g., {'contentBlockDelta': {'delta': {'text': '...'}}}
         if isinstance(event, dict):
-            event_type = event.get("type", "")
-            event_data = event
+            # 找到事件类型键（不是 'delta', 'start' 等数据键）
+            event_type_keys = [
+                "contentBlockDelta", "contentBlockStart", "contentBlockStop",
+                "messageStart", "messageStop", "metadata",
+                "internalServerException", "modelStreamErrorException",
+                "serviceUnavailableException", "throttlingException", "validationException",
+                "finish",  # 向后兼容：旧版自定义事件格式
+            ]
+            event_type = ""
+            event_data = {}
+            for key in event_type_keys:
+                if key in event:
+                    event_type = key
+                    event_data = event[key]
+                    break
         else:
             # 处理对象形式的事件（直接访问属性）
             event_type = getattr(event, "type", "")
@@ -720,6 +724,7 @@ class StrandsModel(Model):
                                 "is_end": False,
                             }
                             state["block_started"] = True
+                            state["block_type"] = "text"
 
                         yield {
                             "type": "text_delta",
@@ -728,9 +733,38 @@ class StrandsModel(Model):
                             "is_start": False,
                             "is_end": False,
                         }
+                # reasoningContent 增量
+                elif "reasoningContent" in delta:
+                    reasoning = delta["reasoningContent"]
+                    reasoning_text = ""
+                    if isinstance(reasoning, dict):
+                        reasoning_text = reasoning.get("text") or ""
+                    if reasoning_text:
+                        if not block_started:
+                            yield {
+                                "type": "thinking_delta",
+                                "index": index,
+                                "delta": "",
+                                "is_start": True,
+                                "is_end": False,
+                            }
+                            state["block_started"] = True
+                            state["block_type"] = "thinking"
+
+                        yield {
+                            "type": "thinking_delta",
+                            "index": index,
+                            "delta": reasoning_text,
+                            "is_start": False,
+                            "is_end": False,
+                        }
                 # 工具输入增量
                 elif "toolUse" in delta:
                     tool_input = delta["toolUse"].get("input", "")
+                    # 工具块在contentBlockStart时已经初始化
+                    # 这里只需要确保block_type被设置
+                    if block_started:
+                        state["block_type"] = "tool_use"
                     if tool_input:
                         yield {
                             "type": "tool_call_delta",
@@ -758,18 +792,41 @@ class StrandsModel(Model):
                         "is_end": False,
                     }
                     state["block_started"] = True
+                    state["block_type"] = "tool_use"
 
         elif event_type == "contentBlockStop":
-            # Strands块结束事件
+            # Strands块结束事件 - 发送is_end标记
             if block_started:
-                yield {
-                    "type": "text_delta",
-                    "index": index,
-                    "delta": "",
-                    "is_start": False,
-                    "is_end": True,
-                }
+                # 根据块类型发送适当的结束事件
+                block_type = state.get("block_type", "text")
+                if block_type == "tool_use":
+                    yield {
+                        "type": "tool_call_delta",
+                        "index": index,
+                        "id": None,
+                        "name": None,
+                        "arguments_delta": "",
+                        "is_start": False,
+                        "is_end": True,
+                    }
+                elif block_type == "thinking":
+                    yield {
+                        "type": "thinking_delta",
+                        "index": index,
+                        "delta": "",
+                        "is_start": False,
+                        "is_end": True,
+                    }
+                else:  # text or default
+                    yield {
+                        "type": "text_delta",
+                        "index": index,
+                        "delta": "",
+                        "is_start": False,
+                        "is_end": True,
+                    }
                 state["block_started"] = False
+                state["block_type"] = None
                 state["index"] = index + 1
 
         elif event_type == "messageStop":
@@ -787,8 +844,9 @@ class StrandsModel(Model):
 
         elif event_type == "metadata":
             # Strands在metadata事件中返回usage
-            metadata = event_data.get("metadata", {})
-            usage = metadata.get("usage") if isinstance(metadata, dict) else None
+            # event_data is already the metadata content when using new format
+            # { "metadata": { "usage": {...} } } -> event_data = { "usage": {...} }
+            usage = event_data.get("usage") if isinstance(event_data, dict) else None
             if usage:
                 # 保存 usage 到 pending，等待 finish 事件
                 if isinstance(usage, dict):

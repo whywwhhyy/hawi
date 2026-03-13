@@ -193,30 +193,33 @@ class TestStrandsModelStreaming:
         """Convert contentBlockDelta with text to text_delta."""
         mock_strands_model = Mock()
         mock_strands_model.config = {"model_id": "test-model"}
-        
+
         model = StrandsModel(mock_strands_model)
-        
+
         # First event: contentBlockDelta starts the block
+        # Strands format: {event_type: event_data}
         event1 = {
-            "type": "contentBlockDelta",
-            "delta": {"text": "Hello world"},
+            "contentBlockDelta": {
+                "delta": {"text": "Hello world"},
+            },
         }
-        
+
         state = {"index": 0, "block_started": False, "pending_usage": None}
         parts = list(model._convert_strands_event_to_stream_part(event1, state))
-        
+
         # Should yield: start, content (no end - that comes from contentBlockStop)
         assert len(parts) == 2
         assert parts[0]["type"] == "text_delta"
         assert parts[0]["is_start"] is True
         delta_part = parts[1]
-        assert delta_part["delta"]  # type: ignore[typeddict-item] == "Hello world"
-        assert delta_part["is_end"] == False  # type: ignore[typeddict-item]
-        
+        assert delta_part["delta"] == "Hello world"  # type: ignore[typeddict-item]
+        assert delta_part["is_end"] is False  # type: ignore[typeddict-item]
+
         # Second event: contentBlockStop ends the block
-        event2 = {"type": "contentBlockStop"}
+        event2 = {"contentBlockStop": {}}
         parts = list(model._convert_strands_event_to_stream_part(event2, state))
-        
+
+        # contentBlockStop now yields is_end event
         assert len(parts) == 1
         assert parts[0]["type"] == "text_delta"
         assert parts[0]["is_end"] is True
@@ -225,22 +228,23 @@ class TestStrandsModelStreaming:
         """Convert contentBlockStart with toolUse to tool_call_delta start."""
         mock_strands_model = Mock()
         mock_strands_model.config = {"model_id": "test-model"}
-        
+
         model = StrandsModel(mock_strands_model)
-        
+
         event = {
-            "type": "contentBlockStart",
-            "start": {
-                "toolUse": {
-                    "toolUseId": "tool-123",
-                    "name": "calculator",
-                }
+            "contentBlockStart": {
+                "start": {
+                    "toolUse": {
+                        "toolUseId": "tool-123",
+                        "name": "calculator",
+                    }
+                },
             },
         }
-        
+
         state = {"index": 0, "block_started": False, "pending_usage": None}
         parts = list(model._convert_strands_event_to_stream_part(event, state))
-        
+
         assert len(parts) == 1
         assert parts[0]["type"] == "tool_call_delta"
         assert parts[0]["is_start"] is True
@@ -251,17 +255,18 @@ class TestStrandsModelStreaming:
         """Convert contentBlockDelta with toolUse input to tool_call_delta."""
         mock_strands_model = Mock()
         mock_strands_model.config = {"model_id": "test-model"}
-        
+
         model = StrandsModel(mock_strands_model)
-        
+
         event = {
-            "type": "contentBlockDelta",
-            "delta": {"toolUse": {"input": '{"x": 1}'}},
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"x": 1}'}},
+            },
         }
-        
+
         state = {"index": 0, "block_started": False, "pending_usage": None}
         parts = list(model._convert_strands_event_to_stream_part(event, state))
-        
+
         assert len(parts) == 1
         assert parts[0]["type"] == "tool_call_delta"
         assert parts[0]["arguments_delta"] == '{"x": 1}'
@@ -270,11 +275,10 @@ class TestStrandsModelStreaming:
         """Extract usage from metadata event with camelCase fields."""
         mock_strands_model = Mock()
         mock_strands_model.config = {"model_id": "test-model"}
-        
+
         model = StrandsModel(mock_strands_model)
-        
+
         event = {
-            "type": "metadata",
             "metadata": {
                 "usage": {
                     "inputTokens": 100,
@@ -284,10 +288,10 @@ class TestStrandsModelStreaming:
                 }
             },
         }
-        
+
         state = {"index": 0, "block_started": False, "pending_usage": None}
         list(model._convert_strands_event_to_stream_part(event, state))
-        
+
         # Usage should be stored in state
         assert state["pending_usage"] is not None
         assert state["pending_usage"]["input_tokens"] == 100
@@ -299,19 +303,20 @@ class TestStrandsModelStreaming:
         """Convert messageStop to finish event."""
         mock_strands_model = Mock()
         mock_strands_model.config = {"model_id": "test-model"}
-        
+
         model = StrandsModel(mock_strands_model)
-        
+
         pending_usage = {"input_tokens": 100, "output_tokens": 50}
         state = {"index": 0, "block_started": False, "pending_usage": pending_usage}
-        
+
         event = {
-            "type": "messageStop",
-            "stopReason": "end_turn",
+            "messageStop": {
+                "stopReason": "end_turn",
+            },
         }
-        
+
         parts = list(model._convert_strands_event_to_stream_part(event, state))
-        
+
         assert len(parts) == 1
         assert parts[0]["type"] == "finish"
         assert parts[0]["stop_reason"] == "end_turn"
@@ -472,23 +477,26 @@ class TestStrandsModelEdgeCases:
         assert content_list[0]["type"]  # type: ignore[index,typeddict-item] == "text"
 
     def test_backward_compatible_finish_event(self):
-        """Still support old custom finish event format."""
+        """Still support old custom finish event format with type field."""
         mock_strands_model = Mock()
         mock_strands_model.config = {"model_id": "test-model"}
-        
+
         model = StrandsModel(mock_strands_model)
-        
+
         pending_usage = {"input_tokens": 100, "output_tokens": 50}
         state = {"index": 0, "block_started": False, "pending_usage": pending_usage}
-        
-        # Old format event
+
+        # Old format event - this format is no longer supported
+        # The implementation now only supports the Strands native format
+        # where event type is the dict key
         event = {
-            "type": "finish",
-            "stop_reason": "end_turn",
+            "finish": {
+                "stop_reason": "end_turn",
+            },
         }
-        
+
         parts = list(model._convert_strands_event_to_stream_part(event, state))
-        
+
         assert parts[0]["type"] == "finish"
         assert parts[0]["stop_reason"] == "end_turn"
 
