@@ -494,6 +494,57 @@ class ModelContentMetadataEvent(Event):
         )
 
 
+class ModelRetryEvent(Event):
+    """Model 调用重试事件
+
+    当模型调用因错误触发重试策略时产生此事件。
+    允许监听器了解重试状态和进度。
+
+    Attributes:
+        request_id: 请求 ID
+        error_type: 触发重试的错误类型
+        attempt: 当前重试次数（从1开始，表示第几次重试）
+        max_retries: 最大重试次数
+        error_message: 错误信息
+    """
+    request_id: str
+    error_type: str
+    attempt: int
+    max_retries: int
+    error_message: str
+
+    @classmethod
+    def create(
+        cls,
+        request_id: str,
+        error_type: str,
+        attempt: int,
+        max_retries: int,
+        error_message: str,
+    ) -> ModelRetryEvent:
+        """创建重试事件
+
+        Args:
+            request_id: 请求 ID
+            error_type: 触发重试的错误类型 (如 'network', 'throttle')
+            attempt: 当前重试次数（1表示第1次重试）
+            max_retries: 最大重试次数
+            error_message: 错误信息
+
+        Returns:
+            ModelRetryEvent 实例
+        """
+        return cls(
+            type='model.retry',
+            source='model',
+            request_id=request_id,
+            error_type=error_type,
+            attempt=attempt,
+            max_retries=max_retries,
+            error_message=error_message,
+        )
+
+
 class ModelErrorEvent(Event):
     error: "ModelError"
 

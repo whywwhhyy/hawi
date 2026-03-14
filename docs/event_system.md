@@ -138,6 +138,7 @@ graph LR
         MCE["model.content_block_stop<br/>内容块结束"]
         ME["model.stream_stop<br/>流式响应结束"]
         MM["model.metadata<br/>元数据"]
+        MR["model.retry<br/>模型重试"]
     end
 ```
 

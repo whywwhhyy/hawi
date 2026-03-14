@@ -29,6 +29,7 @@ from .model_events import (
     ModelMetadataEvent,
     ModelContentMetadataEvent,
     ModelErrorEvent,
+    ModelRetryEvent,
 )
 from .agent_events import (
     AgentRunStartEvent,
@@ -70,6 +71,7 @@ __all__ = [
     "ModelMetadataEvent",
     "ModelContentMetadataEvent",
     "ModelErrorEvent",
+    "ModelRetryEvent",
     # Agent
     "AgentRunStartEvent",
     "AgentRunStopEvent",

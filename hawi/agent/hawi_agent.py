@@ -56,6 +56,7 @@ from .events import (
     ModelContentBlockStartEvent,
     ModelContentBlockStopEvent,
     ModelErrorEvent,
+    ModelRetryEvent,
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockStopEvent,
@@ -1083,6 +1084,17 @@ class HawiAgent:
                     return
 
                 if attempt < max_retries:
+                    # Emit retry event before sleeping
+                    if event_bus:
+                        await event_bus.publish_async(
+                            ModelRetryEvent.create(
+                                request_id=request_id,
+                                error_type=e.error_type,
+                                attempt=attempt + 1,
+                                max_retries=max_retries,
+                                error_message=str(e),
+                            )
+                        )
                     await asyncio.sleep(min(2 ** attempt, 60))
 
         if last_error:
