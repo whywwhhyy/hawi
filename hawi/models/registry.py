@@ -1,21 +1,41 @@
 """
-Model注册表（工厂），可以通过名字找到对应的Model类，也可以通过名字+参数dict直接创建Model
+Model注册表（工厂 + 对象池），支持类注册、实例创建/复用。
+
+核心功能：
 1. 名字可以是类名（自动识别），也可以是别名（用户设定）
 2. 手动创建的注册表为空，全局单例预置内置模型
-3. 支持手动注册新的模型
+3. 支持手动注册新的模型类
+4. **对象池模式**: 相同参数的模型实例可复用，减少资源消耗
 
-Example:
-    # 使用全局单例（预置内置模型）
+    对象池设计原理：
+    - 所有 Model 实现支持单线程异步并发（ainvoke/astream），因此异步调用可安全复用实例
+    - 同步调用（invoke/stream）会阻塞事件循环，需要独占实例
+    - `async_only=True`（默认）: 从对象池获取或创建实例，可被多个异步调用复用
+    - `async_only=False`: 总是创建新实例，供同步调用独占使用
+
+推荐用法（对象池模式）：
     from hawi.models import model_registry
 
+    # 获取异步实例（可复用，推荐用于 ainvoke/astream）
+    model = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+
+    # 再次调用返回同一实例
+    model2 = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+    assert model is model2  # True
+
+    # 获取同步实例（独占新实例，用于 invoke/stream）
+    model3 = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"}, async_only=False)
+
+传统用法（每次都创建新实例）：
     model = model_registry.create("OpenAIModel", {"model_id": "gpt-4", "api_key": "..."})
 
-    # 手动创建独立的空注册表
+手动创建注册表：
     from hawi.models import ModelRegistry
     registry = ModelRegistry()
     registry.register(OpenAIModel)
 """
 
+import json
 from typing import Dict, Type, Optional, TypeVar, Any
 from threading import Lock
 
@@ -26,10 +46,21 @@ ModelType = TypeVar("ModelType", bound=Model)
 
 class ModelRegistry:
     """
-    Model 注册表，支持类注册、别名设置和实例创建。
+    Model 注册表，支持类注册、别名设置和实例创建/复用。
 
     手动创建的实例为空，不预置任何模型。
     如需带内置模型的单例，使用模块级 `get_global_registry()`。
+
+    支持对象池模式：
+    - `obtain_model(name, args, async_only=True)`: 获取异步实例（可复用）
+    - `obtain_model(name, args, async_only=False)`: 获取同步实例（独占新实例）
+    - `release_model(name, args)`: 释放共享实例
+    - `clear_pool()`: 清空对象池
+
+    设计原理：
+    - 所有 Model 实现都支持单线程异步并发（ainvoke/astream），因此 async_only=True 时可安全复用实例
+    - 同步调用（invoke/stream）会阻塞事件循环，需要独占实例，因此 async_only=False 时创建新实例
+    - 这是性能与安全的权衡：异步调用复用减少连接开销，同步调用隔离避免阻塞问题
     """
 
     def __init__(self) -> None:
@@ -39,6 +70,8 @@ class ModelRegistry:
         self._defaults: Dict[str, Dict[str, Any]] = {}  # 类名 -> 默认参数
         self._alias_defaults: Dict[str, Dict[str, Any]] = {}  # 别名 -> 默认参数
         self._template_providers: Dict[str, list[str]] = {}  # template -> [provider_names]
+        self._model_object_pool: Dict[str, Model] = {}  # 对象池: key -> Model实例
+        self._model_object_pool_lock: Lock = Lock()  # 对象池锁
 
     def register(
         self,
@@ -282,18 +315,179 @@ class ModelRegistry:
         if model_class is None:
             raise KeyError(f"Model '{name}' not found in registry")
 
+        merged_params = self._get_merged_params(name, params)
+        return model_class(**merged_params)
+
+    def obtain_model(
+        self,
+        name: str,
+        args: Optional[Dict[str, Any]] = None,
+        async_only: bool = True,
+    ) -> Model:
+        """
+        获取 Model 实例，支持对象池复用（推荐使用）。
+
+        这是 `create()` 的增强版本，根据使用模式决定实例复用策略：
+        - async_only=True:  从对象池获取或创建实例（异步调用支持并发复用，默认）
+        - async_only=False: 总是创建新实例（同步调用需要独占实例）
+
+        设计原理（重要）：
+        1. 所有 Model 实现都支持单线程异步并发（ainvoke/astream 使用 async/await），
+           因此 async_only=True 时可以安全复用同一实例
+        2. 同步调用（invoke/stream）会阻塞事件循环，如果复用实例会导致其他任务等待，
+           因此 async_only=False 时创建独占的新实例
+        3. 这是性能与安全的权衡：异步复用减少连接开销，同步隔离避免阻塞问题
+
+        Args:
+            name: 类名或别名
+            args: 实例化参数字典
+            async_only: 是否仅用于异步调用（默认True，可复用实例）
+
+        Returns:
+            Model实例
+
+        Raises:
+            KeyError: 如果name未注册
+            TypeError: 如果params包含无效参数
+
+        Example:
+            # 异步调用场景：获取可复用实例（推荐）
+            # 所有异步调用可共享此实例，提高性能
+            model = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+            # await model.ainvoke(...)
+
+            # 再次调用返回同一实例（节省连接资源）
+            model2 = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+            assert model is model2  # True
+
+            # 同步调用场景：必须获取独占新实例
+            # 同步调用会阻塞，不可与其他调用共享实例
+            model3 = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"}, async_only=False)
+            # model3.invoke(...)  # 不会阻塞其他异步任务
+            assert model is not model3  # True
+        """
+        if not async_only:
+            # 同步调用需要独占实例，创建新的
+            instance = self.create(name, args)
+            instance._async_only = False  # 标记为同步实例
+            return instance
+
+        # 获取合并后的参数（用于生成pool key）
+        merged_params = self._get_merged_params(name, args)
+
+        # 生成对象池key
+        pool_key = self._make_pool_key(name, merged_params)
+
+        with self._model_object_pool_lock:
+            # 检查对象池
+            if pool_key in self._model_object_pool:
+                return self._model_object_pool[pool_key]
+
+            # 创建新实例并放入对象池（直接使用create，它会再次合并参数）
+            instance = self.create(name, args)
+            instance._async_only = True  # 标记为异步专用实例
+            self._model_object_pool[pool_key] = instance
+            return instance
+
+    def _make_pool_key(self, name: str, merged_params: Dict[str, Any]) -> str:
+        """生成对象池key（基于name和已合并的params）。
+
+        Args:
+            name: 类名或别名
+            merged_params: 已合并的参数（由_get_merged_params生成）
+
+        Returns:
+            对象池key字符串
+        """
+        # 序列化所有值（不可序列化的使用str()）
+        serializable = {}
+        for k, v in sorted(merged_params.items()):  # 排序确保一致性
+            if isinstance(v, (str, int, float, bool, type(None))):
+                serializable[k] = v
+            else:
+                # 不可序列化的值使用str()表示
+                serializable[k] = f"<obj:{str(v)}>"
+
+        param_str = json.dumps(serializable, separators=(',', ':'))
+        return f"{name}:{param_str}"
+
+    def _get_merged_params(self, name: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """获取合并后的参数（与create()逻辑一致）。
+
+        合并优先级（从低到高）：
+        1. 类级别默认参数
+        2. 别名级别默认参数
+        3. 传入参数（最高优先级）
+        """
+        model_class = self.get_class(name)
+        if model_class is None:
+            return params or {}
+
         class_name = model_class.__name__
         params = params or {}
 
-        # 合并参数（优先级从低到高）：
-        # 1. 类级别默认参数
-        # 2. 别名级别默认参数（覆盖类级别）
-        # 3. 传入参数（最高优先级）
         class_defaults = self._defaults.get(class_name, {})
         alias_defaults = self._alias_defaults.get(name, {}) if name in self._aliases else {}
-        merged_params = {**class_defaults, **alias_defaults, **params}
 
-        return model_class(**merged_params)
+        return {**class_defaults, **alias_defaults, **params}
+
+    def release_model(
+        self,
+        name: str,
+        args: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        从对象池释放共享实例。
+
+        Args:
+            name: 类名或别名
+            args: 实例化参数字典
+
+        Returns:
+            是否成功释放
+
+        Example:
+            registry.release_model("deepseek-openai", {"model_id": "deepseek-chat"})
+        """
+        merged_params = self._get_merged_params(name, args)
+        pool_key = self._make_pool_key(name, merged_params)
+
+        with self._model_object_pool_lock:
+            if pool_key in self._model_object_pool:
+                del self._model_object_pool[pool_key]
+                return True
+            return False
+
+    def clear_pool(self) -> "ModelRegistry":
+        """
+        清空对象池中的所有共享实例。
+
+        Returns:
+            self，支持链式调用
+
+        Example:
+            registry.clear_pool()
+        """
+        with self._model_object_pool_lock:
+            self._model_object_pool.clear()
+        return self
+
+    def get_pool_info(self) -> Dict[str, Any]:
+        """
+        获取对象池信息。
+
+        Returns:
+            包含池大小和keys的字典
+
+        Example:
+            >>> registry.get_pool_info()
+            {'size': 2, 'keys': ['deepseek-openai:{"model_id":"deepseek-chat"}', ...]}
+        """
+        with self._model_object_pool_lock:
+            return {
+                'size': len(self._model_object_pool),
+                'keys': list(self._model_object_pool.keys()),
+            }
 
     def list_models(self) -> Dict[str, Type[Model]]:
         """
@@ -371,7 +565,7 @@ class ModelRegistry:
 
     def clear(self) -> "ModelRegistry":
         """
-        清空所有注册的类、别名和默认参数。
+        清空所有注册的类、别名、默认参数和对象池。
 
         Returns:
             self，支持链式调用
@@ -381,6 +575,7 @@ class ModelRegistry:
         self._defaults.clear()
         self._alias_defaults.clear()
         self._template_providers.clear()
+        self.clear_pool()
         return self
 
     def __contains__(self, name: str) -> bool:
@@ -395,7 +590,8 @@ class ModelRegistry:
         classes = list(self._classes.keys())
         aliases = dict(self._aliases)
         defaults = {k: list(v.keys()) for k, v in self._defaults.items()}
-        return f"ModelRegistry(classes={classes}, aliases={aliases}, defaults={defaults})"
+        pool_info = self.get_pool_info()
+        return f"ModelRegistry(classes={classes}, aliases={aliases}, defaults={defaults}, pool_size={pool_info['size']})"
 
 
 # =============================================================================

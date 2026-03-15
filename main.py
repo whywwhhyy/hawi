@@ -18,31 +18,6 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-
-def _supports_color() -> bool:
-    """检测当前终端是否支持 ANSI 颜色。"""
-    # 显式禁用颜色
-    if os.environ.get("NO_COLOR"):
-        return False
-
-    # 不是终端（管道/重定向）
-    if not sys.stdout.isatty():
-        return False
-
-    # TERM=dumb 表示不支持转义序列
-    term = os.environ.get("TERM", "")
-    if term == "dumb":
-        return False
-
-    # Windows 检测
-    if sys.platform == "win32":
-        # Windows 10+ 支持 ANSI，但需要启用
-        # 简化处理：如果没有 FORCE_COLOR，假设不支持
-        if not os.environ.get("FORCE_COLOR"):
-            return False
-
-    return True
-
 from hawi.agent import HawiAgent
 from hawi.agent.printers import create_printer
 from hawi.models import Model, model_registry
@@ -101,7 +76,8 @@ def create_model(argv: list[str]) -> tuple[str, str, Model]:
             )
 
     params = {"model_id": model_id, "api_key": api_key} if model_id else {"api_key": api_key}
-    model = model_registry.create(template_name, params)
+    # 使用 obtain_model 获取/复用实例（HawiAgent 使用异步调用，async_only=True 可安全复用）
+    model = model_registry.obtain_model(template_name, params, async_only=True)
 
     print(f"quick arguments: {' '.join(QUICK_ARGUMENTS)}")
     return template_name, provider_name or "default", model

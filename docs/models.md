@@ -313,3 +313,86 @@ print(list(models.keys()))  # ['OpenAIModel', 'AnthropicModel', 'DeepSeekModel',
 aliases = registry.list_aliases()
 print(aliases)  # {'gpt': 'OpenAIModel', 'deepseek': 'DeepSeekModel', ...}
 ```
+
+### 对象池模式 (obtain_model)
+
+`obtain_model()` 是 `create()` 的增强版本，支持实例复用（对象池模式）。推荐使用此方法获取模型实例。
+
+#### 设计原理
+
+- **异步调用可复用**: 所有 Model 实现都支持单线程异步并发（`ainvoke`/`astream`），因此可以安全复用同一实例
+- **同步调用需独占**: 同步调用（`invoke`/`stream`）会阻塞事件循环，如果复用实例会导致其他任务等待
+- **性能与安全权衡**: 异步复用减少连接开销，同步隔离避免阻塞问题
+
+#### 基本用法
+
+```python
+# 获取异步实例（默认，可复用）
+model = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+
+# 再次调用返回同一实例（节省连接资源）
+model2 = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+assert model is model2  # True
+
+# 获取同步实例（独占新实例）
+model3 = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"}, async_only=False)
+assert model is not model3  # True
+```
+
+#### 异步调用场景（推荐）
+
+```python
+# 获取可复用实例
+model = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+
+# 多个异步调用共享同一实例
+response1 = await model.ainvoke(request1)
+response2 = await model.ainvoke(request2)  # 并发执行，不会互相阻塞
+```
+
+#### 同步调用场景
+
+```python
+# 获取独占实例
+model = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"}, async_only=False)
+
+# 同步调用不会阻塞其他异步任务
+response = model.invoke(request)
+```
+
+#### 对象池管理
+
+```python
+# 查看对象池信息
+pool_info = registry.get_pool_info()
+print(pool_info)  # {'size': 2, 'keys': [...]}
+
+# 释放特定实例（从对象池移除）
+registry.release_model("deepseek-openai", {"model_id": "deepseek-chat"})
+
+# 清空整个对象池
+registry.clear_pool()
+```
+
+#### 完整示例
+
+```python
+from hawi.models import model_registry
+
+# 配置已在 apikey.yaml 中设置，只需指定 model_id
+model = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
+
+# 使用模型
+from hawi.agent.messages import MessageRequest, Message
+
+request = MessageRequest(
+    messages=[Message(role="user", content=[{"type": "text", "text": "Hello!"}])]
+)
+
+# 异步调用
+response = await model.ainvoke(request)
+print(response.message["content"][0]["text"])
+
+# 查看对象池状态
+print(f"Pool size: {model_registry.get_pool_info()['size']}")  # 1
+```

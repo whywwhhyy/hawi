@@ -100,6 +100,12 @@ class Model(ABC):
                 print(event.content)
     """
 
+    def __init__(self) -> None:
+        """初始化模型基类，设置 _async_only 标记。"""
+        # _async_only=True 表示此模型仅用于异步调用（从对象池获取的共享实例）
+        # 此时同步调用 invoke/stream 会被阻止，以避免阻塞事件循环
+        self._async_only: bool = False
+
     @property
     @abstractmethod
     def model_id(self) -> str:
@@ -158,6 +164,13 @@ class Model(ABC):
             streaming=False: MessageResponse
             streaming=True: Iterator[DeltaPart]
         """
+        # 检查 _async_only 标记
+        if getattr(self, '_async_only', False):
+            raise RuntimeError(
+                "This model was obtained with async_only=True and can only be used for async calls. "
+                "Please use ainvoke() instead of invoke(), or obtain the model with async_only=False."
+            )
+
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         if streaming:
             return self._stream_impl(request)

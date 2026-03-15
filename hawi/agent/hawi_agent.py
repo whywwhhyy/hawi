@@ -393,6 +393,17 @@ class HawiAgent:
         self._streaming = streaming
         self._event_bus = event_bus or EventBus()
 
+        # 检查模型是否适合异步使用
+        if getattr(model, '_async_only', False) is False:
+            import warnings
+            warnings.warn(
+                "The model was obtained with async_only=False (sync-only). "
+                "HawiAgent uses async calls internally, so the model will work but cannot be reused by other agents. "
+                "Consider using model_registry.obtain_model(..., async_only=True) for better resource utilization.",
+                UserWarning,
+                stacklevel=2
+            )
+
         # Initialize event dump manager
         self._dump_manager = DumpManager(event_dump_file) if event_dump_file else None
 

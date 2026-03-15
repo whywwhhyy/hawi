@@ -304,21 +304,31 @@ class StrandsModel(Model):
             # Fallback: use streaming API and collect response
             full_text_parts: list[str] = []
             full_thinking_parts: list[str] = []
-            tool_calls: list[DeltaToolCallPart] = []
+            tool_calls: list[DeltaToolCallPart] = []  # 只收集 tool_call_delta 类型
             final_stop_reason = "end_turn"
             final_usage = None
 
             async for chunk in self._astream_impl(request):
                 chunk_type = chunk["type"]
                 if chunk_type == "text_delta":
-                    full_text_parts.append(chunk["delta"])
+                    part = cast(DeltaTextPart, chunk)
+                    full_text_parts.append(part["delta"])
                 elif chunk_type == "thinking_delta":
-                    full_thinking_parts.append(chunk["delta"])
+                    part = cast(DeltaThinkingPart, chunk)
+                    full_thinking_parts.append(part["delta"])
                 elif chunk_type == "tool_call_delta":
-                    tool_calls.append(chunk)
+                    part = cast(DeltaToolCallPart, chunk)
+                    tool_calls.append(part)
+                elif chunk_type == "signature_delta":
+                    # 签名通常不需要收集，直接忽略
+                    pass
+                elif chunk_type == "metadata_delta":
+                    # 元数据不需要收集
+                    pass
                 elif chunk_type == "finish":
-                    final_stop_reason = chunk.get("stop_reason") or "end_turn"
-                    final_usage = chunk.get("usage")
+                    part = cast(DeltaFinishPart, chunk)
+                    final_stop_reason = part["stop_reason"]
+                    final_usage = part["usage"]
 
             # Yield collected content as complete parts
             if full_text_parts:

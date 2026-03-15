@@ -93,7 +93,7 @@ class DocumentPart(TypedDict):
     context: str | None
 
 
-class ToolCallPart(TypedDict):
+class ToolCallPart(TypedDict): # TODO: ToolCall arguments也可能支持流式
     """工具调用"""
 
     type: Literal["tool_call"]
