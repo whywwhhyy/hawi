@@ -264,7 +264,7 @@ class StrandsModel(Model):
                     exhausted = True
 
             # 在事件循环中调度任务
-            task = asyncio.ensure_future(pump(), loop=loop)
+            _ = asyncio.ensure_future(pump(), loop=loop)
 
             # 同步迭代，通过忙等待从队列获取数据
             import time
@@ -412,15 +412,17 @@ class StrandsModel(Model):
         else:
             # Fallback: call sync stream() and wrap in async generator
             sync_stream = self.strands_model.stream(**strands_request)
-            # Convert sync generator to async by iterating in executor
-            import asyncio
-            loop = asyncio.get_event_loop()
+            # Handle both sync and async generators (strands may return either)
+            if hasattr(sync_stream, '__aiter__'):
+                # It's already an async generator
+                strands_stream = sync_stream
+            else:
+                # It's a sync generator, wrap it
+                async def async_wrapper():
+                    for event in sync_stream:
+                        yield event
 
-            async def async_wrapper():
-                for event in sync_stream:
-                    yield event
-
-            strands_stream = async_wrapper()
+                strands_stream = async_wrapper()
 
         state = {"index": 0, "block_started": False, "pending_usage": None}
         async for event in strands_stream:
