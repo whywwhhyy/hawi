@@ -23,7 +23,7 @@ from test.integration.models import get_deepseek_api_key
 DEEPSEEK_API_KEY = get_deepseek_api_key()
 HAS_DEEPSEEK_KEY = DEEPSEEK_API_KEY is not None and DEEPSEEK_API_KEY.strip() != ""
 
-SKIP_REASON = "DeepSeek API key not found (set DEEPSEEK_API_KEY or configure apikey.yaml)"
+SKIP_REASON = "DeepSeek API key not found (set DEEPSEEK_API_KEY or configure models.yaml)"
 
 
 class CalculatorPlugin(HawiPlugin):

@@ -13,59 +13,57 @@ Example:
     ))
 """
 
-from typing import Optional
-
 from .model import (
-    Model,
+    BalanceDetails,
     BalanceInfo,
+    Model,
+    ModelParams,
     ProviderRequest,
     ProviderResponse,
-    ModelParams,
-    BalanceDetails,
 )
 from .message import (
-    Message,
-    MessageRequest,
-    MessageResponse,
-    ContentPartType,
-    DeltaPartType,
-    TokenUsage,
-    ContentPart,
-    TextPart,
-    ImagePart,
-    ImageSource,
-    DocumentPart,
-    DocumentSource,
-    ToolCallPart,
-    ToolResultPart,
-    ReasoningPart,
-    CacheControlPart,
-    CacheControl,
     AudioPart,
     AudioSource,
-    VideoPart,
-    VideoSource,
-    FilePart,
-    FileSource,
-    RefusalPart,
-    GuardContentPart,
-    CitationPart,
-    CitationLocation,
+    CacheControl,
+    CacheControlPart,
     CitationCharLocation,
-    CitationPageLocation,
     CitationContentBlockLocation,
-    CitationsWebSearchResultLocation,
+    CitationLocation,
+    CitationPageLocation,
+    CitationPart,
     CitationsSearchResultLocation,
+    CitationsWebSearchResultLocation,
+    ContentPart,
+    ContentPartType,
+    DeltaFinishPart,
+    DeltaMetadataPart,
     DeltaPart,
+    DeltaPartType,
+    DeltaSignaturePart,
     DeltaTextPart,
     DeltaThinkingPart,
-    DeltaSignaturePart,
-    DeltaMetadataPart,
     DeltaToolCallPart,
-    DeltaFinishPart,
+    DocumentPart,
+    DocumentSource,
+    FilePart,
+    FileSource,
+    GuardContentPart,
+    ImagePart,
+    ImageSource,
+    Message,
     MessageMetadata,
-    ToolDefinition,
+    MessageRequest,
+    MessageResponse,
+    ReasoningPart,
+    RefusalPart,
+    TextPart,
+    TokenUsage,
+    ToolCallPart,
     ToolChoice,
+    ToolDefinition,
+    ToolResultPart,
+    VideoPart,
+    VideoSource,
 )
 from .openai import OpenAIModel
 from .anthropic import AnthropicModel
@@ -73,17 +71,17 @@ from .deepseek import DeepSeekModel
 from .kimi import KimiModel
 from .minimax import MiniMaxModel
 from .strands import StrandsModel
-from .registry import ModelRegistry, model_registry, get_global_registry
-
-def get_model_class(name:str) -> Optional[type]:
-    return {
-        "OpenAIModel": OpenAIModel,
-        "AnthropicModel": AnthropicModel,
-        "DeepSeekModel": DeepSeekModel,
-        "KimiModel": KimiModel,
-        "MiniMaxModel": MiniMaxModel,
-        "StrandsModel": StrandsModel,
-    }.get(name)
+from .registry import (
+    CircularDependencyError,
+    FactoryConfig,
+    ModelRegistry,
+    UnknownFactoryError,
+    create_model,
+    get_model_class,
+    list_factories,
+    load_config,
+    model_registry,
+)
 
 __all__ = [
     # Base classes
@@ -143,9 +141,15 @@ __all__ = [
     "KimiModel",
     "MiniMaxModel",
     "StrandsModel",
-    "get_model_class",
     # Registry
     "ModelRegistry",
     "model_registry",
-    "get_global_registry",
+    "FactoryConfig",
+    "CircularDependencyError",
+    "UnknownFactoryError",
+    # Convenience functions
+    "create_model",
+    "get_model_class",
+    "load_config",
+    "list_factories",
 ]

@@ -15,7 +15,7 @@ MINIMAX_API_KEY = get_minimax_api_key()
 HAS_MINIMAX_KEY = MINIMAX_API_KEY is not None and MINIMAX_API_KEY.strip() != ""
 
 # Skip reason for tests requiring API key
-SKIP_REASON = "MiniMax API key not found (set MINIMAX_API_KEY or configure apikey.yaml)"
+SKIP_REASON = "MiniMax API key not found (set MINIMAX_API_KEY or configure models.yaml)"
 
 
 def _create_user_message(content: str) -> Message:

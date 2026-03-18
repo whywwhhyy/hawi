@@ -21,196 +21,108 @@ warnings.filterwarnings(
 from hawi.agent import HawiAgent
 from hawi.agent.printers import create_printer
 from hawi.models import Model, model_registry
-from hawi.config import (
-    select_model_id,
-    get_template_providers_with_configs,
-)
-from hawi.utils.terminal import user_select
+from utils.terminal import user_select
 
 
 QUICK_ARGUMENTS: list[str] = []
 
-
-def create_model(argv: list[str]) -> tuple[str, str, Model]:
+def create_model_from_argv(argv: list[str]) -> tuple[str, Model]:
     """
     从命令行参数或交互式选择创建模型。
 
     流程：
-    1. 选择模板（从 argv 或交互式）
-    2. 选择 provider（如果该模板有多个 provider）
-    3. 选择 model_id（从 argv 或交互式）
-    4. 验证 api_key 并创建模型实例
+    1. 从 ~/.hawi/models.yaml 和 ./.hawi/models.yaml 自动加载配置
+    2. 选择 factory（从 argv 或交互式）
+    3. 使用 factory 创建模型实例
 
-    注意：配置已在导入 hawi 时自动加载
+    配置格式示例（models.yaml）：
+        factories:
+          deepseek-chat:
+            class: DeepSeekOpenAIModel
+            model_id: deepseek-chat
+            base_url: https://api.deepseek.com
+            api_key: ${DEEPSEEK_API_KEY}
     """
-    # 1. 选择模板
-    available_templates = list(model_registry.list_aliases().keys())
-    if not available_templates:
-        raise RuntimeError("No model templates available. Check models.yaml configuration.")
+    # 确保配置已加载（首次调用会自动加载）
+    # 注意：后加载的配置会覆盖先加载的，所以项目级配置最后加载
+    from pathlib import Path
+    user_config = Path.home() / ".hawi" / "models.yaml"
+    project_config = Path.cwd() / "models.yaml"
 
-    template_name = _select_template(argv, available_templates)
-    QUICK_ARGUMENTS.append(template_name)
+    # 先加载用户级配置
+    if user_config.exists():
+        model_registry.load_config(user_config, quiet=True)
+    # 再加载项目级配置（覆盖用户级）
+    # 注意：load_config 会自动设置 _initialized=True，禁用自动加载
+    if project_config.exists():
+        model_registry.load_config(project_config, quiet=True)
 
-    # 2. 选择 provider（如果该模板有多个）
-    provider_name, api_key = _select_provider(template_name, argv)
-    if provider_name:
-        QUICK_ARGUMENTS.append(provider_name)
+    # 调试：显示已加载的 factories
+    if os.environ.get("HAWI_DEBUG"):
+        print(f"[DEBUG] Loaded factories: {model_registry.list_factories()}")
+        config = model_registry.get_factory("deepseek-chat")
+        if config:
+            api_key_preview = config.arguments.get("api_key", "N/A")
+            if api_key_preview and len(str(api_key_preview)) > 10:
+                api_key_preview = str(api_key_preview)[:10] + "..."
+            print(f"[DEBUG] deepseek-chat api_key: {api_key_preview}")
 
-    # 3. 选择 model_id
-    model_id = select_model_id(template_name, argv)
-    if model_id:
-        QUICK_ARGUMENTS.append(model_id)
+    available_factories = model_registry.list_factories()
+    if not available_factories:
+        raise RuntimeError(
+            "No model factories available.\n"
+            "Please create ~/.hawi/models.yaml or ./.hawi/models.yaml with factory definitions.\n"
+            "Example:\n"
+            "  factories:\n"
+            "    deepseek-chat:\n"
+            "      class: DeepSeekOpenAIModel\n"
+            "      model_id: deepseek-chat\n"
+            "      base_url: https://api.deepseek.com\n"
+            "      api_key: ${DEEPSEEK_API_KEY}"
+        )
 
-    # 4. 验证 api_key 并创建模型
-    if not api_key:
-        # 尝试从环境变量获取
-        model_class = model_registry.get_class(template_name)
-        class_name = model_class.__name__ if model_class else None
-        api_key = _get_api_key_from_env(template_name, class_name)
-        if not api_key:
-            raise RuntimeError(
-                f"No API key found for template '{template_name}'.\n"
-                f"Please either:\n"
-                f"  1. Add it to apikey.yaml\n"
-                f"  2. Set the appropriate environment variable (e.g., OPENAI_API_KEY, DEEPSEEK_API_KEY)"
-            )
+    # 从 argv 或交互式选择 factory
+    factory_name = None
+    for arg in argv[:]:
+        if arg in available_factories:
+            argv.remove(arg)
+            factory_name = arg
+            break
 
-    params = {"model_id": model_id, "api_key": api_key} if model_id else {"api_key": api_key}
-    # 使用 obtain_model 获取/复用实例（HawiAgent 使用异步调用，async_only=True 可安全复用）
-    model = model_registry.obtain_model(template_name, params, async_only=True)
+    if factory_name is None:
+        # 交互式选择
+        factory_name = user_select(available_factories, "Select model factory:")
+        if factory_name is None:
+            print("")
+            exit()
+
+    QUICK_ARGUMENTS.append(factory_name)
+
+    # 使用 factory 创建模型
+    try:
+        model = model_registry.create_model(factory_name)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to create model from factory '{factory_name}': {e}\n"
+            f"Please check your models.yaml configuration."
+        )
 
     print(f"quick arguments: {' '.join(QUICK_ARGUMENTS)}")
-    return template_name, provider_name or "default", model
-
-
-def _get_api_key_from_env(template_name: str, class_name: str | None) -> str | None:
-    """尝试从环境变量获取 API key。"""
-    import os
-
-    # 模板名特定的环境变量
-    template_env_map = {
-        "openai-official": "OPENAI_API_KEY",
-        "anthropic-official": "ANTHROPIC_API_KEY",
-        "deepseek-openai": "DEEPSEEK_API_KEY",
-        "deepseek-anthropic": "DEEPSEEK_API_KEY",
-        "kimi-openai": "MOONSHOT_API_KEY",
-        "kimi-anthropic": "KIMI_API_KEY",
-        "minimax-openai": "MINIMAX_API_KEY",
-        "minimax-anthropic": "MINIMAX_API_KEY",
-        "glm-openai": "GLM_API_KEY",
-        "glm-anthropic": "GLM_API_KEY",
-        "stepfun-openai": "STEPFUN_API_KEY",
-        "siliconflow-deepseek": "SILICONFLOW_API_KEY",
-        "siliconflow-kimi": "SILICONFLOW_API_KEY",
-        "siliconflow-openai": "SILICONFLOW_API_KEY",
-        "ali-openai": "DASHSCOPE_API_KEY",
-    }
-
-    # 先尝试模板名映射
-    if template_name in template_env_map:
-        env_var = template_env_map[template_name]
-        return os.environ.get(env_var)
-
-    # 回退到类名映射
-    class_env_map = {
-        "OpenAIModel": "OPENAI_API_KEY",
-        "AnthropicModel": "ANTHROPIC_API_KEY",
-        "DeepSeekModel": "DEEPSEEK_API_KEY",
-        "KimiModel": "MOONSHOT_API_KEY",
-        "MiniMaxModel": "MINIMAX_API_KEY",
-    }
-
-    if class_name in class_env_map:
-        return os.environ.get(class_env_map[class_name])
-
-    return None
-
-
-def _select_template(argv: list[str], templates: list[str]) -> str:
-    """从 argv 或交互式选择模板。"""
-    # 检查 argv
-    for arg in argv[:]:
-        if arg in templates:
-            argv.remove(arg)
-            return arg
-
-    # 交互式选择
-    selected = user_select(templates, "Select model template:")
-    if selected is None:
-        print("")
-        exit()
-    return selected
-
-
-def _select_provider(template_name: str, argv: list[str]) -> tuple[str | None, str | None]:
-    """
-    选择 provider 并返回对应的 api_key。
-
-    如果该 template 只有一个 provider，直接返回。
-    如果有多个，让用户选择或从 argv 中匹配。
-
-    Returns:
-        (provider_name, api_key) 元组，如果没有可用 provider 返回 (None, None)
-    """
-    providers_with_configs = get_template_providers_with_configs(template_name)
-
-    if not providers_with_configs:
-        # 没有配置 provider，返回 None，让上层尝试环境变量
-        return None, None
-
-    if len(providers_with_configs) == 1:
-        # 只有一个 provider，直接使用
-        provider_name, config = providers_with_configs[0]
-        return provider_name, config.get("apikey")
-
-    # 多个 provider，先检查 argv 是否匹配
-    for arg in argv[:]:
-        for provider_name, config in providers_with_configs:
-            if arg == provider_name:
-                argv.remove(arg)
-                return provider_name, config.get("apikey")
-
-    # 交互式选择
-    provider_names = [name for name, _ in providers_with_configs]
-    selected = user_select(provider_names, f"Multiple providers for {template_name}, select one:")
-    if selected is None:
-        print("")
-        exit()
-
-    # 找到选中的 provider 配置
-    for name, config in providers_with_configs:
-        if name == selected:
-            return name, config.get("apikey")
-
-    return None, None
+    return factory_name, model
 
 def create_agent(model: Model, event_dump_file: str | None = None, streaming: bool = True) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
     # print(model.get_balance())
-    from hawi_plugins.python_interpreter import PythonInterpreterPlugin
     from hawi_plugins.skills_plugin import SkillsPlugin
     from hawi_plugins.web import WebPlugin
 
     return HawiAgent(
         model=model,
         plugins=[
-            #PythonInterpreterPlugin(work_dir=".python_vm", print_execution=False),
             SkillsPlugin(skills_dir=".skills"),
             WebPlugin(),
         ],
-        system_prompt="""You are a helpful AI assistant with Python execution capabilities.
-
-You have access to a persistent Python interpreter through the following tools:
-- execute: Run Python code (variables persist between calls)
-- install_dependency: Install Python packages
-- restart_server: Clear interpreter state
-- save_script: Save code to a file
-- execute_script: Run a saved script
-- list_scripts: See available scripts
-
-Use these tools to help users with coding tasks, data analysis, calculations, etc.
-Always explain what you're doing before executing code.
-""",
+        system_prompt="""You are a helpful AI assistant with Skills""",
         max_iterations=None,
         event_dump_file=event_dump_file,
         streaming=streaming,
@@ -258,10 +170,9 @@ def main():
             event_dump_file = f".dumps/events_{timestamp}.jsonl"
 
     # Create agent using new config system
-    template_name, provider_name, model = create_model(argv)
+    factory_name, model = create_model_from_argv(argv)
     agent = create_agent(model, event_dump_file=event_dump_file, streaming=streaming)
-    print(f"Using template: {template_name}")
-    print(f"Using provider: {provider_name}")
+    print(f"Using factory: {factory_name}")
     print(f"Model: {model.model_id}")
     if event_dump_file:
         print(f"Event dump: {event_dump_file}")

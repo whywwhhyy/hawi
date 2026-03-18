@@ -26,6 +26,7 @@ from hawi.models import (
     TokenUsage,
     ToolCallPart,
     ToolDefinition,
+    model_registry,
 )
 from hawi.plugin import HawiPlugin
 from hawi.tool.types import AgentTool, ToolResult
@@ -357,7 +358,7 @@ class HawiAgent:
 
     def __init__(
         self,
-        model: Model,
+        model: Model | str,
         *,
         plugins: list[HawiPlugin] | None = None,
         plugin_factories: list[Callable[[], HawiPlugin]] | None = None,
@@ -371,7 +372,9 @@ class HawiAgent:
         """Initialize HawiAgent.
 
         Args:
-            model: Default model for agent execution
+            model: Default model for agent execution. Can be:
+                - Model instance (direct use)
+                - str (factory name from models.yaml, e.g., "deepseek-chat")
             plugins: List of plugins providing tools and hooks (default: empty list).
                 On clone, `plugin.clone()` is called for each plugin.
             plugin_factories: List of factory functions that create plugins (default: empty list).
@@ -388,21 +391,13 @@ class HawiAgent:
             Both `plugins` and `plugin_factories` can be used together.
             Factories are invoked first during initialization.
         """
+        # Resolve model from registry if string is provided
+        if isinstance(model, str):
+            model = model_registry.create_model(model)
         self._default_model = model
         self._max_iterations = max_iterations
         self._streaming = streaming
         self._event_bus = event_bus or EventBus()
-
-        # 检查模型是否适合异步使用
-        if getattr(model, '_async_only', False) is False:
-            import warnings
-            warnings.warn(
-                "The model was obtained with async_only=False (sync-only). "
-                "HawiAgent uses async calls internally, so the model will work but cannot be reused by other agents. "
-                "Consider using model_registry.obtain_model(..., async_only=True) for better resource utilization.",
-                UserWarning,
-                stacklevel=2
-            )
 
         # Initialize event dump manager
         self._dump_manager = DumpManager(event_dump_file) if event_dump_file else None

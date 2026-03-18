@@ -1,660 +1,523 @@
-"""
-Model注册表（工厂 + 对象池），支持类注册、实例创建/复用。
+"""Model Registry - 单例模式，管理 Model 类和 Factory 注册。
 
-核心功能：
-1. 名字可以是类名（自动识别），也可以是别名（用户设定）
-2. 手动创建的注册表为空，全局单例预置内置模型
-3. 支持手动注册新的模型类
-4. **对象池模式**: 相同参数的模型实例可复用，减少资源消耗
-
-    对象池设计原理：
-    - 所有 Model 实现支持单线程异步并发（ainvoke/astream），因此异步调用可安全复用实例
-    - 同步调用（invoke/stream）会阻塞事件循环，需要独占实例
-    - `async_only=True`（默认）: 从对象池获取或创建实例，可被多个异步调用复用
-    - `async_only=False`: 总是创建新实例，供同步调用独占使用
-
-推荐用法（对象池模式）：
-    from hawi.models import model_registry
-
-    # 获取异步实例（可复用，推荐用于 ainvoke/astream）
-    model = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
-
-    # 再次调用返回同一实例
-    model2 = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
-    assert model is model2  # True
-
-    # 获取同步实例（独占新实例，用于 invoke/stream）
-    model3 = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"}, async_only=False)
-
-传统用法（每次都创建新实例）：
-    model = model_registry.create("OpenAIModel", {"model_id": "gpt-4", "api_key": "..."})
-
-手动创建注册表：
-    from hawi.models import ModelRegistry
-    registry = ModelRegistry()
-    registry.register(OpenAIModel)
+设计原则：
+- 单例模式：全局唯一实例
+- 职责：Model 类注册表 + Factory 注册表
+- 无对象池：每次 create_model 创建新实例
+- 自动配置加载：首次使用时自动加载默认配置路径
 """
 
-import json
-from typing import Dict, Type, Optional, TypeVar, Any
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
 from threading import Lock
+from typing import Any, Optional, Union
 
-from .model import Model
+from hawi.models.model import Model
 
-ModelType = TypeVar("ModelType", bound=Model)
+__all__ = [
+    "ModelRegistry",
+    "model_registry",
+    "create_model",
+    "get_model_class",
+    "load_config",
+    "list_factories",
+    "CircularDependencyError",
+    "UnknownFactoryError",
+    "UnknownApiKeyAliasError",
+]
+
+
+class CircularDependencyError(Exception):
+    """Factory 循环继承错误"""
+    pass
+
+
+class UnknownFactoryError(Exception):
+    """未知 Factory 错误"""
+    pass
+
+
+class UnknownApiKeyAliasError(Exception):
+    """未知 API Key 别名错误"""
+    pass
+
+
+class FactoryConfig:
+    """Factory 配置对象"""
+
+    def __init__(
+        self,
+        class_name: str,
+        arguments: dict[str, Any],
+        parent: Optional[str] = None,
+    ):
+        self.class_name = class_name
+        self.arguments = arguments
+        self.parent = parent
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> FactoryConfig:
+        """从配置字典创建"""
+        data = data.copy()
+        class_name = data.pop("class")
+        parent = data.pop("parent", None)
+        # 剩余字段都是 arguments
+        return cls(class_name=class_name, arguments=data, parent=parent)
+
+    def to_dict(self) -> dict[str, Any]:
+        """转换为配置字典"""
+        result = {"class": self.class_name, **self.arguments}
+        if self.parent:
+            result["parent"] = self.parent
+        return result
 
 
 class ModelRegistry:
+    """Model Registry 单例类
+
+    管理：
+    1. Model 类注册表（类名 -> Model 类）
+    2. Factory 注册表（factory 名 -> FactoryConfig）
+
+    使用方式：
+        from hawi.models import model_registry
+
+        # 获取 Model 类
+        cls = model_registry.get_model_class("DeepSeekOpenAIModel")
+
+        # 创建模型实例
+        model = model_registry.create_model("deepseek-chat")
+
+        # 手动加载配置
+        model_registry.load_config(Path("/path/to/custom/models.yaml"))
     """
-    Model 注册表，支持类注册、别名设置和实例创建/复用。
 
-    手动创建的实例为空，不预置任何模型。
-    如需带内置模型的单例，使用模块级 `get_global_registry()`。
+    _instance: Optional[ModelRegistry] = None
+    _lock: Lock = Lock()
 
-    支持对象池模式：
-    - `obtain_model(name, args, async_only=True)`: 获取异步实例（可复用）
-    - `obtain_model(name, args, async_only=False)`: 获取同步实例（独占新实例）
-    - `release_model(name, args)`: 释放共享实例
-    - `clear_pool()`: 清空对象池
+    def __new__(cls) -> ModelRegistry:
+        """单例模式"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialize()
+        return cls._instance
 
-    设计原理：
-    - 所有 Model 实现都支持单线程异步并发（ainvoke/astream），因此 async_only=True 时可安全复用实例
-    - 同步调用（invoke/stream）会阻塞事件循环，需要独占实例，因此 async_only=False 时创建新实例
-    - 这是性能与安全的权衡：异步调用复用减少连接开销，同步调用隔离避免阻塞问题
-    """
+    def _initialize(self) -> None:
+        """初始化（仅执行一次）"""
+        self._classes: dict[str, type[Model]] = {}
+        self._factories: dict[str, FactoryConfig] = {}
+        self._api_keys: dict[str, str] = {}
+        self._auto_load_needed: bool = True
 
-    def __init__(self) -> None:
-        """初始化空的注册表。"""
-        self._classes: Dict[str, Type[Model]] = {}
-        self._aliases: Dict[str, str] = {}  # 别名 -> 真实类名
-        self._defaults: Dict[str, Dict[str, Any]] = {}  # 类名 -> 默认参数
-        self._alias_defaults: Dict[str, Dict[str, Any]] = {}  # 别名 -> 默认参数
-        self._template_providers: Dict[str, list[str]] = {}  # template -> [provider_names]
-        self._model_object_pool: Dict[str, Model] = {}  # 对象池: key -> Model实例
-        self._model_object_pool_lock: Lock = Lock()  # 对象池锁
+        # 注册内置 Model 类
+        self._register_builtin_classes()
 
-    def register(
+    def _register_builtin_classes(self) -> None:
+        """注册 Hawi 内置的 Model 类"""
+        # 延迟导入避免循环依赖
+        from hawi.models.anthropic import AnthropicModel
+        from hawi.models.deepseek import (
+            DeepSeekAnthropicModel,
+            DeepSeekModel,
+            DeepSeekOpenAIModel,
+        )
+        from hawi.models.kimi import KimiAnthropicModel, KimiModel, KimiOpenAIModel
+        from hawi.models.minimax import (
+            MiniMaxAnthropicModel,
+            MiniMaxModel,
+            MiniMaxOpenAIModel,
+        )
+        from hawi.models.openai import OpenAIModel
+        from hawi.models.strands import StrandsModel
+
+        builtin_classes = [
+            OpenAIModel,
+            AnthropicModel,
+            DeepSeekModel,
+            DeepSeekOpenAIModel,
+            DeepSeekAnthropicModel,
+            KimiModel,
+            KimiOpenAIModel,
+            KimiAnthropicModel,
+            MiniMaxModel,
+            MiniMaxOpenAIModel,
+            MiniMaxAnthropicModel,
+            StrandsModel,
+        ]
+
+        for cls in builtin_classes:
+            self._classes[cls.__name__] = cls
+
+    # ========================================================================
+    # Model 类管理
+    # ========================================================================
+
+    def register_class(
+        self, name: str, cls: type[Model], quiet: bool = False
+    ) -> None:
+        """注册 Model 类
+
+        Args:
+            name: 类名（用于 factory 配置中的 class 字段）
+            cls: Model 类
+            quiet: 是否静默（不输出覆盖日志）
+
+        Note:
+            如果类名已存在，新注册的类会覆盖旧的。
+        """
+        if name in self._classes and not quiet:
+            existing = self._classes[name]
+            print(
+                f"[ModelRegistry] Model class '{name}' overridden: "
+                f"{existing.__module__} -> {cls.__module__}"
+            )
+        self._classes[name] = cls
+
+    def get_model_class(self, name: str) -> Optional[type[Model]]:
+        """通过类名获取 Model 类"""
+        return self._classes.get(name)
+
+    def list_classes(self) -> list[str]:
+        """列出所有已注册的类名"""
+        return list(self._classes.keys())
+
+    # ========================================================================
+    # Factory 管理
+    # ========================================================================
+
+    def register_factory(
         self,
-        model_class: Type[ModelType],
-        alias: Optional[str] = None,
-        aliases: Optional[list[str]] = None,
-    ) -> "ModelRegistry":
-        """
-        注册一个Model类。
+        name: str,
+        class_name: str,
+        arguments: dict[str, Any],
+        parent: Optional[str] = None,
+        quiet: bool = False,
+    ) -> None:
+        """注册 Factory
 
         Args:
-            model_class: Model类（继承自Model）
-            alias: 单个别名（可选）
-            aliases: 多个别名列表（可选）
-
-        Returns:
-            self，支持链式调用
-
-        Example:
-            registry.register(OpenAIModel)
-            registry.register(OpenAIModel, alias="gpt")
-            registry.register(OpenAIModel, aliases=["gpt", "openai"])
+            name: Factory 名称
+            class_name: Model 类名
+            arguments: 实例化参数
+            parent: 继承的 factory 名称
+            quiet: 是否静默（不输出覆盖警告）
         """
-        class_name = model_class.__name__
+        if name in self._factories and not quiet:
+            print(f"[ModelRegistry] Factory '{name}' overridden")
 
-        # 注册类名
-        self._classes[class_name] = model_class
+        self._factories[name] = FactoryConfig(
+            class_name=class_name, arguments=arguments, parent=parent
+        )
 
-        # 注册单个别名
-        if alias:
-            self._aliases[alias] = class_name
-
-        # 注册多个别名
-        if aliases:
-            for a in aliases:
-                self._aliases[a] = class_name
-
-        return self
-
-    def unregister(self, name: str) -> bool:
-        """
-        取消注册一个Model类或别名。
-
-        Args:
-            name: 类名或别名
-
-        Returns:
-            是否成功移除
-        """
-        # 如果是类名，从_classes移除，并清理相关别名
-        if name in self._classes:
-            del self._classes[name]
-            # 清理指向该类名的别名
-            self._aliases = {k: v for k, v in self._aliases.items() if v != name}
+    def unregister_factory(self, name: str) -> bool:
+        """注销 Factory"""
+        if name in self._factories:
+            del self._factories[name]
             return True
-
-        # 如果是别名，仅从_aliases移除
-        if name in self._aliases:
-            del self._aliases[name]
-            return True
-
         return False
 
-    def alias(self, name: str, alias_name: str) -> "ModelRegistry":
-        """
-        为已注册的类添加别名。
+    def get_factory(self, name: str) -> Optional[FactoryConfig]:
+        """获取 Factory 配置"""
+        return self._factories.get(name)
 
-        Args:
-            name: 已注册的类名
-            alias_name: 别名
+    def list_factories(self) -> list[str]:
+        """列出所有已注册的 factory 名称"""
+        return list(self._factories.keys())
 
-        Returns:
-            self，支持链式调用
+    def has_factory(self, name: str) -> bool:
+        """检查 factory 是否存在"""
+        return name in self._factories
 
-        Raises:
-            KeyError: 如果name未注册
-        """
-        if name not in self._classes:
-            raise KeyError(f"Model class '{name}' not registered")
+    # ========================================================================
+    # 模型创建
+    # ========================================================================
 
-        self._aliases[alias_name] = name
-        return self
-
-    def set_defaults(self, name: str, defaults: Dict[str, Any]) -> "ModelRegistry":
-        """
-        为指定模型类设置全局默认参数。
-
-        Args:
-            name: 类名或别名
-            defaults: 默认参数字典
-
-        Returns:
-            self，支持链式调用
-
-        Raises:
-            KeyError: 如果name未注册
-
-        Example:
-            registry.set_defaults("OpenAIModel", {"temperature": 0.7, "max_tokens": 2048})
-        """
-        class_name = self._resolve_name(name)
-        if class_name is None:
-            raise KeyError(f"Model '{name}' not registered")
-
-        self._defaults[class_name] = defaults.copy()
-        return self
-
-    def get_defaults(self, name: str) -> Dict[str, Any]:
-        """
-        获取指定模型类的全局默认参数。
-
-        Args:
-            name: 类名或别名
-
-        Returns:
-            默认参数字典，如果未设置返回空字典
-
-        Raises:
-            KeyError: 如果name未注册
-        """
-        class_name = self._resolve_name(name)
-        if class_name is None:
-            raise KeyError(f"Model '{name}' not registered")
-
-        return self._defaults.get(class_name, {}).copy()
-
-    def set_alias_defaults(self, alias: str, defaults: Dict[str, Any]) -> "ModelRegistry":
-        """
-        为指定别名设置默认参数（别名级别，优先级高于类级别）。
-
-        Args:
-            alias: 别名
-            defaults: 默认参数字典
-
-        Returns:
-            self，支持链式调用
-
-        Raises:
-            KeyError: 如果别名未注册
-
-        Example:
-            registry.set_alias_defaults("deepseek-openai", {"temperature": 0.7})
-        """
-        if alias not in self._aliases:
-            raise KeyError(f"Alias '{alias}' not registered")
-
-        self._alias_defaults[alias] = defaults.copy()
-        return self
-
-    def get_alias_defaults(self, alias: str) -> Dict[str, Any]:
-        """
-        获取指定别名的默认参数。
-
-        Args:
-            alias: 别名
-
-        Returns:
-            默认参数字典，如果未设置返回空字典
-
-        Raises:
-            KeyError: 如果别名未注册
-        """
-        if alias not in self._aliases:
-            raise KeyError(f"Alias '{alias}' not registered")
-
-        return self._alias_defaults.get(alias, {}).copy()
-
-    def clear_defaults(self, name: Optional[str] = None) -> "ModelRegistry":
-        """
-        清除全局默认参数。
-
-        Args:
-            name: 类名或别名，如果为None则清除所有默认参数
-
-        Returns:
-            self，支持链式调用
-        """
-        if name is None:
-            self._defaults.clear()
-            self._alias_defaults.clear()
-        else:
-            # 尝试作为类名清除
-            if name in self._defaults:
-                del self._defaults[name]
-            # 尝试作为别名清除
-            if name in self._alias_defaults:
-                del self._alias_defaults[name]
-            # 如果是别名，也清除指向该别名的类 defaults
-            class_name = self._resolve_name(name)
-            if class_name and class_name in self._defaults:
-                del self._defaults[class_name]
-        return self
-
-    def _resolve_name(self, name: str) -> Optional[str]:
-        """将类名或别名解析为真实类名"""
-        if name in self._classes:
-            return name
-        if name in self._aliases:
-            return self._aliases[name]
-        return None
-
-    def get_class(self, name: str) -> Optional[Type[Model]]:
-        """
-        通过名字获取Model类。
-
-        Args:
-            name: 类名或别名
-
-        Returns:
-            Model类，如果未找到返回None
-        """
-        # 直接是类名
-        if name in self._classes:
-            return self._classes[name]
-
-        # 是别名，解析为类名
-        if name in self._aliases:
-            class_name = self._aliases[name]
-            return self._classes.get(class_name)
-
-        return None
-
-    def create(self, name: str, params: Optional[Dict[str, Any]] = None) -> Model:
-        """
-        通过名字和参数创建Model实例。
-
-        创建时会自动合并全局默认参数（优先级：传入参数 > 默认参数）。
-
-        Args:
-            name: 类名或别名
-            params: 实例化参数字典
-
-        Returns:
-            Model实例
-
-        Raises:
-            KeyError: 如果name未注册
-            TypeError: 如果params包含无效参数
-        """
-        model_class = self.get_class(name)
-        if model_class is None:
-            raise KeyError(f"Model '{name}' not found in registry")
-
-        merged_params = self._get_merged_params(name, params)
-        return model_class(**merged_params)
-
-    def obtain_model(
-        self,
-        name: str,
-        args: Optional[Dict[str, Any]] = None,
-        async_only: bool = True,
+    def create_model(
+        self, name: str, overrides: Optional[dict[str, Any]] = None
     ) -> Model:
-        """
-        获取 Model 实例，支持对象池复用（推荐使用）。
-
-        这是 `create()` 的增强版本，根据使用模式决定实例复用策略：
-        - async_only=True:  从对象池获取或创建实例（异步调用支持并发复用，默认）
-        - async_only=False: 总是创建新实例（同步调用需要独占实例）
-
-        设计原理（重要）：
-        1. 所有 Model 实现都支持单线程异步并发（ainvoke/astream 使用 async/await），
-           因此 async_only=True 时可以安全复用同一实例
-        2. 同步调用（invoke/stream）会阻塞事件循环，如果复用实例会导致其他任务等待，
-           因此 async_only=False 时创建独占的新实例
-        3. 这是性能与安全的权衡：异步复用减少连接开销，同步隔离避免阻塞问题
+        """通过 Factory 名称创建 Model 实例
 
         Args:
-            name: 类名或别名
-            args: 实例化参数字典
-            async_only: 是否仅用于异步调用（默认True，可复用实例）
+            name: Factory 名称
+            overrides: 覆盖参数
 
         Returns:
-            Model实例
+            Model 实例
 
         Raises:
-            KeyError: 如果name未注册
-            TypeError: 如果params包含无效参数
-
-        Example:
-            # 异步调用场景：获取可复用实例（推荐）
-            # 所有异步调用可共享此实例，提高性能
-            model = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
-            # await model.ainvoke(...)
-
-            # 再次调用返回同一实例（节省连接资源）
-            model2 = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
-            assert model is model2  # True
-
-            # 同步调用场景：必须获取独占新实例
-            # 同步调用会阻塞，不可与其他调用共享实例
-            model3 = registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"}, async_only=False)
-            # model3.invoke(...)  # 不会阻塞其他异步任务
-            assert model is not model3  # True
+            UnknownFactoryError: factory 不存在
+            UnknownFactoryError: Model 类未注册
         """
-        if not async_only:
-            # 同步调用需要独占实例，创建新的
-            instance = self.create(name, args)
-            instance._async_only = False  # 标记为同步实例
-            return instance
+        # 自动加载配置（首次使用，除非被显式禁用）
+        self._ensure_auto_load()
 
-        # 获取合并后的参数（用于生成pool key）
-        merged_params = self._get_merged_params(name, args)
+        if name not in self._factories:
+            raise UnknownFactoryError(f"Factory '{name}' not found")
 
-        # 生成对象池key
-        pool_key = self._make_pool_key(name, merged_params)
+        # 解析配置（处理 parent 继承）
+        resolved = self._resolve_factory(name)
 
-        with self._model_object_pool_lock:
-            # 检查对象池
-            if pool_key in self._model_object_pool:
-                return self._model_object_pool[pool_key]
-
-            # 创建新实例并放入对象池（直接使用create，它会再次合并参数）
-            instance = self.create(name, args)
-            instance._async_only = True  # 标记为异步专用实例
-            self._model_object_pool[pool_key] = instance
-            return instance
-
-    def _make_pool_key(self, name: str, merged_params: Dict[str, Any]) -> str:
-        """生成对象池key（基于name和已合并的params）。
-
-        Args:
-            name: 类名或别名
-            merged_params: 已合并的参数（由_get_merged_params生成）
-
-        Returns:
-            对象池key字符串
-        """
-        # 序列化所有值（不可序列化的使用str()）
-        serializable = {}
-        for k, v in sorted(merged_params.items()):  # 排序确保一致性
-            if isinstance(v, (str, int, float, bool, type(None))):
-                serializable[k] = v
-            else:
-                # 不可序列化的值使用str()表示
-                serializable[k] = f"<obj:{str(v)}>"
-
-        param_str = json.dumps(serializable, separators=(',', ':'))
-        return f"{name}:{param_str}"
-
-    def _get_merged_params(self, name: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """获取合并后的参数（与create()逻辑一致）。
-
-        合并优先级（从低到高）：
-        1. 类级别默认参数
-        2. 别名级别默认参数
-        3. 传入参数（最高优先级）
-        """
-        model_class = self.get_class(name)
+        # 获取 Model 类
+        model_class = self._classes.get(resolved.class_name)
         if model_class is None:
-            return params or {}
+            raise UnknownFactoryError(
+                f"Model class '{resolved.class_name}' not registered for factory '{name}'"
+            )
 
-        class_name = model_class.__name__
-        params = params or {}
+        # 合并参数：factory arguments < overrides
+        arguments = resolved.arguments.copy()
+        if overrides:
+            arguments.update(overrides)
 
-        class_defaults = self._defaults.get(class_name, {})
-        alias_defaults = self._alias_defaults.get(name, {}) if name in self._aliases else {}
+        # 解析占位符替换（api_key 别名 + 环境变量）
+        arguments = self._resolve_substitutions(arguments)
 
-        return {**class_defaults, **alias_defaults, **params}
+        return model_class(**arguments)
 
-    def release_model(
-        self,
-        name: str,
-        args: Optional[Dict[str, Any]] = None,
-    ) -> bool:
+    def _resolve_factory(
+        self, name: str, visited: Optional[set[str]] = None
+    ) -> FactoryConfig:
+        """解析 factory 配置，处理 parent 继承"""
+        if visited is None:
+            visited = set()
+
+        if name in visited:
+            raise CircularDependencyError(
+                f"Circular parent detected: {' -> '.join(visited)} -> {name}"
+            )
+
+        config = self._factories.get(name)
+        if config is None:
+            raise UnknownFactoryError(f"Factory '{name}' not found")
+
+        if config.parent:
+            visited.add(name)
+            # 递归解析父配置
+            parent = self._resolve_factory(config.parent, visited)
+            # 合并：父配置 + 当前配置
+            merged_args = {**parent.arguments, **config.arguments}
+            return FactoryConfig(
+                class_name=config.class_name or parent.class_name,
+                arguments=merged_args,
+                parent=None,  # 已解析，不需要保留
+            )
+
+        return config
+
+    def _resolve_substitutions(self, value: Any) -> Any:
+        """递归解析所有占位符替换（API Key 别名 + 环境变量）
+
+        支持语法：
+        - ${api_key:ALIAS}    -> 从 api_keys 配置中查找
+        - ${ENV_VAR}          -> 从环境变量中查找
+        - ${ENV_VAR:default}  -> 环境变量带默认值
+
+        优先级：api_key 别名 > 环境变量
+
+        Raises:
+            UnknownApiKeyAliasError: 当 ${api_key:ALIAS} 找不到对应别名时
         """
-        从对象池释放共享实例。
+        if isinstance(value, str):
+            # 完整字符串是单一占位符
+            if value.startswith("${") and value.endswith("}"):
+                inner = value[2:-1]
+
+                # 1. 处理 ${api_key:ALIAS}
+                if inner.startswith("api_key:"):
+                    alias = inner[8:]  # 提取 ALIAS
+                    if alias in self._api_keys:
+                        return self._api_keys[alias]
+                    # 别名不存在，抛出明确错误
+                    raise UnknownApiKeyAliasError(
+                        f"Unknown API key alias '${{api_key:{alias}}}'. "
+                        f"Available aliases: {list(self._api_keys.keys())}"
+                    )
+
+                # 2. 处理 ${ENV_VAR} 或 ${ENV_VAR:default}
+                if ":" in inner:
+                    env_var, default = inner.split(":", 1)
+                    return os.environ.get(env_var, default)
+                return os.environ.get(inner, value)
+
+            # 处理嵌入的占位符
+            # 先处理 api_key 别名
+            api_key_pattern = r"\$\{api_key:([^}]+)\}"
+
+            def replace_api_key(match: re.Match) -> str:
+                alias = match.group(1)
+                if alias not in self._api_keys:
+                    raise UnknownApiKeyAliasError(
+                        f"Unknown API key alias '${{api_key:{alias}}}'. "
+                        f"Available aliases: {list(self._api_keys.keys())}"
+                    )
+                return self._api_keys[alias]
+
+            value = re.sub(api_key_pattern, replace_api_key, value)
+
+            # 再处理环境变量
+            env_pattern = r"\$\{([^}:]+)(?::([^}]*))?\}"
+
+            def replace_env_var(match: re.Match) -> str:
+                var_name = match.group(1)
+                default_val = match.group(2)
+                env_val = os.environ.get(var_name)
+                if env_val is not None:
+                    return env_val
+                if default_val is not None:
+                    return default_val
+                return match.group(0) or ""
+
+            return re.sub(env_pattern, replace_env_var, value)
+
+        elif isinstance(value, dict):
+            return {k: self._resolve_substitutions(v) for k, v in value.items()}
+
+        elif isinstance(value, list):
+            return [self._resolve_substitutions(item) for item in value]
+
+        return value
+
+    # ========================================================================
+    # 配置加载
+    # ========================================================================
+
+    def _ensure_auto_load(self) -> None:
+        """确保自动加载已处理（加载完成或被显式禁用）"""
+        if not self._auto_load_needed:
+            return  # 已经处理过，不需要再加载
+
+        # 检查是否显式禁用自动加载
+        if os.environ.get("HAWI_NO_AUTO_LOAD"):
+            self._auto_load_needed = False
+            return
+
+        # 执行自动加载
+        self._do_auto_load()
+        self._auto_load_needed = False
+
+    def _do_auto_load(self) -> None:
+        """执行实际的自动加载（不包含标志设置）"""
+        try:
+            import yaml
+        except ImportError:
+            print("[ModelRegistry] PyYAML not installed, skipping config auto-load")
+            return
+
+        # 1. 用户级配置
+        user_config = Path.home() / ".hawi" / "models.yaml"
+        if user_config.exists():
+            self._load_config_file(user_config, quiet=True)
+
+        # 2. 项目级配置
+        project_config = Path.cwd() / ".hawi" / "models.yaml"
+        if project_config.exists():
+            self._load_config_file(project_config, quiet=True)
+
+    def load_config(
+        self, path: Union[str, Path], quiet: bool = False
+    ) -> None:
+        """从 YAML 文件加载配置
 
         Args:
-            name: 类名或别名
-            args: 实例化参数字典
+            path: 配置文件路径
+            quiet: 是否静默（不输出日志）
 
-        Returns:
-            是否成功释放
-
-        Example:
-            registry.release_model("deepseek-openai", {"model_id": "deepseek-chat"})
+        合并策略：
+        - Factory 级别覆盖，后加载的同名 factory 完全替换先加载的
+        - 如果尚未自动加载，会先尝试自动加载（除非被显式禁用）
         """
-        merged_params = self._get_merged_params(name, args)
-        pool_key = self._make_pool_key(name, merged_params)
+        # 先处理自动加载（如果还需要的话）
+        if self._auto_load_needed:
+            if not os.environ.get("HAWI_NO_AUTO_LOAD"):
+                self._do_auto_load()
+            self._auto_load_needed = False
 
-        with self._model_object_pool_lock:
-            if pool_key in self._model_object_pool:
-                del self._model_object_pool[pool_key]
-                return True
-            return False
+        # 然后加载用户指定的配置
+        self._load_config_file(path, quiet)
 
-    def clear_pool(self) -> "ModelRegistry":
-        """
-        清空对象池中的所有共享实例。
+    def _load_config_file(self, path: Union[str, Path], quiet: bool = False) -> None:
+        """实际加载配置文件（不包含自动加载逻辑）"""
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError(
+                "PyYAML is required to load config files. Install with: pip install pyyaml"
+            )
 
-        Returns:
-            self，支持链式调用
+        path = Path(path)
+        if not path.exists():
+            if not quiet:
+                print(f"[ModelRegistry] Config file not found: {path}")
+            return
 
-        Example:
-            registry.clear_pool()
-        """
-        with self._model_object_pool_lock:
-            self._model_object_pool.clear()
-        return self
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
 
-    def get_pool_info(self) -> Dict[str, Any]:
-        """
-        获取对象池信息。
+            # 加载 API Key 别名
+            if "api_keys" in data:
+                self._api_keys.update(data["api_keys"])
+                if not quiet:
+                    print(f"[ModelRegistry] Loaded {len(data['api_keys'])} API key aliases from {path}")
 
-        Returns:
-            包含池大小和keys的字典
+            if not data or "factories" not in data:
+                if not quiet:
+                    print(f"[ModelRegistry] No factories found in {path}")
+                return
 
-        Example:
-            >>> registry.get_pool_info()
-            {'size': 2, 'keys': ['deepseek-openai:{"model_id":"deepseek-chat"}', ...]}
-        """
-        with self._model_object_pool_lock:
-            return {
-                'size': len(self._model_object_pool),
-                'keys': list(self._model_object_pool.keys()),
-            }
+            factories = data["factories"]
+            for name, config in factories.items():
+                factory_config = FactoryConfig.from_dict(config)
+                self.register_factory(
+                    name=name,
+                    class_name=factory_config.class_name,
+                    arguments=factory_config.arguments,
+                    parent=factory_config.parent,
+                    quiet=quiet,
+                )
 
-    def list_models(self) -> Dict[str, Type[Model]]:
-        """
-        获取所有注册的Model类（副本）。
+            if not quiet:
+                print(f"[ModelRegistry] Loaded {len(factories)} factories from {path}")
 
-        Returns:
-            类名到Model类的字典
-        """
-        return self._classes.copy()
+        except yaml.YAMLError as e:
+            raise ValueError(f"Invalid YAML in {path}: {e}")
 
-    def list_aliases(self) -> Dict[str, str]:
-        """
-        获取所有别名映射（副本）。
-
-        Returns:
-            别名到类名的字典
-        """
-        return self._aliases.copy()
-
-    def is_registered(self, name: str) -> bool:
-        """
-        检查名字是否已注册。
-
-        Args:
-            name: 类名或别名
-
-        Returns:
-            是否已注册
-        """
-        return name in self._classes or name in self._aliases
-
-    def register_template_provider(self, template: str, provider: str) -> "ModelRegistry":
-        """
-        注册 template 与 provider 的关联。
-
-        用于记录哪个 provider（来自 apikey.yaml）为某个 template 提供了 API key。
-
-        Args:
-            template: 模板名（alias）
-            provider: provider 名称
-
-        Returns:
-            self，支持链式调用
-        """
-        if template not in self._template_providers:
-            self._template_providers[template] = []
-        if provider not in self._template_providers[template]:
-            self._template_providers[template].append(provider)
-        return self
-
-    def get_template_providers(self, template: str) -> list[str]:
-        """
-        获取指定 template 对应的所有 providers。
-
-        Args:
-            template: 模板名（alias）
-
-        Returns:
-            provider 名称列表，如果没有关联返回空列表
-        """
-        return self._template_providers.get(template, []).copy()
-
-    def list_templates_with_providers(self) -> Dict[str, list[str]]:
-        """
-        获取所有 template 及其对应的 providers。
-
-        Returns:
-            template 到 provider 列表的字典
-
-        Example:
-            >>> registry.list_templates_with_providers()
-            {'kimi-openai': ['moonshot', 'moonshot-bao'], 'deepseek-openai': ['deepseek']}
-        """
-        return dict(self._template_providers)
-
-    def clear(self) -> "ModelRegistry":
-        """
-        清空所有注册的类、别名、默认参数和对象池。
-
-        Returns:
-            self，支持链式调用
-        """
+    def clear(self) -> None:
+        """清空所有注册（主要用于测试）"""
+        self._factories.clear()
         self._classes.clear()
-        self._aliases.clear()
-        self._defaults.clear()
-        self._alias_defaults.clear()
-        self._template_providers.clear()
-        self.clear_pool()
-        return self
-
-    def __contains__(self, name: str) -> bool:
-        """支持 'in' 操作符："OpenAIModel" in registry"""
-        return self.is_registered(name)
-
-    def __len__(self) -> int:
-        """返回注册的类数量（不包括别名）"""
-        return len(self._classes)
-
-    def __repr__(self) -> str:
-        classes = list(self._classes.keys())
-        aliases = dict(self._aliases)
-        defaults = {k: list(v.keys()) for k, v in self._defaults.items()}
-        pool_info = self.get_pool_info()
-        return f"ModelRegistry(classes={classes}, aliases={aliases}, defaults={defaults}, pool_size={pool_info['size']})"
+        self._api_keys.clear()
+        self._auto_load_needed = True
+        self._register_builtin_classes()
 
 
-# =============================================================================
-# 框架级别的全局单例（不属于 ModelRegistry 类的核心职责）
-# =============================================================================
-
-# 全局单例锁
-_singleton_lock: Lock = Lock()
-_global_registry: Optional[ModelRegistry] = None
+# 全局单例实例
+model_registry = ModelRegistry()
 
 
-def _register_builtin_models(registry: ModelRegistry) -> None:
-    """向注册表注册Hawi内置的所有模型类"""
-    # 延迟导入，避免循环依赖
-    from .openai import OpenAIModel
-    from .anthropic import AnthropicModel
-    from .deepseek import DeepSeekModel, DeepSeekOpenAIModel, DeepSeekAnthropicModel
-    from .kimi import KimiModel, KimiOpenAIModel, KimiAnthropicModel
-    from .minimax import MiniMaxModel, MiniMaxOpenAIModel, MiniMaxAnthropicModel
-    from .strands import StrandsModel
-
-    builtin_models = [
-        OpenAIModel,
-        AnthropicModel,
-        DeepSeekModel,
-        DeepSeekOpenAIModel,
-        DeepSeekAnthropicModel,
-        KimiModel,
-        KimiOpenAIModel,
-        KimiAnthropicModel,
-        MiniMaxModel,
-        MiniMaxOpenAIModel,
-        MiniMaxAnthropicModel,
-        StrandsModel,
-    ]
-
-    for model_class in builtin_models:
-        registry.register(model_class)
+# 便捷函数（直接通过模块调用）
+def create_model(
+    name: str, overrides: Optional[dict[str, Any]] = None
+) -> Model:
+    """通过 Factory 名称创建 Model 实例"""
+    return model_registry.create_model(name, overrides)
 
 
-def get_global_registry() -> ModelRegistry:
-    """
-    获取全局单例注册表（线程安全，延迟初始化）。
-
-    全局单例预置了Hawi所有内置模型（OpenAI、Anthropic、DeepSeek等）。
-
-    Returns:
-        预置了所有内置模型的全局ModelRegistry实例
-    """
-    global _global_registry
-
-    if _global_registry is None:
-        with _singleton_lock:
-            # 双重检查，避免重复初始化
-            if _global_registry is None:
-                _global_registry = ModelRegistry()
-                _register_builtin_models(_global_registry)
-
-    return _global_registry
+def get_model_class(name: str) -> Optional[type[Model]]:
+    """通过类名获取 Model 类"""
+    return model_registry.get_model_class(name)
 
 
-# 模块级别的全局单例（预置所有内置模型）
-model_registry: ModelRegistry = get_global_registry()
+def load_config(path: Union[str, Path], quiet: bool = False) -> None:
+    """加载配置文件"""
+    return model_registry.load_config(path, quiet)
 
 
-__all__ = ["ModelRegistry", "model_registry", "get_global_registry"]
+def list_factories() -> list[str]:
+    """列出所有 factory 名称"""
+    return model_registry.list_factories()

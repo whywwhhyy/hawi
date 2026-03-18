@@ -1,14 +1,22 @@
 """
 Integration test utilities for loading API keys.
 
-If apikey.yaml exists in the project root, API keys will be loaded from it.
-Otherwise, falls back to environment variables.
+Supports loading API keys from:
+1. Environment variables (highest priority)
+2. models.yaml in project root (new format with api_keys section)
+3. ~/.hawi/models.yaml (user-level config)
 
-Structure matches the new format:
-providers:
-  provider_name:
-    apikey: the API key string
-    templates: list of template names
+models.yaml format:
+    api_keys:
+      deepseek: sk-...
+      moonshot: sk-...
+      kimi: sk-...
+
+    factories:
+      deepseek-chat:
+        class: DeepSeekOpenAIModel
+        model_id: deepseek-chat
+        api_key: ${api_key:deepseek}
 """
 
 import os
@@ -18,150 +26,146 @@ from typing import Any
 import yaml
 
 
-def load_apikey_yaml() -> dict[str, dict[str, Any]]:
-    """Load apikey.yaml from project root if it exists.
+def load_models_yaml(path: Path | None = None) -> dict[str, Any]:
+    """Load models.yaml config if it exists.
+
+    Args:
+        path: Optional specific path to models.yaml. If not provided,
+              searches project root and ~/.hawi/models.yaml.
 
     Returns:
-        Dict of provider_name -> provider_config
+        Dict with 'api_keys' and 'factories' sections, or empty dict.
     """
-    # Find project root (where apikey.yaml is located)
-    current_file = Path(__file__).resolve()
-    # Go up from test/integration/__init__.py to project root
-    project_root = current_file.parent.parent.parent
+    if path is not None:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        return {}
 
-    apikey_path = project_root / "apikey.yaml"
+    # Search for models.yaml in standard locations
+    # 1. Project root (current working directory)
+    project_config = Path.cwd() / "models.yaml"
+    if project_config.exists():
+        with open(project_config, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
 
-    if apikey_path.exists():
-        with open(apikey_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-            # New format: providers dict
-            if isinstance(data, dict) and "providers" in data:
-                return data["providers"]
-            # Old format: list of configs (fallback)
-            if isinstance(data, list):
-                return {c.get("key", "unknown"): c for c in data if isinstance(c, dict)}
-            return {}
+    # 2. User-level config
+    user_config = Path.home() / ".hawi" / "models.yaml"
+    if user_config.exists():
+        with open(user_config, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
 
     return {}
 
 
-def get_api_key(provider_key: str, env_var: str | None = None) -> str | None:
-    """
-    Get API key from apikey.yaml or environment variable.
-
-    Priority:
-    1. Environment variable (if set)
-    2. apikey.yaml (if file exists and contains matching entry)
+def get_api_key_from_models_yaml(key_alias: str) -> str | None:
+    """Get API key from models.yaml api_keys section.
 
     Args:
-        provider_key: Provider name in apikey.yaml (e.g., "deepseek", "moonshot", "kimi-code")
-        env_var: Environment variable name to check first
+        key_alias: The alias name in api_keys section (e.g., "deepseek", "moonshot")
 
     Returns:
-        API key string or None if not found
+        API key string or None if not found.
     """
-    # First, check environment variable
-    if env_var:
+    config = load_models_yaml()
+    api_keys = config.get("api_keys", {})
+    if isinstance(api_keys, dict):
+        return api_keys.get(key_alias)
+    return None
+
+
+def get_api_key(
+    key_aliases: list[str],
+    env_vars: list[str],
+) -> str | None:
+    """Get API key with fallback chain.
+
+    Priority:
+    1. Environment variables (first match)
+    2. models.yaml api_keys section (first alias match)
+
+    Args:
+        key_aliases: List of alias names to try in models.yaml (e.g., ["deepseek", "moonshot"])
+        env_vars: List of environment variable names to try (e.g., ["DEEPSEEK_API_KEY"])
+
+    Returns:
+        API key string or None if not found anywhere.
+    """
+    # First, check environment variables
+    for env_var in env_vars:
         key = os.environ.get(env_var)
         if key and key.strip():
             return key
 
-    # Then, try apikey.yaml - match by provider name
-    providers = load_apikey_yaml()
-    provider_config = providers.get(provider_key)
-    if provider_config and isinstance(provider_config, dict):
-        return provider_config.get("apikey")
+    # Then, try models.yaml api_keys
+    for alias in key_aliases:
+        key = get_api_key_from_models_yaml(alias)
+        if key and key.strip():
+            return key
 
     return None
 
 
-def find_model_config(provider_key: str, model_key: str | None = None) -> dict[str, Any] | None:
-    """
-    Find a specific model configuration from apikey.yaml.
-
-    Args:
-        provider_key: Provider name in apikey.yaml
-        model_key: Optional model key to select specific model config
-
-    Returns:
-        Model configuration dict or None if not found
-    """
-    providers = load_apikey_yaml()
-    provider_config = providers.get(provider_key)
-    if provider_config and isinstance(provider_config, dict):
-        templates = provider_config.get("templates", [])
-        if not templates:
-            return None
-        # If model_key specified, find matching template
-        if model_key:
-            for template in templates:
-                if template == model_key:
-                    return {"template": template}
-            return None
-        # Otherwise return first template
-        return {"template": templates[0]}
-    return None
-
-
+# =============================================================================
 # Convenience functions for specific providers
+# =============================================================================
+
+
 def get_deepseek_api_key() -> str | None:
-    """Get DeepSeek API key."""
-    return get_api_key("deepseek", env_var="DEEPSEEK_API_KEY")
+    """Get DeepSeek API key.
+
+    Checks (in order):
+    1. DEEPSEEK_API_KEY environment variable
+    2. models.yaml api_keys.deepseek
+    """
+    return get_api_key(
+        key_aliases=["deepseek"],
+        env_vars=["DEEPSEEK_API_KEY"],
+    )
 
 
 def get_kimi_openai_api_key() -> str | None:
-    """Get Kimi OpenAI-compatible API key (from moonshot or kimi-code provider)."""
-    # First check env var
-    key = os.environ.get("KIMI_API_KEY")
-    if key and key.strip():
-        return key
+    """Get Kimi OpenAI-compatible API key.
 
-    # Try moonshot provider (OpenAI compatible)
-    key = get_api_key("moonshot")
-    if key:
-        return key
-
-    # Try kimi-code provider
-    key = get_api_key("kimi-code")
-    if key:
-        return key
-
-    # Try siliconflow provider with kimi model
-    providers = load_apikey_yaml()
-    siliconflow = providers.get("siliconflow")
-    if siliconflow and isinstance(siliconflow, dict):
-        return siliconflow.get("apikey")
-
-    return None
+    Checks (in order):
+    1. KIMI_API_KEY environment variable
+    2. MOONSHOT_API_KEY environment variable
+    3. models.yaml api_keys.moonshot
+    4. models.yaml api_keys.kimi
+    """
+    return get_api_key(
+        key_aliases=["moonshot", "kimi", "moonshot-bao"],
+        env_vars=["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    )
 
 
 def get_kimi_anthropic_api_key() -> str | None:
-    """Get Kimi Anthropic-compatible API key."""
-    # Check env var first
-    key = os.environ.get("KIMI_ANTHROPIC_API_KEY") or os.environ.get("KIMI_API_KEY")
-    if key and key.strip():
-        return key
+    """Get Kimi Anthropic-compatible API key.
 
-    # Try kimi-code provider (uses anthropic API)
-    key = get_api_key("kimi-code")
-    if key:
-        return key
-
-    # Try siliconflow
-    providers = load_apikey_yaml()
-    siliconflow = providers.get("siliconflow")
-    if siliconflow and isinstance(siliconflow, dict):
-        return siliconflow.get("apikey")
-
-    return None
+    Checks (in order):
+    1. KIMI_ANTHROPIC_API_KEY environment variable
+    2. KIMI_API_KEY environment variable
+    3. models.yaml api_keys.kimi
+    4. models.yaml api_keys.moonshot
+    """
+    return get_api_key(
+        key_aliases=["kimi", "moonshot", "moonshot-bao"],
+        env_vars=["KIMI_ANTHROPIC_API_KEY", "KIMI_API_KEY"],
+    )
 
 
 def get_minimax_api_key() -> str | None:
-    """Get MiniMax API key."""
-    # Check env var first
-    key = os.environ.get("MINIMAX_API_KEY")
-    if key and key.strip():
-        return key
+    """Get MiniMax API key.
 
-    # Try minimax provider from apikey.yaml
-    return get_api_key("minimax")
+    Checks (in order):
+    1. MINIMAX_API_KEY environment variable
+    2. models.yaml api_keys.minimax
+    """
+    return get_api_key(
+        key_aliases=["minimax"],
+        env_vars=["MINIMAX_API_KEY"],
+    )
+
+
+# Backwards compatibility alias
+get_moonshot_api_key = get_kimi_openai_api_key

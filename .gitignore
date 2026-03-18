@@ -217,3 +217,5 @@ apikey.yaml
 # Agents
 .claude/
 .clinerules/
+.hawi/
+models.yaml

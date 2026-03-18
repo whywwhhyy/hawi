@@ -98,7 +98,7 @@ KIMI_API_KEY = get_kimi_anthropic_api_key()
 HAS_KIMI_KEY = KIMI_API_KEY is not None and KIMI_API_KEY.strip() != ""
 
 # Skip reason for tests requiring API key
-SKIP_REASON = "Kimi Anthropic API key not found (set KIMI_ANTHROPIC_API_KEY, KIMI_API_KEY or configure apikey.yaml)"
+SKIP_REASON = "Kimi Anthropic API key not found (set KIMI_ANTHROPIC_API_KEY, KIMI_API_KEY or configure models.yaml)"
 
 
 class TestKimiAnthropicUnit:
