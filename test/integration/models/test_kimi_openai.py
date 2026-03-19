@@ -288,12 +288,10 @@ class TestKimiOpenAIIntegration:
 
         # Should have content block events and finish event
         content_events = [e for e in events if e["type"] == "text_delta"]
-        reasoning_events = [e for e in events if e["type"] == "thinking_delta"]
         finish_events = [e for e in events if e["type"] == "finish"]
 
         assert len(content_events) > 0
         assert len(finish_events) == 1
-        # May have reasoning events depending on model response
 
     def test_multi_turn_conversation(self, model: KimiOpenAIModel):
         """Test multi-turn conversation."""
@@ -431,3 +429,107 @@ class TestKimiK25ToolCalls:
         response2 = model.invoke(messages=messages, tools=tools)
 
         assert len(response2.content) > 0
+
+
+@pytest.mark.skipif(not HAS_KIMI_KEY, reason=SKIP_REASON)
+class TestKimiOpenAIAsync:
+    """Async integration tests for Kimi OpenAI API."""
+
+    @pytest.fixture
+    def model(self) -> KimiOpenAIModel:
+        """Create a Kimi model instance with thinking enabled."""
+        return KimiOpenAIModel(
+            api_key=KIMI_API_KEY,
+            model_id="kimi-k2.5",
+            enable_thinking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_chat_completion(self, model: KimiOpenAIModel):
+        """Test async non-streaming chat completion."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Say 'Async Kimi!' and nothing else.")],
+            streaming=False,
+        ):
+            events.append(event)
+
+        assert len(events) > 0
+
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        # ainvoke returns delta parts directly (not ModelEvents)
+        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        assert get_type(events[-1]) == "finish"
+
+        # Extract text deltas
+        text_deltas = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
+        assert len(text_deltas) > 0
+
+        full_text = "".join(d.get("delta", "") for d in text_deltas)
+        assert "Kimi" in full_text or "Async" in full_text
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_chat_completion(self, model: KimiOpenAIModel):
+        """Test async streaming chat completion with reasoning."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Count from 1 to 3.")],
+            streaming=True,
+        ):
+            events.append(event)
+
+        assert len(events) > 0
+
+        # Check for text deltas (reasoning deltas may also appear)
+        text_deltas = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
+
+        assert len(text_deltas) > 0
+
+        full_text = "".join(d.get("delta", "") for d in text_deltas)
+        assert "1" in full_text and "3" in full_text
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_events_structure(self, model: KimiOpenAIModel):
+        """Test that async streaming produces correct event sequence."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Hi")],
+            streaming=True,
+        ):
+            events.append(event)
+
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        event_types = [get_type(e) for e in events]
+
+        # Verify event sequence - ainvoke returns delta parts directly
+        assert event_types[0] in ["text_delta", "thinking_delta"]
+        assert event_types[-1] == "finish"
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_with_thinking_disabled(self):
+        """Test async non-streaming with thinking disabled."""
+        model = KimiOpenAIModel(
+            api_key=KIMI_API_KEY,
+            model_id="kimi-k2.5",
+            enable_thinking=False,
+        )
+
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Say 'No Thinking' and nothing else.")],
+            streaming=False,
+        ):
+            events.append(event)
+
+        assert len(events) > 0
+
+        # Extract text deltas
+        text_deltas = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
+        assert len(text_deltas) > 0
+
+        full_text = "".join(d.get("delta", "") for d in text_deltas)
+        assert "No" in full_text or "Thinking" in full_text

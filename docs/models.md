@@ -10,6 +10,10 @@ Hawi 提供统一的模型接口，支持多种 LLM 提供商和 API 格式。
 | DeepSeek | deepseek-reasoner | ✅ | ✅ |
 | Kimi | kimi-k2-5 | ✅ | ✅ |
 | Kimi | kimi-latest | ✅ | ✅ |
+| MiniMax | MiniMax-M2.7 | ✅ | ✅ |
+| GLM | glm-4-flash | ✅ | ✅ |
+| GLM | glm-4 | ✅ | ✅ |
+| GLM | glm-4-air | ✅ | ✅ |
 
 ## 快速开始
 

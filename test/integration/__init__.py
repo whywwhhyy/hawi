@@ -167,5 +167,20 @@ def get_minimax_api_key() -> str | None:
     )
 
 
+def get_glm_api_key() -> str | None:
+    """Get GLM (Zhipu AI) API key.
+
+    Checks (in order):
+    1. GLM_API_KEY environment variable
+    2. ZHIPU_API_KEY environment variable
+    3. models.yaml api_keys.glm
+    4. models.yaml api_keys.zhipu
+    """
+    return get_api_key(
+        key_aliases=["glm", "zhipu"],
+        env_vars=["GLM_API_KEY", "ZHIPU_API_KEY"],
+    )
+
+
 # Backwards compatibility alias
 get_moonshot_api_key = get_kimi_openai_api_key

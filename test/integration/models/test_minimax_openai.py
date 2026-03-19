@@ -134,7 +134,6 @@ class TestMiniMaxM25Integration:
 
         # MiniMax may output thinking_delta or text_delta events
         content_events = [e for e in events if e["type"] in ("text_delta", "thinking_delta")]
-        finish_events = [e for e in events if e["type"] == "finish"]
 
         assert len(content_events) > 0
         # finish event may not be present in some cases, so we just verify we got content
@@ -231,7 +230,109 @@ class TestMiniMaxM21Integration:
 
         # MiniMax may output thinking_delta or text_delta events
         content_events = [e for e in events if e["type"] in ("text_delta", "thinking_delta")]
-        finish_events = [e for e in events if e["type"] == "finish"]
 
         assert len(content_events) > 0
         # finish event may not be present in some cases
+
+
+@pytest.mark.skipif(not HAS_MINIMAX_KEY, reason=SKIP_REASON)
+class TestMiniMaxOpenAIAsync:
+    """Async integration tests for MiniMax OpenAI API."""
+
+    @pytest.fixture
+    def model(self) -> MiniMaxOpenAIModel:
+        """Create a MiniMax M2.5 model instance."""
+        return MiniMaxOpenAIModel(
+            model_id="MiniMax-M2.5",
+            api_key=MINIMAX_API_KEY,
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_chat_completion(self, model: MiniMaxOpenAIModel):
+        """Test async non-streaming chat completion."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Say 'Async MiniMax!' and nothing else.")],
+            streaming=False,
+        ):
+            events.append(event)
+
+        assert len(events) > 0
+
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        # ainvoke returns delta parts directly (not ModelEvents)
+        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        assert get_type(events[-1]) == "finish"
+
+        # Extract text deltas
+        text_deltas = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
+        assert len(text_deltas) > 0
+
+        full_text = "".join(d.get("delta", "") for d in text_deltas)
+        assert "MiniMax" in full_text or "Async" in full_text
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_chat_completion(self, model: MiniMaxOpenAIModel):
+        """Test async streaming chat completion."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Count from 1 to 3.")],
+            streaming=True,
+        ):
+            events.append(event)
+
+        assert len(events) > 0
+
+        # MiniMax may output thinking_delta or text_delta events
+        content_events = [e for e in events if isinstance(e, dict) and e.get("type") in ("text_delta", "thinking_delta")]
+
+        assert len(content_events) > 0
+
+        full_text = "".join(str(d.get("delta", "")) for d in content_events)
+        assert "1" in full_text and "3" in full_text
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_events_structure(self, model: MiniMaxOpenAIModel):
+        """Test that async streaming produces correct event sequence."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Hi")],
+            streaming=True,
+        ):
+            events.append(event)
+
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        event_types = [get_type(e) for e in events]
+
+        # Verify event sequence - ainvoke returns delta parts directly
+        assert event_types[0] in ["text_delta", "thinking_delta"]
+        # Last event should be finish or a content delta (depending on API)
+        assert event_types[-1] in ["finish", "text_delta", "thinking_delta"]
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_m21_model(self):
+        """Test async non-streaming with M2.1 model."""
+        model = MiniMaxOpenAIModel(
+            model_id="MiniMax-M2.1",
+            api_key=MINIMAX_API_KEY,
+        )
+
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Say 'M2.1 Async' and nothing else.")],
+            streaming=False,
+        ):
+            events.append(event)
+
+        assert len(events) > 0
+
+        # Extract text deltas
+        text_deltas = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
+        assert len(text_deltas) > 0
+
+        full_text = "".join(d.get("delta", "") for d in text_deltas)
+        assert "M2.1" in full_text or "Async" in full_text

@@ -164,7 +164,7 @@ class MiniMaxAnthropicModel(AnthropicModel):
 
     Example:
         model = MiniMaxAnthropicModel(
-            model_id="MiniMax-M2.5",
+            model_id="MiniMax-M2.7",
             api_key="sk-...",
             base_url="https://api.minimaxi.com/anthropic",
         )
@@ -173,7 +173,7 @@ class MiniMaxAnthropicModel(AnthropicModel):
     def __init__(
         self,
         *,
-        model_id: str = "MiniMax-M2.5",
+        model_id: str = "MiniMax-M2.7",
         api_key: str | None = None,
         base_url: str = "https://api.minimaxi.com/anthropic",
         **params,

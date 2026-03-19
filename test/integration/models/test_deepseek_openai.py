@@ -351,3 +351,111 @@ class TestDeepSeekReasonerMultiTurn:
         # Reasoner model may have reasoning_content
         # This is important for multi-turn tool calling scenarios
         # where reasoning_content must be passed back to the API
+
+
+@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+class TestDeepSeekOpenAIAsync:
+    """Async integration tests for DeepSeek OpenAI API."""
+
+    @pytest.fixture
+    def model(self) -> DeepSeekOpenAIModel:
+        """Create a DeepSeek model instance."""
+        return DeepSeekOpenAIModel(
+            model_id="deepseek-chat",
+            api_key=DEEPSEEK_API_KEY,
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_chat_completion(self, model: DeepSeekOpenAIModel):
+        """Test async non-streaming chat completion."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Say 'Async Hello!' and nothing else.")],
+            streaming=False,
+        ):
+            events.append(event)
+
+        # Should have ModelEvent types for non-streaming
+        assert len(events) > 0
+
+        # Check event types
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        # First event should be text_delta (DeepSeek OpenAI returns delta parts directly)
+        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        # Last event should be finish
+        assert get_type(events[-1]) == "finish"
+
+        # Extract text delta events
+        text_deltas = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
+        assert len(text_deltas) > 0
+
+        # Verify content
+        full_text = "".join(d.get("delta", "") for d in text_deltas)
+        assert "Async" in full_text or "Hello" in full_text
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_chat_completion(self, model: DeepSeekOpenAIModel):
+        """Test async streaming chat completion."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Count from 1 to 3 quickly.")],
+            streaming=True,
+        ):
+            events.append(event)
+
+        # Should have events including text deltas
+        assert len(events) > 0
+
+        # Extract text delta events
+        text_deltas = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
+        assert len(text_deltas) > 0
+
+        # Verify content includes numbers
+        full_text = "".join(d.get("delta", "") for d in text_deltas)
+        assert "1" in full_text and "3" in full_text
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_events_structure(self, model: DeepSeekOpenAIModel):
+        """Test that async streaming produces correct event structure."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Hi")],
+            streaming=True,
+        ):
+            events.append(event)
+
+        # Check event structure
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        event_types = [get_type(e) for e in events]
+
+        # Should start with delta and end with finish
+        assert event_types[0] in ["text_delta", "thinking_delta"]
+        assert event_types[-1] == "finish"
+
+        # Verify finish event structure (usage may or may not be present depending on API)
+        finish_event = events[-1]
+        if isinstance(finish_event, dict):
+            assert finish_event.get("type") == "finish"
+            assert finish_event.get("stop_reason") is not None
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_default(self, model: DeepSeekOpenAIModel):
+        """Test that ainvoke defaults to non-streaming when streaming parameter omitted."""
+        events = []
+        async for event in model.ainvoke(
+            messages=[_create_user_message("Say 'Default Async' and nothing else.")],
+        ):
+            events.append(event)
+
+        # Default should be non-streaming (produces ModelEvents)
+        assert len(events) > 0
+
+        def get_type(e):
+            return e["type"] if isinstance(e, dict) else e.type
+
+        # ainvoke returns delta parts directly (not ModelEvents)
+        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
