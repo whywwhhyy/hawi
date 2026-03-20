@@ -310,31 +310,32 @@ class ModelRegistry:
         return config
 
     def _resolve_substitutions(self, value: Any) -> Any:
-        """递归解析所有占位符替换（API Key 别名 + 环境变量）
+        """递归解析所有占位符替换（API Keys 别名 + 环境变量）
 
         支持语法：
-        - ${api_key:ALIAS}    -> 从 api_keys 配置中查找
+        - ${api_keys.ALIAS}   -> 从 api_keys 配置中查找
         - ${ENV_VAR}          -> 从环境变量中查找
         - ${ENV_VAR:default}  -> 环境变量带默认值
 
-        优先级：api_key 别名 > 环境变量
+        优先级：api_keys 别名 > 环境变量
 
         Raises:
-            UnknownApiKeyAliasError: 当 ${api_key:ALIAS} 找不到对应别名时
+            UnknownApiKeyAliasError: 当 ${api_keys.ALIAS} 找不到对应别名时
         """
         if isinstance(value, str):
             # 完整字符串是单一占位符
             if value.startswith("${") and value.endswith("}"):
                 inner = value[2:-1]
 
-                # 1. 处理 ${api_key:ALIAS}
-                if inner.startswith("api_key:"):
-                    alias = inner[8:]  # 提取 ALIAS
+                # 1. 处理 ${api_keys.ALIAS}
+                prefix = "api_keys."
+                if inner.startswith(prefix):
+                    alias = inner[len(prefix):]  # 提取 ALIAS
                     if alias in self._api_keys:
                         return self._api_keys[alias]
                     # 别名不存在，抛出明确错误
                     raise UnknownApiKeyAliasError(
-                        f"Unknown API key alias '${{api_key:{alias}}}'. "
+                        f"Unknown API key alias '${{api_keys.{alias}}}'. "
                         f"Available aliases: {list(self._api_keys.keys())}"
                     )
 
@@ -345,19 +346,19 @@ class ModelRegistry:
                 return os.environ.get(inner, value)
 
             # 处理嵌入的占位符
-            # 先处理 api_key 别名
-            api_key_pattern = r"\$\{api_key:([^}]+)\}"
+            # 先处理 api_keys 别名
+            api_keys_pattern = r"\$\{api_keys\.([^}]+)\}"
 
-            def replace_api_key(match: re.Match) -> str:
+            def replace_api_keys(match: re.Match) -> str:
                 alias = match.group(1)
                 if alias not in self._api_keys:
                     raise UnknownApiKeyAliasError(
-                        f"Unknown API key alias '${{api_key:{alias}}}'. "
+                        f"Unknown API key alias '${{api_keys.{alias}}}'. "
                         f"Available aliases: {list(self._api_keys.keys())}"
                     )
                 return self._api_keys[alias]
 
-            value = re.sub(api_key_pattern, replace_api_key, value)
+            value = re.sub(api_keys_pattern, replace_api_keys, value)
 
             # 再处理环境变量
             env_pattern = r"\$\{([^}:]+)(?::([^}]*))?\}"
@@ -459,11 +460,11 @@ class ModelRegistry:
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
 
-            # 加载 API Key 别名
+            # 加载 API Key
             if "api_keys" in data:
                 self._api_keys.update(data["api_keys"])
                 if not quiet:
-                    print(f"[ModelRegistry] Loaded {len(data['api_keys'])} API key aliases from {path}")
+                    print(f"[ModelRegistry] Loaded {len(data['api_keys'])} API keys from {path}")
 
             if not data or "factories" not in data:
                 if not quiet:

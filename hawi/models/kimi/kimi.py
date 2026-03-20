@@ -39,6 +39,8 @@ class KimiModel:
         base_url: API 基础 URL，默认根据 api 参数决定
         api: API 格式选择，"auto" 根据 URL 自动检测，"openai" 使用 OpenAI 格式，"anthropic" 使用 Anthropic 格式
         enable_thinking: 是否启用 thinking 模式（仅 K2.5，OpenAI 格式下有效）
+        thinking_budget: thinking 模式的 token 预算（仅 anthropic 格式），0 或 None 表示禁用
+        max_output_tokens: 最大输出 token 数
         **params: 其他参数传递给具体的模型类
 
     Example:
@@ -86,6 +88,8 @@ class KimiModel:
         base_url: str | None = None,
         api: Literal["auto", "openai", "anthropic"] = "auto",
         enable_thinking: bool = True,
+        thinking_budget: int | None = None,
+        max_output_tokens: int | None = None,
         **params: Any,
     ) -> Model:
         """
@@ -125,11 +129,16 @@ class KimiModel:
         # 创建对应的模型实例
         if detected_api == "anthropic":
             logger.debug(f"Creating KimiAnthropicModel with base_url={base_url}")
-            # Anthropic 格式不支持 enable_thinking 参数
+            # 计算 thinking_budget: 如果未指定，根据 enable_thinking 设置默认值
+            budget = thinking_budget
+            if budget is None:
+                budget = 8000 if enable_thinking else None
             return KimiAnthropicModel(
                 model_id=model_id,
                 api_key=api_key,
                 base_url=base_url,
+                thinking_budget=budget,
+                max_output_tokens=max_output_tokens,
                 **params,
             )
         else:

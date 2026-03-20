@@ -315,13 +315,13 @@ class Model(ABC):
             tools=tools,
             tool_choice=tool_choice,
             parallel_tool_calls=merged.get("parallel_tool_calls"),
-            max_tokens=merged.get("max_tokens"),
-            max_completion_tokens=merged.get("max_completion_tokens"),
+            max_output_tokens=merged.get("max_output_tokens"),
             temperature=merged.get("temperature"),
             top_p=merged.get("top_p"),
             response_format=merged.get("response_format"),
             reasoning_effort=merged.get("reasoning_effort"),
             service_tier=merged.get("service_tier"),
+            thinking_budget=merged.get("thinking_budget"),
         )
 
     def _get_params(self) -> ModelParams:

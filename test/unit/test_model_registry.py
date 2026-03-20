@@ -319,14 +319,14 @@ class TestEnvironmentVariableResolution:
 
 
 class TestApiKeyAliasResolution:
-    """Tests for ${api_key:ALIAS} syntax resolution."""
+    """Tests for ${api_keys.ALIAS} syntax resolution."""
 
     def test_resolve_api_key_alias(self):
-        """Test resolving ${api_key:ALIAS} syntax."""
+        """Test resolving ${api_keys.ALIAS} syntax."""
         registry = ModelRegistry()
         registry._api_keys = {"my-key": "secret-api-key"}
 
-        result = registry._resolve_substitutions({"api_key": "${api_key:my-key}"})
+        result = registry._resolve_substitutions({"api_key": "${api_keys.my-key}"})
         assert result["api_key"] == "secret-api-key"
 
     def test_resolve_unknown_api_key_alias_raises_error(self):
@@ -335,17 +335,17 @@ class TestApiKeyAliasResolution:
         registry._api_keys = {}
 
         with pytest.raises(UnknownApiKeyAliasError) as exc_info:
-            registry._resolve_substitutions({"api_key": "${api_key:unknown}"})
-        assert "${api_key:unknown}" in str(exc_info.value)
+            registry._resolve_substitutions({"api_key": "${api_keys.unknown}"})
+        assert "${api_keys.unknown}" in str(exc_info.value)
         assert "Available aliases" in str(exc_info.value)
 
     def test_resolve_embedded_api_key_alias(self):
-        """Test ${api_key:ALIAS} embedded in string."""
+        """Test ${api_keys.ALIAS} embedded in string."""
         registry = ModelRegistry()
         registry._api_keys = {"my-key": "secret123"}
 
         result = registry._resolve_substitutions(
-            {"header": "Bearer ${api_key:my-key}"}
+            {"header": "Bearer ${api_keys.my-key}"}
         )
         assert result["header"] == "Bearer secret123"
 
@@ -355,7 +355,7 @@ class TestApiKeyAliasResolution:
         registry._api_keys = {"deepseek": "alias-key"}
 
         with patch.dict(os.environ, {"api_key:deepseek": "env-key"}):
-            result = registry._resolve_substitutions({"api_key": "${api_key:deepseek}"})
+            result = registry._resolve_substitutions({"api_key": "${api_keys.deepseek}"})
             # Should resolve to alias value, not env var
             assert result["api_key"] == "alias-key"
 
@@ -367,7 +367,7 @@ class TestApiKeyAliasResolution:
         result = registry._resolve_substitutions(
             {
                 "level1": {
-                    "level2": {"api_key": "${api_key:test-key}"},
+                    "level2": {"api_key": "${api_keys.test-key}"},
                 }
             }
         )
@@ -379,7 +379,7 @@ class TestApiKeyAliasResolution:
         registry._api_keys = {"key1": "val1", "key2": "val2"}
 
         result = registry._resolve_substitutions(
-            ["${api_key:key1}", "static", "${api_key:key2}"]
+            ["${api_keys.key1}", "static", "${api_keys.key2}"]
         )
         assert result == ["val1", "static", "val2"]
 
@@ -390,7 +390,7 @@ class TestApiKeyAliasResolution:
 
         with patch.dict(os.environ, {"DOMAIN": "example.com"}):
             result = registry._resolve_substitutions(
-                {"url": "https://${DOMAIN}/api?key=${api_key:my-key}"}
+                {"url": "https://${DOMAIN}/api?key=${api_keys.my-key}"}
             )
             assert result["url"] == "https://example.com/api?key=api-secret"
 

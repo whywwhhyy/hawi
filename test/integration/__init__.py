@@ -16,7 +16,7 @@ models.yaml format:
       deepseek-chat:
         class: DeepSeekOpenAIModel
         model_id: deepseek-chat
-        api_key: ${api_key:deepseek}
+        api_key: ${api_keys.deepseek}
 """
 
 import os

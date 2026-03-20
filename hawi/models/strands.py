@@ -144,8 +144,8 @@ class StrandsModel(Model):
             )
 
         # 转换其他参数
-        if request.max_tokens is not None:
-            strands_request["max_tokens"] = request.max_tokens
+        if request.max_output_tokens is not None:
+            strands_request["max_tokens"] = request.max_output_tokens
         if request.temperature is not None:
             strands_request["temperature"] = request.temperature
         if request.top_p is not None:

@@ -38,6 +38,8 @@ class DeepSeekModel:
         api_key: API 密钥
         base_url: API 基础 URL，默认根据 api 参数决定
         api: API 格式选择，"auto" 根据 URL 自动检测，"openai" 使用 OpenAI 格式，"anthropic" 使用 Anthropic 格式
+        thinking_budget: thinking 模式的 token 预算（仅 anthropic 格式），0 或 None 表示禁用
+        max_output_tokens: 最大输出 token 数
         **params: 其他参数传递给具体的模型类
 
     Example:
@@ -77,6 +79,8 @@ class DeepSeekModel:
         api_key: str | None = None,
         base_url: str | None = None,
         api: Literal["auto", "openai", "anthropic"] = "auto",
+        thinking_budget: int | None = None,
+        max_output_tokens: int | None = None,
         **params: Any,
     ) -> Model:
         """
@@ -120,6 +124,8 @@ class DeepSeekModel:
                 model_id=model_id,
                 api_key=api_key,
                 base_url=base_url,
+                thinking_budget=thinking_budget,
+                max_output_tokens=max_output_tokens,
                 **params,
             )
         else:

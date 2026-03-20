@@ -67,6 +67,8 @@ class AnthropicModel(Model):
         timeout: float = 60.0,
         max_retries: int = 3,
         enable_image_download: bool = True,
+        thinking_budget: int | None = 8000,
+        max_output_tokens: int | None = None,
         **params,
     ):
         """
@@ -79,7 +81,9 @@ class AnthropicModel(Model):
             timeout: 请求超时时间
             max_retries: 最大重试次数
             enable_image_download: 是否允许下载远程图片转为 base64
-            **params: 其他参数，如 temperature, max_tokens 等
+            thinking_budget: thinking 模式的 token 预算，0 或 None 表示禁用，默认 8000
+            max_output_tokens: 最大输出 token 数，默认 None（使用 API 默认值或请求中的值）
+            **params: 其他参数，如 temperature, max_output_tokens 等
         """
         self._model_id = model_id
         self.api_key = api_key
@@ -87,6 +91,8 @@ class AnthropicModel(Model):
         self.timeout = timeout
         self.max_retries = max_retries
         self.enable_image_download = enable_image_download
+        self.thinking_budget = thinking_budget
+        self.max_output_tokens = max_output_tokens
         self.params = params
         self._client: Anthropic | None = None
         self._async_client: AsyncAnthropic | None = None
@@ -190,10 +196,13 @@ class AnthropicModel(Model):
         request: MessageRequest,
     ) -> dict[str, Any]:
         """构建 Anthropic API 请求"""
+        # max_output_tokens: 请求级 > 实例级 > 默认值
+        effective_max_tokens = request.max_output_tokens or self.max_output_tokens or 4096
+
         req: dict[str, Any] = {
             "model": self.model_id,
             "messages": messages,
-            "max_tokens": request.max_tokens or 4096,
+            "max_tokens": effective_max_tokens,
         }
 
         # System 内容 - Anthropic 使用顶级 system 字段
@@ -222,6 +231,15 @@ class AnthropicModel(Model):
             if request.parallel_tool_calls is not None:
                 tool_choice["disable_parallel_tool_use"] = not request.parallel_tool_calls
             req["tool_choice"] = tool_choice
+
+        # Thinking 模式 (thinking_budget 为 0 或 None 时禁用)
+        # 优先级: 请求级 > 实例级
+        effective_thinking_budget = request.thinking_budget if request.thinking_budget is not None else self.thinking_budget
+        if effective_thinking_budget:
+            req["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": effective_thinking_budget,
+            }
 
         # 可选参数
         if request.temperature is not None:
@@ -419,10 +437,10 @@ class AnthropicModel(Model):
             DeltaPart 流式增量块
         """
         req = await self._prepare_request_async(request)
-        req["stream"] = True
 
         async with self.async_client.messages.stream(**req) as stream:
             handler = _AnthropicStreamHandler(stream)
             async for event in stream:
                 for delta_part in handler.handle_event(event):
                     yield delta_part
+            yield handler._create_finish_part()

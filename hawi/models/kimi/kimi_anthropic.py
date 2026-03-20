@@ -42,6 +42,8 @@ class KimiAnthropicModel(AnthropicModel):
         model_id: str = "kimi-k2.5",
         api_key: str | None = None,
         base_url: str = "https://api.kimi.com/coding/",
+        thinking_budget: int | None = 8000,
+        max_output_tokens: int | None = None,
         **params,
     ):
         """初始化 Kimi Anthropic 模型"""
@@ -49,6 +51,8 @@ class KimiAnthropicModel(AnthropicModel):
             model_id=model_id,
             api_key=api_key,
             base_url=base_url,
+            thinking_budget=thinking_budget,
+            max_output_tokens=max_output_tokens,
             **params
         )
 

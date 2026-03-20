@@ -77,6 +77,8 @@ class DeepSeekAnthropicModel(AnthropicModel):
         model_id: str = "deepseek-chat",
         api_key: str | None = None,
         base_url: str = "https://api.deepseek.com/anthropic",
+        thinking_budget: int | None = None,
+        max_output_tokens: int | None = None,
         **params,
     ):
         """初始化 DeepSeek Anthropic 模型"""
@@ -84,6 +86,8 @@ class DeepSeekAnthropicModel(AnthropicModel):
             model_id=model_id,
             api_key=api_key,
             base_url=base_url,
+            thinking_budget=thinking_budget,
+            max_output_tokens=max_output_tokens,
             **params
         )
 

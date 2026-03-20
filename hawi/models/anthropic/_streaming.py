@@ -293,6 +293,7 @@ def stream_response(
         handler = _AnthropicStreamHandler(stream)
         for event in stream:
             yield from handler.handle_event(event)
+        yield handler._create_finish_part()
 
 
 async def stream_response_async(
@@ -308,6 +309,7 @@ async def stream_response_async(
         async for event in stream:
             for part in handler.handle_event(event):
                 yield part
+        yield handler._create_finish_part()
 
 
 def run_async_stream(

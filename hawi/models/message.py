@@ -631,8 +631,7 @@ class MessageRequest(BaseModel):
     parallel_tool_calls: bool | None = None  # 是否允许并行工具调用
 
     # 可选参数
-    max_tokens: int | None = None  # 已弃用，推荐使用 max_completion_tokens
-    max_completion_tokens: int | None = None  # 输出 token 预算
+    max_output_tokens: int | None = None  # 最大输出 token 数
     temperature: float | None = None
     top_p: float | None = None
 
@@ -649,6 +648,7 @@ class MessageRequest(BaseModel):
     top_k: int | None = None  # Anthropic top_k sampling
     stop_sequences: list[str] | None = None  # Anthropic stop sequences
     metadata: dict[str, Any] | None = None  # Anthropic metadata (e.g., user_id)
+    thinking_budget: int | None = None  # Anthropic thinking mode budget (0/None to disable)
 
 
 class MessageResponse(BaseModel):

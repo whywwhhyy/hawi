@@ -102,9 +102,30 @@ model = DeepSeekModel(
 model = DeepSeekModel(
     model_id="deepseek-chat",
     api_key="your-api-key",
-    temperature=0.7,    # 温度
-    max_tokens=4096,    # 最大生成 token 数
-    top_p=0.9,          # 核采样
+    temperature=0.7,        # 温度
+    max_output_tokens=4096, # 最大输出 token 数
+    top_p=0.9,             # 核采样
+)
+```
+
+### Thinking 模式 (Anthropic 兼容 API)
+
+部分模型支持 Thinking 模式（深度思考），可以通过 `thinking_budget` 参数控制 token 预算：
+
+```python
+# Anthropic 格式的模型
+model = KimiModel(
+    model_id="kimi-k2.5",
+    api_key="your-api-key",
+    api="anthropic",
+    thinking_budget=8000,  # Thinking token 预算，0 或 None 表示禁用
+    max_output_tokens=8192,
+)
+
+# 请求级覆盖
+request = MessageRequest(
+    messages=[...],
+    thinking_budget=16000,  # 覆盖实例级设置
 )
 ```
 

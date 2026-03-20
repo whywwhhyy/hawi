@@ -92,8 +92,7 @@ def prepare_request(
     # 注意：request 中的值已由基类 _build_request 合并过 params 和 override_params
     # 这里只需要应用 request 中的显式设置，其余参数通过 req.update 补充
     request_params = {
-        "max_tokens": request.max_tokens,
-        "max_completion_tokens": request.max_completion_tokens,
+        "max_output_tokens": request.max_output_tokens,
         "temperature": request.temperature,
         "top_p": request.top_p,
         "parallel_tool_calls": request.parallel_tool_calls,
@@ -108,16 +107,11 @@ def prepare_request(
     # 然后应用 request 中显式设置的值（覆盖 params）
     for key, value in request_params.items():
         if value is not None:
-            req[key] = value
-
-    # 处理 max_completion_tokens 优先级：如果设置了 max_completion_tokens，优先使用它
-    # OpenAI 推荐优先使用 max_completion_tokens 替代 max_tokens
-    if request.max_completion_tokens is not None:
-        req["max_completion_tokens"] = request.max_completion_tokens
-        # 如果同时设置了 max_tokens，移除它以避免冲突
-        if "max_tokens" in req and request.max_tokens is None:
-            # 只有当 max_tokens 来自 params 而非 request 时才移除
-            pass  # 保留两者，让 API 决定
+            # 将 max_output_tokens 映射为 OpenAI 的 max_completion_tokens
+            if key == "max_output_tokens":
+                req["max_completion_tokens"] = value
+            else:
+                req[key] = value
 
     return req
 
