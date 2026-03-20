@@ -37,7 +37,7 @@ export KIMI_API_KEY="sk-your-key"
 
 ```python
 from hawi.agent import HawiAgent
-from hawi.agent.models import DeepSeekModel
+from hawi.models import DeepSeekModel
 
 # 创建模型
 model = DeepSeekModel(model_id="deepseek-chat")
@@ -57,10 +57,10 @@ print(content)
 ### 流式输出
 
 ```python
-from hawi.agent.events import ConversationPrinter
+from hawi.agent.printers import create_printer
 
 agent = HawiAgent(model=model)
-printer = ConversationPrinter()
+printer = create_printer(streaming=True)
 
 # 流式执行
 async for event in agent.arun("讲一个短故事", stream=True):
@@ -130,7 +130,7 @@ agent = HawiAgent(
 ## 切换模型
 
 ```python
-from hawi.agent.models import DeepSeekModel, KimiModel
+from hawi.models import DeepSeekModel, KimiModel
 
 # DeepSeek
 deepseek = DeepSeekModel(model_id="deepseek-chat")
@@ -150,8 +150,8 @@ agent = HawiAgent(model=reasoner)
 ```python
 import asyncio
 from hawi.agent import HawiAgent
-from hawi.agent.models import DeepSeekModel
-from hawi.agent.events import ConversationPrinter
+from hawi.models import DeepSeekModel
+from hawi.agent.printers import create_printer
 from hawi.tool import tool
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import hook
@@ -183,7 +183,7 @@ async def main():
     )
 
     # 5. 流式对话
-    printer = ConversationPrinter()
+    printer = create_printer(streaming=True)
 
     async for event in agent.arun(
         "搜索一下 Python 的最新版本",

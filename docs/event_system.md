@@ -55,19 +55,17 @@ asyncio.run(main())
 ```python
 import asyncio
 from hawi.agent import HawiAgent
-from hawi.agent.events import ConversationPrinter
+from hawi.agent.printers import create_printer
 
 async def main():
     agent = HawiAgent(model=model, plugins=[MyPlugin()])
 
     # 创建打印机（支持配置）
-    printer = ConversationPrinter(
+    printer = create_printer(
+        streaming=True,
         show_reasoning=True,      # 显示思考内容
         show_tools=True,          # 显示工具调用
         show_errors=True,         # 显示错误
-        reasoning_prefix="\n🤔 ", # 思考内容前缀
-        tool_call_prefix="\n🔧 ", # 工具调用前缀
-        max_arg_length=50,        # 参数最大显示长度
     )
 
     # 流式处理事件
@@ -90,11 +88,12 @@ asyncio.run(main())
 在同步代码（如 REPL）中使用 `ConversationPrinter`：
 
 ```python
-from hawi.agent import HawiAgent, ConversationPrinter
+from hawi.agent import HawiAgent
+from hawi.agent.printers import create_printer
 import asyncio
 
 agent = HawiAgent(model=model)
-printer = ConversationPrinter()
+printer = create_printer(streaming=True)
 
 # 同步方式运行
 async def process(prompt):
@@ -336,27 +335,18 @@ async for event in agent.arun("prompt", stream=True):
 ### 便捷函数
 
 ```python
-# 创建事件工厂函数
-def model_stream_start_event(request_id: str, **metadata) -> Event: ...
-def model_content_block_delta_event(
-    request_id: str,
-    block_index: int,
-    delta_type: Literal["text", "reasoning", ...],
-    delta: str,
-    **metadata
-) -> Event: ...
-def agent_tool_call_event(
-    run_id: str,
-    tool_name: str,
-    arguments: dict,
-    tool_call_id: str,
-    **metadata
-) -> Event: ...
-# ... 等
+# 事件工厂函数（从各自模块导入）
+from hawi.agent.events import (
+    ModelStreamStartEvent,
+    ModelContentBlockDeltaEvent,
+    AgentToolCallEvent,
+    # ... 等
+)
 
-# 创建默认打印机
-def create_event_printer() -> EventHandler:
-    """创建默认控制台打印机，实时显示内容和工具调用"""
+# 创建打印机
+from hawi.agent.printers import create_printer
+
+printer = create_printer(streaming=True)
 ```
 
 ## 最佳实践
@@ -422,10 +412,11 @@ async for event in agent.run("prompt", stream=True):
 
 
 # 新版
-from hawi.agent.events import EventBus, create_event_printer
+from hawi.agent.events import EventBus
+from hawi.agent.printers import create_printer
 
 bus = EventBus()
-bus.subscribe(create_event_printer())
+bus.subscribe(create_printer(streaming=True).handle)
 
 async for event in agent.arun("prompt", event_bus=bus):
     # 事件已通过 bus 广播

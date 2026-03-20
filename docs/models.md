@@ -11,16 +11,13 @@ Hawi 提供统一的模型接口，支持多种 LLM 提供商和 API 格式。
 | Kimi | kimi-k2-5 | ✅ | ✅ |
 | Kimi | kimi-latest | ✅ | ✅ |
 | MiniMax | MiniMax-M2.7 | ✅ | ✅ |
-| GLM | glm-4-flash | ✅ | ✅ |
-| GLM | glm-4 | ✅ | ✅ |
-| GLM | glm-4-air | ✅ | ✅ |
 
 ## 快速开始
 
 ### DeepSeek
 
 ```python
-from hawi.agent.models import DeepSeekModel
+from hawi.models import DeepSeekModel
 
 # 自动检测 API 类型（默认 OpenAI）
 model = DeepSeekModel(
@@ -39,7 +36,7 @@ model = DeepSeekModel(
 ### Kimi
 
 ```python
-from hawi.agent.models import KimiModel
+from hawi.models import KimiModel
 
 # OpenAI API 格式
 model = KimiModel(
@@ -56,14 +53,35 @@ model = KimiModel(
 )
 ```
 
+### MiniMax
+
+```python
+from hawi.models import MiniMaxModel
+
+# 自动检测 API 类型（默认 OpenAI）
+model = MiniMaxModel(
+    model_id="MiniMax-M2.5",
+    api_key="your-api-key"
+)
+
+# 强制使用 Anthropic API 格式
+model = MiniMaxModel(
+    model_id="MiniMax-M2.5",
+    api_key="your-api-key",
+    api="anthropic"
+)
+```
+
 ### 直接使用适配器类
 
 ```python
-from hawi.agent.models import (
+from hawi.models import (
     DeepSeekOpenAIModel,
     DeepSeekAnthropicModel,
     KimiOpenAIModel,
     KimiAnthropicModel,
+    MiniMaxOpenAIModel,
+    MiniMaxAnthropicModel,
 )
 
 # 直接使用具体实现
@@ -134,7 +152,7 @@ request = MessageRequest(
 ### 同步调用
 
 ```python
-from hawi.agent.messages import MessageRequest, Message
+from hawi.models import MessageRequest, Message
 
 request = MessageRequest(
     messages=[
@@ -191,7 +209,7 @@ for info in balance:
 ### 工具调用
 
 ```python
-from hawi.agent.messages import ToolDefinition
+from hawi.models import ToolDefinition
 
 tools = [
     ToolDefinition(
@@ -223,7 +241,7 @@ for part in response.message["content"]:
 ## 错误处理
 
 ```python
-from hawi.agent.model import ModelErrorType
+from hawi.errors import ModelErrorType
 
 try:
     response = model.invoke(request)
@@ -408,7 +426,7 @@ from hawi.models import model_registry
 model = model_registry.obtain_model("deepseek-openai", {"model_id": "deepseek-chat"})
 
 # 使用模型
-from hawi.agent.messages import MessageRequest, Message
+from hawi.models import MessageRequest, Message
 
 request = MessageRequest(
     messages=[Message(role="user", content=[{"type": "text", "text": "Hello!"}])]

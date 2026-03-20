@@ -18,7 +18,14 @@ Hawi Agent 框架的官方文档。
 | [hook_system.md](./hook_system.md) | Hook 系统使用指南 |
 | [models.md](./models.md) | 模型适配器使用指南 |
 | [tools.md](./tools.md) | 工具系统使用指南 |
-| [STREAMING_SUPPORT_PLAN.md](./STREAMING_SUPPORT_PLAN.md) | 流式支持设计计划 |
+| [lifecycle.md](./lifecycle.md) | 生命周期管理（ExitHandler） |
+| [config.md](./config.md) | 配置系统（YAML/环境变量） |
+| [messages.md](./messages.md) | 消息类型系统详解 |
+| [result.md](./result.md) | Agent 执行结果 |
+| [printers.md](./printers.md) | 打印机系统 |
+| [context.md](./context.md) | AgentContext 使用指南 |
+| [resources.md](./resources.md) | MCP 兼容资源系统 |
+| [errors.md](./errors.md) | 错误处理指南 |
 
 ## 快速导航
 
@@ -27,10 +34,11 @@ Hawi Agent 框架的官方文档。
 Event 是**只读、非阻塞**的观察机制：
 
 ```python
-from hawi.agent.events import EventBus, create_event_printer
+from hawi.agent.events import EventBus
+from hawi.agent.printers import create_printer
 
 bus = EventBus()
-bus.subscribe(create_event_printer())
+bus.subscribe(create_printer(streaming=True).handle)
 
 async for event in agent.arun("prompt", event_bus=bus):
     pass
