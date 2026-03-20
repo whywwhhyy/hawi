@@ -8,7 +8,7 @@ Printer 系统采用策略模式，根据终端环境自动选择最佳输出方
 
 | Printer | 说明 | 适用场景 |
 |---------|------|---------|
-| `RichPrinter` | 智能流式 Markdown 渲染器 | 终端环境（默认） |
+| `RichPrinter` | 智能流式 Markdown 渲染器，支持代码块自定义样式 | 终端环境（默认） |
 | `PlainPrinter` | 纯文本输出 | 非终端环境 |
 | `BasePrinter` | 基类 | 自定义实现 |
 | `auto` | 自动检测 | 通用（默认） |
@@ -27,6 +27,41 @@ Printer 系统采用策略模式，根据终端环境自动选择最佳输出方
 - dumb/unknown 终端 → Non-streaming 模式
 - CI 环境 → Non-streaming 模式
 - Jupyter/Notebook → Non-streaming 模式
+- 管道/重定向 → PlainPrinter
+
+## 代码块样式自定义
+
+`RichPrinter` 基于 `markdown-it-py` 解析，支持丰富的代码块样式自定义：
+
+```python
+from hawi.agent.printers import RichPrinter
+
+# 基础样式
+printer = RichPrinter(
+    code_theme="dracula",           # 语法高亮主题
+    code_border_style="blue",       # 边框颜色
+    code_background="#1e1e1e",      # 背景色
+    code_show_language=True,        # 显示语言标识
+    code_line_numbers=False,        # 显示行号
+)
+```
+
+**效果示例：**
+
+```
+╭─ 📄 python ─────────────────────────────────────────────────╮
+│ def hello():                                                 │
+│     print("Hello, World!")                                   │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+**可用主题：**
+- `monokai`（默认）
+- `dracula`
+- `github-dark`, `github-light`
+- `one-dark`
+- `solarized-dark`, `solarized-light`
+- `gruvbox-dark`, `gruvbox-light`
 
 ## 工厂函数
 
@@ -42,10 +77,10 @@ printer = create_printer()
 printer = create_printer(streaming=True)   # 强制 streaming
 printer = create_printer(streaming=False)  # 强制 non-streaming
 
-# 完全控制
+# 完整控制
 printer = create_printer(
-    printer_type="auto",     # "auto" | "rich" | "plain"
-    streaming=None,          # None=自动, True=streaming, False=non-streaming
+    printer_type="auto",        # "auto" | "rich" | "plain"
+    streaming=None,             # None=自动, True=streaming, False=non-streaming
     show_reasoning=True,
     show_tools=True,
     show_errors=True,
@@ -67,7 +102,7 @@ HAWI_STREAMING=1 python my_agent.py
 
 ## RichPrinter
 
-智能流式 Markdown 渲染器，支持自动/手动模式切换。
+智能流式 Markdown 渲染器，支持自定义代码块样式。
 
 ```python
 from hawi.agent.printers import RichPrinter
@@ -75,22 +110,32 @@ from hawi.agent.printers import RichPrinter
 # 自动检测模式
 printer = RichPrinter()
 
-# 强制指定模式
-printer = RichPrinter(streaming=True)   # Streaming 模式
-printer = RichPrinter(streaming=False)  # Non-streaming 模式
+# 自定义代码块样式
+printer = RichPrinter(
+    code_theme="dracula",
+    code_border_style="blue",
+    code_background="#1e1e1e",
+    code_show_language=True,
+    code_line_numbers=True,
+)
 
 # 完整参数
 printer = RichPrinter(
-    show_reasoning=True,       # 显示 thinking 内容
-    show_tools=True,           # 显示工具调用
-    show_errors=True,          # 显示错误
-    show_error_stack=True,     # 显示错误堆栈
-    max_arg_length=80,         # 参数最大显示长度
-    max_result_length=200,     # 结果最大显示长度
-    show_full_tool_content=True,  # 显示完整工具内容
-    streaming=None,            # None=自动, True=streaming, False=non-streaming
-    console=None,              # 自定义 Console
-    refresh_per_second=12.5,   # Live 刷新频率
+    show_reasoning=True,            # 显示 thinking 内容
+    show_tools=True,                # 显示工具调用
+    show_errors=True,               # 显示错误
+    show_error_stack=True,          # 显示错误堆栈
+    max_arg_length=80,              # 参数最大显示长度
+    max_result_length=200,          # 结果最大显示长度
+    show_full_tool_content=True,    # 显示完整工具内容
+    streaming=None,                 # None=自动, True=streaming, False=non-streaming
+    console=None,                   # 自定义 Console
+    refresh_per_second=12.5,        # Live 刷新频率
+    code_theme="monokai",           # 代码主题
+    code_border_style="dim",        # 代码块边框样式
+    code_background=None,           # 代码块背景色
+    code_show_language=True,        # 显示代码语言
+    code_line_numbers=False,        # 显示行号
 )
 ```
 
@@ -159,6 +204,20 @@ printer = create_printer(streaming=True)
 printer = create_printer(streaming=False)
 ```
 
+### 自定义代码块样式
+
+```python
+# 使用 Dracula 主题 + 蓝色边框 + 深色背景
+printer = RichPrinter(
+    code_theme="dracula",
+    code_border_style="blue",
+    code_background="#1e1e1e",
+    code_show_language=True,
+)
+
+agent = HawiAgent(model=model, printer=printer)
+```
+
 ### 非终端环境
 
 ```python
@@ -173,8 +232,8 @@ Printer 自动处理以下事件类型：
 | 事件 | 处理 |
 |------|------|
 | `model.stream_start` | 流式响应开始 |
-| `model.stream_stop` | 流式响应结束（不含 usage） |
-| `model.metadata` | 模型度量指标（usage、latency 等） |
+| `model.stream_stop` | 流式响应结束（含 usage） |
+| `model.metadata` | 模型元数据（usage、latency 等） |
 | `model.content_block_start` | 内容块开始 |
 | `model.content_block_delta` | 内容块增量更新 |
 | `model.content_block_stop` | 内容块结束 |

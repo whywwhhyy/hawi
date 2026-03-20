@@ -11,6 +11,11 @@ Rich Printer - 智能流式 Markdown 渲染器
 - 支持环境变量覆盖（HAWI_STREAMING=0/1）
 - 支持参数强制指定（streaming=True/False）
 
+代码块样式：
+- 基于 markdown-it-py 解析，可自定义 fence 规则
+- 支持 Pygments 主题选择（code_theme）
+- 支持通过 Console 主题自定义整体样式
+
 技术方案：
 - 块级分割：识别 Markdown 块边界（双换行分隔）
 - 增量渲染：streaming 模式下当前块使用 Live 实时更新
@@ -29,6 +34,9 @@ from rich.console import Console, RenderableType
 from rich.live import Live
 from rich.markdown import Markdown as RichMarkdown
 from rich.panel import Panel
+from rich.rule import Rule
+from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 
 from hawi.agent.events import (
@@ -52,24 +60,205 @@ def _detect_streaming_support() -> bool:
     3. CI 环境（CI=true） → 不支持
     4. 其他 → 支持
     """
-    # 非 TTY 不支持
     if not sys.stdout.isatty():
         return False
     
-    # 检查终端类型
     term = os.environ.get("TERM", "").lower()
     if term in ("dumb", "unknown", ""):
         return False
     
-    # CI 环境通常不支持动态更新
     if os.environ.get("CI", "").lower() in ("true", "1", "yes"):
         return False
     
-    # Jupyter/Notebook 环境检查
     if "JPY_PARENT_PID" in os.environ:
         return False
     
     return True
+
+
+class CodeBlockRenderer:
+    """
+    自定义代码块渲染器
+    
+    利用 markdown-it-py 的 token 信息，为代码块添加自定义样式：
+    - 边框
+    - 背景色
+    - 语言标识
+    - 行号
+    """
+    
+    def __init__(
+        self,
+        theme: str = "monokai",
+        border_style: str = "dim",
+        background_color: Optional[str] = None,
+        show_language: bool = True,
+        show_line_numbers: bool = False,
+    ):
+        self.theme = theme
+        self.border_style = border_style
+        self.background_color = background_color
+        self.show_language = show_language
+        self.show_line_numbers = show_line_numbers
+    
+    def render(self, code: str, language: Optional[str] = None) -> RenderableType:
+        """渲染代码块为带样式的 Panel"""
+        # 创建语法高亮
+        if language:
+            syntax = Syntax(
+                code,
+                language,
+                theme=self.theme,
+                background_color=self.background_color,
+                line_numbers=self.show_line_numbers,
+                word_wrap=True,
+            )
+        else:
+            # 无语言时使用普通文本
+            syntax = Text(
+                code,
+                style=f"on {self.background_color}" if self.background_color else None
+            )
+        
+        # 构建标题
+        title = None
+        if self.show_language and language:
+            title = f"📄 {language}"
+        elif self.show_language:
+            title = "📄 text"
+        
+        # 包装在 Panel 中
+        return Panel(
+            syntax,
+            border_style=self.border_style,
+            title=title,
+            title_align="left",
+            padding=(0, 1),
+        )
+
+
+class StyledMarkdown:
+    """
+    自定义 Markdown 渲染器，支持代码块样式自定义
+    
+    通过 markdown-it-py 解析 token，识别代码块并应用自定义样式
+    """
+    
+    def __init__(
+        self,
+        markup: str,
+        code_renderer: Optional[CodeBlockRenderer] = None,
+        code_theme: str = "monokai",
+    ):
+        self.markup = markup
+        self.code_renderer = code_renderer or CodeBlockRenderer(theme=code_theme)
+        # 使用 markdown-it-py 解析
+        self._md = MarkdownIt("commonmark").enable("table")
+    
+    def __rich__(self) -> RenderableType:
+        """Rich 渲染协议"""
+        from rich.console import Group
+        
+        tokens = self._md.parse(self.markup)
+        renderables: list[RenderableType] = []
+        
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            
+            if token.type == "fence":
+                # 代码块 - 使用自定义渲染器
+                language = token.info.strip() if token.info else None
+                code = token.content
+                renderables.append(self.code_renderer.render(code, language))
+                i += 1
+            
+            elif token.type == "paragraph_open":
+                # 普通段落
+                # 收集段落内容直到 paragraph_close
+                content_parts = []
+                i += 1
+                while i < len(tokens) and tokens[i].type != "paragraph_close":
+                    if tokens[i].type == "inline":
+                        content_parts.append(tokens[i].content)
+                    i += 1
+                if content_parts:
+                    # 使用 RichMarkdown 渲染段落
+                    para_text = "".join(content_parts)
+                    md = RichMarkdown(para_text, code_theme=self.code_renderer.theme)
+                    renderables.append(md)
+                i += 1  # 跳过 paragraph_close
+            
+            elif token.type == "heading_open":
+                # 标题
+                level = int(token.tag[1]) if token.tag.startswith("h") else 1
+                i += 1
+                if i < len(tokens) and tokens[i].type == "inline":
+                    text = tokens[i].content
+                    renderables.append(Text(text, style=f"bold {'#' * level}"))
+                i += 2  # 跳过 inline 和 heading_close
+            
+            elif token.type == "bullet_list_open":
+                # 无序列表
+                list_items = []
+                i += 1
+                while i < len(tokens) and tokens[i].type != "bullet_list_close":
+                    if tokens[i].type == "list_item_open":
+                        i += 1
+                        if i < len(tokens) and tokens[i].type == "inline":
+                            list_items.append(f"• {tokens[i].content}")
+                        i += 1  # 跳过 list_item_close
+                    i += 1
+                if list_items:
+                    renderables.append(Text("\n".join(list_items)))
+                i += 1  # 跳过 bullet_list_close
+            
+            elif token.type == "ordered_list_open":
+                # 有序列表
+                list_items = []
+                num = 1
+                i += 1
+                while i < len(tokens) and tokens[i].type != "ordered_list_close":
+                    if tokens[i].type == "list_item_open":
+                        i += 1
+                        if i < len(tokens) and tokens[i].type == "inline":
+                            list_items.append(f"{num}. {tokens[i].content}")
+                            num += 1
+                        i += 1
+                    i += 1
+                if list_items:
+                    renderables.append(Text("\n".join(list_items)))
+                i += 1
+            
+            elif token.type == "blockquote_open":
+                # 引用块
+                content_parts = []
+                i += 1
+                while i < len(tokens) and tokens[i].type != "blockquote_close":
+                    if tokens[i].type == "inline":
+                        content_parts.append(tokens[i].content)
+                    i += 1
+                if content_parts:
+                    text = " ".join(content_parts)
+                    renderables.append(Panel(
+                        Text(text, style="italic green"),
+                        border_style="green",
+                        title="Quote",
+                        title_align="left",
+                    ))
+                i += 1
+            
+            elif token.type == "hr":
+                # 分隔线
+                renderables.append(Rule(style="dim"))
+                i += 1
+            
+            else:
+                i += 1
+        
+        if len(renderables) == 1:
+            return renderables[0]
+        return Group(*renderables) if renderables else Text("")
 
 
 class RichPrinter(BasePrinter):
@@ -88,21 +277,41 @@ class RichPrinter(BasePrinter):
     - 无 Live 动态更新
     - 适合：管道、文件重定向、dumb 终端、CI 环境
     
+    代码块样式：
+    - 基于 markdown-it-py 解析，支持自定义 fence 规则
+    - 支持边框、背景色、语言标识、行号
+    - 支持 Pygments 主题选择（code_theme）
+    
     Args:
         streaming: 强制指定模式（None=自动检测, True=streaming, False=non-streaming）
         console: 自定义 Console 实例
         refresh_per_second: Live 刷新频率（streaming 模式有效）
+        code_theme: 代码块语法高亮主题（默认 monokai）
+        code_border_style: 代码块边框样式（默认 dim）
+        code_background: 代码块背景色（默认 None）
+        code_show_language: 是否显示代码语言标识（默认 True）
+        code_line_numbers: 是否显示行号（默认 False）
     
     Example:
         # 自动检测模式
         printer = RichPrinter()
         
-        # 强制 streaming 模式
-        printer = RichPrinter(streaming=True)
-        
-        # 强制 non-streaming 模式
-        printer = RichPrinter(streaming=False)
+        # 自定义代码块样式
+        printer = RichPrinter(
+            code_theme="dracula",
+            code_border_style="blue",
+            code_background="#1e1e1e",
+            code_show_language=True,
+            code_line_numbers=True,
+        )
     """
+
+    # 可用的代码高亮主题
+    CODE_THEMES = [
+        "monokai", "dracula", "github-dark", "github-light",
+        "one-dark", "solarized-dark", "solarized-light",
+        "gruvbox-dark", "gruvbox-light",
+    ]
 
     def __init__(
         self,
@@ -117,6 +326,11 @@ class RichPrinter(BasePrinter):
         streaming: bool | None = None,
         console: Console | None = None,
         refresh_per_second: float = 12.5,
+        code_theme: str = "monokai",
+        code_border_style: str = "dim",
+        code_background: Optional[str] = None,
+        code_show_language: bool = True,
+        code_line_numbers: bool = False,
     ):
         super().__init__(
             show_reasoning=show_reasoning,
@@ -127,19 +341,33 @@ class RichPrinter(BasePrinter):
             max_result_length=max_result_length,
             show_full_tool_content=show_full_tool_content,
         )
+        
+        # 代码主题验证
+        if code_theme not in self.CODE_THEMES:
+            logger.warning(f"Unknown code theme: {code_theme}, using 'monokai'")
+            code_theme = "monokai"
+        
+        # 创建代码块渲染器
+        self._code_renderer = CodeBlockRenderer(
+            theme=code_theme,
+            border_style=code_border_style,
+            background_color=code_background,
+            show_language=code_show_language,
+            show_line_numbers=code_line_numbers,
+        )
+        self._code_theme = code_theme
+        
+        # Console 配置
         self._console = console or Console()
         self._refresh_per_second = refresh_per_second
 
-        # 确定工作模式（参数 > 环境变量 > 自动检测）
+        # 确定工作模式
         env_streaming = os.environ.get("HAWI_STREAMING")
         if streaming is not None:
-            # 参数强制指定
             self._streaming_mode = streaming
         elif env_streaming is not None:
-            # 环境变量覆盖
             self._streaming_mode = env_streaming.lower() in ("1", "true", "yes")
         else:
-            # 自动检测
             self._streaming_mode = _detect_streaming_support()
 
         # Markdown 解析器
@@ -149,8 +377,6 @@ class RichPrinter(BasePrinter):
         self._buffer = ""
         self._is_thinking = False
         self._in_live_mode = False
-
-        # Live 显示（仅 streaming 模式）
         self._live: Optional[Live] = None
 
         # 工具调用状态
@@ -161,6 +387,19 @@ class RichPrinter(BasePrinter):
     def streaming_mode(self) -> bool:
         """当前是否处于 streaming 模式"""
         return self._streaming_mode
+
+    @property
+    def code_theme(self) -> str:
+        """当前代码高亮主题"""
+        return self._code_theme
+
+    def _create_markdown(self, text: str) -> StyledMarkdown:
+        """创建带样式的 Markdown 对象"""
+        return StyledMarkdown(
+            text,
+            code_renderer=self._code_renderer,
+            code_theme=self._code_theme,
+        )
 
     def _start_live(self) -> None:
         """启动 Live 显示（仅 streaming 模式）"""
@@ -184,25 +423,14 @@ class RichPrinter(BasePrinter):
         self._in_live_mode = False
 
     def _update_live(self, content: RenderableType) -> None:
-        """更新 Live 内容（仅 streaming 模式）"""
+        """更新 Live 内容"""
         if self._live:
             self._live.update(content, refresh=True)
 
     def _feed_text(self, text: str) -> None:
-        """
-        接收文本片段，根据模式选择处理方式
-        
-        Streaming 模式：
-        - 完整块立即输出
-        - 当前块 Live 更新
-        
-        Non-streaming 模式：
-        - 只累积，不输出
-        - 块完成时一次性输出
-        """
+        """接收文本片段，进行增量解析"""
         self._buffer += text
         
-        # 检查是否有完整的块（以 \n\n 结尾）
         while "\n\n" in self._buffer:
             idx = self._buffer.find("\n\n")
             if idx == -1:
@@ -216,18 +444,17 @@ class RichPrinter(BasePrinter):
                     self._stop_live()
                 self._render_and_print(complete_block, final=True)
         
-        # Streaming 模式：剩余内容使用 Live 更新
         if self._streaming_mode:
             if self._buffer.strip() or self._in_live_mode:
                 self._start_live()
                 self._render_and_print(self._buffer, final=False)
 
     def _render_and_print(self, text: str, final: bool = True) -> None:
-        """渲染并打印/更新文本"""
+        """渲染并打印文本"""
         if not text.strip():
             return
         
-        md = RichMarkdown(text)
+        md = self._create_markdown(text)
         
         if self._is_thinking:
             content = Panel(
@@ -244,11 +471,10 @@ class RichPrinter(BasePrinter):
             self._update_live(content)
 
     def _finalize(self) -> None:
-        """最终化当前块（流结束时的处理）"""
+        """最终化当前块"""
         if self._streaming_mode:
             self._stop_live()
         
-        # 输出剩余内容
         if self._buffer.strip():
             self._render_and_print(self._buffer, final=True)
         
@@ -326,10 +552,8 @@ class RichPrinter(BasePrinter):
         arguments: dict[str, Any] | None = None,
     ) -> None:
         """打印工具结果"""
-        from rich.json import JSON
-        from rich.rule import Rule
-        from rich.table import Table
         from rich.console import Group
+        from rich.json import JSON
 
         timestamp = self._get_timestamp()
         status_emoji = "✅" if success else "❌"
@@ -397,4 +621,29 @@ class RichPrinter(BasePrinter):
 
     def _print_usage(self, usage: Any) -> None:
         """打印 token 用量"""
-        pass
+        if usage is None:
+            return
+        
+        # 提取 token 信息
+        input_tokens = getattr(usage, 'input_tokens', None) or getattr(usage, 'prompt_tokens', None)
+        output_tokens = getattr(usage, 'output_tokens', None) or getattr(usage, 'completion_tokens', None)
+        total_tokens = getattr(usage, 'total_tokens', None)
+        
+        if not any([input_tokens, output_tokens, total_tokens]):
+            return
+        
+        # 构建显示文本
+        parts = []
+        if input_tokens is not None:
+            parts.append(f"↓ {input_tokens}")
+        if output_tokens is not None:
+            parts.append(f"↑ {output_tokens}")
+        if total_tokens is not None:
+            parts.append(f"Σ {total_tokens}")
+        
+        if parts:
+            usage_text = "  |  ".join(parts)
+            self._console.print(
+                f"[dim]Tokens: {usage_text}[/dim]",
+                justify="right"
+            )
