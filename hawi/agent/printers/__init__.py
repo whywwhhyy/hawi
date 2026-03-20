@@ -6,10 +6,11 @@ from .base import BasePrinter as BasePrinter
 from .plain import PlainPrinter as PlainPrinter
 from .block import BlockPrinter as BlockPrinter
 from .rich import RichPrinter as RichPrinter
+from .streaming import StreamingMarkdownPrinter as StreamingMarkdownPrinter
 
 
 def create_printer(
-    printer_type: Literal['auto','rich','block','plain'] = "auto",
+    printer_type: Literal['auto','rich','block','plain','streaming'] = "auto",
     *,
     streaming: bool = False,
     show_reasoning: bool = True,
@@ -25,11 +26,11 @@ def create_printer(
 
     自动检测环境并选择合适的打印机：
     - auto模式：
-      - 终端环境：使用 rich printer
+      - 终端环境：使用 streaming printer（流式 Markdown 渲染）
       - 非终端 + streaming：使用 plain printer（逐行输出）
       - 非终端 + 非 streaming：使用 block printer（完整块输出）
     - 显式指定 printer 时：
-      - rich + 非终端：回退到 block printer（不支持 Live 更新）
+      - streaming/rich + 非终端：回退到 block printer（不支持 Live 更新）
       - 其他：按指定类型创建
 
     Args:
@@ -45,7 +46,7 @@ def create_printer(
     # auto 模式：根据环境自动选择
     if printer_type == "auto":
         if is_tty:
-            actual_printer = "rich"
+            actual_printer = "streaming"
         elif streaming:
             # 非终端 + streaming：使用 plain printer 逐行输出
             actual_printer = "plain"
@@ -54,8 +55,8 @@ def create_printer(
             actual_printer = "block"
     else:
         actual_printer = printer_type
-        # 显式指定 rich 但非终端：回退到 block（Live 不支持管道）
-        if actual_printer == "rich" and not is_tty:
+        # 显式指定 streaming/rich 但非终端：回退到 block（Live 不支持管道）
+        if actual_printer in ("streaming", "rich") and not is_tty:
             actual_printer = "block"
 
     common_args = {
@@ -74,5 +75,7 @@ def create_printer(
         return BlockPrinter(**common_args)
     elif actual_printer == "plain":
         return PlainPrinter(**common_args)
+    elif actual_printer == "streaming":
+        return StreamingMarkdownPrinter(**common_args)
     else:
         raise ValueError(f"Unknown printer type: {printer_type}")

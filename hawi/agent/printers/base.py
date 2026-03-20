@@ -13,10 +13,13 @@ from hawi.agent.events import (
     AgentToolResultEvent,
     AgentErrorEvent,
     ModelErrorEvent,
+    ModelStreamStopEvent,
+    ModelMetadataEvent,
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStopEvent,
 )
+from hawi.models.message import TokenUsage
 
 # Backward compatibility aliases
 ModelToolCallBlockStartEvent = ModelToolCallBlockStartEvent
@@ -74,6 +77,7 @@ class BasePrinter(ABC):
             "model.tool_use_block_stop": self._on_tool_use_block_stop,
             "model.stream_start": self._on_stream_start,
             "model.stream_stop": self._on_stream_stop,
+            "model.metadata": self._on_metadata,
             "agent.run_start": self._on_run_start,
             "agent.run_stop": self._on_run_stop,
             "agent.tool_call": self._on_tool_call,
@@ -94,6 +98,15 @@ class BasePrinter(ABC):
     async def _on_stream_stop(self, event: Event) -> None:
         """Model 流式响应结束"""
         self._current_block_type = None
+        assert isinstance(event, ModelStreamStopEvent)
+        if event.usage:
+            self._print_usage(event.usage)
+
+    async def _on_metadata(self, event: Event) -> None:
+        """Model 元数据（usage、latency 等）"""
+        assert isinstance(event, ModelMetadataEvent)
+        if event.usage:
+            self._print_usage(event.usage)
 
     @abstractmethod
     async def _on_content_block_start(self, event: Event) -> None:
@@ -222,4 +235,8 @@ class BasePrinter(ABC):
     @abstractmethod
     def _print_error(self, error: str) -> None:
         """打印错误 - 子类实现"""
+        pass
+
+    def _print_usage(self, usage: TokenUsage) -> None:
+        """打印 token 用量 - 子类可重写"""
         pass

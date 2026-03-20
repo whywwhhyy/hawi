@@ -8,6 +8,7 @@ Printer 系统采用策略模式，支持多种输出格式：
 
 | Printer | 说明 | 适用场景 |
 |---------|------|---------|
+| `StreamingMarkdownPrinter` | 流式 Markdown 渲染，增量块级输出 | 终端 TTY 环境（默认） |
 | `RichPrinter` | Rich 库格式化，支持颜色和布局 | 终端 TTY 环境 |
 | `BlockPrinter` | 分块输出，流水线友好 | 非 TTY + 非流式 |
 | `PlainPrinter` | 纯文本逐行输出 | 非 TTY + 流式 |
@@ -21,7 +22,7 @@ Printer 系统采用策略模式，支持多种输出格式：
 from hawi.agent.printers import create_printer
 
 printer = create_printer(
-    printer_type="auto",     # "auto" | "rich" | "block" | "plain"
+    printer_type="auto",     # "auto" | "rich" | "block" | "plain" | "streaming"
     streaming=False,
     show_reasoning=True,
     show_tools=True,
@@ -40,14 +41,60 @@ is_tty = sys.stdout.isatty()
 
 if printer_type == "auto":
     if is_tty:
-        # 终端环境 → RichPrinter
-        actual = "rich"
+        # 终端环境 → StreamingMarkdownPrinter（默认）
+        actual = "streaming"
     elif streaming:
         # 非终端 + 流式 → PlainPrinter
         actual = "plain"
     else:
         # 非终端 + 非流式 → BlockPrinter
         actual = "block"
+```
+
+## StreamingMarkdownPrinter
+
+流式 Markdown 渲染器，基于块级增量解析策略，大幅提升长文档流式渲染性能。
+
+**核心特性：**
+- 块级分割：识别 Markdown 块边界（空行分隔）
+- 增量输出：完成的块立即输出，不等待流结束
+- 动态更新：当前未完成块使用 Live 实时更新
+- 自动清理：流结束时自动处理剩余内容
+
+```python
+from hawi.agent.printers import StreamingMarkdownPrinter
+
+printer = StreamingMarkdownPrinter(
+    show_reasoning=True,       # 显示 thinking 内容
+    show_tools=True,           # 显示工具调用
+    show_errors=True,          # 显示错误
+    show_error_stack=True,     # 显示错误堆栈
+    max_arg_length=80,         # 参数最大显示长度
+    max_result_length=200,     # 结果最大显示长度
+    show_full_tool_content=True,  # 显示完整工具内容
+    console=None,              # 自定义 Console
+    refresh_per_second=12.5,   # 刷新频率
+)
+```
+
+**工作原理：**
+1. 接收文本片段，累积到缓冲区
+2. 识别块边界（双换行符 `\n\n` 分隔）
+3. 已完成的块立即输出到终端
+4. 当前未完成块使用 Rich Live 动态更新
+5. 流结束时，停止 Live 并输出剩余内容
+
+**Thinking 模式：**
+当模型输出 thinking 内容时，会显示带边框的面板：
+
+```
+┌─────────────────────────────────┐
+│ 🤔 Thinking                     │
+├─────────────────────────────────┤
+│ 让我逐步分析这个问题...          │
+│                                 │
+│ 第一步：理解问题                 │
+└─────────────────────────────────┘
 ```
 
 ## RichPrinter
@@ -168,7 +215,8 @@ Printer 自动处理以下事件类型：
 | 事件 | 处理 |
 |------|------|
 | `model.stream_start` | 流式响应开始 |
-| `model.stream_stop` | 流式响应结束 |
+| `model.stream_stop` | 流式响应结束（含 usage） |
+| `model.metadata` | 模型元数据（usage、latency 等） |
 | `model.content_block_start` | 内容块开始 |
 | `model.content_block_delta` | 内容块增量更新 |
 | `model.content_block_stop` | 内容块结束 |

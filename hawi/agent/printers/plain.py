@@ -206,3 +206,16 @@ class PlainPrinter(BasePrinter):
         timestamp = self._get_timestamp()
         _stdout.write(f"\n[{timestamp}] [Error] {error}\n")
         _stdout.flush()
+
+    def _print_usage(self, usage) -> None:
+        """打印 token 用量"""
+        timestamp = self._get_timestamp()
+        parts = [f"in={usage['input_tokens']}", f"out={usage['output_tokens']}"]
+        cache_write = usage.get('cache_write_tokens')
+        cache_read = usage.get('cache_read_tokens')
+        if cache_write:
+            parts.append(f"cache_write={cache_write}")
+        if cache_read:
+            parts.append(f"cache_read={cache_read}")
+        _stdout.write(f"[{timestamp}] [Usage] {', '.join(parts)}\n")
+        _stdout.flush()

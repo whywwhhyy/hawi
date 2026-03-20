@@ -395,3 +395,15 @@ class RichPrinter(BasePrinter):
         self._console.print(panel)
         # Add newline after error for proper separation in piped output
         self._console.print()
+
+    def _print_usage(self, usage) -> None:
+        """打印 token 用量"""
+        self._stop_live()
+        parts = [f"[bold]in[/bold]: {usage['input_tokens']}", f"[bold]out[/bold]: {usage['output_tokens']}"]
+        cache_write = usage.get('cache_write_tokens')
+        cache_read = usage.get('cache_read_tokens')
+        if cache_write:
+            parts.append(f"[bold]cache_write[/bold]: {cache_write}")
+        if cache_read:
+            parts.append(f"[bold]cache_read[/bold]: {cache_read}")
+        self._console.print(Text.from_markup(f"[dim]tokens — {' | '.join(parts)}[/dim]"))
