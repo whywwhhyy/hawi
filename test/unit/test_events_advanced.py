@@ -341,7 +341,7 @@ class TestConversationPrinterAdvanced:
         ))
 
         # Verify reasoning was captured in buffer before stop event
-        assert "Thinking..." in printer_with._current_content
+        assert "Thinking..." in printer_with._buffer
 
         # Reasoning is buffered and displayed on stop event
         reasoning_part = ReasoningPart(
@@ -378,7 +378,7 @@ class TestConversationPrinterAdvanced:
         ))
 
         # Verify reasoning buffer is empty when hidden
-        assert printer_without._current_content == ""
+        assert printer_without._buffer == ""
 
     @pytest.mark.asyncio
     async def test_printer_tool_visibility(self):
@@ -395,7 +395,7 @@ class TestConversationPrinterAdvanced:
         ))
 
         # Verify no active tool calls when hidden
-        assert len(printer_hidden._pending_tool_calls) == 0
+        assert len(printer_hidden._active_tool_calls) == 0
 
     @pytest.mark.asyncio
     async def test_printer_stream_lifecycle(self):

@@ -27,7 +27,6 @@ from .context import AgentContext
 from .printers import (
     PlainPrinter,
     RichPrinter,
-    BlockPrinter,
 )
 from .result import AgentRunResult, ToolCallRecord
 
@@ -37,7 +36,6 @@ __all__ = [
     "AgentContext",
     "PlainPrinter",
     "RichPrinter",
-    "BlockPrinter",
     # Results
     "AgentRunResult",
     "ToolCallRecord",

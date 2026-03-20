@@ -1,10 +1,7 @@
 """
-Hawi Printer Implementations
+PlainPrinter - 纯文本事件打印机
 
-提供多种事件打印机实现：
-- PlainPrinter: 纯文本输出
-- BlockPrinter: 块级渲染输出
-- RichPrinter: 动态流式渲染输出
+用于非终端环境的简单文本输出。
 """
 
 from __future__ import annotations

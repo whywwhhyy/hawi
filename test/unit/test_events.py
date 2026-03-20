@@ -331,7 +331,7 @@ class TestConversationPrinter:
         )
         await printer.handle(event)
         # Verify content is captured in buffer
-        assert "Hello World" in printer._current_content
+        assert "Hello World" in printer._buffer
 
     @pytest.mark.asyncio
     async def test_handle_reasoning_delta(self, printer):
@@ -360,7 +360,7 @@ class TestConversationPrinter:
         await printer.handle(delta_event)
 
         # Verify content is buffered before stop event
-        assert "Let me think..." in printer._current_content
+        assert "Let me think..." in printer._buffer
 
         # Reasoning is only printed on block stop
         from hawi.models.message import ReasoningPart
@@ -441,10 +441,10 @@ class TestConversationPrinter:
     @pytest.mark.asyncio
     async def test_hide_reasoning(self, monkeypatch):
         """Test hiding reasoning output."""
+        from rich.console import Console
         output = io.StringIO()
-        import hawi.agent.printers.rich as rich_module
-        monkeypatch.setattr(rich_module, '_stdout', output)
-        printer = RichStreamingPrinter(show_reasoning=False)
+        console = Console(file=output, force_terminal=True, width=80)
+        printer = RichStreamingPrinter(show_reasoning=False, console=console)
         from hawi.models.message import DeltaThinkingPart
 
         part: DeltaThinkingPart = {
@@ -460,15 +460,16 @@ class TestConversationPrinter:
         )
         await printer.handle(event)
         # When reasoning is hidden, buffer should not be populated
-        assert printer._reasoning_buffer == ""
+        assert printer._buffer == ""
 
     @pytest.mark.asyncio
     async def test_hide_tools(self, monkeypatch):
         """Test hiding tool output."""
+        from rich.console import Console
+        import io
         output = io.StringIO()
-        import hawi.agent.printers.rich as rich_module
-        monkeypatch.setattr(rich_module, '_stdout', output)
-        printer = RichStreamingPrinter(show_tools=False)
+        console = Console(file=output, force_terminal=True, width=80)
+        printer = RichStreamingPrinter(show_tools=False, console=console)
         event = AgentToolCallEvent.create(
             run_id="run-1",
             tool_name="calculate",

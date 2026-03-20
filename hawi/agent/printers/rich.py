@@ -1,49 +1,109 @@
 """
-Hawi Printer Implementations
+Rich Printer - 智能流式 Markdown 渲染器
 
-提供多种事件打印机实现：
-- RichPrinter: 动态流式渲染输出 (Markdown + Live)
+支持两种工作模式：
+1. Streaming 模式（默认）：实时动态更新当前块，适合标准终端
+2. Non-streaming 模式：块确定后才打印，适合不支持动态更新的终端
+
+自动检测终端能力：
+- 检测 TTY 状态
+- 检测终端类型（dumb/unknown 视为 non-streaming）
+- 支持环境变量覆盖（HAWI_STREAMING=0/1）
+- 支持参数强制指定（streaming=True/False）
+
+技术方案：
+- 块级分割：识别 Markdown 块边界（双换行分隔）
+- 增量渲染：streaming 模式下当前块使用 Live 实时更新
+- 延迟输出：non-streaming 模式下块完成才输出
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Any, Optional
 
-from rich.console import Console, RenderableType, Group
-
-# For test mocking compatibility
-_stdout = sys.stdout
+from markdown_it import MarkdownIt
+from rich.console import Console, RenderableType
 from rich.live import Live
-from rich.markdown import Markdown
+from rich.markdown import Markdown as RichMarkdown
 from rich.panel import Panel
 from rich.text import Text
-from rich.json import JSON
-from rich.rule import Rule
 
 from hawi.agent.events import (
     Event,
-    ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,
+    ModelContentBlockStartEvent,
     ModelContentBlockStopEvent,
-    ModelToolCallBlockStartEvent,
-    ModelToolCallBlockDeltaEvent,
-    ModelToolCallBlockStopEvent,
 )
 from hawi.agent.printers.base import BasePrinter
 
 logger = logging.getLogger(__name__)
 
+
+def _detect_streaming_support() -> bool:
+    """
+    检测当前终端是否支持 streaming（Live 动态更新）
+    
+    检测逻辑（按优先级）：
+    1. 非 TTY → 不支持
+    2. dumb/unknown 终端类型 → 不支持
+    3. CI 环境（CI=true） → 不支持
+    4. 其他 → 支持
+    """
+    # 非 TTY 不支持
+    if not sys.stdout.isatty():
+        return False
+    
+    # 检查终端类型
+    term = os.environ.get("TERM", "").lower()
+    if term in ("dumb", "unknown", ""):
+        return False
+    
+    # CI 环境通常不支持动态更新
+    if os.environ.get("CI", "").lower() in ("true", "1", "yes"):
+        return False
+    
+    # Jupyter/Notebook 环境检查
+    if "JPY_PARENT_PID" in os.environ:
+        return False
+    
+    return True
+
+
 class RichPrinter(BasePrinter):
     """
-    Rich Printer: 使用 rich 库输出真正的动态用户界面。
+    Rich Printer - 智能流式 Markdown 渲染器
     
-    特性：
-    - 支持流式输出渲染过的 markdown 到终端
-    - 实时流式显示输出（backtrack/re-render）
+    根据终端能力自动选择工作模式：
+    
+    **Streaming 模式**（动态更新）：
+    - 已完成块立即输出
+    - 当前块使用 Live 实时更新
+    - 适合：标准终端、支持 ANSI 的终端
+    
+    **Non-streaming 模式**（块级输出）：
+    - 块确定后（双换行）才输出
+    - 无 Live 动态更新
+    - 适合：管道、文件重定向、dumb 终端、CI 环境
+    
+    Args:
+        streaming: 强制指定模式（None=自动检测, True=streaming, False=non-streaming）
+        console: 自定义 Console 实例
+        refresh_per_second: Live 刷新频率（streaming 模式有效）
+    
+    Example:
+        # 自动检测模式
+        printer = RichPrinter()
+        
+        # 强制 streaming 模式
+        printer = RichPrinter(streaming=True)
+        
+        # 强制 non-streaming 模式
+        printer = RichPrinter(streaming=False)
     """
-    
+
     def __init__(
         self,
         *,
@@ -54,6 +114,7 @@ class RichPrinter(BasePrinter):
         max_arg_length: int = 80,
         max_result_length: int = 200,
         show_full_tool_content: bool = True,
+        streaming: bool | None = None,
         console: Console | None = None,
         refresh_per_second: float = 12.5,
     ):
@@ -68,243 +129,193 @@ class RichPrinter(BasePrinter):
         )
         self._console = console or Console()
         self._refresh_per_second = refresh_per_second
-        
-        self._live: Optional[Live] = None
-        self._current_content = ""
-        self._current_tool_name = ""
-        # 缓存 tool args 用于 Live 持续显示
-        self._pending_tool_calls: dict[str, str] = {} # tool_name -> args_json
-        # 当前正在执行的 tool 信息（用于 Live 更新）
-        self._current_tool_info: dict[str, Any] | None = None
-        # 存储流式工具结果片段
-        self._streaming_tool_parts: dict[str, list[str]] = {} # tool_call_id -> parts
 
-    def _start_live(self, renderable: RenderableType) -> None:
-        if self._live:
-            self._live.stop()
+        # 确定工作模式（参数 > 环境变量 > 自动检测）
+        env_streaming = os.environ.get("HAWI_STREAMING")
+        if streaming is not None:
+            # 参数强制指定
+            self._streaming_mode = streaming
+        elif env_streaming is not None:
+            # 环境变量覆盖
+            self._streaming_mode = env_streaming.lower() in ("1", "true", "yes")
+        else:
+            # 自动检测
+            self._streaming_mode = _detect_streaming_support()
+
+        # Markdown 解析器
+        self._md = MarkdownIt("commonmark").enable("table")
+
+        # 状态
+        self._buffer = ""
+        self._is_thinking = False
+        self._in_live_mode = False
+
+        # Live 显示（仅 streaming 模式）
+        self._live: Optional[Live] = None
+
+        # 工具调用状态
+        self._current_tool_name = ""
+        self._current_tool_args = ""
+
+    @property
+    def streaming_mode(self) -> bool:
+        """当前是否处于 streaming 模式"""
+        return self._streaming_mode
+
+    def _start_live(self) -> None:
+        """启动 Live 显示（仅 streaming 模式）"""
+        if not self._streaming_mode or self._live:
+            return
         self._live = Live(
-            renderable,
+            "",
             console=self._console,
             refresh_per_second=self._refresh_per_second,
-            transient=False, # Final output persists
+            transient=True,
+            auto_refresh=True,
         )
         self._live.start()
-
-    def _update_live(self, renderable: RenderableType) -> None:
-        if self._live:
-            self._live.update(renderable, refresh=True)
+        self._in_live_mode = True
 
     def _stop_live(self) -> None:
+        """停止 Live 显示"""
         if self._live:
             self._live.stop()
             self._live = None
+        self._in_live_mode = False
 
-    def _format_tool_arguments(self, arguments: dict[str, Any]) -> str:
-        """格式化工具参数为易读的格式。
+    def _update_live(self, content: RenderableType) -> None:
+        """更新 Live 内容（仅 streaming 模式）"""
+        if self._live:
+            self._live.update(content, refresh=True)
 
-        - 无换行符的参数: **arg**: value
-        - 有换行符的参数: **arg**:\nvalue
+    def _feed_text(self, text: str) -> None:
         """
-        if not arguments:
-            return ""
+        接收文本片段，根据模式选择处理方式
+        
+        Streaming 模式：
+        - 完整块立即输出
+        - 当前块 Live 更新
+        
+        Non-streaming 模式：
+        - 只累积，不输出
+        - 块完成时一次性输出
+        """
+        self._buffer += text
+        
+        # 检查是否有完整的块（以 \n\n 结尾）
+        while "\n\n" in self._buffer:
+            idx = self._buffer.find("\n\n")
+            if idx == -1:
+                break
+            
+            complete_block = self._buffer[:idx]
+            self._buffer = self._buffer[idx + 2:]
+            
+            if complete_block.strip():
+                if self._streaming_mode:
+                    self._stop_live()
+                self._render_and_print(complete_block, final=True)
+        
+        # Streaming 模式：剩余内容使用 Live 更新
+        if self._streaming_mode:
+            if self._buffer.strip() or self._in_live_mode:
+                self._start_live()
+                self._render_and_print(self._buffer, final=False)
 
-        lines: list[str] = []
-        for key, value in arguments.items():
-            value_str = str(value)
-            if '\n' in value_str:
-                # 有换行符的参数，冒号后换行
-                lines.append(f"[bold]{key}[/bold]:")
-                lines.append(value_str)
-            else:
-                # 无换行符的参数，单行显示
-                lines.append(f"[bold]{key}[/bold]: {value_str}")
+    def _render_and_print(self, text: str, final: bool = True) -> None:
+        """渲染并打印/更新文本"""
+        if not text.strip():
+            return
+        
+        md = RichMarkdown(text)
+        
+        if self._is_thinking:
+            content = Panel(
+                md,
+                title="[bold yellow]🤔 Thinking[/bold yellow]",
+                border_style="yellow"
+            )
+        else:
+            content = md
+        
+        if final:
+            self._console.print(content)
+        elif self._streaming_mode:
+            self._update_live(content)
 
-        full_text = "\n".join(lines)
-        if not self.show_full_tool_content and len(full_text) > self.max_arg_length:
-            full_text = full_text[:self.max_arg_length - 3] + "..."
+    def _finalize(self) -> None:
+        """最终化当前块（流结束时的处理）"""
+        if self._streaming_mode:
+            self._stop_live()
+        
+        # 输出剩余内容
+        if self._buffer.strip():
+            self._render_and_print(self._buffer, final=True)
+        
+        self._buffer = ""
 
-        return full_text
+    # ===== Event Handlers =====
 
     async def _on_content_block_start(self, event: Event) -> None:
+        """内容块开始"""
         assert isinstance(event, ModelContentBlockStartEvent)
-        self._current_content = ""
-        timestamp = self._get_timestamp()
-
-        if event.block_type == "text":
-            self._start_live(Markdown(f"*{timestamp}* "))
-        elif event.block_type == "thinking" and self.show_reasoning:
-            self._start_live(Panel(Markdown(""), title=f"[bold yellow]🤔 Thinking ({timestamp})[/bold yellow]", border_style="yellow"))
+        self._buffer = ""
+        self._is_thinking = event.block_type == "thinking"
 
     async def _on_content_block_delta(self, event: Event) -> None:
+        """内容块增量"""
         assert isinstance(event, ModelContentBlockDeltaEvent)
-        if not event.delta: return
-
-        if event.delta_type == "text":
-            self._current_content += event.delta
-            # Only update live if we have content
-            if self._current_content:
-                self._update_live(Markdown(self._current_content))
-            
-        elif event.delta_type == "thinking" and self.show_reasoning:
-            self._current_content += event.delta
-            if self._current_content:
-                self._update_live(Panel(
-                    Markdown(self._current_content),
-                    title="[bold yellow]🤔 Thinking[/bold yellow]",
-                    border_style="yellow"
-                ))
+        
+        if not event.delta:
+            return
+        
+        is_thinking = event.delta_type == "thinking"
+        
+        if event.delta_type == "text" or (is_thinking and self.show_reasoning):
+            self._is_thinking = is_thinking
+            self._feed_text(event.delta)
 
     async def _on_content_block_stop(self, event: Event) -> None:
-        self._stop_live()
-        self._current_content = ""
-        # Add newline after content block for proper separation in piped output
+        """内容块结束"""
+        self._finalize()
         self._console.print()
 
     async def _on_tool_use_block_start(self, event: Event) -> None:
+        """工具调用块开始"""
+        from hawi.agent.events import ModelToolCallBlockStartEvent
         assert isinstance(event, ModelToolCallBlockStartEvent)
+        
         self._current_tool_name = event.tool_name
-        self._current_content = ""
-        timestamp = self._get_timestamp()
-
+        self._current_tool_args = ""
+        
         if self.show_tools:
-            self._start_live(Panel(
-                Text(""),
+            timestamp = self._get_timestamp()
+            if self._streaming_mode:
+                self._start_live()
+                self._update_live(Panel(
+                    Text(""),
+                    title=f"[bold blue]🔧 Tool Call: {self._current_tool_name} ({timestamp})[/bold blue]",
+                    border_style="blue"
+                ))
+
+    async def _on_tool_use_block_delta(self, event: Event) -> None:
+        """工具调用块增量"""
+        from hawi.agent.events import ModelToolCallBlockDeltaEvent
+        assert isinstance(event, ModelToolCallBlockDeltaEvent)
+        
+        self._current_tool_args += event.arguments_delta
+        
+        if self.show_tools and self._streaming_mode and self._live:
+            timestamp = self._get_timestamp()
+            self._update_live(Panel(
+                Text(self._current_tool_args),
                 title=f"[bold blue]🔧 Tool Call: {self._current_tool_name} ({timestamp})[/bold blue]",
                 border_style="blue"
             ))
 
-    async def _on_tool_use_block_delta(self, event: Event) -> None:
-        assert isinstance(event, ModelToolCallBlockDeltaEvent)
-        self._current_content += event.arguments_delta
-        
-        if self.show_tools and self._live:
-            # During delta, we only have partial JSON string, so we display it as is
-            # Or try to format it if valid JSON? Usually delta is partial so invalid.
-            self._update_live(Panel(
-                Text(self._current_content),
-                title=f"[bold blue]🔧 Tool Call: {self._current_tool_name}[/bold blue]",
-                border_style="blue"
-            ))
-
     async def _on_tool_use_block_stop(self, event: Event) -> None:
-        """工具调用块结束 - 保存参数，等待 tool_call 事件"""
-        if self.show_tools:
-            # 保存 content 到 buffer，以便 _on_tool_call 时使用
-            self._pending_tool_calls[self._current_tool_name] = self._current_content
-
-        self._current_content = ""
-        self._current_tool_name = ""
-
-    async def _on_tool_call(self, event: Event) -> None:
-        """工具调用 - 启动 Live 显示 tool call 面板（含 Executing... 状态）"""
-        if not self.show_tools:
-            return
-
-        from hawi.agent.events import AgentToolCallEvent
-        assert isinstance(event, AgentToolCallEvent)
-
-        tool_call_id = event.tool_call_id
-        tool_name = event.tool_name
-        arguments = event.arguments
-        timestamp = self._get_timestamp()
-
-        # 如果有正在运行的 Live，先停止它
+        """工具调用块结束"""
         self._stop_live()
-
-        # 获取参数内容
-        if arguments:
-            args_text = self._format_tool_arguments(arguments)
-            args_content = Text.from_markup(args_text)
-        else:
-            # 尝试从 pending buffer 获取原始 JSON 字符串
-            args_json_str = self._pending_tool_calls.pop(tool_name, "{}")
-            try:
-                args_content = JSON(args_json_str)
-            except Exception:
-                args_content = Text(args_json_str)
-
-        # 保存当前 tool 信息供 result 更新使用（用 tool_call_id 作为 key）
-        self._current_tool_info = {
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "args_content": args_content,
-            "timestamp": timestamp,
-        }
-
-        # 创建带有 "Executing..." 状态的 panel 并启动 Live
-        content_group = Group(
-            args_content,
-            Rule(style="dim"),
-            Text("Executing...", style="dim italic")
-        )
-
-        panel = Panel(
-            content_group,
-            title=f"[bold blue]🔧 Tool Call: {tool_name} ({timestamp})[/bold blue]",
-            border_style="yellow"
-        )
-
-        self._start_live(panel)
-
-    async def _on_tool_result_part(self, event: Event) -> None:
-        """处理流式工具结果片段（异步生成器工具）"""
-        if not self.show_tools:
-            return
-
-        from hawi.agent.events import AgentToolResultPartEvent
-        assert isinstance(event, AgentToolResultPartEvent)
-
-        tool_call_id = event.tool_call_id
-        part = event.part
-        is_final = event.is_final
-
-        # 存储片段
-        if tool_call_id not in self._streaming_tool_parts:
-            self._streaming_tool_parts[tool_call_id] = []
-        if part:
-            self._streaming_tool_parts[tool_call_id].append(part)
-
-        # 如果有 Live 正在运行，更新显示
-        if self._live and self._current_tool_info:
-            # 获取工具信息
-            args_content = self._current_tool_info["args_content"]
-            timestamp = self._current_tool_info["timestamp"]
-            tool_name = self._current_tool_info["tool_name"]
-
-            # 构建当前累积的结果文本
-            all_parts = self._streaming_tool_parts.get(tool_call_id, [])
-            current_output = "".join(all_parts)
-
-            # 准备结果部分（流式更新，不显示状态）
-            result_text = Text(current_output, style="white")
-
-            if is_final:
-                # 最终片段：显示完成状态
-                status_text = Text("✓ Complete", style="dim italic green")
-            else:
-                # 中间片段：显示接收中状态
-                status_text = Text("Receiving...", style="dim italic")
-
-            # 组合 panel
-            content_group = Group(
-                args_content,
-                Rule(style="dim"),
-                result_text,
-                Rule(style="dim"),
-                status_text
-            )
-
-            panel = Panel(
-                content_group,
-                title=f"[bold blue]🔧 Tool Call: {tool_name} ({timestamp})[/bold blue]",
-                border_style="yellow"
-            )
-
-            self._update_live(panel)
-
-        # 如果是最终片段，清理缓存
-        if is_final:
-            self._streaming_tool_parts.pop(tool_call_id, None)
 
     def _print_tool_result(
         self,
@@ -312,49 +323,48 @@ class RichPrinter(BasePrinter):
         success: bool,
         result_preview: Any,
         duration: float,
-        arguments: dict[str, Any] | None = None
+        arguments: dict[str, Any] | None = None,
     ) -> None:
-        """打印工具结果 - 更新 Live 显示最终结果"""
+        """打印工具结果"""
+        from rich.json import JSON
+        from rich.rule import Rule
         from rich.table import Table
+        from rich.console import Group
 
-        # 清理 pending 记录
-        self._pending_tool_calls.pop(tool_name, None)
-
-        # 获取之前保存的 tool 信息
-        tool_info = self._current_tool_info
-        if tool_info:
-            # 使用保存的参数和时间戳
-            args_content = tool_info["args_content"]
-            timestamp = tool_info["timestamp"]
-            # 更新 tool_name 为保存的（保持一致）
-            tool_name = tool_info["tool_name"]
-        else:
-            # 如果没有保存的信息，使用传入的参数或空内容
-            if arguments:
-                args_text = self._format_tool_arguments(arguments)
-                args_content = Text.from_markup(args_text)
-            else:
-                args_content = Text("(no arguments)", style="dim")
-            timestamp = self._get_timestamp()
-
+        timestamp = self._get_timestamp()
         status_emoji = "✅" if success else "❌"
         status_color = "green" if success else "red"
         status_text = "OK" if success else "FAILED"
 
-        # 准备结果部分
+        # 参数部分
+        if arguments:
+            args_lines = []
+            for key, value in arguments.items():
+                value_str = str(value)
+                if '\n' in value_str:
+                    args_lines.append(f"[bold]{key}[/bold]:")
+                    args_lines.append(value_str)
+                else:
+                    args_lines.append(f"[bold]{key}[/bold]: {value_str}")
+            args_content = Text.from_markup("\n".join(args_lines))
+        else:
+            try:
+                args_content = JSON(self._current_tool_args)
+            except Exception:
+                args_content = Text(self._current_tool_args or "(no arguments)", style="dim")
+
+        # 结果表格
         result_table = Table(show_header=False, box=None, expand=True, padding=(0, 1))
         result_table.add_column("label", width=10, style="dim cyan")
         result_table.add_column("content", ratio=1)
-
         result_table.add_row("Status", f"{status_emoji} {status_text} ({duration:.0f}ms)", style=f"bold {status_color}")
-
+        
         if result_preview is not None:
             preview = str(result_preview)
             if not self.show_full_tool_content and len(preview) > self.max_result_length:
                 preview = preview[: self.max_result_length - 3] + "..."
             result_table.add_row("Output", Text(preview, style="white"))
 
-        # 组合最终 panel（参数 + 结果）
         content_group = Group(
             args_content,
             Rule(style="dim"),
@@ -368,23 +378,13 @@ class RichPrinter(BasePrinter):
             padding=(0, 1),
         )
 
-        # 更新 Live 并停止
-        if self._live:
-            self._update_live(panel)
-            self._stop_live()
-        else:
-            # 如果没有 Live（可能被打断），直接打印
-            self._console.print(panel)
-            self._console.print()
-
-        # 清理 tool 信息
-        self._current_tool_info = None
+        self._console.print(panel)
+        self._console.print()
 
     def _print_error(self, error: str) -> None:
         """打印错误"""
-        # 如果有正在运行的 Live，先停止它
         self._stop_live()
-
+        
         timestamp = self._get_timestamp()
         panel = Panel(
             Text(error, style="red"),
@@ -393,17 +393,8 @@ class RichPrinter(BasePrinter):
             padding=(0, 1),
         )
         self._console.print(panel)
-        # Add newline after error for proper separation in piped output
         self._console.print()
 
-    def _print_usage(self, usage) -> None:
+    def _print_usage(self, usage: Any) -> None:
         """打印 token 用量"""
-        self._stop_live()
-        parts = [f"[bold]in[/bold]: {usage['input_tokens']}", f"[bold]out[/bold]: {usage['output_tokens']}"]
-        cache_write = usage.get('cache_write_tokens')
-        cache_read = usage.get('cache_read_tokens')
-        if cache_write:
-            parts.append(f"[bold]cache_write[/bold]: {cache_write}")
-        if cache_read:
-            parts.append(f"[bold]cache_read[/bold]: {cache_read}")
-        self._console.print(Text.from_markup(f"[dim]tokens — {' | '.join(parts)}[/dim]"))
+        pass

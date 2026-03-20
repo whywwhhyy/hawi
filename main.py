@@ -133,7 +133,7 @@ def main():
     argv = sys.argv[1:]
 
     # Parse arguments
-    printer_type = "auto"  # auto, rich, text
+    printer_type = "auto"  # auto, rich, plain
     loop = False
     event_dump_file = None
     streaming = True  # Default to streaming mode
@@ -181,8 +181,8 @@ def main():
     # Setup printer for output display
     # Printer handles events from both streaming and non-streaming modes
     # Note: create_printer automatically selects appropriate printer based on environment
-    assert printer_type in ['auto','rich','block','plain','streaming']
-    printer = create_printer(cast(Literal['auto','rich','block','plain','streaming'], printer_type), streaming=streaming)
+    assert printer_type in ['auto', 'rich', 'plain']
+    printer = create_printer(cast(Literal['auto', 'rich', 'plain'], printer_type), streaming=streaming)
     print(f"Printer: {type(printer).__name__}", file=sys.stderr)
 
     agent.subscribe(printer.handle)

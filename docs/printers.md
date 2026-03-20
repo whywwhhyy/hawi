@@ -4,15 +4,29 @@ Printer 负责将 Agent 执行过程中的事件流格式化为可读的输出�
 
 ## 概述
 
-Printer 系统采用策略模式，支持多种输出格式：
+Printer 系统采用策略模式，根据终端环境自动选择最佳输出方式：
 
 | Printer | 说明 | 适用场景 |
 |---------|------|---------|
-| `StreamingMarkdownPrinter` | 流式 Markdown 渲染，增量块级输出 | 终端 TTY 环境（默认） |
-| `RichPrinter` | Rich 库格式化，支持颜色和布局 | 终端 TTY 环境 |
-| `BlockPrinter` | 分块输出，流水线友好 | 非 TTY + 非流式 |
-| `PlainPrinter` | 纯文本逐行输出 | 非 TTY + 流式 |
-| `auto` | 自动检测环境选择 | 通用（默认） |
+| `RichPrinter` | 智能流式 Markdown 渲染器 | 终端环境（默认） |
+| `PlainPrinter` | 纯文本输出 | 非终端环境 |
+| `BasePrinter` | 基类 | 自定义实现 |
+| `auto` | 自动检测 | 通用（默认） |
+
+## RichPrinter 工作模式
+
+`RichPrinter` 支持两种工作模式，自动检测或手动指定：
+
+| 模式 | 说明 | 适用场景 |
+|------|------|---------|
+| **Streaming** | 实时动态更新当前块 | 标准终端、支持 ANSI |
+| **Non-streaming** | 块确定后才打印 | 管道、文件、dumb 终端、CI |
+
+**自动检测逻辑：**
+- TTY 终端 → Streaming 模式
+- dumb/unknown 终端 → Non-streaming 模式
+- CI 环境 → Non-streaming 模式
+- Jupyter/Notebook → Non-streaming 模式
 
 ## 工厂函数
 
@@ -21,9 +35,17 @@ Printer 系统采用策略模式，支持多种输出格式：
 ```python
 from hawi.agent.printers import create_printer
 
+# 自动检测
+printer = create_printer()
+
+# 强制指定模式
+printer = create_printer(streaming=True)   # 强制 streaming
+printer = create_printer(streaming=False)  # 强制 non-streaming
+
+# 完全控制
 printer = create_printer(
-    printer_type="auto",     # "auto" | "rich" | "block" | "plain" | "streaming"
-    streaming=False,
+    printer_type="auto",     # "auto" | "rich" | "plain"
+    streaming=None,          # None=自动, True=streaming, False=non-streaming
     show_reasoning=True,
     show_tools=True,
     show_errors=True,
@@ -34,37 +56,31 @@ printer = create_printer(
 )
 ```
 
-**自动检测逻辑：**
+**环境变量控制：**
+```bash
+# 强制 non-streaming 模式
+HAWI_STREAMING=0 python my_agent.py
 
-```python
-is_tty = sys.stdout.isatty()
-
-if printer_type == "auto":
-    if is_tty:
-        # 终端环境 → StreamingMarkdownPrinter（默认）
-        actual = "streaming"
-    elif streaming:
-        # 非终端 + 流式 → PlainPrinter
-        actual = "plain"
-    else:
-        # 非终端 + 非流式 → BlockPrinter
-        actual = "block"
+# 强制 streaming 模式
+HAWI_STREAMING=1 python my_agent.py
 ```
 
-## StreamingMarkdownPrinter
+## RichPrinter
 
-流式 Markdown 渲染器，基于块级增量解析策略，大幅提升长文档流式渲染性能。
-
-**核心特性：**
-- 块级分割：识别 Markdown 块边界（空行分隔）
-- 增量输出：完成的块立即输出，不等待流结束
-- 动态更新：当前未完成块使用 Live 实时更新
-- 自动清理：流结束时自动处理剩余内容
+智能流式 Markdown 渲染器，支持自动/手动模式切换。
 
 ```python
-from hawi.agent.printers import StreamingMarkdownPrinter
+from hawi.agent.printers import RichPrinter
 
-printer = StreamingMarkdownPrinter(
+# 自动检测模式
+printer = RichPrinter()
+
+# 强制指定模式
+printer = RichPrinter(streaming=True)   # Streaming 模式
+printer = RichPrinter(streaming=False)  # Non-streaming 模式
+
+# 完整参数
+printer = RichPrinter(
     show_reasoning=True,       # 显示 thinking 内容
     show_tools=True,           # 显示工具调用
     show_errors=True,          # 显示错误
@@ -72,17 +88,22 @@ printer = StreamingMarkdownPrinter(
     max_arg_length=80,         # 参数最大显示长度
     max_result_length=200,     # 结果最大显示长度
     show_full_tool_content=True,  # 显示完整工具内容
+    streaming=None,            # None=自动, True=streaming, False=non-streaming
     console=None,              # 自定义 Console
-    refresh_per_second=12.5,   # 刷新频率
+    refresh_per_second=12.5,   # Live 刷新频率
 )
 ```
 
-**工作原理：**
-1. 接收文本片段，累积到缓冲区
-2. 识别块边界（双换行符 `\n\n` 分隔）
-3. 已完成的块立即输出到终端
-4. 当前未完成块使用 Rich Live 动态更新
-5. 流结束时，停止 Live 并输出剩余内容
+**Streaming 模式特性：**
+- 块级分割：识别 Markdown 块边界（空行分隔）
+- 增量输出：完成的块立即输出，不等待流结束
+- 动态更新：当前未完成块使用 Live 实时更新
+- 高性能：长文档不卡顿
+
+**Non-streaming 模式特性：**
+- 块确定后（双换行）才输出
+- 无动态更新，适合管道/文件重定向
+- 与 CI/CD 系统兼容
 
 **Thinking 模式：**
 当模型输出 thinking 内容时，会显示带边框的面板：
@@ -97,74 +118,9 @@ printer = StreamingMarkdownPrinter(
 └─────────────────────────────────┘
 ```
 
-## RichPrinter
-
-支持颜色、进度条等富文本格式，需要终端支持：
-
-```python
-from hawi.agent.printers import RichPrinter
-
-printer = RichPrinter(
-    show_reasoning=True,       # 显示 reasoning 内容
-    show_tools=True,          # 显示工具调用
-    show_errors=True,         # 显示错误
-    reasoning_prefix="🤔 ",    # reasoning 前缀
-    tool_call_prefix="🔧 ",   # 工具调用前缀
-    tool_result_prefix="",    # 工具结果前缀
-    error_prefix="❌ ",
-    max_arg_length=80,        # 参数最大显示长度
-    max_result_length=200,    # 结果最大显示长度
-)
-```
-
-**输出示例：**
-
-```
-🤔 让我计算一下 1+1 的结果
-🔧 execute({'code': '1+1'})
-✓ execute (45ms): 2
-答案是 2
-```
-
-## BlockPrinter
-
-分块输出，适合日志和管道：
-
-```python
-from hawi.agent.printers import BlockPrinter
-
-printer = BlockPrinter(
-    show_reasoning=True,
-    show_tools=True,
-    show_errors=True,
-    max_arg_length=80,
-    max_result_length=200,
-)
-```
-
-**输出示例：**
-
-```
-[reasoning]
-让我计算一下...
-[/reasoning]
-
-[tool_call]
-execute({'code': '1+1'})
-[/tool_call]
-
-[tool_result]
-2
-[/tool_result]
-
-[response]
-答案是 2
-[/response]
-```
-
 ## PlainPrinter
 
-纯文本逐行输出，适合流式处理：
+纯文本输出，适用于非终端环境：
 
 ```python
 from hawi.agent.printers import PlainPrinter
@@ -178,34 +134,36 @@ printer = PlainPrinter(
 
 ## 在 Agent 中使用
 
-### 方式一：直接使用
+### 自动模式（推荐）
 
 ```python
-import asyncio
 from hawi import HawiAgent
 from hawi.agent.printers import create_printer
 
-async def main():
-    printer = create_printer(streaming=True)
-    agent = HawiAgent(model=model)
-
-    async for event in agent.arun("讲个故事", stream=True):
-        await printer.handle(event)
-
-asyncio.run(main())
-```
-
-### 方式二：同步调用
-
-```python
-printer = create_printer(streaming=True)
+# 自动检测最佳 printer
+printer = create_printer()
 agent = HawiAgent(model=model)
 
-async def process(prompt):
-    async for event in agent.arun(prompt, stream=True):
-        await printer.handle(event)
+for event in agent.run("讲个故事", stream=True):
+    # 事件自动打印
+    pass
+```
 
-asyncio.run(process("Hello"))
+### 强制指定模式
+
+```python
+# 强制 streaming 模式
+printer = create_printer(streaming=True)
+
+# 强制 non-streaming 模式
+printer = create_printer(streaming=False)
+```
+
+### 非终端环境
+
+```python
+# 管道/文件重定向时自动使用 PlainPrinter
+printer = create_printer()  # 自动检测为非 TTY，使用 PlainPrinter
 ```
 
 ## 事件处理
@@ -242,12 +200,11 @@ class MyPrinter(BasePrinter):
         print(f"[CONTENT] ", end="")
 
     async def _on_content_block_delta(self, event):
-        # 从事件中获取 delta 文本
         delta = event.delta if hasattr(event, 'delta') else ""
         print(delta, end="", flush=True)
 
     async def _on_content_block_stop(self, event):
-        print()  # 换行
+        print()
 
     async def _on_tool_use_block_start(self, event):
         tool_name = event.tool_name if hasattr(event, 'tool_name') else "unknown"

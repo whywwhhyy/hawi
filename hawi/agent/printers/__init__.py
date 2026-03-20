@@ -1,18 +1,40 @@
-import sys
+"""
+Hawi Printer System
 
+提供统一的事件驱动输出接口，支持多种终端环境。
+
+主要组件：
+- RichPrinter: 智能流式 Markdown 渲染器（默认）
+- PlainPrinter: 纯文本输出（用于非终端环境）
+- BasePrinter: 打印机基类（用于自定义实现）
+
+使用方式：
+    from hawi.agent.printers import create_printer
+    
+    # 自动检测最佳打印机
+    printer = create_printer()
+    
+    # 强制指定模式
+    printer = create_printer(streaming=True)   # 强制 streaming 模式
+    printer = create_printer(streaming=False)  # 强制 non-streaming 模式
+
+环境变量：
+    HAWI_STREAMING=0    # 强制 non-streaming 模式
+    HAWI_STREAMING=1    # 强制 streaming 模式
+"""
+
+import sys
 from typing import Literal
 
 from .base import BasePrinter as BasePrinter
 from .plain import PlainPrinter as PlainPrinter
-from .block import BlockPrinter as BlockPrinter
 from .rich import RichPrinter as RichPrinter
-from .streaming import StreamingMarkdownPrinter as StreamingMarkdownPrinter
 
 
 def create_printer(
-    printer_type: Literal['auto','rich','block','plain','streaming'] = "auto",
+    printer_type: Literal['auto', 'rich', 'plain'] = "auto",
     *,
-    streaming: bool = False,
+    streaming: bool | None = None,
     show_reasoning: bool = True,
     show_tools: bool = True,
     show_errors: bool = True,
@@ -25,39 +47,52 @@ def create_printer(
     创建打印机实例。
 
     自动检测环境并选择合适的打印机：
-    - auto模式：
-      - 终端环境：使用 streaming printer（流式 Markdown 渲染）
-      - 非终端 + streaming：使用 plain printer（逐行输出）
-      - 非终端 + 非 streaming：使用 block printer（完整块输出）
-    - 显式指定 printer 时：
-      - streaming/rich + 非终端：回退到 block printer（不支持 Live 更新）
-      - 其他：按指定类型创建
-
+    - auto 模式：
+      - 终端环境：使用 RichPrinter（自动选择 streaming/non-streaming）
+      - 非终端环境：使用 PlainPrinter（纯文本输出）
+    
+    Streaming 模式控制：
+    - 参数 `streaming` 优先级最高（True/False）
+    - 环境变量 `HAWI_STREAMING` 次之（0/1）
+    - 自动检测终端能力（默认）
+    
     Args:
-        printer_type: 打印机类型 ("auto", "rich", "block", "plain", "markdown")
-        streaming: 是否为流式模式
-        **kwargs: 传递给打印机构造函数的参数
-
+        printer_type: 打印机类型 ("auto", "rich", "plain")
+        streaming: 强制指定 streaming 模式（None=自动, True=streaming, False=non-streaming）
+        show_reasoning: 是否显示推理内容
+        show_tools: 是否显示工具调用
+        show_errors: 是否显示错误
+        show_error_stack: 是否显示错误堆栈
+        max_arg_length: 工具参数最大显示长度
+        max_result_length: 工具结果最大显示长度
+        show_full_tool_content: 是否显示完整工具内容
+    
     Returns:
         打印机实例
+    
+    Example:
+        # 自动检测
+        printer = create_printer()
+        
+        # 强制 rich，自动检测 streaming
+        printer = create_printer("rich")
+        
+        # 强制 rich，强制 streaming 模式
+        printer = create_printer("rich", streaming=True)
+        
+        # 强制 rich，强制 non-streaming 模式
+        printer = create_printer("rich", streaming=False)
+        
+        # 纯文本模式（非终端环境推荐）
+        printer = create_printer("plain")
     """
     is_tty = sys.stdout.isatty()
 
-    # auto 模式：根据环境自动选择
+    # 确定实际使用的打印机类型
     if printer_type == "auto":
-        if is_tty:
-            actual_printer = "streaming"
-        elif streaming:
-            # 非终端 + streaming：使用 plain printer 逐行输出
-            actual_printer = "plain"
-        else:
-            # 非终端 + 非 streaming：使用 block printer 完整块输出
-            actual_printer = "block"
+        actual_printer = "rich" if is_tty else "plain"
     else:
         actual_printer = printer_type
-        # 显式指定 streaming/rich 但非终端：回退到 block（Live 不支持管道）
-        if actual_printer in ("streaming", "rich") and not is_tty:
-            actual_printer = "block"
 
     common_args = {
         "show_reasoning": show_reasoning,
@@ -70,12 +105,19 @@ def create_printer(
     }
 
     if actual_printer == "rich":
+        # RichPrinter 内部处理 streaming 模式
+        if streaming is not None:
+            common_args["streaming"] = streaming
         return RichPrinter(**common_args)
-    elif actual_printer == "block":
-        return BlockPrinter(**common_args)
     elif actual_printer == "plain":
         return PlainPrinter(**common_args)
-    elif actual_printer == "streaming":
-        return StreamingMarkdownPrinter(**common_args)
     else:
         raise ValueError(f"Unknown printer type: {printer_type}")
+
+
+__all__ = [
+    "BasePrinter",
+    "PlainPrinter", 
+    "RichPrinter",
+    "create_printer",
+]
