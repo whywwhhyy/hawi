@@ -135,6 +135,7 @@ class TestKimiAnthropicIntegration:
         return KimiAnthropicModel(
             api_key=KIMI_API_KEY,
             model_id="kimi-k2.5",
+            thinking_budget=None,
         )
 
     def test_simple_chat_completion(self, model: KimiAnthropicModel):
@@ -232,6 +233,7 @@ class TestKimiAnthropicToolCalls:
         return KimiAnthropicModel(
             api_key=KIMI_API_KEY,
             model_id="kimi-k2.5",
+            thinking_budget=None,
         )
 
     def test_tool_call_with_citations(self, model: KimiAnthropicModel):

@@ -145,11 +145,12 @@ def get_kimi_anthropic_api_key() -> str | None:
     Checks (in order):
     1. KIMI_ANTHROPIC_API_KEY environment variable
     2. KIMI_API_KEY environment variable
-    3. models.yaml api_keys.kimi
-    4. models.yaml api_keys.moonshot
+    3. models.yaml api_keys.kimi-code
+    4. models.yaml api_keys.kimi
+    5. models.yaml api_keys.moonshot
     """
     return get_api_key(
-        key_aliases=["kimi", "moonshot", "moonshot-bao"],
+        key_aliases=["kimi-code", "kimi", "moonshot", "moonshot-bao"],
         env_vars=["KIMI_ANTHROPIC_API_KEY", "KIMI_API_KEY"],
     )
 
@@ -180,7 +181,3 @@ def get_glm_api_key() -> str | None:
         key_aliases=["glm", "zhipu"],
         env_vars=["GLM_API_KEY", "ZHIPU_API_KEY"],
     )
-
-
-# Backwards compatibility alias
-get_moonshot_api_key = get_kimi_openai_api_key
