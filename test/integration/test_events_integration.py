@@ -12,6 +12,7 @@ from hawi.agent.events import (
     EventBus,
 )
 from hawi.agent.printers import RichPrinter as ConversationPrinter
+from hawi.models import Model
 from hawi.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool
@@ -54,7 +55,7 @@ class TestEventFlowWithAgent:
     """Integration tests for event flow with real Agent execution."""
 
     @pytest.fixture
-    def model(self) -> DeepSeekModel:
+    def model(self) -> Model:
         """Create a DeepSeek model instance."""
         return DeepSeekModel(
             model_id="deepseek-chat",
@@ -62,7 +63,7 @@ class TestEventFlowWithAgent:
         )
 
     @pytest.fixture
-    def agent(self, model: DeepSeekModel) -> HawiAgent:
+    def agent(self, model: Model) -> HawiAgent:
         """Create a HawiAgent with calculator plugin."""
         return HawiAgent(
             model=model,
@@ -285,14 +286,14 @@ class TestEventFiltering:
     """Tests for event filtering and selective subscription."""
 
     @pytest.fixture
-    def model(self) -> DeepSeekModel:
+    def model(self) -> Model:
         return DeepSeekModel(
             model_id="deepseek-chat",
             api_key=DEEPSEEK_API_KEY,
         )
 
     @pytest.fixture
-    def agent(self, model: DeepSeekModel) -> HawiAgent:
+    def agent(self, model: Model) -> HawiAgent:
         return HawiAgent(
             model=model,
             plugins=[CalculatorPlugin()],
@@ -349,14 +350,14 @@ class TestEventWithReasoningModel:
     """Tests for events with reasoning/thinking models."""
 
     @pytest.fixture
-    def model(self) -> DeepSeekModel:
+    def model(self) -> Model:
         return DeepSeekModel(
             model_id="deepseek-reasoner",
             api_key=DEEPSEEK_API_KEY,
         )
 
     @pytest.fixture
-    def agent(self, model: DeepSeekModel) -> HawiAgent:
+    def agent(self, model: Model) -> HawiAgent:
         return HawiAgent(
             model=model,
         )

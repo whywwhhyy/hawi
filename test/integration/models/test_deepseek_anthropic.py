@@ -135,7 +135,6 @@ class TestDeepSeekAnthropicUnit:
                     {"type": "image", "source": {"url": "data:image/png;base64,abc", "detail": "auto"}},
                 ],
                 "name": None,
-                "tool_call_id": None,
                 "metadata": None,
             }],
         )
@@ -165,7 +164,6 @@ class TestDeepSeekAnthropicUnit:
                     {"type": "document", "source": {"url": "data:application/pdf;base64,abc", "mime_type": "application/pdf"}, "title": None, "context": None},
                 ],
                 "name": None,
-                "tool_call_id": None,
                 "metadata": None,
             }],
         )

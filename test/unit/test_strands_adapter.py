@@ -332,7 +332,7 @@ class TestIntegration:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_call_id": None,
+            "tool_call_id": None,  # type: ignore[typeddict-unknown]
             "metadata": None,
         }]
         response = adapter.invoke(messages=messages)
@@ -355,7 +355,7 @@ class TestIntegration:
             "role": "user",
             "content": [{"type": "text", "text": "Hello"}],
             "name": None,
-            "tool_call_id": None,
+            "tool_call_id": None,  # type: ignore[typeddict-unknown]
             "metadata": None,
         }]
         events = list(adapter.invoke(messages=messages, streaming=True))

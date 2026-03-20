@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal
 
-from hawi.models import Model
+from hawi.models import DelegateModel
 from hawi.models._utils import (
     detect_kimi_api_type,
     complete_url_and_api,
@@ -20,14 +20,12 @@ from .kimi_anthropic import KimiAnthropicModel
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["KimiModel", "create_kimi_model"]
-
 # 默认端点
 DEFAULT_OPENAI_URL = "https://api.moonshot.cn/v1"
 DEFAULT_ANTHROPIC_URL = "https://api.kimi.com/coding/"
 
 
-class KimiModel:
+class KimiModel(DelegateModel):
     """
     Kimi 模型统一入口
 
@@ -80,8 +78,8 @@ class KimiModel:
         )
     """
 
-    def __new__(
-        cls,
+    def __init__(
+        self,
         *,
         model_id: str = "kimi-k2.5",
         api_key: str | None = None,
@@ -91,13 +89,7 @@ class KimiModel:
         thinking_budget: int | None = None,
         max_output_tokens: int | None = None,
         **params: Any,
-    ) -> Model:
-        """
-        创建 Kimi 模型实例
-
-        根据 api 参数和 base_url 自动选择合适的模型类。
-        支持参数补全：base_url 和 api 可以互相推导。
-        """
+    ) -> None:
         # 验证 model_id 类型
         if not isinstance(model_id, str):
             raise TypeError(
@@ -116,14 +108,14 @@ class KimiModel:
             KIMI_URL_API_CANDIDATES,
             validate=False if (base_url is not None and query_api is not None) else True,
         )
-        
+
         # 如果用户提供了 base_url 但没有提供 api，需要根据 base_url 检测
         if api == "auto":
             detected_api = detect_kimi_api_type(base_url)
             logger.debug(f"Auto-detected API type: {detected_api} for URL: {base_url}")
         else:
             detected_api = final_api
-        
+
         base_url = final_url
 
         # 创建对应的模型实例
@@ -133,7 +125,7 @@ class KimiModel:
             budget = thinking_budget
             if budget is None:
                 budget = 8000 if enable_thinking else None
-            return KimiAnthropicModel(
+            delegate = KimiAnthropicModel(
                 model_id=model_id,
                 api_key=api_key,
                 base_url=base_url,
@@ -143,10 +135,12 @@ class KimiModel:
             )
         else:
             logger.debug(f"Creating KimiOpenAIModel with base_url={base_url}")
-            return KimiOpenAIModel(
+            delegate = KimiOpenAIModel(
                 model_id=model_id,
                 api_key=api_key,
                 base_url=base_url,
                 enable_thinking=enable_thinking,
                 **params,
             )
+
+        super().__init__(delegate)

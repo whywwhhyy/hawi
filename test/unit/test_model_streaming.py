@@ -70,7 +70,7 @@ class MockModel(Model):
             usage=TokenUsage(input_tokens=10, output_tokens=5, cache_write_tokens=None, cache_read_tokens=None),
         )
 
-    async def _ainvoke_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:
+    async def _ainvoke_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:  # type: ignore[override]
         """Mock async non-streaming implementation."""
         import time
         request_id = f"test-{int(time.time() * 1000)}"
@@ -104,7 +104,7 @@ class MockModel(Model):
             stop_reason="end_turn",
         )
 
-    async def _astream_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:
+    async def _astream_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:  # type: ignore[override]
         """Mock async streaming implementation."""
         import time
         request_id = f"test-{int(time.time() * 1000)}"
@@ -235,6 +235,7 @@ class TestInvokeStreaming:
         result = model.invoke(messages=messages, streaming=False)
 
         assert isinstance(result, MessageResponse)
+        assert result.content[0]["type"] == "text"
         assert result.content[0]["text"] == "Hello, world!"
 
 
@@ -342,6 +343,7 @@ class TestStreamingConsistency:
         # Non-streaming returns MessageResponse
         result = model.invoke(messages=messages, streaming=False)
         assert isinstance(result, MessageResponse)
+        assert result.content[0]["type"] == "text"
         assert result.content[0]["text"] == "Hello, world!"
 
         # Collect streaming events (from iterator)
@@ -349,7 +351,8 @@ class TestStreamingConsistency:
         for chunk in model.invoke(messages=messages, streaming=True):
             if isinstance(chunk, dict):
                 if chunk.get("type") == "text_delta":
-                    streaming_events.append(chunk["delta"])
+                    from hawi.models.message import DeltaTextPart
+                    streaming_events.append(cast(DeltaTextPart, chunk)["delta"])
 
         # Both should produce complete content
         streaming_content = "".join(streaming_events)

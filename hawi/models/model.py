@@ -24,7 +24,7 @@ from hawi.models.message import (
 )
 from hawi.errors import ModelError
 
-__all__ = ["Model", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
+__all__ = ["Model", "DelegateModel", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -363,3 +363,47 @@ class Model(ABC):
             USD: 15.50
         """
         raise NotImplementedError(f"{self.__class__.__name__} does not support balance query")
+
+
+class DelegateModel(Model):
+    """委托模型包装器
+
+    将所有调用转发给内部委托模型实例，用于实现工厂入口类（如 DeepSeekModel、KimiModel），
+    使其成为具体类而非抽象类，避免 Pylance 的不完整实现警告。
+
+    子类在 __init__ 中创建实际的委托模型，并调用 super().__init__(delegate)。
+    """
+
+    def __init__(self, delegate: Model) -> None:
+        super().__init__()
+        self._delegate = delegate
+
+    @property
+    def model_id(self) -> str:
+        return self._delegate.model_id
+
+    def _prepare_request_impl(self, request: MessageRequest) -> ProviderRequest:
+        return self._delegate._prepare_request_impl(request)
+
+    def _parse_response_impl(self, response: ProviderResponse) -> MessageResponse:
+        return self._delegate._parse_response_impl(response)
+
+    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+        return self._delegate._invoke_impl(request)
+
+    async def _ainvoke_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
+        async for delta in self._delegate._ainvoke_impl(request):
+            yield delta
+
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
+        return self._delegate._stream_impl(request)
+
+    async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
+        async for delta in self._delegate._astream_impl(request):
+            yield delta
+
+    def _get_params(self) -> ModelParams:
+        return self._delegate._get_params()
+
+    def get_balance(self) -> list[BalanceInfo]:
+        return self._delegate.get_balance()

@@ -6,6 +6,7 @@ and tool calling hooks.
 
 import asyncio
 import pytest
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 from hawi.plugin import HawiPlugin
@@ -277,7 +278,7 @@ class TestHawiPluginBase:
 
         class ToolPlugin(HawiPlugin):
             def __init__(self):
-                self._tools = [MockTool()]
+                self._tools: list[AgentTool] = [MockTool()]
 
             @property
             def tools(self):
@@ -296,7 +297,8 @@ class TestHookExecution:
         plugin = SimplePlugin()
         agent = MockAgent()
 
-        hook_fn = plugin.hooks["before_session"]
+        hook_fn = plugin.hooks.get("before_session")
+        assert hook_fn is not None
         hook_fn(agent)
 
         assert "before_session" in plugin.called_hooks
@@ -307,7 +309,8 @@ class TestHookExecution:
         agent = MockAgent()
         arguments = {}
 
-        hook_fn = plugin.hooks["before_tool_calling"]
+        hook_fn = plugin.hooks.get("before_tool_calling")
+        assert hook_fn is not None
         hook_fn(agent, "dangerous", arguments)
 
         assert arguments["timeout"] == 30
@@ -319,7 +322,8 @@ class TestHookExecution:
         agent = MockAgent()
         result = ToolResult(success=True, output="done")
 
-        hook_fn = plugin.hooks["after_tool_calling"]
+        hook_fn = plugin.hooks.get("after_tool_calling")
+        assert hook_fn is not None
         hook_fn(agent, "test_tool", {}, result)
 
         assert "logged:test_tool:True" in plugin.interventions
@@ -332,7 +336,8 @@ class TestHookExecution:
         context.system_prompt = [{"type": "text", "text": "Original"}]
         model = MagicMock()
 
-        hook_fn = plugin.hooks["before_model_call"]
+        hook_fn = plugin.hooks.get("before_model_call")
+        assert hook_fn is not None
         hook_fn(agent, context, model)
 
         # Check that modifier was added
@@ -347,7 +352,7 @@ class TestHookExecution:
         model = MagicMock()
         response = MagicMock()
 
-        hooks = plugin.hooks
+        hooks = cast(dict[str, Any], plugin.hooks)
 
         # Execute all hooks
         hooks["before_session"](agent)
@@ -373,8 +378,9 @@ class TestAsyncHooks:
         plugin = AsyncPlugin()
         agent = MockAgent()
 
-        hook_fn = plugin.hooks["before_tool_calling"]
-        await hook_fn(agent, "my_tool", {})
+        hook_fn = plugin.hooks.get("before_tool_calling")
+        assert hook_fn is not None
+        await hook_fn(agent, "my_tool", {})  # type: ignore[misc]
 
         assert "before_tool_calling:my_tool" in plugin.called_hooks
 
@@ -385,8 +391,9 @@ class TestAsyncHooks:
         agent = MockAgent()
         result = ToolResult(success=True)
 
-        hook_fn = plugin.hooks["after_tool_calling"]
-        await hook_fn(agent, "my_tool", {}, result)
+        hook_fn = plugin.hooks.get("after_tool_calling")
+        assert hook_fn is not None
+        await hook_fn(agent, "my_tool", {}, result)  # type: ignore[misc]
 
         assert "after_tool_calling:my_tool" in plugin.called_hooks
 
@@ -412,7 +419,9 @@ class TestMultiplePlugins:
         agent = MockAgent()
 
         # Call hook on plugin1
-        plugin1.hooks["before_session"](agent)
+        hook_fn = plugin1.hooks.get("before_session")
+        assert hook_fn is not None
+        hook_fn(agent)
 
         # Only plugin1 should have the call recorded
         assert "before_session" in plugin1.called_hooks
@@ -434,7 +443,7 @@ class TestToolDecoratorIntegration:
         assert callable(calculator)
         assert calculator.__name__ == "calculator"
         assert hasattr(calculator, '_is_agent_tool')
-        assert calculator._is_agent_tool is True
+        assert calculator._is_agent_tool is True  # type: ignore[reportFunctionMemberAccess]
 
     def test_tool_decorator_tool_invocation(self):
         """Test that decorated function can still be called directly."""
@@ -458,6 +467,6 @@ class TestToolDecoratorIntegration:
 
         # Function is marked for plugin discovery
         assert hasattr(calculator, '_is_agent_tool')
-        assert calculator._is_agent_tool is True
+        assert calculator._is_agent_tool is True  # type: ignore[reportFunctionMemberAccess]
         # Tool parameters are stored for later use
         assert hasattr(calculator, '_agent_tool_parameters')

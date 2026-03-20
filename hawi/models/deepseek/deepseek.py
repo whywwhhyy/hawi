@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal
 
-from hawi.models import Model
+from hawi.models import DelegateModel
 from hawi.models._utils import (
     detect_deepseek_api_type,
     complete_url_and_api,
@@ -20,14 +20,12 @@ from .deepseek_anthropic import DeepSeekAnthropicModel
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DeepSeekModel"]
-
 # 默认端点
 DEFAULT_OPENAI_URL = "https://api.deepseek.com"
 DEFAULT_ANTHROPIC_URL = "https://api.deepseek.com/anthropic"
 
 
-class DeepSeekModel:
+class DeepSeekModel(DelegateModel):
     """
     DeepSeek 模型统一入口
 
@@ -72,8 +70,8 @@ class DeepSeekModel:
         )
     """
 
-    def __new__(
-        cls,
+    def __init__(
+        self,
         *,
         model_id: str = "deepseek-chat",
         api_key: str | None = None,
@@ -82,13 +80,7 @@ class DeepSeekModel:
         thinking_budget: int | None = None,
         max_output_tokens: int | None = None,
         **params: Any,
-    ) -> Model:
-        """
-        创建 DeepSeek 模型实例
-
-        根据 api 参数和 base_url 自动选择合适的模型类。
-        支持参数补全：base_url 和 api 可以互相推导。
-        """
+    ) -> None:
         # 验证 model_id 类型
         if not isinstance(model_id, str):
             raise TypeError(
@@ -105,22 +97,22 @@ class DeepSeekModel:
             base_url,
             query_api,
             DEEPSEEK_URL_API_CANDIDATES,
-            validate=False if (base_url is not None and query_api is not None) else True,
+            validate=False,
         )
-        
+
         # 如果用户提供了 base_url 但没有提供 api，需要根据 base_url 检测
         if api == "auto":
             detected_api = detect_deepseek_api_type(base_url)
             logger.debug(f"Auto-detected API type: {detected_api} for URL: {base_url}")
         else:
             detected_api = final_api
-        
+
         base_url = final_url
 
         # 创建对应的模型实例
         if detected_api == "anthropic":
             logger.debug(f"Creating DeepSeekAnthropicModel with base_url={base_url}")
-            return DeepSeekAnthropicModel(
+            delegate = DeepSeekAnthropicModel(
                 model_id=model_id,
                 api_key=api_key,
                 base_url=base_url,
@@ -130,9 +122,11 @@ class DeepSeekModel:
             )
         else:
             logger.debug(f"Creating DeepSeekOpenAIModel with base_url={base_url}")
-            return DeepSeekOpenAIModel(
+            delegate = DeepSeekOpenAIModel(
                 model_id=model_id,
                 api_key=api_key,
                 base_url=base_url,
                 **params,
             )
+
+        super().__init__(delegate)

@@ -4,6 +4,8 @@ Tests the context injection mechanism that allows tools to receive runtime
 context information hidden from the LLM.
 """
 
+from typing import Any
+
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.tool.types import AgentTool, ToolResult
 
@@ -33,7 +35,7 @@ class ContextTool(AgentTool):
             "required": ["action", "resource"]
         }
 
-    def run(self, action: str, resource: str, user_id: str = None) -> ToolResult:
+    def run(self, action: str, resource: str, user_id: str | None = None, **kwargs: Any) -> ToolResult:  # type: ignore[override]
         # user_id comes from context injection
         if user_id is None:
             return ToolResult(success=False, error="No user_id in context")
@@ -64,7 +66,7 @@ class MultiContextTool(AgentTool):
             "properties": {"data": {"type": "string"}}
         }
 
-    def run(self, data: str) -> ToolResult:
+    def run(self, data: str, **kwargs: Any) -> ToolResult:  # type: ignore[override]
         return ToolResult(success=True, output=data)
 
 
@@ -88,7 +90,7 @@ class NoContextTool(AgentTool):
             "properties": {"input": {"type": "string"}}
         }
 
-    def run(self, input: str) -> ToolResult:
+    def run(self, input: str, **kwargs: Any) -> ToolResult:  # type: ignore[override]
         return ToolResult(success=True, output=input)
 
 
@@ -199,6 +201,7 @@ class TestContextInjectionScenario:
         result = tool.run(**merged_params)
 
         assert result.success is True
+        assert isinstance(result.output, dict)
         assert result.output["user_id"] == "user-123"
         assert result.output["action"] == "read"
 
@@ -232,17 +235,19 @@ class TestContextInjectionScenario:
                     "properties": {"data": {"type": "string"}}
                 }
 
-            def run(self, data: str, tenant_id: str = "default_tenant") -> ToolResult:
+            def run(self, data: str, tenant_id: str = "default_tenant", **kwargs: Any) -> ToolResult:  # type: ignore[override]
                 return ToolResult(success=True, output={"data": data, "tenant": tenant_id})
 
         tool = ContextWithDefaultTool()
 
         # Without context injection, uses default
         result = tool.run(data="test")
+        assert isinstance(result.output, dict)
         assert result.output["tenant"] == "default_tenant"
 
         # With context injection, uses injected value
         result = tool.run(data="test", tenant_id="injected_tenant")
+        assert isinstance(result.output, dict)
         assert result.output["tenant"] == "injected_tenant"
 
 

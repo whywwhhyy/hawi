@@ -16,6 +16,7 @@ Example:
 from .model import (
     BalanceDetails,
     BalanceInfo,
+    DelegateModel,
     Model,
     ModelParams,
     ProviderRequest,
@@ -86,6 +87,7 @@ from .registry import (
 __all__ = [
     # Base classes
     "Model",
+    "DelegateModel",
     "BalanceInfo",
     "ProviderRequest",
     "ProviderResponse",

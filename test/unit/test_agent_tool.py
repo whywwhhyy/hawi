@@ -1,5 +1,7 @@
 """Unit tests for AgentTool and ToolResult."""
 
+from typing import Any
+
 import asyncio
 import pytest
 from hawi.tool import AgentTool, ToolResult, tool
@@ -55,7 +57,7 @@ class TestAgentToolBasic:
     def test_abstract_class_cannot_instantiate(self):
         """Test that AgentTool is abstract and cannot be instantiated."""
         with pytest.raises(TypeError):
-            AgentTool()
+            AgentTool()  # type: ignore[abstract]
 
     def test_required_properties(self):
         """Test that subclasses must implement required properties."""
@@ -66,7 +68,7 @@ class TestAgentToolBasic:
                 return "test"
 
         with pytest.raises(TypeError):
-            IncompleteTool()
+            IncompleteTool()  # type: ignore[abstract]
 
     def test_tool_with_only_sync(self):
         """Test tool that only implements sync execution."""
@@ -90,7 +92,7 @@ class TestAgentToolBasic:
                     "required": ["value"]
                 }
 
-            def run(self, value: int):
+            def run(self, value: int, **kwargs: Any):  # type: ignore[override]
                 return ToolResult(success=True, output=value * 2)
 
         tool = SyncTool()
@@ -177,7 +179,7 @@ class TestAgentToolInvoke:
                     "required": ["a", "b"]
                 }
 
-            def run(self, a: int, b: int):
+            def run(self, a: int, b: int, **kwargs: Any):  # type: ignore[override]
                 return ToolResult(success=True, output=a + b)
 
         tool = AddTool()
@@ -208,7 +210,7 @@ class TestAgentToolInvoke:
                     "required": ["x", "y"]
                 }
 
-            async def arun(self, x: float, y: float):
+            async def arun(self, x: float, y: float, **kwargs: Any):  # type: ignore[override]
                 await asyncio.sleep(0)
                 return ToolResult(success=True, output=x * y)
 
@@ -243,7 +245,7 @@ class TestAgentToolInvoke:
                     "required": ["required_param"]
                 }
 
-            def run(self, required_param: str):
+            def run(self, required_param: str, **kwargs: Any):  # type: ignore[override]
                 return ToolResult(success=True, output=required_param)
 
         tool = StrictTool()
@@ -297,7 +299,7 @@ class TestAgentToolInvoke:
                     "required": ["message"]
                 }
 
-            def run(self, message: str):
+            def run(self, message: str, **kwargs: Any):  # type: ignore[override]
                 return ToolResult(success=True, output=message)
 
         tool = EchoTool()
@@ -475,7 +477,7 @@ class TestAgentToolValidation:
                     "required": ["count", "name"]
                 }
 
-            def run(self, count: int, name: str):
+            def run(self, count: int, name: str, **kwargs: Any):  # type: ignore[override]
                 return ToolResult(True, f"{name}: {count}")
 
         tool = ValidatedTool()
@@ -505,7 +507,7 @@ class TestAgentToolValidation:
                     "required": ["count"]
                 }
 
-            def run(self, count: int):
+            def run(self, count: int, **kwargs: Any):  # type: ignore[override]
                 return ToolResult(True, str(count))
 
         tool = ValidatedTool()
@@ -535,7 +537,7 @@ class TestAgentToolValidation:
                     "required": ["value"]
                 }
 
-            def run(self, value: str):
+            def run(self, value: str, **kwargs: Any):  # type: ignore[override]
                 return ToolResult(True, value)
 
         tool = RequiredTool()

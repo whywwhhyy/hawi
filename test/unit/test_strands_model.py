@@ -51,8 +51,8 @@ class TestStrandsModelTokenUsage:
         assert response.usage is not None
         assert response.usage["input_tokens"] == 100
         assert response.usage["output_tokens"] == 50
-        assert response.usage["cache_write_tokens"] == 80
-        assert response.usage["cache_read_tokens"] == 20
+        assert response.usage.get("cache_write_tokens") == 80
+        assert response.usage.get("cache_read_tokens") == 20
 
     def test_parse_response_without_cache_tokens(self):
         """Response without cache tokens should have None for cache fields."""

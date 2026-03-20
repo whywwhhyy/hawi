@@ -22,7 +22,7 @@ class TestModelValidation:
         """Test that DeepSeekModel rejects list model_id with clear error."""
         with pytest.raises((ValueError, TypeError)) as exc_info:
             DeepSeekModel(
-                model_id=["deepseek-chat", "deepseek-reasoner"],
+                model_id=["deepseek-chat", "deepseek-reasoner"],  # type: ignore[arg-type]
                 api_key="test-key",
             )
         assert "model_id" in str(exc_info.value).lower() or "string" in str(exc_info.value).lower()
@@ -31,7 +31,7 @@ class TestModelValidation:
         """Test that DeepSeekModel rejects non-string model_id."""
         with pytest.raises((ValueError, TypeError)):
             DeepSeekModel(
-                model_id={"name": "deepseek-chat"},
+                model_id={"name": "deepseek-chat"},  # type: ignore[arg-type]
                 api_key="test-key",
             )
 
@@ -48,7 +48,7 @@ class TestModelValidation:
         """Test that KimiModel rejects list model_id with clear error."""
         with pytest.raises((ValueError, TypeError)) as exc_info:
             KimiModel(
-                model_id=["kimi-k2.5", "kimi-k2.0"],
+                model_id=["kimi-k2.5", "kimi-k2.0"],  # type: ignore[arg-type]
                 api_key="test-key",
             )
         assert "model_id" in str(exc_info.value).lower() or "string" in str(exc_info.value).lower()

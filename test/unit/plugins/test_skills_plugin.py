@@ -90,7 +90,7 @@ Step 1: Do something.
         agent.context.system_prompt = []
         
         # Run injection
-        plugin.inject_skills_context(agent)
+        plugin.inject_skills_context(agent)  # type: ignore[reportCallIssue]
         
         # Verify system prompt updated
         assert len(agent.context.system_prompt) == 1

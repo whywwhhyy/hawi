@@ -79,6 +79,7 @@ class TestHawiAgentIntegration:
         return DeepSeekModel(
             model_id="deepseek-chat",
             api_key=DEEPSEEK_API_KEY,
+            api='openai',
         )
 
     @pytest.fixture
