@@ -566,12 +566,14 @@ class HawiAgent:
         """
         return self.clone()
 
-    def _invoke_hook(self, hook_type: str, *args, **kwargs) -> None:
-        """Invoke a hook if registered."""
+    async def _ainvoke_hook(self, hook_type: str, *args, **kwargs) -> None:
+        """Invoke a hook if registered, awaiting if it's async."""
         hook = self._hooks.get(hook_type)
         if hook:
             try:
-                hook(*args, **kwargs)
+                result = hook(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    await result
             except Exception as e:
                 import warnings
 
@@ -766,7 +768,7 @@ class HawiAgent:
         )
 
         # before_conversation hook
-        self._invoke_hook("before_conversation", self)
+        await self._ainvoke_hook("before_conversation", self)
 
         try:
             while not state.should_stop:
@@ -783,7 +785,7 @@ class HawiAgent:
                 state.iteration += 1
 
                 # before_model_call hook
-                self._invoke_hook("before_model_call", self, self._context, m)
+                await self._ainvoke_hook("before_model_call", self, self._context, m)
 
                 # Model stream start
                 request_id = f"{run_id}-{state.iteration}"
@@ -925,7 +927,7 @@ class HawiAgent:
                 )
 
                 # after_model_call hook
-                self._invoke_hook("after_model_call", self, self._context, None)
+                await self._ainvoke_hook("after_model_call", self, self._context, None)
 
                 # Build content parts for the assistant message
                 # Content parts include text/reasoning, but NOT tool_calls (they go in separate field)
@@ -1019,7 +1021,7 @@ class HawiAgent:
 
         finally:
             # after_conversation hook
-            self._invoke_hook("after_conversation", self)
+            await self._ainvoke_hook("after_conversation", self)
 
         # Build and return result
         duration_ms = (time.time() - start_time) * 1000
@@ -1241,7 +1243,7 @@ class HawiAgent:
         start_time = time.time()
 
         # before_tool_calling hook
-        self._invoke_hook("before_tool_calling", self, tool_name, arguments)
+        await self._ainvoke_hook("before_tool_calling", self, tool_name, arguments)
 
         # Find tool
         tool = self.get_tool(tool_name)
@@ -1325,7 +1327,7 @@ class HawiAgent:
         duration_ms = (time.time() - start_time) * 1000
 
         # after_tool_calling hook
-        self._invoke_hook("after_tool_calling", self, tool_name, arguments, result)
+        await self._ainvoke_hook("after_tool_calling", self, tool_name, arguments, result)
 
         # Add tool result to context (unless audit pending - will be added after approval)
         if not (tool and getattr(tool, "audit", False)):

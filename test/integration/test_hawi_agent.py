@@ -4,6 +4,7 @@ Tests the complete agent workflow with real API calls.
 Requires DEEPSEEK_API_KEY environment variable or models.yaml configuration.
 """
 
+import asyncio
 import pytest
 from typing import cast
 
@@ -11,7 +12,13 @@ from hawi.agent import HawiAgent
 from hawi.models import Model
 from hawi.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
-from hawi.plugin.decorators import tool, before_conversation, after_conversation
+from hawi.plugin.decorators import (
+    tool,
+    before_conversation,
+    after_conversation,
+    before_tool_calling,
+    after_tool_calling,
+)
 
 from test.integration.models import get_deepseek_api_key
 
@@ -67,6 +74,33 @@ class CalculatorPlugin(HawiPlugin):
         """
         from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+class AsyncHookPlugin(HawiPlugin):
+    """Plugin with async hooks for testing that they are properly awaited."""
+
+    def __init__(self):
+        self.events = []
+
+    @before_conversation
+    async def on_start(self, agent: HawiAgent):
+        await asyncio.sleep(0)  # Prove we're actually awaited
+        self.events.append("before_conversation")
+
+    @after_conversation
+    async def on_end(self, agent: HawiAgent):
+        await asyncio.sleep(0)
+        self.events.append("after_conversation")
+
+    @before_tool_calling
+    async def on_before_tool(self, agent: HawiAgent, tool_name: str, arguments: dict):
+        await asyncio.sleep(0)
+        self.events.append(f"before_tool_calling:{tool_name}")
+
+    @after_tool_calling
+    async def on_after_tool(self, agent: HawiAgent, tool_name: str, arguments: dict, result):
+        await asyncio.sleep(0)
+        self.events.append(f"after_tool_calling:{tool_name}")
 
 
 @pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
@@ -249,3 +283,51 @@ class TestHawiAgentAsync:
 
         assert "agent.run_start" in events
         assert "agent.run_stop" in events
+
+    @pytest.mark.asyncio
+    async def test_async_hooks_are_awaited(self):
+        """Test that async hooks registered via decorators are properly awaited.
+
+        If _ainvoke_hook does not await coroutines, the async hook body never
+        runs and the events list stays empty.
+        """
+        plugin = AsyncHookPlugin()
+        model = DeepSeekModel(
+            model_id="deepseek-chat",
+            api_key=DEEPSEEK_API_KEY,
+        )
+        agent = HawiAgent(model=model, plugins=[plugin])
+
+        await agent.arun("Say 'hi'.")
+
+        assert "before_conversation" in plugin.events, (
+            "async before_conversation hook was not awaited"
+        )
+        assert "after_conversation" in plugin.events, (
+            "async after_conversation hook was not awaited"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_tool_hooks_are_awaited(self):
+        """Test that async before/after_tool_calling hooks are properly awaited."""
+        plugin = AsyncHookPlugin()
+        calc = CalculatorPlugin()
+        model = DeepSeekModel(
+            model_id="deepseek-chat",
+            api_key=DEEPSEEK_API_KEY,
+        )
+        agent = HawiAgent(
+            model=model,
+            plugins=[calc, plugin],
+            system_prompt="You are a calculator assistant. Always use the calculate tool.",
+        )
+
+        await agent.arun("What is 3 + 4? Use the calculate tool.")
+
+        tool_events = [e for e in plugin.events if "tool_calling" in e]
+        assert any("before_tool_calling" in e for e in tool_events), (
+            "async before_tool_calling hook was not awaited"
+        )
+        assert any("after_tool_calling" in e for e in tool_events), (
+            "async after_tool_calling hook was not awaited"
+        )
