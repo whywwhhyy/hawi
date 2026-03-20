@@ -135,8 +135,8 @@ graph LR
         MCS["model.content_block_start<br/>内容块开始"]
         MCD["model.content_block_delta<br/>内容块增量"]
         MCE["model.content_block_stop<br/>内容块结束"]
-        ME["model.stream_stop<br/>流式响应结束"]
-        MM["model.metadata<br/>元数据"]
+        ME["model.stream_stop<br/>流式响应结束（不含 usage）"]
+        MM["model.metadata<br/>度量指标（usage、latency）"]
         MR["model.retry<br/>模型重试"]
     end
 ```

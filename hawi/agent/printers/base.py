@@ -13,7 +13,6 @@ from hawi.agent.events import (
     AgentToolResultEvent,
     AgentErrorEvent,
     ModelErrorEvent,
-    ModelStreamStopEvent,
     ModelMetadataEvent,
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockDeltaEvent,
@@ -98,9 +97,6 @@ class BasePrinter(ABC):
     async def _on_stream_stop(self, event: Event) -> None:
         """Model 流式响应结束"""
         self._current_block_type = None
-        assert isinstance(event, ModelStreamStopEvent)
-        if event.usage:
-            self._print_usage(event.usage)
 
     async def _on_metadata(self, event: Event) -> None:
         """Model 元数据（usage、latency 等）"""

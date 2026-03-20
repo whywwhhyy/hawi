@@ -40,21 +40,18 @@ class ModelStreamStopEvent(Event):
     """Model 流式响应结束"""
     request_id: str
     stop_reason: str
-    usage: TokenUsage | None = None
 
     @classmethod
     def create(
         cls,
         request_id: str,
         stop_reason: str,
-        usage: TokenUsage | None = None,
     ) -> ModelStreamStopEvent:
         return cls(
             type="model.stream_stop",
             source="model",
             request_id=request_id,
             stop_reason=stop_reason,
-            usage=usage,
         )
 
 

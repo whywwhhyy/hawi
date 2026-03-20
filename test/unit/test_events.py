@@ -69,17 +69,12 @@ class TestModelEvents:
 
     def test_model_stream_stop_event(self):
         """Test ModelStreamStopEvent creation."""
-        from hawi.models.message import TokenUsage
-        usage: TokenUsage = {"input_tokens": 10, "output_tokens": 20, "cache_write_tokens": None, "cache_read_tokens": None}
         event = ModelStreamStopEvent.create(
             request_id="req-123",
             stop_reason="end_turn",
-            usage=usage,
         )
         assert event.type == "model.stream_stop"
         assert event.stop_reason == "end_turn"
-        assert event.usage is not None
-        assert event.usage["input_tokens"] == 10
 
     def test_model_content_block_delta_event(self):
         """Test ModelContentBlockDeltaEvent creation."""

@@ -173,8 +173,8 @@ Printer 自动处理以下事件类型：
 | 事件 | 处理 |
 |------|------|
 | `model.stream_start` | 流式响应开始 |
-| `model.stream_stop` | 流式响应结束（含 usage） |
-| `model.metadata` | 模型元数据（usage、latency 等） |
+| `model.stream_stop` | 流式响应结束（不含 usage） |
+| `model.metadata` | 模型度量指标（usage、latency 等） |
 | `model.content_block_start` | 内容块开始 |
 | `model.content_block_delta` | 内容块增量更新 |
 | `model.content_block_stop` | 内容块结束 |

@@ -63,6 +63,7 @@ from .events import (
     ModelToolCallBlockStopEvent,
     ModelStreamStartEvent,
     ModelStreamStopEvent,
+    ModelMetadataEvent,
     DumpManager,
 )
 from .context import AgentContext, ToolCallContext
@@ -796,6 +797,7 @@ class HawiAgent:
                 tool_calls: list[ToolCallPart] = []
                 stop_reason = "end_turn"
                 usage: TokenUsage | None = None
+                model_call_start = time.time()
 
                 # Content block handlers for processing different chunk types
                 text_handler = ContentBlockHandler.create_text_handler()
@@ -908,7 +910,16 @@ class HawiAgent:
                     ModelStreamStopEvent.create(
                         request_id=request_id,
                         stop_reason=stop_reason,
+                    ),
+                    event_bus,
+                )
+
+                # Model metadata (usage + per-call latency)
+                await self._emit_event(
+                    ModelMetadataEvent.create(
+                        request_id=request_id,
                         usage=usage,
+                        latency_ms=(time.time() - model_call_start) * 1000,
                     ),
                     event_bus,
                 )
@@ -1212,7 +1223,7 @@ class HawiAgent:
             parts.append({
                 "type": "finish",
                 "stop_reason": data.get("stop_reason", "end_turn"),
-                "usage": data.get("usage"),
+                "usage": None,  # usage is carried by the subsequent model.metadata event
             })
 
         return parts

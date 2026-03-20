@@ -102,7 +102,6 @@ class MockModel(Model):
         yield ModelStreamStopEvent.create(
             request_id=request_id,
             stop_reason="end_turn",
-            usage=TokenUsage(input_tokens=10, output_tokens=5, cache_write_tokens=None, cache_read_tokens=None),
         )
 
     async def _astream_impl(self, request) -> AsyncGenerator[DeltaPart | Event, None]:
@@ -144,7 +143,6 @@ class MockModel(Model):
         yield ModelStreamStopEvent.create(
             request_id=request_id,
             stop_reason="end_turn",
-            usage=TokenUsage(input_tokens=10, output_tokens=5, cache_write_tokens=None, cache_read_tokens=None),
         )
 
     def _stream_impl(self, request) -> Iterator[DeltaPart]:
