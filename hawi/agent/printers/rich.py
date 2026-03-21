@@ -427,8 +427,13 @@ class RichPrinter(BasePrinter):
         if self._live:
             self._live.update(content, refresh=True)
 
-    def _feed_text(self, text: str) -> None:
-        """接收文本片段，进行增量解析"""
+    def _feed_text(self, text: str, is_thinking: bool = False) -> None:
+        """接收文本片段，进行增量解析
+        
+        Args:
+            text: 文本内容
+            is_thinking: 当前块是否为 thinking 类型（在调用时确定，避免状态竞争）
+        """
         self._buffer += text
         
         while "\n\n" in self._buffer:
@@ -442,21 +447,27 @@ class RichPrinter(BasePrinter):
             if complete_block.strip():
                 if self._streaming_mode:
                     self._stop_live()
-                self._render_and_print(complete_block, final=True)
+                self._render_and_print(complete_block, is_thinking=is_thinking, final=True)
         
         if self._streaming_mode:
             if self._buffer.strip() or self._in_live_mode:
                 self._start_live()
-                self._render_and_print(self._buffer, final=False)
+                self._render_and_print(self._buffer, is_thinking=is_thinking, final=False)
 
-    def _render_and_print(self, text: str, final: bool = True) -> None:
-        """渲染并打印文本"""
+    def _render_and_print(self, text: str, is_thinking: bool = False, final: bool = True) -> None:
+        """渲染并打印文本
+        
+        Args:
+            text: 文本内容
+            is_thinking: 是否为 thinking 类型内容
+            final: 是否为最终输出（非 Live 更新）
+        """
         if not text.strip():
             return
         
         md = self._create_markdown(text)
         
-        if self._is_thinking:
+        if is_thinking:
             content = Panel(
                 md,
                 title="[bold yellow]🤔 Thinking[/bold yellow]",
@@ -470,13 +481,17 @@ class RichPrinter(BasePrinter):
         elif self._streaming_mode:
             self._update_live(content)
 
-    def _finalize(self) -> None:
-        """最终化当前块"""
+    def _finalize(self, is_thinking: bool = False) -> None:
+        """最终化当前块
+        
+        Args:
+            is_thinking: 当前块是否为 thinking 类型
+        """
         if self._streaming_mode:
             self._stop_live()
         
         if self._buffer.strip():
-            self._render_and_print(self._buffer, final=True)
+            self._render_and_print(self._buffer, is_thinking=is_thinking, final=True)
         
         self._buffer = ""
 
@@ -485,8 +500,12 @@ class RichPrinter(BasePrinter):
     async def _on_content_block_start(self, event: Event) -> None:
         """内容块开始"""
         assert isinstance(event, ModelContentBlockStartEvent)
+        # 确保先清空之前的状态
+        if self._streaming_mode:
+            self._stop_live()
         self._buffer = ""
-        self._is_thinking = event.block_type == "thinking"
+        # 根据 block_type 设置 thinking 状态
+        self._is_thinking = event.block_type == "reasoning"
 
     async def _on_content_block_delta(self, event: Event) -> None:
         """内容块增量"""
@@ -495,16 +514,20 @@ class RichPrinter(BasePrinter):
         if not event.delta:
             return
         
-        is_thinking = event.delta_type == "thinking"
-        
-        if event.delta_type == "text" or (is_thinking and self.show_reasoning):
-            self._is_thinking = is_thinking
-            self._feed_text(event.delta)
+        # delta_type 应该与 block_type 一致
+        # 传递 _is_thinking 状态，避免在 _feed_text 中读取时状态已改变
+        if event.delta_type == "text":
+            self._feed_text(event.delta, is_thinking=False)
+        elif event.delta_type == "reasoning" and self.show_reasoning and self._is_thinking:
+            self._feed_text(event.delta, is_thinking=True)
 
     async def _on_content_block_stop(self, event: Event) -> None:
         """内容块结束"""
-        self._finalize()
+        # 使用当前的 _is_thinking 状态来最终化
+        self._finalize(is_thinking=self._is_thinking)
         self._console.print()
+        # 重置状态，避免影响下一个 block
+        self._is_thinking = False
 
     async def _on_tool_use_block_start(self, event: Event) -> None:
         """工具调用块开始"""
@@ -620,16 +643,20 @@ class RichPrinter(BasePrinter):
         self._console.print()
 
     def _print_usage(self, usage: Any) -> None:
-        """打印 token 用量"""
+        """打印 token 用量（包含 cache read/write）"""
         if usage is None:
             return
         
-        # 提取 token 信息
+        # 提取 token 信息（兼容不同字段命名）
         input_tokens = getattr(usage, 'input_tokens', None) or getattr(usage, 'prompt_tokens', None)
         output_tokens = getattr(usage, 'output_tokens', None) or getattr(usage, 'completion_tokens', None)
         total_tokens = getattr(usage, 'total_tokens', None)
         
-        if not any([input_tokens, output_tokens, total_tokens]):
+        # 缓存相关 tokens
+        cache_read = getattr(usage, 'cache_read_tokens', None)
+        cache_write = getattr(usage, 'cache_write_tokens', None)
+        
+        if not any([input_tokens, output_tokens, total_tokens, cache_read, cache_write]):
             return
         
         # 构建显示文本
@@ -638,6 +665,16 @@ class RichPrinter(BasePrinter):
             parts.append(f"↓ {input_tokens}")
         if output_tokens is not None:
             parts.append(f"↑ {output_tokens}")
+        
+        # 缓存 tokens（如果存在）
+        cache_parts = []
+        if cache_read:
+            cache_parts.append(f"↺ {cache_read}")
+        if cache_write:
+            cache_parts.append(f"✎ {cache_write}")
+        if cache_parts:
+            parts.append(" ".join(cache_parts))
+        
         if total_tokens is not None:
             parts.append(f"Σ {total_tokens}")
         

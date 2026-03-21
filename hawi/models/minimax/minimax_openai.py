@@ -160,7 +160,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                         
                         # 发送 thinking 开始事件
                         yield {
-                            "type": "thinking_delta",
+                            "type": "reasoning_delta",
                             "index": 0,
                             "delta": "",
                             "is_start": True,
@@ -176,7 +176,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                         # 发送 thinking 内容
                         if think_parts[0]:
                             yield {
-                                "type": "thinking_delta",
+                                "type": "reasoning_delta",
                                 "index": 0,
                                 "delta": think_parts[0],
                                 "is_start": False,
@@ -185,7 +185,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                         
                         # 发送 thinking 结束事件
                         yield {
-                            "type": "thinking_delta",
+                            "type": "reasoning_delta",
                             "index": 0,
                             "delta": "",
                             "is_start": False,
@@ -209,7 +209,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                         # 仍在 think 中，发送内容
                         thinking_content += buffer
                         yield {
-                            "type": "thinking_delta",
+                            "type": "reasoning_delta",
                             "index": 0,
                             "delta": buffer,
                             "is_start": False,
@@ -277,7 +277,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                             
                             # 发送 thinking 开始事件
                             yield {
-                                "type": "thinking_delta",
+                                "type": "reasoning_delta",
                                 "index": 0,
                                 "delta": "",
                                 "is_start": True,
@@ -292,7 +292,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                             # 发送 thinking 内容
                             if think_parts[0]:
                                 yield {
-                                    "type": "thinking_delta",
+                                    "type": "reasoning_delta",
                                     "index": 0,
                                     "delta": think_parts[0],
                                     "is_start": False,
@@ -301,7 +301,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                             
                             # 发送 thinking 结束事件
                             yield {
-                                "type": "thinking_delta",
+                                "type": "reasoning_delta",
                                 "index": 0,
                                 "delta": "",
                                 "is_start": False,
@@ -325,7 +325,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
                         else:
                             # 仍在 think 中，发送内容
                             yield {
-                                "type": "thinking_delta",
+                                "type": "reasoning_delta",
                                 "index": 0,
                                 "delta": buffer,
                                 "is_start": False,

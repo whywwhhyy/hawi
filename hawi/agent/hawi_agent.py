@@ -91,8 +91,8 @@ class ContentBlockHandler:
     """
 
     # 块类型配置
-    stream_part_type: str  # "text_delta", "thinking_delta", "tool_call_delta"
-    block_type: Literal["text", "thinking", "tool_use", "redacted_thinking"]
+    stream_part_type: str  # "text_delta", "reasoning_delta", "tool_call_delta"
+    block_type: Literal["text", "reasoning", "tool_use", "redacted_thinking"]
 
     # 当前块状态
     _current_block_index: int = field(default=-1, repr=False)
@@ -110,8 +110,8 @@ class ContentBlockHandler:
     def create_thinking_handler(cls) -> ContentBlockHandler:
         """创建推理块处理器"""
         return cls(
-            stream_part_type="thinking_delta",
-            block_type="thinking",
+            stream_part_type="reasoning_delta",
+            block_type="reasoning",
         )
 
     @classmethod
@@ -126,7 +126,7 @@ class ContentBlockHandler:
         """创建累积器"""
         if self.block_type == "text":
             return []
-        elif self.block_type == "thinking":
+        elif self.block_type == "reasoning":
             return []
         elif self.block_type == "tool_use":
             return {"id": "", "name": "", "arguments": ""}
@@ -137,7 +137,7 @@ class ContentBlockHandler:
         if self._accumulator is None:
             return
 
-        if self.block_type in ("text", "thinking"):
+        if self.block_type in ("text", "reasoning"):
             # list[str] accumulator
             delta = chunk.get("delta", "")
             if delta:
@@ -162,7 +162,7 @@ class ContentBlockHandler:
 
         if self.block_type == "text":
             return TextPart(type="text", text="".join(self._accumulator))
-        elif self.block_type == "thinking":
+        elif self.block_type == "reasoning":
             from hawi.models.message import ReasoningPart
             return ReasoningPart(
                 type="reasoning",
@@ -184,7 +184,7 @@ class ContentBlockHandler:
         """检查累积器是否为空"""
         if self._accumulator is None:
             return True
-        if self.block_type in ("text", "thinking"):
+        if self.block_type in ("text", "reasoning"):
             return not "".join(self._accumulator).strip()
         elif self.block_type == "tool_use":
             return not self._accumulator.get("name")
@@ -840,7 +840,7 @@ class HawiAgent:
                         # Get or create handler for this chunk type
                         if chunk_type == "text_delta":
                             handler = text_handler
-                        elif chunk_type == "thinking_delta":
+                        elif chunk_type == "reasoning_delta":
                             handler = thinking_handler
                         elif chunk_type == "tool_call_delta":
                             handler = tool_handler
@@ -1146,9 +1146,9 @@ class HawiAgent:
                     "is_start": True,
                     "is_end": False,
                 })
-            elif block_type == "thinking":
+            elif block_type == "reasoning":
                 parts.append({
-                    "type": "thinking_delta",
+                    "type": "reasoning_delta",
                     "index": idx,
                     "delta": "",
                     "is_start": True,
@@ -1181,7 +1181,7 @@ class HawiAgent:
                     })
                 elif content_type == "reasoning":
                     parts.append({
-                        "type": "thinking_delta",
+                        "type": "reasoning_delta",
                         "index": idx,
                         "delta": "",
                         "is_start": False,

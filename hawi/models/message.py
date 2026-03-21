@@ -48,7 +48,7 @@ ContentPartType = Literal[
 
 # 流式内容块类型 - 事件系统中使用的块类型
 # 注意：这是 ContentPartType 的子集，用于流式块处理
-DeltaPartType = Literal["text", "thinking", "tool_use", "redacted_thinking"]
+DeltaPartType = Literal["text", "reasoning", "tool_use", "redacted_thinking"]
 
 
 class CacheControl(TypedDict):
@@ -359,7 +359,7 @@ class DeltaTextPart(TypedDict):
 class DeltaThinkingPart(TypedDict):
     """推理/思考增量块"""
 
-    type: Literal["thinking_delta"]
+    type: Literal["reasoning_delta"]
     index: int
     delta: str              # 推理内容增量
     is_start: bool
@@ -370,7 +370,7 @@ class DeltaSignaturePart(TypedDict):
     """推理签名增量块 (Anthropic)
 
     Thinking 块的签名增量，用于验证推理完整性。
-    通常与 thinking_delta 配合使用。
+    通常与 reasoning_delta 配合使用。
     """
 
     type: Literal["signature_delta"]

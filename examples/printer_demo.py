@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RichPrinter 演示 - 展示代码块样式自定义"""
+"""RichPrinter 演示"""
 
 import asyncio
 import sys
@@ -13,7 +13,7 @@ from hawi.agent.events import (
 
 def make_delta(text: str, delta_type: str = "text"):
     part = {
-        "type": "text_delta" if delta_type == "text" else "thinking_delta",
+        "type": f"{delta_type}_delta",
         "index": 0,
         "delta": text,
         "is_start": False,
@@ -29,7 +29,6 @@ async def demo_code_style():
     print("=" * 60)
     print()
     
-    # 使用自定义代码块样式
     printer = RichPrinter(
         code_theme="dracula",
         code_border_style="blue",
@@ -40,21 +39,18 @@ async def demo_code_style():
     await printer.handle(ModelContentBlockStartEvent.create("demo-1", 0, "text"))
     
     chunks = [
-        "# 代码块样式演示\n\n",
-        "## Python\n\n",
+        "# 代码块演示\n\n",
         "```python\n",
-        "def fibonacci(n):\n",
-        "    if n <= 1:\n",
-        "        return n\n",
-        "    return fibonacci(n-1) + fibonacci(n-2)\n",
+        "def hello():\n",
+        "    print('Hello')\n",
         "```\n\n",
         "完成！",
     ]
     
     for chunk in chunks:
-        await printer.handle(make_delta(chunk))
+        await printer.handle(make_delta(chunk, "text"))
     
-    await printer.handle(ModelContentBlockStopEvent.create("demo-1", 0, [{"type": "text", "text": ""}]))
+    await printer.handle(ModelContentBlockStopEvent.create("demo-1", 0, []))
 
 
 async def main():

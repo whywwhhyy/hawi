@@ -76,7 +76,7 @@ class PlainPrinter(BasePrinter):
             _stdout.write("\n")
         self._has_printed_first_block = True
 
-        if event.block_type == "thinking" and self.show_reasoning:
+        if event.block_type == "reasoning" and self.show_reasoning:
             _stdout.write(f"[{timestamp}] [Thinking]\n")
             _stdout.flush()
 
@@ -90,7 +90,7 @@ class PlainPrinter(BasePrinter):
         if event.delta_type == "text":
             _stdout.write(delta)
             _stdout.flush()
-        elif event.delta_type == "thinking" and self.show_reasoning:
+        elif event.delta_type == "reasoning" and self.show_reasoning:
             _stdout.write(delta)
             _stdout.flush()
 
@@ -98,7 +98,7 @@ class PlainPrinter(BasePrinter):
         """内容块结束"""
         assert isinstance(event, ModelContentBlockStopEvent)
         
-        if event.block_type == "thinking" and self.show_reasoning:
+        if event.block_type == "reasoning" and self.show_reasoning:
             _stdout.write("\n[/Thinking]\n")
             _stdout.flush()
         elif event.block_type == "text":

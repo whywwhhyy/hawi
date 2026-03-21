@@ -222,7 +222,7 @@ class TestGLMOpenAIAsync:
             return e["type"] if isinstance(e, dict) else e.type
 
         # ainvoke returns delta parts directly (not ModelEvents)
-        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        assert get_type(events[0]) in ["text_delta", "reasoning_delta"]
         assert get_type(events[-1]) == "finish"
 
         # Extract text deltas
@@ -267,7 +267,7 @@ class TestGLMOpenAIAsync:
         event_types = [get_type(e) for e in events]
 
         # Verify event sequence - ainvoke returns delta parts directly
-        assert event_types[0] in ["text_delta", "thinking_delta"]
+        assert event_types[0] in ["text_delta", "reasoning_delta"]
         assert event_types[-1] == "finish"
 
     @pytest.mark.asyncio
@@ -286,4 +286,4 @@ class TestGLMOpenAIAsync:
             return e["type"] if isinstance(e, dict) else e.type
 
         # ainvoke returns delta parts directly (not ModelEvents)
-        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        assert get_type(events[0]) in ["text_delta", "reasoning_delta"]

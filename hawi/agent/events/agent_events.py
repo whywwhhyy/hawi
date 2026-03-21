@@ -152,6 +152,17 @@ class AgentToolResultEvent(Event):
             duration_ms=duration_ms,
         )
 
+    @field_serializer('result')
+    def serialize_result(self, result: "ToolResult | None") -> dict[str, Any] | None:
+        """将 ToolResult 序列化为可 JSON 序列化的字典"""
+        if result is None:
+            return None
+        return {
+            'success': result.success,
+            'output': result.output,
+            'error': result.error,
+        }
+
 
 class AgentMessageAddedEvent(Event):
     """消息被添加到上下文"""

@@ -323,11 +323,11 @@ class TestConversationPrinterAdvanced:
 
         # handle is now sync, no await needed
         await printer_with.handle(ModelContentBlockStartEvent.create(
-            request_id="r1", block_index=0, block_type="thinking"
+            request_id="r1", block_index=0, block_type="reasoning"
         ))
         await printer_with.handle(ModelContentBlockDeltaEvent.create(
             request_id="r1", part={
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": 0,
                 "delta": "Thinking...",
                 "is_start": False,
@@ -364,7 +364,7 @@ class TestConversationPrinterAdvanced:
 
         await printer_without.handle(ModelContentBlockDeltaEvent.create(
             request_id="r1", part={
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": 0,
                 "delta": "Secret thought",
                 "is_start": False,

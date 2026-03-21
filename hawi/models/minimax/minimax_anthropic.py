@@ -90,7 +90,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
             }
         elif block.type == "thinking":
             yield {
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": block_index,
                 "delta": "",
                 "is_start": True,
@@ -98,7 +98,7 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
             }
         elif block.type == "redacted_thinking":
             yield {
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": block_index,
                 "delta": "[Redacted thinking content]",
                 "is_start": True,
@@ -116,10 +116,10 @@ class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
         
         delta_type = getattr(delta, 'type', None)
         
-        if delta_type == "thinking_delta" or isinstance(delta, ThinkingDelta):
+        if delta_type == "reasoning_delta" or isinstance(delta, ThinkingDelta):
             thinking = getattr(delta, 'thinking', '')
             yield {
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": block_index,
                 "delta": thinking,
                 "is_start": False,

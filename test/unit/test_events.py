@@ -105,11 +105,11 @@ class TestModelEvents:
         start = ModelContentBlockStartEvent.create(
             request_id="req-123",
             block_index=1,
-            block_type="thinking",
+            block_type="reasoning",
         )
 
         part: DeltaThinkingPart = {
-            "type": "thinking_delta",
+            "type": "reasoning_delta",
             "index": 1,
             "delta": "Let me think...",
             "is_start": False,
@@ -132,8 +132,8 @@ class TestModelEvents:
             content=[reasoning_part],
         )
 
-        assert start.block_type == "thinking"
-        assert delta.delta_type == "thinking"
+        assert start.block_type == "reasoning"
+        assert delta.delta_type == "reasoning"
         assert stop.content[0].get("reasoning") == "Let me think..."
         assert stop.block_type == "reasoning"
 
@@ -337,12 +337,12 @@ class TestConversationPrinter:
         start_event = ModelContentBlockStartEvent.create(
             request_id="req-1",
             block_index=0,
-            block_type="thinking",
+            block_type="reasoning",
         )
         await printer.handle(start_event)
 
         part: DeltaThinkingPart = {
-            "type": "thinking_delta",
+            "type": "reasoning_delta",
             "index": 0,
             "delta": "Let me think...",
             "is_start": False,
@@ -443,7 +443,7 @@ class TestConversationPrinter:
         from hawi.models.message import DeltaThinkingPart
 
         part: DeltaThinkingPart = {
-            "type": "thinking_delta",
+            "type": "reasoning_delta",
             "index": 0,
             "delta": "Secret thought",
             "is_start": False,

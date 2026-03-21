@@ -128,7 +128,7 @@ class _AnthropicStreamHandler:
             })
         elif block.type == "thinking":
             yield DeltaThinkingPart({
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": block_index,
                 "delta": "",
                 "is_start": True,
@@ -136,7 +136,7 @@ class _AnthropicStreamHandler:
             })
         elif block.type == "redacted_thinking":
             yield DeltaThinkingPart({
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": block_index,
                 "delta": "[Redacted thinking content]",
                 "is_start": True,
@@ -175,7 +175,7 @@ class _AnthropicStreamHandler:
             })
         elif isinstance(delta, ThinkingDelta):
             yield DeltaThinkingPart({
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": block_index,
                 "delta": delta.thinking,
                 "is_start": False,
@@ -246,7 +246,7 @@ class _AnthropicStreamHandler:
             self._partial_json_parts = []
         elif block.type == "thinking":
             yield DeltaThinkingPart({
-                "type": "thinking_delta",
+                "type": "reasoning_delta",
                 "index": block_index,
                 "delta": "",
                 "is_start": False,

@@ -282,7 +282,7 @@ class AnthropicModel(Model):
                         arguments=block.get("input", {}),
                     )
                 )
-            elif block_type == "thinking":
+            elif block_type == "reasoning":
                 parts.append(
                     ReasoningPart(
                         type="reasoning",
@@ -380,7 +380,7 @@ class AnthropicModel(Model):
                 reasoning_part = cast(ReasoningPart, part)
                 from hawi.models.message import DeltaThinkingPart
                 yield DeltaThinkingPart(
-                    type="thinking_delta",
+                    type="reasoning_delta",
                     index=idx,
                     delta=reasoning_part.get("reasoning") or "",
                     is_start=True,

@@ -313,7 +313,7 @@ class StrandsModel(Model):
                 if chunk_type == "text_delta":
                     part = cast(DeltaTextPart, chunk)
                     full_text_parts.append(part["delta"])
-                elif chunk_type == "thinking_delta":
+                elif chunk_type == "reasoning_delta":
                     part = cast(DeltaThinkingPart, chunk)
                     full_thinking_parts.append(part["delta"])
                 elif chunk_type == "tool_call_delta":
@@ -341,7 +341,7 @@ class StrandsModel(Model):
                 )
             if full_thinking_parts:
                 yield DeltaThinkingPart(
-                    type="thinking_delta",
+                    type="reasoning_delta",
                     index=1 if full_text_parts else 0,
                     delta="".join(full_thinking_parts),
                     is_start=True,
@@ -376,7 +376,7 @@ class StrandsModel(Model):
             elif part_type == "reasoning":
                 reasoning_part = cast(ReasoningPart, part)
                 yield DeltaThinkingPart(
-                    type="thinking_delta",
+                    type="reasoning_delta",
                     index=idx,
                     delta=reasoning_part.get("reasoning") or "",
                     is_start=True,
@@ -819,17 +819,17 @@ class StrandsModel(Model):
                     if reasoning_text:
                         if not block_started:
                             yield {
-                                "type": "thinking_delta",
+                                "type": "reasoning_delta",
                                 "index": index,
                                 "delta": "",
                                 "is_start": True,
                                 "is_end": False,
                             }
                             state["block_started"] = True
-                            state["block_type"] = "thinking"
+                            state["block_type"] = "reasoning"
 
                         yield {
-                            "type": "thinking_delta",
+                            "type": "reasoning_delta",
                             "index": index,
                             "delta": reasoning_text,
                             "is_start": False,
@@ -886,9 +886,9 @@ class StrandsModel(Model):
                         "is_start": False,
                         "is_end": True,
                     }
-                elif block_type == "thinking":
+                elif block_type == "reasoning":
                     yield {
-                        "type": "thinking_delta",
+                        "type": "reasoning_delta",
                         "index": index,
                         "delta": "",
                         "is_start": False,

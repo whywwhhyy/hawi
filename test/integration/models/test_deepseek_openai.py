@@ -383,7 +383,7 @@ class TestDeepSeekOpenAIAsync:
             return e["type"] if isinstance(e, dict) else e.type
 
         # First event should be text_delta (DeepSeek OpenAI returns delta parts directly)
-        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        assert get_type(events[0]) in ["text_delta", "reasoning_delta"]
         # Last event should be finish
         assert get_type(events[-1]) == "finish"
 
@@ -433,7 +433,7 @@ class TestDeepSeekOpenAIAsync:
         event_types = [get_type(e) for e in events]
 
         # Should start with delta and end with finish
-        assert event_types[0] in ["text_delta", "thinking_delta"]
+        assert event_types[0] in ["text_delta", "reasoning_delta"]
         assert event_types[-1] == "finish"
 
         # Verify finish event structure (usage may or may not be present depending on API)
@@ -458,4 +458,4 @@ class TestDeepSeekOpenAIAsync:
             return e["type"] if isinstance(e, dict) else e.type
 
         # ainvoke returns delta parts directly (not ModelEvents)
-        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        assert get_type(events[0]) in ["text_delta", "reasoning_delta"]

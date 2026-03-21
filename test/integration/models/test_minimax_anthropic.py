@@ -122,8 +122,8 @@ class TestMiniMaxAnthropicM25Integration:
             messages=[_create_user_message("Count from 1 to 3.")],
         ))
 
-        # MiniMax may output thinking_delta or text_delta events
-        content_events = [e for e in events if e["type"] in ("text_delta", "thinking_delta")]
+        # MiniMax may output reasoning_delta or text_delta events
+        content_events = [e for e in events if e["type"] in ("text_delta", "reasoning_delta")]
 
         assert len(content_events) > 0
         # finish event may not be present in some cases, so we just verify we got content
@@ -218,7 +218,7 @@ class TestMiniMaxAnthropicM21Integration:
             messages=[_create_user_message("Tell me a short joke.")],
         ))
 
-        # MiniMax may output thinking_delta or text_delta events
-        content_events = [e for e in events if e["type"] in ("text_delta", "thinking_delta")]
+        # MiniMax may output reasoning_delta or text_delta events
+        content_events = [e for e in events if e["type"] in ("text_delta", "reasoning_delta")]
 
         assert len(content_events) > 0

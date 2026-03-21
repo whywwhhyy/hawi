@@ -308,7 +308,7 @@ class OpenAIModel(Model):
             elif part_type == "reasoning":
                 reasoning_part = cast(ReasoningPart, part)
                 yield DeltaThinkingPart(
-                    type="thinking_delta",
+                    type="reasoning_delta",
                     index=idx,
                     delta=reasoning_part.get("reasoning") or "",
                     is_start=True,

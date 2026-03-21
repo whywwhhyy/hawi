@@ -132,8 +132,8 @@ class TestMiniMaxM25Integration:
             messages=[_create_user_message("Count from 1 to 3.")],
         ))
 
-        # MiniMax may output thinking_delta or text_delta events
-        content_events = [e for e in events if e["type"] in ("text_delta", "thinking_delta")]
+        # MiniMax may output reasoning_delta or text_delta events
+        content_events = [e for e in events if e["type"] in ("text_delta", "reasoning_delta")]
 
         assert len(content_events) > 0
         # finish event may not be present in some cases, so we just verify we got content
@@ -228,8 +228,8 @@ class TestMiniMaxM21Integration:
             messages=[_create_user_message("Tell me a short joke.")],
         ))
 
-        # MiniMax may output thinking_delta or text_delta events
-        content_events = [e for e in events if e["type"] in ("text_delta", "thinking_delta")]
+        # MiniMax may output reasoning_delta or text_delta events
+        content_events = [e for e in events if e["type"] in ("text_delta", "reasoning_delta")]
 
         assert len(content_events) > 0
         # finish event may not be present in some cases
@@ -263,7 +263,7 @@ class TestMiniMaxOpenAIAsync:
             return e["type"] if isinstance(e, dict) else e.type
 
         # ainvoke returns delta parts directly (not ModelEvents)
-        assert get_type(events[0]) in ["text_delta", "thinking_delta"]
+        assert get_type(events[0]) in ["text_delta", "reasoning_delta"]
         assert get_type(events[-1]) == "finish"
 
         # Extract text deltas
@@ -285,8 +285,8 @@ class TestMiniMaxOpenAIAsync:
 
         assert len(events) > 0
 
-        # MiniMax may output thinking_delta or text_delta events
-        content_events = [e for e in events if isinstance(e, dict) and e.get("type") in ("text_delta", "thinking_delta")]
+        # MiniMax may output reasoning_delta or text_delta events
+        content_events = [e for e in events if isinstance(e, dict) and e.get("type") in ("text_delta", "reasoning_delta")]
 
         assert len(content_events) > 0
 
@@ -309,9 +309,9 @@ class TestMiniMaxOpenAIAsync:
         event_types = [get_type(e) for e in events]
 
         # Verify event sequence - ainvoke returns delta parts directly
-        assert event_types[0] in ["text_delta", "thinking_delta"]
+        assert event_types[0] in ["text_delta", "reasoning_delta"]
         # Last event should be finish or a content delta (depending on API)
-        assert event_types[-1] in ["finish", "text_delta", "thinking_delta"]
+        assert event_types[-1] in ["finish", "text_delta", "reasoning_delta"]
 
     @pytest.mark.asyncio
     async def test_async_non_streaming_m21_model(self):

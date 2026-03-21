@@ -389,4 +389,4 @@ class TestEventWithReasoningModel:
         # Verify delta events have correct types
         delta_events = [e for e in events if e.type == "model.content_block_delta"]
         for de in delta_events:
-            assert de.delta_type in ["text", "thinking", "tool_input", "signature"]
+            assert de.delta_type in ["text", "reasoning", "tool_input", "signature"]

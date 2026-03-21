@@ -259,8 +259,8 @@ text_delta: DeltaTextPart = {
 }
 
 # 思考增量
-thinking_delta: DeltaThinkingPart = {
-    "type": "thinking_delta",
+reasoning_delta: DeltaThinkingPart = {
+    "type": "reasoning_delta",
     "delta": "Let me think...",
     "index": 0,
     "is_start": True,

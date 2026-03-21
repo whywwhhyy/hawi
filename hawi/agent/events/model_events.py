@@ -18,9 +18,9 @@ from .event import Event
 
 # 内容块类型 - 用于事件系统中 ContentBlock 相关的 block_type 字段
 # 与 ContentPart.type 有所不同：
-# - "reasoning" (ContentPart) -> "thinking" (事件 block_type)
+# - "reasoning" (ContentPart) -> "reasoning" (事件 block_type)
 # - 不包含 tool_call、image 等无法作为内容块出现的类型
-ContentBlockType = Literal["text", "thinking", "redacted_thinking", "tool_use"]
+ContentBlockType = Literal["text", "reasoning", "redacted_thinking", "tool_use"]
 
 
 class ModelStreamStartEvent(Event):
@@ -68,14 +68,14 @@ class ModelContentBlockStartEvent(Event):
 
     request_id: str
     block_index: int
-    block_type: Literal["text", "thinking", "redacted_thinking"]
+    block_type: Literal["text", "reasoning", "redacted_thinking"]
 
     @classmethod
     def create(
         cls,
         request_id: str,
         block_index: int,
-        block_type: Literal["text", "thinking", "redacted_thinking"],
+        block_type: Literal["text", "reasoning", "redacted_thinking"],
     ) -> ModelContentBlockStartEvent:
         """创建内容块开始事件
 
@@ -135,7 +135,7 @@ class ModelContentBlockDeltaEvent(Event):
 
     request_id: str
     block_index: int
-    delta_type: Literal["text", "thinking", "tool_input", "signature"]
+    delta_type: Literal["text", "reasoning", "tool_input", "signature"]
     delta: str
     part: DeltaPart
     is_streaming: bool = True
@@ -173,10 +173,10 @@ class ModelContentBlockDeltaEvent(Event):
 
         # 映射 part type 到 delta_type 并提取 delta 内容
         if part_type == "text_delta":
-            delta_type: Literal["text", "thinking", "tool_input", "signature"] = "text"
+            delta_type: Literal["text", "reasoning", "tool_input", "signature"] = "text"
             delta = part.get("delta", "")
-        elif part_type == "thinking_delta":
-            delta_type = "thinking"
+        elif part_type == "reasoning_delta":
+            delta_type = "reasoning"
             delta = part.get("delta", "")
         elif part_type == "tool_call_delta":
             delta_type = "tool_input"
