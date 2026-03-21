@@ -22,7 +22,7 @@ from hawi.errors import (
     ToolExecutionError,
     ConfigurationError,
 )
-from .hawi_agent import HawiAgent
+from .agent import HawiAgent
 from .context import AgentContext
 from .printers import (
     PlainPrinter,

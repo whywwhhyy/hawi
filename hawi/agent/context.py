@@ -22,7 +22,7 @@ from hawi.models.message import (
 from hawi.tool.types import PendingToolCall
 
 if TYPE_CHECKING:
-    from .hawi_agent import HawiAgent
+    from .agent import HawiAgent
 
 
 @dataclass

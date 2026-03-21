@@ -19,11 +19,6 @@ from hawi.agent.events import (
     ModelToolCallBlockStopEvent,
 )
 from hawi.models.message import TokenUsage
-
-# Backward compatibility aliases
-ModelToolCallBlockStartEvent = ModelToolCallBlockStartEvent
-ModelToolCallBlockDeltaEvent = ModelToolCallBlockDeltaEvent
-ModelToolCallBlockStopEvent = ModelToolCallBlockStopEvent
 from hawi.errors import AgentError, ModelError
 
 logger = logging.getLogger(__name__)
