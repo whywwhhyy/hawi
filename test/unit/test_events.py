@@ -94,9 +94,7 @@ class TestModelEvents:
         assert event.type == "model.content_block_delta"
         assert event.delta == "Hello"
         assert event.delta_type == "text"
-        assert event.is_start is True
-        assert event.is_end is False
-        assert event.part == part
+        assert event.block_index == 0
 
     def test_model_content_block_events_with_reasoning(self):
         """Test content block events for reasoning."""
@@ -145,12 +143,10 @@ class TestAgentEvents:
         """Test AgentRunStartEvent creation."""
         event = AgentRunStartEvent.create(
             run_id="run-123",
-            message_preview="Hello",
         )
         assert event.type == "agent.run_start"
         assert event.source == "agent"
         assert event.run_id == "run-123"
-        assert event.message_preview == "Hello"
 
     def test_agent_run_stop_event(self):
         """Test AgentRunStopEvent creation."""

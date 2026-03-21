@@ -106,7 +106,7 @@ class ModelContentBlockStartEvent(Event):
 class ModelContentBlockDeltaEvent(Event):
     """内容块增量更新
 
-    包含完整的原始 DeltaPart，同时提供便捷属性访问常用字段。
+    包含内容块增量的核心字段。不包含完整的 DeltaPart，只提取必要信息。
 
     关于 delta 的语义：
     - streaming=True: delta 表示每一个小碎块的信息
@@ -115,14 +115,9 @@ class ModelContentBlockDeltaEvent(Event):
     Attributes:
         request_id: 请求 ID
         block_index: 内容块序号
-        delta_type: 增量类型（便捷属性，也可从 part 获取）
-        delta: 增量内容（streaming 决定其语义）
-        part: 完整的 DeltaPart，包含 is_start, is_end 等原始信息
+        delta_type: 增量类型（"text", "reasoning", "tool_input", "signature"）
+        delta: 增量内容
         is_streaming: 是否来自流式接口
-
-    便捷属性:
-        is_start: 是否是该内容块的开始
-        is_end: 是否是该内容块的结束
 
     Example:
         # 流式模式：累积 delta
@@ -137,18 +132,7 @@ class ModelContentBlockDeltaEvent(Event):
     block_index: int
     delta_type: Literal["text", "reasoning", "tool_input", "signature"]
     delta: str
-    part: DeltaPart
     is_streaming: bool = True
-
-    @property
-    def is_start(self) -> bool:
-        """是否是该内容块的开始"""
-        return self.part.get("is_start", False)
-
-    @property
-    def is_end(self) -> bool:
-        """是否是该内容块的结束"""
-        return self.part.get("is_end", False)
 
     @classmethod
     def create(
@@ -156,7 +140,7 @@ class ModelContentBlockDeltaEvent(Event):
         request_id: str,
         part: DeltaPart,
         is_streaming: bool = True,
-    ) -> ModelContentBlockDeltaEvent:
+    ) -> "ModelContentBlockDeltaEvent":
         """从 DeltaPart 创建事件
 
         Args:
@@ -167,7 +151,7 @@ class ModelContentBlockDeltaEvent(Event):
         Returns:
             ModelContentBlockDeltaEvent 实例
         """
-        # 从 part 中提取信息（使用 get 避免类型错误）
+        # 从 part 中提取信息
         block_index = part.get("index", 0)
         part_type = part.get("type", "")
 
@@ -181,6 +165,9 @@ class ModelContentBlockDeltaEvent(Event):
         elif part_type == "tool_call_delta":
             delta_type = "tool_input"
             delta = part.get("arguments_delta", "")
+        elif part_type == "signature_delta":
+            delta_type = "signature"
+            delta = part.get("delta", "")
         else:
             delta_type = "text"
             delta = ""
@@ -192,7 +179,6 @@ class ModelContentBlockDeltaEvent(Event):
             block_index=block_index,
             delta_type=delta_type,
             delta=delta,
-            part=part,
             is_streaming=is_streaming,
         )
 
@@ -382,6 +368,10 @@ class ModelContentBlockStopEvent(Event):
             return None
         part = self.content[0]
         return part['type']
+
+    @field_serializer('content')
+    def serialize_content(self, content: list[ContentPart]) -> list[dict]:
+        return [dict(item) for item in content]
 
     @classmethod
     def create(

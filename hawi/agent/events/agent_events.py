@@ -20,19 +20,16 @@ from .event import Event
 class AgentRunStartEvent(Event):
     """Agent 开始执行"""
     run_id: str
-    message_preview: str | None = None
 
     @classmethod
     def create(
         cls,
         run_id: str,
-        message_preview: str | None = None,
     ) -> AgentRunStartEvent:
         return cls(
             type='agent.run_start',
             source='agent',
             run_id=run_id,
-            message_preview=message_preview,
         )
 
 
@@ -169,7 +166,6 @@ class AgentMessageAddedEvent(Event):
     run_id: str
     role: Literal["user", "assistant", "tool"]
     content: list[ContentPart]
-    message_preview: str
 
     @classmethod
     def create(
@@ -177,7 +173,6 @@ class AgentMessageAddedEvent(Event):
         run_id: str,
         role: Literal["user", "assistant", "tool"],
         content: list[ContentPart],
-        message_preview: str,
     ) -> AgentMessageAddedEvent:
         return cls(
             type="agent.message_added",
@@ -185,7 +180,6 @@ class AgentMessageAddedEvent(Event):
             run_id=run_id,
             role=role,
             content=content,
-            message_preview=message_preview,
         )
 
 

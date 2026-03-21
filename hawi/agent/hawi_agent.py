@@ -75,7 +75,8 @@ class ContentBlockHandler:
 
     通过实例方法处理不同类型的内容块，避免代码重复。
 
-    事件通过 EventBus 异步发布，方法返回完成的 ContentPart（块结束时）或 None。
+    本类只负责创建事件，不发布事件。调用者应使用 _emit_event() 统一发布，
+    以确保 DumpManager 能正确记录所有事件。
 
     Example:
         # 文本块处理器
@@ -85,7 +86,9 @@ class ContentBlockHandler:
         tool_handler = ContentBlockHandler.create_tool_handler()
 
         # 使用
-        part = await handler.handle(chunk, request_id, event_bus)
+        part, events = handler.handle(chunk, request_id)
+        for event in events:
+            await agent._emit_event(event, event_bus)
         if part is not None:
             content_parts.append(part)
     """
@@ -199,95 +202,88 @@ class ContentBlockHandler:
         except json.JSONDecodeError:
             return {}
 
-    async def handle(
+    def handle(
         self,
         chunk: DeltaPart,
         request_id: str,
-        event_bus: EventBus | None,
         is_streaming: bool = True,
-    ) -> ContentPart | None:
-        """处理单个 chunk，返回完成的 Part（块结束时）或 None。
+    ) -> tuple[ContentPart | None, list[Event]]:
+        """处理单个 chunk，返回完成的 Part 和需要发布的事件列表。
 
-        事件通过 event_bus 异步发布，不阻塞处理流程。
+        本方法只创建事件，不发布。调用者应使用 _emit_event() 统一发布事件，
+        以确保 DumpManager 能正确记录所有事件。
 
         Args:
             chunk: DeltaPart（必须是匹配的 type）
             request_id: 请求 ID
-            event_bus: 事件总线（可为 None）
             is_streaming: 是否来自流式接口（默认 True）
 
         Returns:
-            块完成时返回 ContentPart，否则返回 None
+            tuple[ContentPart | None, list[Event]]:
+                - Part 在块完成时返回，否则为 None
+                - 事件列表需要由调用者发布
         """
         idx = chunk.get("index", 0)
+        events: list[Event] = []
 
-        # is_start: 初始化新块，发送 StartEvent
+        # is_start: 初始化新块，创建 StartEvent
         if chunk.get("is_start"):
             self._current_block_index = idx
             self._accumulator = self._create_accumulator()
 
             if self.block_type == "tool_use":
-                event = ModelToolCallBlockStartEvent.create(
+                events.append(ModelToolCallBlockStartEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     tool_call_id=chunk.get("id") or "",
                     tool_name=chunk.get("name") or "",
-                )
+                ))
             else:
-                event = ModelContentBlockStartEvent.create(
+                events.append(ModelContentBlockStartEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     block_type=self.block_type,
-                )
+                ))
 
-            if event_bus is not None:
-                await event_bus.publish_async(event)
-
-        # 发送 DeltaEvent
+        # 创建 DeltaEvent
         if self.block_type == "tool_use":
-            event = ModelToolCallBlockDeltaEvent.create(
+            events.append(ModelToolCallBlockDeltaEvent.create(
                 request_id=request_id,
                 block_index=idx,
                 tool_call_id=chunk.get("id") or "",
                 arguments_delta=chunk.get("arguments_delta", ""),
                 is_streaming=is_streaming,
-            )
+            ))
         else:
-            event = ModelContentBlockDeltaEvent.create(
+            events.append(ModelContentBlockDeltaEvent.create(
                 request_id=request_id,
                 part=chunk,
                 is_streaming=is_streaming,
-            )
-
-        if event_bus is not None:
-            await event_bus.publish_async(event)
+            ))
 
         # 累积内容
         self._add_delta(chunk)
 
-        # is_end: 构建 Part，发送 StopEvent，返回 Part
+        # is_end: 构建 Part，创建 StopEvent
+        part: ContentPart | None = None
         if chunk.get("is_end") and self._accumulator is not None:
             part = self._build_part(idx)
 
             if self.block_type == "tool_use":
                 acc = self._accumulator
-                # ModelToolCallBlockStopEvent 包含完整参数
-                event = ModelToolCallBlockStopEvent.create(
+                events.append(ModelToolCallBlockStopEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     tool_call_id=acc.get("id") or "",
                     tool_name=acc.get("name") or "",
                     arguments=self._parse_tool_arguments(acc.get("arguments", "")),
-                )
+                ))
             else:
-                event = ModelContentBlockStopEvent.create(
+                events.append(ModelContentBlockStopEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     content=[part],
-                )
-
-            if event_bus is not None:
-                await event_bus.publish_async(event)
+                ))
 
             # 在重置前检查是否为空
             is_empty = self._is_empty()
@@ -296,10 +292,10 @@ class ContentBlockHandler:
             self._current_block_index = -1
             self._accumulator = None
 
-            if not is_empty:
-                return part
+            if is_empty:
+                part = None
 
-        return None
+        return part, events
 
 
 @dataclass
@@ -756,14 +752,13 @@ class HawiAgent:
                     run_id=run_id,
                     role="user",
                     content=user_content,
-                    message_preview=str(message)[:100],
                 ),
                 event_bus,
             )
 
         # Agent run start
         await self._emit_event(
-            AgentRunStartEvent.create(run_id=run_id, message_preview=str(message)[:100] if message else None),
+            AgentRunStartEvent.create(run_id=run_id),
             event_bus,
         )
 
@@ -879,7 +874,12 @@ class HawiAgent:
                             continue  # Unknown chunk type
 
                         # Handle the chunk with appropriate handler
-                        part = await handler.handle(chunk, request_id, event_bus, is_streaming=streaming)
+                        part, events = handler.handle(chunk, request_id, is_streaming=streaming)
+
+                        # Emit all events through _emit_event for consistent handling
+                        for event in events:
+                            await self._emit_event(event, event_bus)
+
                         if part is not None:
                             content_parts.append(part)
                             if part["type"] == "tool_call":
@@ -943,7 +943,6 @@ class HawiAgent:
                         run_id=run_id,
                         role="assistant",
                         content=response_content,
-                        message_preview=str(response_content)[:100] if response_content else "",
                     ),
                     event_bus,
                 )

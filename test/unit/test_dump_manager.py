@@ -59,7 +59,7 @@ class TestDumpManager:
             dump_file = Path(tmpdir) / "test_events.json"
             dm = DumpManager(str(dump_file))
 
-            event = AgentRunStartEvent.create(run_id="test-123", message_preview="Hello")
+            event = AgentRunStartEvent.create(run_id="test-123")
             dm.dump(event)
 
             # Verify event was dumped
@@ -78,8 +78,8 @@ class TestDumpManager:
             dump_file = Path(tmpdir) / "test_events.json"
             dm = DumpManager(str(dump_file))
 
-            event1 = AgentRunStartEvent.create(run_id="test-1", message_preview="Hello")
-            event2 = AgentRunStartEvent.create(run_id="test-2", message_preview="World")
+            event1 = AgentRunStartEvent.create(run_id="test-1")
+            event2 = AgentRunStartEvent.create(run_id="test-2")
 
             dm.dump(event1)
             dm.dump(event2)
@@ -95,7 +95,7 @@ class TestDumpManager:
     def test_dump_without_init(self):
         """Test dump does nothing when disabled."""
         dm = DumpManager(None)
-        event = AgentRunStartEvent.create(run_id="test", message_preview="Hello")
+        event = AgentRunStartEvent.create(run_id="test")
 
         # Should not raise
         dm.dump(event)

@@ -107,8 +107,8 @@ class TestEventLifecycle:
     def test_event_equality(self):
         """Test event equality based on attributes."""
         # Events with same attributes (explicit timestamp)
-        event1 = AgentRunStartEvent.create(run_id="test", message_preview=None)
-        event2 = AgentRunStartEvent.create(run_id="test", message_preview=None)
+        event1 = AgentRunStartEvent.create(run_id="test")
+        event2 = AgentRunStartEvent.create(run_id="test")
 
         # Events are not equal because they have different timestamps
         assert event1 != event2
@@ -119,14 +119,12 @@ class TestEventLifecycle:
             source="agent",
             timestamp=1.0,
             run_id="test",
-            message_preview=None
         )
         event4 = AgentRunStartEvent(
             type="agent.run_start",
             source="agent",
             timestamp=1.0,
             run_id="test",
-            message_preview=None
         )
         assert event3 == event4
 
@@ -181,7 +179,7 @@ class TestModelEventClasses:
         assert event.type == "model.content_block_delta"
         assert event.delta == "Hello"
         assert event.delta_type == "text"
-        assert event.part == part
+        assert event.block_index == 0
 
     def test_model_content_block_stop_event(self):
         """Test ModelContentBlockStopEvent.create()."""
@@ -219,12 +217,10 @@ class TestAgentEventClasses:
         """Test AgentRunStartEvent.create()."""
         event = AgentRunStartEvent.create(
             run_id="run-123",
-            message_preview="Hello, world!"
         )
         assert event.type == "agent.run_start"
         assert event.source == "agent"
         assert event.run_id == "run-123"
-        assert event.message_preview == "Hello, world!"
 
     def test_agent_run_stop_event(self):
         """Test AgentRunStopEvent.create()."""
@@ -286,12 +282,10 @@ class TestAgentEventClasses:
             run_id="run-123",
             role="assistant",
             content=[{"type": "text", "text": "Hello world"}],
-            message_preview="Hello world"
         )
         assert event.type == "agent.message_added"
         assert event.role == "assistant"
         assert event.content == [{"type": "text", "text": "Hello world"}]
-        assert event.message_preview == "Hello world"
 
     def test_agent_error_event(self):
         """Test AgentErrorEvent.create()."""
