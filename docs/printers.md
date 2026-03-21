@@ -29,39 +29,22 @@ Printer 系统采用策略模式，根据终端环境自动选择最佳输出方
 - Jupyter/Notebook → Non-streaming 模式
 - 管道/重定向 → PlainPrinter
 
-## 代码块样式自定义
+## 代码块渲染
 
-`RichPrinter` 基于 `markdown-it-py` 解析，支持丰富的代码块样式自定义：
+`RichPrinter` 使用 Rich 原生的 Markdown 渲染器处理代码块，支持语法高亮：
 
 ```python
 from hawi.agent.printers import RichPrinter
 
-# 基础样式
-printer = RichPrinter(
-    code_theme="dracula",           # 语法高亮主题
-    code_border_style="blue",       # 边框颜色
-    code_background="#1e1e1e",      # 背景色
-    code_show_language=True,        # 显示语言标识
-    code_line_numbers=False,        # 显示行号
-)
+printer = RichPrinter()
 ```
 
 **效果示例：**
 
+```python
+def hello():
+    print("Hello, World!")
 ```
-╭─ 📄 python ─────────────────────────────────────────────────╮
-│ def hello():                                                 │
-│     print("Hello, World!")                                   │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-**可用主题：**
-- `monokai`（默认）
-- `dracula`
-- `github-dark`, `github-light`
-- `one-dark`
-- `solarized-dark`, `solarized-light`
-- `gruvbox-dark`, `gruvbox-light`
 
 ## 工厂函数
 
@@ -110,15 +93,6 @@ from hawi.agent.printers import RichPrinter
 # 自动检测模式
 printer = RichPrinter()
 
-# 自定义代码块样式
-printer = RichPrinter(
-    code_theme="dracula",
-    code_border_style="blue",
-    code_background="#1e1e1e",
-    code_show_language=True,
-    code_line_numbers=True,
-)
-
 # 完整参数
 printer = RichPrinter(
     show_reasoning=True,            # 显示 thinking 内容
@@ -131,11 +105,6 @@ printer = RichPrinter(
     streaming=None,                 # None=自动, True=streaming, False=non-streaming
     console=None,                   # 自定义 Console
     refresh_per_second=12.5,        # Live 刷新频率
-    code_theme="monokai",           # 代码主题
-    code_border_style="dim",        # 代码块边框样式
-    code_background=None,           # 代码块背景色
-    code_show_language=True,        # 显示代码语言
-    code_line_numbers=False,        # 显示行号
 )
 ```
 
@@ -204,19 +173,6 @@ printer = create_printer(streaming=True)
 printer = create_printer(streaming=False)
 ```
 
-### 自定义代码块样式
-
-```python
-# 使用 Dracula 主题 + 蓝色边框 + 深色背景
-printer = RichPrinter(
-    code_theme="dracula",
-    code_border_style="blue",
-    code_background="#1e1e1e",
-    code_show_language=True,
-)
-
-agent = HawiAgent(model=model, printer=printer)
-```
 
 ### 非终端环境
 
