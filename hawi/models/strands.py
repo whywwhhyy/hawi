@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncGenerator, Iterator, cast
+from typing import Any, AsyncGenerator, Iterator, Sequence, cast
 
 from hawi.models import BalanceInfo, Model
 from hawi.models import (
@@ -482,7 +482,7 @@ class StrandsModel(Model):
         return strands_msg
 
     def _convert_content_to_strands(
-        self, content: list[ContentPart]
+        self, content: Sequence[ContentPart]
     ) -> list[dict[str, Any]]:
         """将 hawi ContentPart 列表转换为 strands ContentBlock 列表"""
         strands_content = []

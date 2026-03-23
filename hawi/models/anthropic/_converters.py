@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Any, cast
+from typing import Any, cast, Sequence
 
 import httpx
 
@@ -42,7 +42,7 @@ class ContentConverter:
         self.enable_image_download = enable_image_download
 
     def convert_content(
-        self, content: list[ContentPart]
+        self, content: Sequence[ContentPart]
     ) -> list[dict[str, Any]]:
         """将 ContentPart 列表转换为 Anthropic 格式
 
@@ -106,7 +106,7 @@ class ContentConverter:
             return self._convert_tool_message(message)
 
         # 对于 assistant 消息，从 content 中提取 tool_call 类型并转换为 tool_use 块
-        msg_content: list = message.get("content") or []
+        msg_content: Sequence[ContentPart] = message.get("content") or []
         if role == "assistant":
             # 从 content 中提取 tool_call 类型的 part
             tool_call_parts = [p for p in msg_content if p.get("type") == "tool_call"]
@@ -284,7 +284,7 @@ class AsyncContentConverter(ContentConverter):
     """异步内容转换器（支持远程图片下载）"""
 
     async def convert_content_async(
-        self, content: list[ContentPart]
+        self, content: Sequence[ContentPart]
     ) -> list[dict[str, Any]]:
         """异步转换 ContentPart 列表
 
@@ -335,7 +335,7 @@ class AsyncContentConverter(ContentConverter):
             return self._convert_tool_message(message)
 
         # 对于 assistant 消息，从 content 中提取 tool_call 类型并转换为 tool_use 块
-        msg_content: list = message.get("content") or []
+        msg_content: Sequence[ContentPart] = message.get("content") or []
         if role == "assistant":
             # 从 content 中提取 tool_call 类型的 part
             tool_call_parts = [p for p in msg_content if p.get("type") == "tool_call"]

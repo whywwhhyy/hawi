@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import warnings
-from typing import Callable, TypeVar
+from typing import TYPE_CHECKING, cast, Callable, TypeVar
 
 from hawi.tool.types import AgentTool
-from hawi.plugin.hook_context import HookResult
+from hawi.plugin.types import HookReturnType
 from hawi.models.message import ToolDefinition
+
+if TYPE_CHECKING:
+    from hawi.plugin import HawiPlugin
 
 P = TypeVar("P", bound="HawiPlugin")
 
@@ -17,7 +20,7 @@ class DynamicPlugin:
 
     def __init__(self) -> None:
         self._tools: dict[str, AgentTool] = {}
-        self._hooks: dict[str, list[Callable[..., HookResult | None]]] = {}
+        self._hooks: dict[str, list[Callable[..., HookReturnType]]] = {}
 
     # --- Tool management ---
     def add_tool(self, tool: AgentTool) -> None:
@@ -37,7 +40,7 @@ class DynamicPlugin:
     def add_hook(
         self,
         hook_type: str,
-        hook_fn: Callable[..., HookResult | None],
+        hook_fn: Callable[..., HookReturnType],
     ) -> None:
         """Add a hook function for a specific hook type."""
         self._hooks.setdefault(hook_type, []).append(hook_fn)
@@ -45,7 +48,7 @@ class DynamicPlugin:
     def remove_hook(
         self,
         hook_type: str,
-        hook_fn: Callable[..., HookResult | None],
+        hook_fn: Callable[..., HookReturnType],
     ) -> bool:
         """Remove a hook function. Returns True if removed, False if not found."""
         hooks = self._hooks.get(hook_type, [])
@@ -54,7 +57,7 @@ class DynamicPlugin:
             return True
         return False
 
-    def get_hooks(self, hook_type: str) -> list[Callable[..., HookResult | None]]:
+    def get_hooks(self, hook_type: str) -> list[Callable[..., HookReturnType]]:
         """Get all hooks for a specific hook type."""
         return list(self._hooks.get(hook_type, []))
 
@@ -74,7 +77,7 @@ class PluginManager:
         self._plugins: list[HawiPlugin] = factory_plugins + list(plugins) if plugins else factory_plugins
 
         # Collect hooks from plugins (aggregate from PluginHooks TypedDict to list)
-        self._hooks: dict[str, list[Callable[..., HookResult | None]]] = {}
+        self._hooks: dict[str, list[Callable[..., HookReturnType]]] = {}
         self._collect_plugin_hooks()
 
         # Dynamic management (tools + hooks)
@@ -91,7 +94,7 @@ class PluginManager:
             plugin_hooks = plugin.hooks
             for hook_type, hook_fn in plugin_hooks.items():
                 if hook_fn:
-                    self._hooks.setdefault(hook_type, []).append(hook_fn)
+                    self._hooks.setdefault(hook_type, []).append(cast(Callable[..., HookReturnType], hook_fn))
 
     def get_plugins(self) -> list[HawiPlugin]:
         """Return all plugins (as a copy)."""
@@ -199,7 +202,7 @@ class PluginManager:
     def add_hook(
         self,
         hook_type: str,
-        hook_fn: Callable[..., HookResult | None],
+        hook_fn: Callable[..., HookReturnType],
     ) -> None:
         """Add hook to dynamic. Dynamic hooks execute after plugin hooks."""
         self._dynamic.add_hook(hook_type, hook_fn)
@@ -207,13 +210,13 @@ class PluginManager:
     def remove_hook(
         self,
         hook_type: str,
-        hook_fn: Callable[..., HookResult | None],
+        hook_fn: Callable[..., HookReturnType],
     ) -> bool:
         """Remove hook from dynamic. Returns True if removed, False if not found."""
         return self._dynamic.remove_hook(hook_type, hook_fn)
 
     # --- Hook Query ---
-    def get_hooks(self, hook_type: str) -> list[Callable[..., HookResult | None]]:
+    def get_hooks(self, hook_type: str) -> list[Callable[..., HookReturnType]]:
         """Get hook chain for a specific type (plugin hooks + dynamic hooks)."""
         plugin_hooks = self._hooks.get(hook_type, [])
         dynamic_hooks = self._dynamic.get_hooks(hook_type)
@@ -242,13 +245,10 @@ class PluginManager:
             plugin_factories=self._plugin_factories.copy(),
         )
 
-        # 3. Clone dynamic tools (deep copy tool instances if they support clone())
+        # 3. Clone dynamic tools
         for tool in self._dynamic.tools:
-            if hasattr(tool, 'clone'):
-                new_tool = tool.clone()
-            else:
-                new_tool = tool
-            new_manager._dynamic.add_tool(new_tool)
+            # dynamic tools are registered as insatnces, thus here we use same instances
+            new_manager._dynamic.add_tool(tool)
 
         # 4. Copy dynamic hooks (function references, shared same function object)
         for hook_type, hooks in self._dynamic._hooks.items():

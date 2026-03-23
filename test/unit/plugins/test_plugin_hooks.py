@@ -24,11 +24,23 @@ from hawi.plugin.decorators import (
 from hawi.tool.types import AgentTool, ToolResult
 
 
-def make_ctx(**kwargs) -> HookContext:
+def make_ctx(**kwargs: str | int | float | None) -> HookContext:
     """Build a minimal HookContext for tests."""
-    defaults = dict(run_id="test-run", iteration=0)
-    defaults.update(kwargs)
-    return HookContext(**defaults)
+    # Extract values to handle type conversion properly
+    tool_call_id_val = kwargs.get("tool_call_id")
+    duration_ms_val = kwargs.get("duration_ms")
+    stop_reason_val = kwargs.get("stop_reason")
+    
+    return HookContext(
+        run_id=kwargs.get("run_id", "test-run"),  # type: ignore[arg-type]
+        iteration=kwargs.get("iteration", 0),  # type: ignore[arg-type]
+        tool_call_id=str(tool_call_id_val) if tool_call_id_val is not None else None,
+        tool=None,  # type: ignore[arg-type]
+        duration_ms=float(duration_ms_val) if duration_ms_val is not None else None,
+        usage=None,  # type: ignore[arg-type]
+        stop_reason=str(stop_reason_val) if stop_reason_val is not None else None,
+        error=None,  # type: ignore[arg-type]
+    )
 
 
 class MockAgent:
@@ -157,7 +169,7 @@ class TestConvenienceDecorators:
         agent = MockAgent()
 
         # Can still call directly
-        plugin.on_before_session(agent, make_ctx())
+        plugin.on_before_session(agent, make_ctx()) # type: ignore
         assert "before_session" in plugin.called_hooks
 
     def test_before_session_decorator(self):
@@ -178,7 +190,7 @@ class TestConvenienceDecorators:
         """Test @after_session decorator."""
         class TestPlugin(HawiPlugin):
             @after_session
-            def on_end(self, agent):
+            def on_end(self, agent, ctx):
                 self.called = True
 
         plugin = TestPlugin()
@@ -188,7 +200,7 @@ class TestConvenienceDecorators:
         """Test @before_conversation decorator."""
         class TestPlugin(HawiPlugin):
             @before_conversation
-            def on_conv_start(self, agent):
+            def on_conv_start(self, agent, ctx):
                 pass
 
         plugin = TestPlugin()
@@ -198,7 +210,7 @@ class TestConvenienceDecorators:
         """Test @after_conversation decorator."""
         class TestPlugin(HawiPlugin):
             @after_conversation
-            def on_conv_end(self, agent):
+            def on_conv_end(self, agent, ctx):
                 pass
 
         plugin = TestPlugin()
@@ -208,7 +220,7 @@ class TestConvenienceDecorators:
         """Test @before_model_call decorator."""
         class TestPlugin(HawiPlugin):
             @before_model_call
-            def on_model_start(self, agent, context, model):
+            def on_model_start(self, agent, context, model, ctx):
                 pass
 
         plugin = TestPlugin()
@@ -218,7 +230,7 @@ class TestConvenienceDecorators:
         """Test @after_model_call decorator."""
         class TestPlugin(HawiPlugin):
             @after_model_call
-            def on_model_end(self, agent, context, response):
+            def on_model_end(self, agent, context, response, ctx):
                 pass
 
         plugin = TestPlugin()
@@ -228,7 +240,7 @@ class TestConvenienceDecorators:
         """Test @before_tool_calling decorator."""
         class TestPlugin(HawiPlugin):
             @before_tool_calling
-            def on_tool_start(self, agent, tool_name, arguments):
+            def on_tool_start(self, agent, tool_name, arguments, ctx):
                 pass
 
         plugin = TestPlugin()
@@ -238,7 +250,7 @@ class TestConvenienceDecorators:
         """Test @after_tool_calling decorator."""
         class TestPlugin(HawiPlugin):
             @after_tool_calling
-            def on_tool_end(self, agent, tool_name, arguments, result):
+            def on_tool_end(self, agent, tool_name, arguments, result, ctx):
                 pass
 
         plugin = TestPlugin()

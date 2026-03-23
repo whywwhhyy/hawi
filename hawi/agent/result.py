@@ -122,7 +122,7 @@ class AgentRunResult:
             "stop_reason": self.stop_reason,
             "messages": self.messages,
             "response": self.response,
-            "usage": self.usage.model_dump() if self.usage else None,
+            "usage": dict(self.usage) if self.usage else None,
             "tool_calls": [
                 {
                     "tool_name": tc.tool_name,

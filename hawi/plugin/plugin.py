@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from .types import PluginHooks
 
@@ -22,7 +22,7 @@ class HawiPlugin:
        Factories are called during init and clone to create fresh instances.
     """
     _cached_hooks:PluginHooks
-    _cached_tools:list[AgentTool]
+    _cached_tools:Sequence[AgentTool]
 
     def _collect_items(self):
         from hawi.tool import tool as create_tool
@@ -52,14 +52,14 @@ class HawiPlugin:
         return self._cached_hooks
 
     @property
-    def tools(self) -> list[AgentTool]:
+    def tools(self) -> Sequence[AgentTool]:
         """Tools provided by this plugin."""
         if not hasattr(self, "_cached_tools"):
             self._collect_items()
         return self._cached_tools
 
     @property
-    def resources(self) -> list[HawiResource]:
+    def resources(self) -> Sequence[HawiResource]:
         """Resources provided by this plugin (MCP-compatible).
 
         Resources provide contextual data to agents, identified by URI.

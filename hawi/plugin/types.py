@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, TypedDict, NotRequired, Any, Callable
+from typing import TYPE_CHECKING, TypedDict, NotRequired, TypeAlias, Any, Callable, Coroutine
 
 from hawi.tool.types import ToolResult
 from .hook_context import HookContext, HookResult
@@ -13,25 +13,29 @@ if TYPE_CHECKING:
 
 # ===== Hook method types (unbound, with self as first arg) =====
 # Used for type-checking @hook-decorated methods inside HawiPlugin subclasses.
+# Supports both sync and async hook methods.
 
-BeforeSessionMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
-AfterSessionMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
-BeforeConversationMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
-AfterConversationMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
-BeforeModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "Model", HookContext], HookResult | None]
-AfterModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "MessageResponse", HookContext], HookResult | None]
-BeforeToolCallMethod = Callable[[Any, "HawiAgent", str, dict, HookContext], HookResult | None]
-AfterToolCallMethod = Callable[[Any, "HawiAgent", str, dict, ToolResult, HookContext], HookResult | None]
+# Type alias for hook return value (both sync and async)
+HookReturnType:TypeAlias = HookResult | None | Coroutine[Any, Any, HookResult | None]
+
+BeforeSessionMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]
+AfterSessionMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]
+BeforeConversationMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]
+AfterConversationMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]
+BeforeModelCallMethod:TypeAlias = Callable[[Any, "HawiAgent", "AgentContext", "Model", HookContext], HookReturnType]
+AfterModelCallMethod:TypeAlias = Callable[[Any, "HawiAgent", "AgentContext", "MessageResponse", HookContext], HookReturnType]
+BeforeToolCallMethod:TypeAlias = Callable[[Any, "HawiAgent", str, dict, HookContext], HookReturnType]
+AfterToolCallMethod:TypeAlias = Callable[[Any, "HawiAgent", str, dict, ToolResult, HookContext], HookReturnType]
 
 
 # ===== PluginHooks TypedDict (stores bound methods after plugin initialization) =====
 # After binding, `self` is absorbed — signatures match the Method types minus the first arg.
 class PluginHooks(TypedDict):
-    before_session: NotRequired[Callable[..., HookResult | None]]
-    after_session: NotRequired[Callable[..., HookResult | None]]
-    before_conversation: NotRequired[Callable[..., HookResult | None]]
-    after_conversation: NotRequired[Callable[..., HookResult | None]]
-    before_model_call: NotRequired[Callable[..., HookResult | None]]
-    after_model_call: NotRequired[Callable[..., HookResult | None]]
-    before_tool_calling: NotRequired[Callable[..., HookResult | None]]
-    after_tool_calling: NotRequired[Callable[..., HookResult | None]]
+    before_session: NotRequired[Callable[..., HookReturnType]]
+    after_session: NotRequired[Callable[..., HookReturnType]]
+    before_conversation: NotRequired[Callable[..., HookReturnType]]
+    after_conversation: NotRequired[Callable[..., HookReturnType]]
+    before_model_call: NotRequired[Callable[..., HookReturnType]]
+    after_model_call: NotRequired[Callable[..., HookReturnType]]
+    before_tool_calling: NotRequired[Callable[..., HookReturnType]]
+    after_tool_calling: NotRequired[Callable[..., HookReturnType]]

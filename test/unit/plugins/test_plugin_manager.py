@@ -1,6 +1,7 @@
 """Tests for the plugin manager."""
 
 import pytest
+from typing import Sequence
 from hawi.plugin.manager import DynamicPlugin
 from hawi.tool.types import AgentTool, ToolResult
 
@@ -157,7 +158,7 @@ class TestPluginManagerTools:
         """Test that adding a dynamic tool with same name as plugin tool warns."""
         class ToolPlugin(HawiPlugin):
             @property
-            def tools(self):
+            def tools(self) -> list[AgentTool]:
                 return [MockTool()]
 
         pm = PluginManager(plugins=[ToolPlugin()])
@@ -209,12 +210,14 @@ class TestPluginManagerTools:
 
         class ToolPlugin(HawiPlugin):
             @property
-            def tools(self):
+            def tools(self) -> list[AgentTool]:
                 return [MockTool()]
 
         pm = PluginManager(plugins=[ToolPlugin()])
         # Initially returns plugin tool
-        assert pm.get_tool("mock_tool").description == "A mock tool"
+        mock_tool = pm.get_tool("mock_tool")
+        assert mock_tool
+        assert mock_tool.description == "A mock tool"
 
         # Add dynamic tool with same name
         dynamic_tool = MockTool2()
@@ -222,7 +225,9 @@ class TestPluginManagerTools:
             pm.add_tool(dynamic_tool)
 
         # Now returns dynamic tool
-        assert pm.get_tool("mock_tool").description == "A different mock tool"
+        mock_tool = pm.get_tool("mock_tool")
+        assert mock_tool
+        assert mock_tool.description == "A different mock tool"
 
 
 class TestPluginManagerHooks:
@@ -354,7 +359,7 @@ class TestHawiAgentPluginManagerIntegration:
                 self._tools = [MockTool()]
 
             @property
-            def tools(self):
+            def tools(self) -> Sequence[AgentTool]:
                 return self._tools
 
         def factory():

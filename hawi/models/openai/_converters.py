@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Sequence, cast
 
 from hawi.models.message import (
     AudioPart,
@@ -20,6 +20,7 @@ from hawi.models.message import (
     MessageRequest,
     RefusalPart,
     ToolCallPart,
+    ToolResultPart,
     ToolDefinition,
     ToolChoice,
     VideoPart,
@@ -285,11 +286,14 @@ def convert_tool_message(message: Message) -> dict[str, Any]:
 
     for part in content:
         if part["type"] == "tool_result":
+            part = cast(ToolResultPart, part)
             tool_call_id = part.get("tool_call_id") or ""
             # 提取 ToolResultPart 中的嵌套内容
             nested_content = part.get("content", [])
             for nested_part in nested_content:
-                if nested_part.get("type") == "text":
+                if isinstance(nested_part, str):
+                    text_parts.append(nested_part)
+                elif nested_part.get("type") == "text":
                     text_parts.append(nested_part.get("text", ""))
         elif part["type"] == "text":
             text_parts.append(part.get("text", ""))
@@ -301,7 +305,7 @@ def convert_tool_message(message: Message) -> dict[str, Any]:
 
 
 def convert_content_to_openai(
-    content: list[ContentPart],
+    content: Sequence[ContentPart],
 ) -> str | list[dict[str, Any]]:
     """将 ContentPart 列表转换为 OpenAI 内容格式
 

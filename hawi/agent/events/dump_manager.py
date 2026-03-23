@@ -89,6 +89,11 @@ class DumpManager:
         """检查转储功能是否启用。"""
         return self._initialized and self._dump_file is not None
 
+    @property
+    def dump_file(self) -> str | None:
+        """获取转储文件路径（字符串格式）。"""
+        return str(self._dump_file) if self._dump_file else None
+
     def get_dump_path(self) -> Path | None:
         """获取转储文件路径。"""
         return self._dump_file

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from pathlib import Path
 
 from hawi.tool import AgentTool
 from hawi.plugin import HawiPlugin
@@ -168,6 +169,80 @@ class MCPPlugin(HawiPlugin):
             parts = command.split()
             if parts:
                 self.add_stdio_server(name, parts[0], parts[1:])
+
+    def load_from_json(self, path: str | None = None) -> None:
+        """
+        从 JSON 文件加载 MCP 服务器配置
+
+        支持标准 MCP 格式 (mcpServers):
+        ```json
+        {
+            "mcpServers": {
+                "server_name": {
+                    "command": "uvx",
+                    "args": ["mcp-server-name"],
+                    "env": {"KEY": "value"}
+                },
+                "server_name2": {
+                    "url": "http://localhost:3000/sse",
+                    "headers": {"Authorization": "Bearer token"}
+                }
+            }
+        }
+        ```
+
+        也支持从默认路径加载: ".hawi/mcp/*.json"
+
+        Args:
+            path: JSON 文件路径。如果为 None，则从默认路径 ".hawi/mcp/" 加载所有 JSON 文件。
+
+        示例:
+            # 从指定文件加载
+            plugin.load_from_json("/path/to/mcp-servers.json")
+
+            # 从默认路径加载所有配置
+            plugin.load_from_json()
+        """
+        import json
+        import os
+
+        if path is None:
+            # 从默认路径加载所有 JSON 文件
+            default_dir = Path(".hawi/mcp")
+            if default_dir.exists():
+                for json_file in default_dir.glob("*.json"):
+                    self._load_json_file(json_file)
+        else:
+            # 从指定文件加载
+            self._load_json_file(Path(path))
+
+    def _load_json_file(self, file_path: Path) -> None:
+        """从单个 JSON 文件加载配置"""
+        import json
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        mcp_servers = config.get("mcpServers", {})
+        if not mcp_servers:
+            return
+
+        for name, server_config in mcp_servers.items():
+            # 检查是否为 stdio 类型 (有 command 字段)
+            if "command" in server_config:
+                self.add_stdio_server(
+                    name=name,
+                    command=server_config["command"],
+                    args=server_config.get("args"),
+                    env=server_config.get("env"),
+                )
+            # 检查是否为 SSE 类型 (有 url 字段)
+            elif "url" in server_config:
+                self.add_sse_server(
+                    name=name,
+                    url=server_config["url"],
+                    headers=server_config.get("headers"),
+                )
 
     async def connect(self) -> None:
         """

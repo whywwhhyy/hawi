@@ -471,7 +471,7 @@ class Message(TypedDict):
     """
 
     role: Literal["user", "assistant", "tool"]
-    content: list[ContentPart]  # 始终为数组，包含 text/image/tool_call/tool_result 等
+    content: Sequence[ContentPart]  # 始终为数组，包含 text/image/tool_call/tool_result 等
 
     # 以下字段仅在特定 role 下使用
     name: str | None  # 区分同名角色的不同参与者
@@ -533,7 +533,7 @@ def convert_audio_part_to_text(part: AudioPart) -> TextPart:
     return {"type": "text", "text": text}
 
 
-def downgrade_audio_content(content: list[ContentPart]) -> list[ContentPart]:
+def downgrade_audio_content(content: Sequence[ContentPart]) -> list[ContentPart]:
     """
     将内容中的 AudioPart 降级为 TextPart
 
