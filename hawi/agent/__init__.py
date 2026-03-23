@@ -30,9 +30,13 @@ from .printers import (
 )
 from .result import AgentRunResult, ToolCallRecord
 
+# 这个别名用于提升项目中的含宝率
+Bao = HawiAgent
+
 __all__ = [
     # Core
     "HawiAgent",
+    "Bao",
     "AgentContext",
     "PlainPrinter",
     "RichPrinter",
