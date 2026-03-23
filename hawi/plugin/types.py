@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, TypedDict, NotRequired, Any, Callable, Union
+from typing import TYPE_CHECKING, TypedDict, NotRequired, Any, Callable
 
 from hawi.tool.types import ToolResult
+from .hook_context import HookContext, HookResult
 
 if TYPE_CHECKING:
     from hawi.agent import HawiAgent
@@ -9,48 +10,28 @@ if TYPE_CHECKING:
     from hawi.models import Model
     from hawi.models import MessageResponse
 
-# ===== Hook types for regular functions =====
-# Function: def hook(agent: HawiAgent) -> None
-BeforeSessionFunc = Callable[["HawiAgent"], None]
-AfterSessionFunc = Callable[["HawiAgent"], None]
-BeforeConversationFunc = Callable[["HawiAgent"], None]
-AfterConversationFunc = Callable[["HawiAgent"], None]
-BeforeModelCallFunc = Callable[["HawiAgent", "AgentContext", "Model"], None]
-AfterModelCallFunc = Callable[["HawiAgent", "AgentContext", "MessageResponse"], None]
-BeforeToolCallFunc = Callable[["HawiAgent", str, dict[str, Any]], None]
-AfterToolCallFunc = Callable[["HawiAgent", str, dict[str, Any], ToolResult], None]
 
+# ===== Hook method types (unbound, with self as first arg) =====
+# Used for type-checking @hook-decorated methods inside HawiPlugin subclasses.
 
-# ===== Hook types for methods (with self) =====
-# Method: def method(self, agent: HawiAgent) -> None
-BeforeSessionMethod = Callable[[Any, "HawiAgent"], None]
-AfterSessionMethod = Callable[[Any, "HawiAgent"], None]
-BeforeConversationMethod = Callable[[Any, "HawiAgent"], None]
-AfterConversationMethod = Callable[[Any, "HawiAgent"], None]
-BeforeModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "Model"], None]
-AfterModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "MessageResponse"], None]
-BeforeToolCallMethod = Callable[[Any, "HawiAgent", str, dict[str, Any]], None]
-AfterToolCallMethod = Callable[[Any, "HawiAgent", str, dict[str, Any], ToolResult], None]
-
-
-# ===== Union types for decorators (accept both functions and methods) =====
-BeforeSessionHook = Union[BeforeSessionFunc, BeforeSessionMethod]
-AfterSessionHook = Union[AfterSessionFunc, AfterSessionMethod]
-BeforeConversationHook = Union[BeforeConversationFunc, BeforeConversationMethod]
-AfterConversationHook = Union[AfterConversationFunc, AfterConversationMethod]
-BeforeModelCallHook = Union[BeforeModelCallFunc, BeforeModelCallMethod]
-AfterModelCallHook = Union[AfterModelCallFunc, AfterModelCallMethod]
-BeforeToolCallHook = Union[BeforeToolCallFunc, BeforeToolCallMethod]
-AfterToolCallHook = Union[AfterToolCallFunc, AfterToolCallMethod]
+BeforeSessionMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
+AfterSessionMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
+BeforeConversationMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
+AfterConversationMethod = Callable[[Any, "HawiAgent", HookContext], HookResult | None]
+BeforeModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "Model", HookContext], HookResult | None]
+AfterModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "MessageResponse", HookContext], HookResult | None]
+BeforeToolCallMethod = Callable[[Any, "HawiAgent", str, dict, HookContext], HookResult | None]
+AfterToolCallMethod = Callable[[Any, "HawiAgent", str, dict, ToolResult, HookContext], HookResult | None]
 
 
 # ===== PluginHooks TypedDict (stores bound methods after plugin initialization) =====
+# After binding, `self` is absorbed — signatures match the Method types minus the first arg.
 class PluginHooks(TypedDict):
-    before_session: NotRequired[BeforeSessionFunc]
-    after_session: NotRequired[AfterSessionFunc]
-    before_conversation: NotRequired[BeforeConversationFunc]
-    after_conversation: NotRequired[AfterConversationFunc]
-    before_model_call: NotRequired[BeforeModelCallFunc]
-    after_model_call: NotRequired[AfterModelCallFunc]
-    before_tool_calling: NotRequired[BeforeToolCallFunc]
-    after_tool_calling: NotRequired[AfterToolCallFunc]
+    before_session: NotRequired[Callable[..., HookResult | None]]
+    after_session: NotRequired[Callable[..., HookResult | None]]
+    before_conversation: NotRequired[Callable[..., HookResult | None]]
+    after_conversation: NotRequired[Callable[..., HookResult | None]]
+    before_model_call: NotRequired[Callable[..., HookResult | None]]
+    after_model_call: NotRequired[Callable[..., HookResult | None]]
+    before_tool_calling: NotRequired[Callable[..., HookResult | None]]
+    after_tool_calling: NotRequired[Callable[..., HookResult | None]]

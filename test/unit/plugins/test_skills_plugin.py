@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import pytest
 from unittest.mock import MagicMock
+from hawi.plugin import HookContext
 from hawi_plugins.skills_plugin.plugin import SkillsPlugin
 
 class TestSkillsPlugin:
@@ -90,7 +91,8 @@ Step 1: Do something.
         agent.context.system_prompt = []
         
         # Run injection
-        plugin.inject_skills_context(agent)  # type: ignore[reportCallIssue]
+        ctx = HookContext(run_id="test", iteration=0)
+        plugin.inject_skills_context(agent, ctx)  # type: ignore[reportCallIssue]
         
         # Verify system prompt updated
         assert len(agent.context.system_prompt) == 1

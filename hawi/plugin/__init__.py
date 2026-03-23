@@ -1,4 +1,5 @@
 from .plugin import HawiPlugin
+from .manager import PluginManager
 from .decorators import (
     before_session,
     after_session,
@@ -11,11 +12,15 @@ from .decorators import (
     tool,
 )
 from .types import PluginHooks
+from .hook_context import HookContext, HookResult
 from .resource import HawiResource, ResourceContent
 
 __all__ = [
     "HawiPlugin",
+    "PluginManager",
     "PluginHooks",
+    "HookContext",
+    "HookResult",
     "HawiResource",
     "ResourceContent",
     "before_session",

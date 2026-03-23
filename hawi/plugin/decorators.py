@@ -2,14 +2,14 @@ from __future__ import annotations
 from typing import Any, overload, ParamSpec, TypeVar, Callable
 
 from .types import (
-    BeforeSessionHook,
-    AfterSessionHook,
-    BeforeConversationHook,
-    AfterConversationHook,
-    BeforeModelCallHook,
-    AfterModelCallHook,
-    BeforeToolCallHook,
-    AfterToolCallHook,
+    BeforeSessionMethod,
+    AfterSessionMethod,
+    BeforeConversationMethod,
+    AfterConversationMethod,
+    BeforeModelCallMethod,
+    AfterModelCallMethod,
+    BeforeToolCallMethod,
+    AfterToolCallMethod,
 )
 
 # Type variables for preserving function signature
@@ -17,67 +17,90 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def before_session(func: BeforeSessionHook) -> BeforeSessionHook:
+def before_session(func: BeforeSessionMethod) -> BeforeSessionMethod:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_session")
     return func
 
 
-def after_session(func: AfterSessionHook) -> AfterSessionHook:
+def after_session(func: AfterSessionMethod) -> AfterSessionMethod:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_session")
     return func
 
 
-def before_conversation(func: BeforeConversationHook) -> BeforeConversationHook:
+def before_conversation(func: BeforeConversationMethod) -> BeforeConversationMethod:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_conversation")
     return func
 
 
-def after_conversation(func: AfterConversationHook) -> AfterConversationHook:
+def after_conversation(func: AfterConversationMethod) -> AfterConversationMethod:
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_conversation")
     return func
 
 
-def before_model_call(func: BeforeModelCallHook):
+def before_model_call(func: BeforeModelCallMethod) -> BeforeModelCallMethod:
     """Hook called before model invocation.
 
-    Can be used to modify context or replace model.
+    Can be used to modify context or add per-turn system prompt instructions.
 
     Args:
         agent: The HawiAgent instance
         context: The AgentContext
-        model: The Model to be called (can be replaced by assigning to event)
+        model: The Model to be called
+        ctx: HookContext with run_id, iteration, cumulative usage
     """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_model_call")
     return func
 
 
-def after_model_call(func: AfterModelCallHook):
+def after_model_call(func: AfterModelCallMethod) -> AfterModelCallMethod:
     """Hook called after model invocation.
 
-    Can be used to modify the response.
+    Can be used to modify the response, track latency, or enforce budgets.
 
     Args:
         agent: The HawiAgent instance
         context: The AgentContext
         response: The MessageResponse from the model
+        ctx: HookContext with run_id, iteration, duration_ms, usage, stop_reason
     """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_model_call")
     return func
 
 
-def before_tool_calling(func: BeforeToolCallHook):
+def before_tool_calling(func: BeforeToolCallMethod) -> BeforeToolCallMethod:
+    """Hook called before tool execution.
+
+    Return ``HookResult.skip(result)`` to bypass the tool and use a synthetic result.
+
+    Args:
+        agent: The HawiAgent instance
+        tool_name: Name of the tool being called
+        arguments: Dict of arguments (mutable — changes are reflected in the call)
+        ctx: HookContext with run_id, iteration, tool_call_id, tool object
+    """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_tool_calling")
     return func
 
 
-def after_tool_calling(func: AfterToolCallHook):
+def after_tool_calling(func: AfterToolCallMethod) -> AfterToolCallMethod:
+    """Hook called after tool execution.
+
+    Can be used to transform the result, cache it, or collect statistics.
+
+    Args:
+        agent: The HawiAgent instance
+        tool_name: Name of the tool that was called
+        arguments: Dict of arguments used
+        result: ToolResult (mutable — changes are reflected in the conversation)
+        ctx: HookContext with run_id, iteration, tool_call_id, tool, duration_ms
+    """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_tool_calling")
     return func

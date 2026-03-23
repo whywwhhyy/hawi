@@ -9,7 +9,7 @@ import pytest
 from typing import Any, cast
 from unittest.mock import MagicMock
 
-from hawi.plugin import HawiPlugin
+from hawi.plugin import HawiPlugin, HookContext, HookResult
 from hawi.plugin.decorators import (
     before_session,
     after_session,
@@ -22,6 +22,13 @@ from hawi.plugin.decorators import (
     tool as tool_decorator,
 )
 from hawi.tool.types import AgentTool, ToolResult
+
+
+def make_ctx(**kwargs) -> HookContext:
+    """Build a minimal HookContext for tests."""
+    defaults = dict(run_id="test-run", iteration=0)
+    defaults.update(kwargs)
+    return HookContext(**defaults)
 
 
 class MockAgent:
@@ -38,11 +45,11 @@ class SimplePlugin(HawiPlugin):
         self.called_hooks = []
 
     @before_session
-    def on_before_session(self, agent):
+    def on_before_session(self, agent, ctx):
         self.called_hooks.append("before_session")
 
     @after_session
-    def on_after_session(self, agent):
+    def on_after_session(self, agent, ctx):
         self.called_hooks.append("after_session")
 
 
@@ -53,13 +60,13 @@ class AsyncPlugin(HawiPlugin):
         self.called_hooks = []
 
     @before_tool_calling
-    async def on_before_tool(self, agent, tool_name, arguments):
+    async def on_before_tool(self, agent, tool_name, arguments, ctx):
         self.called_hooks.append(f"before_tool_calling:{tool_name}")
         # Simulate async operation
         await asyncio.sleep(0)
 
     @after_tool_calling
-    async def on_after_tool(self, agent, tool_name, arguments, result):
+    async def on_after_tool(self, agent, tool_name, arguments, result, ctx):
         self.called_hooks.append(f"after_tool_calling:{tool_name}")
 
 
@@ -70,35 +77,35 @@ class AllHooksPlugin(HawiPlugin):
         self.hook_calls = []
 
     @before_session
-    def on_before_session(self, agent):
+    def on_before_session(self, agent, ctx):
         self.hook_calls.append(("before_session", agent))
 
     @after_session
-    def on_after_session(self, agent):
+    def on_after_session(self, agent, ctx):
         self.hook_calls.append(("after_session", agent))
 
     @before_conversation
-    def on_before_conversation(self, agent):
+    def on_before_conversation(self, agent, ctx):
         self.hook_calls.append(("before_conversation", agent))
 
     @after_conversation
-    def on_after_conversation(self, agent):
+    def on_after_conversation(self, agent, ctx):
         self.hook_calls.append(("after_conversation", agent))
 
     @before_model_call
-    def on_before_model(self, agent, context, model):
+    def on_before_model(self, agent, context, model, ctx):
         self.hook_calls.append(("before_model_call", agent, context, model))
 
     @after_model_call
-    def on_after_model(self, agent, context, response):
+    def on_after_model(self, agent, context, response, ctx):
         self.hook_calls.append(("after_model_call", agent, context, response))
 
     @before_tool_calling
-    def on_before_tool(self, agent, tool_name, arguments):
+    def on_before_tool(self, agent, tool_name, arguments, ctx):
         self.hook_calls.append(("before_tool_calling", agent, tool_name, arguments))
 
     @after_tool_calling
-    def on_after_tool(self, agent, tool_name, arguments, result):
+    def on_after_tool(self, agent, tool_name, arguments, result, ctx):
         self.hook_calls.append(("after_tool_calling", agent, tool_name, arguments, result))
 
 
@@ -109,14 +116,14 @@ class ToolInterventionPlugin(HawiPlugin):
         self.interventions = []
 
     @before_tool_calling
-    def on_before_tool(self, agent, tool_name, arguments):
+    def on_before_tool(self, agent, tool_name, arguments, ctx):
         # Add timeout to dangerous tools
         if tool_name == "dangerous":
             arguments["timeout"] = 30
             self.interventions.append(f"added_timeout:{tool_name}")
 
     @after_tool_calling
-    def on_after_tool(self, agent, tool_name, arguments, result):
+    def on_after_tool(self, agent, tool_name, arguments, result, ctx):
         # Log all tool results
         self.interventions.append(f"logged:{tool_name}:{result.success}")
 
@@ -125,7 +132,7 @@ class ModelInterceptorPlugin(HawiPlugin):
     """Plugin that modifies model calls."""
 
     @before_model_call
-    def on_before_model(self, agent, context, model):
+    def on_before_model(self, agent, context, model, ctx):
         # Add system message modifier
         if context.system_prompt:
             context.system_prompt.append({"type": "text", "text": "[Modified by plugin]"})
@@ -150,21 +157,21 @@ class TestConvenienceDecorators:
         agent = MockAgent()
 
         # Can still call directly
-        plugin.on_before_session(agent)
+        plugin.on_before_session(agent, make_ctx())
         assert "before_session" in plugin.called_hooks
 
     def test_before_session_decorator(self):
         """Test @before_session decorator."""
         class TestPlugin(HawiPlugin):
             @before_session
-            def on_start(self, agent):
+            def on_start(self, agent, ctx):
                 self.called = True
 
         plugin = TestPlugin()
         assert "before_session" in plugin.hooks
 
         agent = MockAgent()
-        plugin.hooks["before_session"](agent)
+        plugin.hooks["before_session"](agent, make_ctx())
         assert plugin.called
 
     def test_after_session_decorator(self):
@@ -299,7 +306,7 @@ class TestHookExecution:
 
         hook_fn = plugin.hooks.get("before_session")
         assert hook_fn is not None
-        hook_fn(agent)
+        hook_fn(agent, make_ctx())
 
         assert "before_session" in plugin.called_hooks
 
@@ -311,7 +318,7 @@ class TestHookExecution:
 
         hook_fn = plugin.hooks.get("before_tool_calling")
         assert hook_fn is not None
-        hook_fn(agent, "dangerous", arguments)
+        hook_fn(agent, "dangerous", arguments, make_ctx())
 
         assert arguments["timeout"] == 30
         assert "added_timeout:dangerous" in plugin.interventions
@@ -324,7 +331,7 @@ class TestHookExecution:
 
         hook_fn = plugin.hooks.get("after_tool_calling")
         assert hook_fn is not None
-        hook_fn(agent, "test_tool", {}, result)
+        hook_fn(agent, "test_tool", {}, result, make_ctx())
 
         assert "logged:test_tool:True" in plugin.interventions
 
@@ -338,7 +345,7 @@ class TestHookExecution:
 
         hook_fn = plugin.hooks.get("before_model_call")
         assert hook_fn is not None
-        hook_fn(agent, context, model)
+        hook_fn(agent, context, model, make_ctx())
 
         # Check that modifier was added
         assert len(context.system_prompt) == 2
@@ -351,18 +358,19 @@ class TestHookExecution:
         context = MagicMock()
         model = MagicMock()
         response = MagicMock()
+        ctx = make_ctx()
 
         hooks = cast(dict[str, Any], plugin.hooks)
 
         # Execute all hooks
-        hooks["before_session"](agent)
-        hooks["before_conversation"](agent)
-        hooks["before_model_call"](agent, context, model)
-        hooks["after_model_call"](agent, context, response)
-        hooks["before_tool_calling"](agent, "test_tool", {})
-        hooks["after_tool_calling"](agent, "test_tool", {}, ToolResult(True))
-        hooks["after_conversation"](agent)
-        hooks["after_session"](agent)
+        hooks["before_session"](agent, ctx)
+        hooks["before_conversation"](agent, ctx)
+        hooks["before_model_call"](agent, context, model, ctx)
+        hooks["after_model_call"](agent, context, response, ctx)
+        hooks["before_tool_calling"](agent, "test_tool", {}, ctx)
+        hooks["after_tool_calling"](agent, "test_tool", {}, ToolResult(True), ctx)
+        hooks["after_conversation"](agent, ctx)
+        hooks["after_session"](agent, ctx)
 
         assert len(plugin.hook_calls) == 8
         assert plugin.hook_calls[0][0] == "before_session"
@@ -380,7 +388,7 @@ class TestAsyncHooks:
 
         hook_fn = plugin.hooks.get("before_tool_calling")
         assert hook_fn is not None
-        await hook_fn(agent, "my_tool", {})  # type: ignore[misc]
+        await hook_fn(agent, "my_tool", {}, make_ctx())  # type: ignore[misc]
 
         assert "before_tool_calling:my_tool" in plugin.called_hooks
 
@@ -393,7 +401,7 @@ class TestAsyncHooks:
 
         hook_fn = plugin.hooks.get("after_tool_calling")
         assert hook_fn is not None
-        await hook_fn(agent, "my_tool", {}, result)  # type: ignore[misc]
+        await hook_fn(agent, "my_tool", {}, result, make_ctx())  # type: ignore[misc]
 
         assert "after_tool_calling:my_tool" in plugin.called_hooks
 
@@ -421,11 +429,122 @@ class TestMultiplePlugins:
         # Call hook on plugin1
         hook_fn = plugin1.hooks.get("before_session")
         assert hook_fn is not None
-        hook_fn(agent)
+        hook_fn(agent, make_ctx())
 
         # Only plugin1 should have the call recorded
         assert "before_session" in plugin1.called_hooks
         assert "before_session" not in plugin2.called_hooks
+
+
+class TestHookChain:
+    """Tests for multi-plugin hook chain behavior."""
+
+    @pytest.mark.asyncio
+    async def test_two_plugins_both_run(self):
+        """Two plugins registering the same hook type must both execute (chain)."""
+        from hawi.agent.agent import HawiAgent
+
+        calls = []
+
+        class PluginA(HawiPlugin):
+            @before_session
+            def hook(self, agent, ctx):
+                calls.append("A")
+
+        class PluginB(HawiPlugin):
+            @before_session
+            def hook(self, agent, ctx):
+                calls.append("B")
+
+        agent = HawiAgent(model=MagicMock(), plugins=[PluginA(), PluginB()])
+        ctx = make_ctx()
+        await agent._ainvoke_hook("before_session", MagicMock(), ctx)
+
+        assert calls == ["A", "B"]
+
+    @pytest.mark.asyncio
+    async def test_hook_result_stops_chain(self):
+        """First HookResult stops the chain; subsequent hooks do not run."""
+        from hawi.agent.agent import HawiAgent
+
+        calls = []
+
+        class PluginA(HawiPlugin):
+            @before_tool_calling
+            def hook(self, agent, tool_name, arguments, ctx):
+                calls.append("A")
+                return HookResult.skip(ToolResult(success=False, output={"blocked": True}))
+
+        class PluginB(HawiPlugin):
+            @before_tool_calling
+            def hook(self, agent, tool_name, arguments, ctx):
+                calls.append("B")  # must NOT be called
+
+        agent = HawiAgent(model=MagicMock(), plugins=[PluginA(), PluginB()])
+        ctx = make_ctx()
+        result = await agent._ainvoke_hook("before_tool_calling", MagicMock(), "tool", {}, ctx)
+
+        assert calls == ["A"]  # B was not called
+        assert result is not None
+        assert result.action == "skip"
+
+    @pytest.mark.asyncio
+    async def test_none_returning_hooks_run_full_chain(self):
+        """Hooks that return None (no control action) let the full chain run."""
+        from hawi.agent.agent import HawiAgent
+
+        calls = []
+
+        class PluginA(HawiPlugin):
+            @before_session
+            def hook(self, agent, ctx):
+                calls.append("A")
+                return None
+
+        class PluginB(HawiPlugin):
+            @before_session
+            def hook(self, agent, ctx):
+                calls.append("B")
+                return None
+
+        agent = HawiAgent(model=MagicMock(), plugins=[PluginA(), PluginB()])
+        result = await agent._ainvoke_hook("before_session", MagicMock(), make_ctx())
+
+        assert calls == ["A", "B"]
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_hook_exception_propagates(self):
+        """Exceptions in hooks propagate to the caller (not silently swallowed)."""
+        from hawi.agent.agent import HawiAgent
+
+        class BadPlugin(HawiPlugin):
+            @before_session
+            def hook(self, agent, ctx):
+                raise ValueError("hook error")
+
+        agent = HawiAgent(model=MagicMock(), plugins=[BadPlugin()])
+        with pytest.raises(ValueError, match="hook error"):
+            await agent._ainvoke_hook("before_session", MagicMock(), make_ctx())
+
+
+class TestHookResult:
+    """Tests for HookResult semantics."""
+
+    def test_skip_factory(self):
+        result = HookResult.skip(ToolResult(success=True, output="cached"))
+        assert result.action == "skip"
+        assert result.tool_result is not None
+        assert result.tool_result.output == "cached"
+
+    def test_abort_factory(self):
+        result = HookResult.abort("over budget")
+        assert result.action == "abort"
+        assert result.reason == "over budget"
+
+    def test_abort_default_reason(self):
+        result = HookResult.abort()
+        assert result.reason == ""
 
 
 class TestToolDecoratorIntegration:

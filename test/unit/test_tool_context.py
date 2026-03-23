@@ -4,10 +4,11 @@ Tests the context injection mechanism that allows tools to receive runtime
 context information hidden from the LLM.
 """
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from hawi.agent import HawiAgent
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.tool.types import AgentTool, ToolResult
 
@@ -109,7 +110,7 @@ class TestToolCallContext:
     def test_tool_call_context_creation(self):
         """Test ToolCallContext creation."""
         agent = MockAgent()
-        ctx = ToolCallContext(agent=agent)
+        ctx = ToolCallContext(agent=cast(HawiAgent, agent))
         assert ctx.agent is agent
 
 
@@ -157,7 +158,7 @@ class TestAgentContextToolCallContext:
         context = AgentContext()
         agent = MockAgent()
 
-        context.tool_call_context = ToolCallContext(agent=agent)
+        context.tool_call_context = ToolCallContext(agent=cast(HawiAgent, agent))
 
         assert context.tool_call_context is not None
         assert context.tool_call_context.agent is agent
@@ -166,7 +167,7 @@ class TestAgentContextToolCallContext:
         """Test that tool_call_context is not copied."""
         context = AgentContext()
         agent = MockAgent()
-        context.tool_call_context = ToolCallContext(agent=agent)
+        context.tool_call_context = ToolCallContext(agent=cast(HawiAgent, agent))
 
         copied = context.copy()
 
@@ -354,21 +355,21 @@ class TestToolCallContextAPI:
     def test_context_property_returns_agent_context(self):
         """ctx.context delegates to the agent's AgentContext."""
         mock = MockAgent()
-        ctx = ToolCallContext(agent=mock)  # type: ignore[arg-type]
+        ctx = ToolCallContext(agent=cast(HawiAgent, mock))
         assert ctx.context is mock.context
         assert isinstance(ctx.context, AgentContext)
 
     def test_agent_property_returns_agent(self):
         """ctx.agent returns the underlying agent."""
         mock = MockAgent()
-        ctx = ToolCallContext(agent=mock)  # type: ignore[arg-type]
+        ctx = ToolCallContext(agent=cast(HawiAgent, mock))
         assert ctx.agent is mock
 
     def test_context_and_agent_consistent(self):
         """ctx.context and ctx.agent.context are the same object."""
         mock = MockAgent()
-        ctx = ToolCallContext(agent=mock)  # type: ignore[arg-type]
-        assert ctx.context is ctx.agent.context  # type: ignore[union-attr]
+        ctx = ToolCallContext(agent=cast(HawiAgent, mock))
+        assert ctx.context is ctx.agent.context
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +422,7 @@ class MockModel:
 
 
 class TestHawiAgentDynamicTools:
-    """Tests for HawiAgent.add_tool() and remove_tool()."""
+    """Tests for HawiAgent.plugins.add_tool() and remove_tool()."""
 
     def _make_agent(self) -> Any:
         """Create a HawiAgent with a mock model."""
@@ -429,62 +430,68 @@ class TestHawiAgentDynamicTools:
         return HawiAgent(model=MockModel())  # type: ignore[arg-type]
 
     def test_add_tool_registers_new_tool(self):
-        """add_tool() makes the tool available via get_tool()."""
+        """plugins.add_tool() makes the tool available via plugins.get_tool()."""
         agent = self._make_agent()
         t = _make_simple_tool("dynamic_tool")
 
-        agent.add_tool(t)
+        agent.plugins.add_tool(t)
 
-        assert agent.get_tool("dynamic_tool") is t
+        assert agent.plugins.get_tool("dynamic_tool") is t
 
     def test_add_tool_updates_tool_definitions(self):
-        """add_tool() updates context.tool_definitions for model requests."""
+        """plugins.add_tool() updates plugin manager tool definitions for model requests."""
         agent = self._make_agent()
-        initial_count = len(agent.context.tool_definitions or [])
+        initial_count = len(agent.plugins.get_tool_definitions())
 
-        agent.add_tool(_make_simple_tool("new_tool"))
+        agent.plugins.add_tool(_make_simple_tool("new_tool"))
 
-        defs = agent.context.tool_definitions or []
+        defs = agent.plugins.get_tool_definitions()
         assert len(defs) == initial_count + 1
         assert any(d["name"] == "new_tool" for d in defs)
 
-    def test_add_tool_warns_on_duplicate(self):
-        """add_tool() emits UserWarning when overwriting an existing tool."""
+    def test_add_tool_shadows_plugin_tool_warns(self):
+        """plugins.add_tool() emits UserWarning when shadowing a plugin tool."""
+        from hawi.plugin import HawiPlugin
+
+        class ToolPlugin(HawiPlugin):
+            @property
+            def tools(self):
+                return [_make_simple_tool("plugin_tool")]
+
         agent = self._make_agent()
-        agent.add_tool(_make_simple_tool("dup"))
+        # Manually add a plugin with a tool
+        agent._plugin_manager._plugins.append(ToolPlugin())
+        agent._plugin_manager._invalidate_cache()
 
-        with pytest.warns(UserWarning, match="dup"):
-            agent.add_tool(_make_simple_tool("dup"))
-
-        # Only one tool with that name should exist
-        assert sum(1 for t in agent._tools if t.name == "dup") == 1
+        with pytest.warns(UserWarning, match="plugin_tool"):
+            agent.plugins.add_tool(_make_simple_tool("plugin_tool"))
 
     def test_remove_tool_unregisters_tool(self):
-        """remove_tool() removes the tool from get_tool() lookup."""
+        """plugins.remove_tool() removes the tool from get_tool() lookup."""
         agent = self._make_agent()
-        agent.add_tool(_make_simple_tool("to_remove"))
-        assert agent.get_tool("to_remove") is not None
+        agent.plugins.add_tool(_make_simple_tool("to_remove"))
+        assert agent.plugins.get_tool("to_remove") is not None
 
-        agent.remove_tool("to_remove")
+        agent.plugins.remove_tool("to_remove")
 
-        assert agent.get_tool("to_remove") is None
+        assert agent.plugins.get_tool("to_remove") is None
 
     def test_remove_tool_updates_tool_definitions(self):
-        """remove_tool() removes the definition from context.tool_definitions."""
+        """plugins.remove_tool() removes the definition from plugin manager tool definitions."""
         agent = self._make_agent()
-        agent.add_tool(_make_simple_tool("to_remove"))
+        agent.plugins.add_tool(_make_simple_tool("to_remove"))
 
-        agent.remove_tool("to_remove")
+        agent.plugins.remove_tool("to_remove")
 
-        defs = agent.context.tool_definitions or []
+        defs = agent.plugins.get_tool_definitions()
         assert all(d["name"] != "to_remove" for d in defs)
 
     def test_remove_all_tools_sets_definitions_to_none(self):
-        """When the last tool is removed, tool_definitions becomes None."""
+        """When the last tool is removed, plugin manager returns empty list."""
         agent = self._make_agent()
-        assert not agent._tools  # start with no tools
-        agent.add_tool(_make_simple_tool("only"))
+        assert not agent.plugins.get_tools()  # start with no tools
+        agent.plugins.add_tool(_make_simple_tool("only"))
 
-        agent.remove_tool("only")
+        agent.plugins.remove_tool("only")
 
-        assert agent.context.tool_definitions is None
+        assert agent.plugins.get_tool_definitions() == []

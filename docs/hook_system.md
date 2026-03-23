@@ -7,6 +7,7 @@ Hook 是 Hawi 提供的**阻塞式、可修改**的扩展机制。与 Event 不�
 - 阻塞 Agent 执行直到处理完成
 - 读取和修改 Agent 状态
 - 干预工具调用参数和结果
+- **返回 `HookResult` 控制 Agent 流程**（跳过工具执行、提前终止循环）
 
 ## 核心概念
 
@@ -14,381 +15,234 @@ Hook 是 Hawi 提供的**阻塞式、可修改**的扩展机制。与 Event 不�
 flowchart TD
     Start(["Agent 执行流程"]) --> BC["Hook: before_conversation"]
     BC -->|"插件修改 Agent 状态"| BMC["Hook: before_model_call"]
-    BMC -->|"插件修改请求参数"| Model["Model 调用"]
+    BMC -->|"可 abort 终止循环"| Model["Model 调用"]
     Model --> AMC["Hook: after_model_call"]
-    AMC -->|"插件修改响应内容"| BTC["Hook: before_tool_calling"]
-    BTC -->|"插件决定是否执行工具"| Tool["工具执行"]
+    AMC -->|"可 abort 终止循环"| BTC["Hook: before_tool_calling"]
+    BTC -->|"可 skip 跳过工具执行"| Tool["工具执行"]
     Tool --> ATC["Hook: after_tool_calling"]
     ATC -->|"插件处理工具结果"| AEC["Hook: after_conversation"]
     AEC -->|"插件清理资源"| End(["结束"])
 ```
 
-## Hook 类型
-
-```mermaid
-graph LR
-    subgraph HookTypes["Hook 类型"]
-        direction TB
-
-        BS["before_session"]
-        BS_T["触发: Agent.run() 开始"]
-        BS_M["可修改: Agent配置/初始状态"]
-
-        BE["after_session"]
-        BE_T["触发: Agent.run() 结束"]
-        BE_M["可修改: 无(清理操作)"]
-
-        BC["before_conversation"]
-        BC_T["触发: 会话开始时"]
-        BC_M["可修改: Agent上下文/system_prompt"]
-
-        AC["after_conversation"]
-        AC_T["触发: 会话结束时"]
-        AC_M["可修改: 无(清理操作)"]
-
-        BMC["before_model_call"]
-        BMC_T["触发: Model调用前"]
-        BMC_M["可修改: messages/tools/parameters"]
-
-        AMC["after_model_call"]
-        AMC_T["触发: Model响应后"]
-        AMC_M["可修改: response content"]
-
-        BTC["before_tool_calling"]
-        BTC_T["触发: 工具调用前"]
-        BTC_M["可修改: arguments/可取消调用"]
-
-        ATC["after_tool_calling"]
-        ATC_T["触发: 工具调用后"]
-        ATC_M["可修改: result/可修改结果"]
-    end
-
-    BS --- BS_T --- BS_M
-    BE --- BE_T --- BE_M
-    BC --- BC_T --- BC_M
-    AC --- AC_T --- AC_M
-    BMC --- BMC_T --- BMC_M
-    AMC --- AMC_T --- AMC_M
-    BTC --- BTC_T --- BTC_M
-    ATC --- ATC_T --- ATC_M
-```
-
 ## 使用方法
 
-### Session 级别 Hook
-
-Session 级别的 Hook 在整个 Agent.run() 生命周期内只执行一次，适合做初始化和清理工作：
+Hook 必须定义在 `HawiPlugin` 子类中（不支持独立函数）。每种 Hook 通过装饰器标记，并接受 `HookContext` 作为最后一个参数。
 
 ```python
-from hawi.plugin import HawiPlugin
-from hawi.plugin.decorators import before_session, after_session
-
-class SessionPlugin(HawiPlugin):
-    """Session 级别插件示例"""
-
-    @before_session
-    async def on_session_start(self, agent):
-        """在 Agent.run() 开始时执行"""
-        print("🚀 Session 启动")
-        # 初始化资源
-        self.metrics = []
-
-    @after_session
-    async def on_session_end(self, agent):
-        """在 Agent.run() 结束时执行"""
-        print("🏁 Session 结束")
-        # 清理资源或上报指标
-        print(f"本次 Session 共调用 {len(self.metrics)} 次模型")
-```
-
-### 基础插件
-
-```python
-from hawi.plugin import HawiPlugin
+from hawi.plugin import HawiPlugin, HookContext, HookResult
 from hawi.plugin.decorators import before_conversation, after_conversation
 
 class MyPlugin(HawiPlugin):
-    """示例插件"""
-
     @before_conversation
-    async def on_start(self, agent):
-        """会话开始时执行"""
-        print(f"会话开始，当前消息数: {len(agent.context.messages)}")
+    async def on_start(self, agent, ctx: HookContext):
+        print(f"[{ctx.run_id}] 会话开始，iteration={ctx.iteration}")
 
     @after_conversation
-    async def on_end(self, agent):
-        """会话结束时执行"""
-        print("会话结束")
+    async def on_end(self, agent, ctx: HookContext):
+        if ctx.usage:
+            print(f"本次消耗 Token: {ctx.usage['input_tokens']} in / {ctx.usage['output_tokens']} out")
+        if ctx.error:
+            print(f"执行出错: {ctx.error}")
 ```
 
-### 干预工具调用
+## HookContext
+
+每次 Hook 调用都会收到一个 `HookContext` 对象（最后一个参数）。
 
 ```python
-from hawi.plugin.decorators import before_tool_calling, after_tool_calling
-
-class ToolInterventionPlugin(HawiPlugin):
-    """干预工具调用的示例"""
-
-    @before_tool_calling
-    async def on_before_tool(self, agent, tool_name, arguments):
-        """
-        在工具调用前执行。
-
-        可以：
-        1. 修改参数
-        2. 记录日志
-        3. 取消调用（抛出异常）
-        """
-        print(f"即将调用工具: {tool_name}")
-        print(f"参数: {arguments}")
-
-        # 修改参数
-        if tool_name == "execute":
-            arguments["timeout"] = 30  # 添加超时限制
-
-    @after_tool_calling
-    async def on_after_tool(self, agent, tool_name, arguments, result):
-        """
-        在工具调用后执行。
-
-        可以：
-        1. 修改结果
-        2. 记录执行时间
-        3. 错误处理
-        """
-        print(f"工具 {tool_name} 执行完成")
-        print(f"结果: {result.output[:100]}")
-
-        # 修改结果（例如脱敏）
-        if "password" in result.output:
-            result.output = result.output.replace("password", "***")
+@dataclass(frozen=True)
+class HookContext:
+    run_id: str               # 本次 arun() 的唯一 ID
+    iteration: int            # 当前循环轮次（session/conversation 级钩子 = 0）
+    tool_call_id: str | None  # 工具调用 ID（tool 类钩子专用）
+    tool: AgentTool | None    # 工具对象本体（tool 类钩子专用）
+    duration_ms: float | None # 执行耗时（after 类钩子）
+    usage: TokenUsage | None  # 本轮 token 用量
+    stop_reason: str | None   # 停止原因（after_model_call / after_conversation）
+    error: Exception | None   # 错误（after_conversation / after_session）
 ```
 
-### 修改 Model 请求
+各 Hook 的有效 `ctx` 字段：
+
+| Hook | 有效字段 |
+|------|---------|
+| `before_session` | `run_id` |
+| `after_session` | `run_id`, `duration_ms`, `error` |
+| `before_conversation` | `run_id` |
+| `after_conversation` | `run_id`, `duration_ms`, `usage`, `stop_reason`, `error` |
+| `before_model_call` | `run_id`, `iteration`, `usage`（累计值） |
+| `after_model_call` | `run_id`, `iteration`, `duration_ms`, `usage`, `stop_reason` |
+| `before_tool_calling` | `run_id`, `iteration`, `tool_call_id`, `tool` |
+| `after_tool_calling` | `run_id`, `iteration`, `tool_call_id`, `tool`, `duration_ms` |
+
+## HookResult — 流程控制
+
+Hook 可以通过返回 `HookResult` 来控制 Agent 流程。返回 `None` 表示继续正常执行。
 
 ```python
-from hawi.plugin.decorators import before_model_call, after_model_call
-
-class ModelInterceptorPlugin(HawiPlugin):
-    """拦截和修改 Model 请求"""
-
-    @before_model_call
-    async def on_before_model(self, agent, context, model):
-        """
-        在 Model 调用前执行。
-
-        可以修改：
-        - context.messages
-        - context.system_prompt
-        - context.tools
-        """
-        # 添加额外的系统提示
-        if agent.context.system_prompt:
-            agent.context.system_prompt += "\n注意：请使用中文回答。"
-
-    @after_model_call
-    async def on_after_model(self, agent, context, response):
-        """
-        在 Model 响应后执行。
-
-        可以修改响应内容。
-        """
-        # 检查响应内容
-        for part in response.content:
-            if part.get("type") == "text":
-                text = part.get("text", "")
-                # 添加后处理
-                if "敏感词" in text:
-                    part["text"] = text.replace("敏感词", "***")
+from hawi.plugin import HookResult
+from hawi.tool.types import ToolResult
 ```
 
-## Hook 与 Event 的区别
+### 跳过工具执行（skip）
 
-```mermaid
-graph TB
-    subgraph Comparison["Hook vs Event 对比"]
-        direction LR
+在 `before_tool_calling` 中返回 `HookResult.skip(result)`，用 synthetic result 替代实际执行：
 
-        subgraph HookCol["Hook"]
-            H1["阻塞性: ✅ 阻塞"]
-            H2["可修改性: ✅ 可修改Agent"]
-            H3["执行时机: 同步调用"]
-            H4["用途: 干预/扩展"]
-            H5["错误影响: 中断执行"]
-            H6["实现方式: @hook装饰器"]
-        end
-
-        subgraph EventCol["Event"]
-            E1["阻塞性: ❌ 非阻塞"]
-            E2["可修改性: ❌ 只读"]
-            E3["执行时机: 异步广播"]
-            E4["用途: 观察/记录"]
-            E5["错误影响: 不影响主流程"]
-            E6["实现方式: EventBus订阅"]
-        end
-    end
+```python
+@before_tool_calling
+async def cache_get(self, agent, tool_name, arguments, ctx: HookContext):
+    key = f"{tool_name}:{arguments}"
+    if key in self._cache:
+        return HookResult.skip(self._cache[key])  # 跳过执行，返回缓存结果
 ```
 
-## 执行顺序
+### 提前终止 Agent 循环（abort）
 
-多个插件注册同一 Hook 时，按注册顺序执行：
+在任意 Hook 中返回 `HookResult.abort(reason)`，提前结束 Agent run：
+
+```python
+@before_model_call
+async def budget_guard(self, agent, context, model, ctx: HookContext):
+    if ctx.usage and ctx.usage["input_tokens"] > 40_000:
+        return HookResult.abort("token budget exceeded")
+```
+
+终止后，`AgentRunResult.stop_reason == "hook_abort"`。
+
+### Hook Chain 执行规则
+
+多个插件注册同一 Hook 类型时，按注册顺序依次执行：
+
+- 返回 `None` → 继续执行链中的下一个 Hook。
+- 返回 `HookResult` → **链立即停止**，后续 Hook 不再执行。
 
 ```python
 agent = HawiAgent(
     plugins=[PluginA(), PluginB(), PluginC()]
 )
-
 # before_model_call 执行顺序：
-# 1. PluginA.on_before_model
-# 2. PluginB.on_before_model
-# 3. PluginC.on_before_model
+# 1. PluginA.before_model_call → None → 继续
+# 2. PluginB.before_model_call → HookResult.abort() → 链停止
+# 3. PluginC.before_model_call → 不执行
 ```
 
-## 错误处理
-
-Hook 中的异常会中断 Agent 执行：
+## Hook 类型完整签名
 
 ```python
-class FailingPlugin(HawiPlugin):
-    @hook("before_tool_calling")
-    async def on_before_tool(self, agent, tool_name, arguments):
-        if tool_name == "dangerous":
-            raise RuntimeError("禁止调用危险工具！")
-
-# 当调用 dangerous 工具时：
-# 1. 抛出 RuntimeError
-# 2. Agent 执行中断
-# 3. 返回错误结果
-```
-
-## 与 Event 配合使用
-
-```python
-class ComprehensivePlugin(HawiPlugin):
-    """同时使用 Hook 和 Event 的示例"""
-
-    def __init__(self):
-        self.event_bus = EventBus()
-        self.event_bus.subscribe(self._on_event)
-
-    async def _on_event(self, event: Event):
-        """异步处理 Event（不阻塞）"""
-        if event.type == "agent.tool_call":
-            await self.log_to_remote(event)
-
-    @hook("before_tool_calling")
-    async def on_before_tool(self, agent, tool_name, arguments):
-        """同步干预工具调用（阻塞）"""
-        # 实时决策，可能需要阻塞
-        if not await self.check_permission(tool_name):
-            raise PermissionError(f"无权使用 {tool_name}")
-```
-
-## 最佳实践
-
-### 1. 保持 Hook 轻量
-
-```python
-# ✅ 好的做法：快速决策
-@hook("before_tool_calling")
-async def on_before_tool(self, agent, tool_name, arguments):
-    if tool_name in self.blocked_tools:
-        raise ValueError(f"工具 {tool_name} 被禁用")
-
-# ❌ 坏的做法：耗时操作
-@hook("before_tool_calling")
-async def on_before_tool(self, agent, tool_name, arguments):
-    await asyncio.sleep(5)  # 阻塞 Agent 5 秒！
-```
-
-### 2. 明确修改范围
-
-```python
-@hook("after_model_call")
-async def on_after_model(self, agent, context, response):
-    # ✅ 只修改必要的内容
-    for part in response.content:
-        if part.get("type") == "text":
-            # 添加水印
-            part["text"] += "\n\n[由 AI 生成]"
-```
-
-### 3. 异常处理
-
-```python
-@hook("before_tool_calling")
-async def on_before_tool(self, agent, tool_name, arguments):
-    try:
-        # 可能失败的操作
-        await self.validate(arguments)
-    except ValidationError as e:
-        # 转换为 Agent 可理解的错误
-        raise ToolCallError(f"参数验证失败: {e}") from e
-```
-
-## 完整示例
-
-```python
-from hawi.agent import HawiAgent
-from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import (
-    before_conversation,
-    after_conversation,
-    before_model_call,
-    before_tool_calling,
-    after_tool_calling,
+    before_session,       # (self, agent, ctx)
+    after_session,        # (self, agent, ctx)
+    before_conversation,  # (self, agent, ctx)
+    after_conversation,   # (self, agent, ctx)
+    before_model_call,    # (self, agent, context, model, ctx)
+    after_model_call,     # (self, agent, context, response, ctx)
+    before_tool_calling,  # (self, agent, tool_name, arguments, ctx) → HookResult | None
+    after_tool_calling,   # (self, agent, tool_name, arguments, result, ctx)
 )
+```
 
-class LoggingPlugin(HawiPlugin):
-    """完整的日志记录插件"""
+所有 Hook 均可返回 `HookResult | None`（同步或异步均可）。
 
-    def __init__(self):
-        self.call_count = 0
-        self.tool_stats = {}
+## 异常处理
 
-    @before_conversation
-    async def on_start(self, agent):
-        print(f"🚀 会话开始")
-        self.call_count = 0
+- Hook 中的**普通异常直接中断 Agent 执行**（透传到调用方，不会被静默捕获）。
+- 可预期的"拒绝"请使用 `HookResult.skip()`；"终止运行"请使用 `HookResult.abort()`。
 
-    @before_model_call
-    async def on_before_model(self, agent, context, model):
-        self.call_count += 1
-        print(f"🤖 第 {self.call_count} 次 Model 调用")
+```python
+@before_tool_calling
+async def permission_check(self, agent, tool_name, arguments, ctx: HookContext):
+    if not await self.has_permission(tool_name):
+        # ✅ 拒绝工具调用，给 LLM 一个错误结果
+        return HookResult.skip(ToolResult(success=False, output={"error": f"Permission denied: {tool_name}"}))
 
-    @before_tool_calling
-    async def on_before_tool(self, agent, tool_name, arguments):
-        print(f"🔧 调用工具: {tool_name}")
-        self.tool_stats[tool_name] = self.tool_stats.get(tool_name, 0) + 1
+    if tool_name == "shutdown":
+        # ✅ 立即终止整个 Agent run
+        return HookResult.abort("shutdown tool called")
 
-    @after_tool_calling
-    async def on_after_tool(self, agent, tool_name, arguments, result):
-        status = "✅" if result.success else "❌"
-        print(f"{status} 工具 {tool_name} 执行完成")
+    # ❌ 不要用异常来"拒绝"——异常会中断整个 Agent，而不是返回错误给 LLM
+```
+
+## 实用示例
+
+### 精确计费
+
+```python
+class BillingPlugin(HawiPlugin):
+    def __init__(self, billing_client):
+        self.billing = billing_client
 
     @after_conversation
-    async def on_end(self, agent):
-        print(f"🏁 会话结束")
-        print(f"   Model 调用次数: {self.call_count}")
-        print(f"   工具使用统计: {self.tool_stats}")
-
-# 使用
-agent = HawiAgent(
-    model=model,
-    plugins=[LoggingPlugin()]
-)
-
-result = agent.run("计算 1+1")
+    async def charge(self, agent, ctx: HookContext):
+        if ctx.usage:
+            await self.billing.record(
+                run_id=ctx.run_id,
+                input_tokens=ctx.usage["input_tokens"],
+                output_tokens=ctx.usage["output_tokens"],
+            )
 ```
 
-输出：
+### 工具缓存
+
+```python
+class CachePlugin(HawiPlugin):
+    def __init__(self):
+        self._cache: dict = {}
+
+    @before_tool_calling
+    def cache_get(self, agent, tool_name, arguments, ctx: HookContext):
+        key = f"{tool_name}:{sorted(arguments.items())}"
+        if key in self._cache:
+            return HookResult.skip(self._cache[key])
+
+    @after_tool_calling
+    def cache_set(self, agent, tool_name, arguments, result, ctx: HookContext):
+        if result.success:
+            key = f"{tool_name}:{sorted(arguments.items())}"
+            self._cache[key] = result
 ```
-🚀 会话开始
-🤖 第 1 次 Model 调用
-🔧 调用工具: calculate
-✅ 工具 calculate 执行完成
-🤖 第 2 次 Model 调用
-🏁 会话结束
-   Model 调用次数: 2
-   工具使用统计: {'calculate': 1}
+
+### 工具执行统计
+
+```python
+class StatsPlugin(HawiPlugin):
+    def __init__(self):
+        self.tool_durations: dict[str, list[float]] = {}
+
+    @after_tool_calling
+    def record_duration(self, agent, tool_name, arguments, result, ctx: HookContext):
+        if ctx.duration_ms is not None:
+            self.tool_durations.setdefault(tool_name, []).append(ctx.duration_ms)
+
+    def report(self):
+        for name, durations in self.tool_durations.items():
+            avg = sum(durations) / len(durations)
+            print(f"{name}: avg={avg:.1f}ms, calls={len(durations)}")
 ```
+
+### 动态 System Prompt 注入
+
+```python
+class ContextPlugin(HawiPlugin):
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+
+    @before_conversation
+    async def inject(self, agent, ctx: HookContext):
+        prefs = await self.load_user_prefs(self.user_id)
+        agent.context.system_prompt.append({
+            "type": "text",
+            "text": f"\n用户偏好: {prefs}"
+        })
+```
+
+## Hook 与 Event 的区别
+
+| 特性 | Hook | Event |
+|------|------|-------|
+| 阻塞性 | ✅ 阻塞执行 | ❌ 非阻塞（worker 线程） |
+| 可修改性 | ✅ 可修改 Agent 状态 | ❌ 只读（frozen Pydantic 模型） |
+| 执行顺序 | 链式，可中途停止 | 广播，所有订阅者都执行 |
+| 流程控制 | ✅ 可 skip/abort | ❌ 无 |
+| 消费者数量 | 多个（chain） | 多个（broadcast） |
+| 错误处理 | 透传，中断执行 | 捕获，不影响主流程 |
+| 适用场景 | 干预、扩展 | 观察、记录 |

@@ -259,7 +259,7 @@ class MCPPlugin(HawiPlugin):
             "after_session": self._on_after_session,
         }
 
-    def _on_before_session(self, agent) -> None:
+    def _on_before_session(self, agent, ctx) -> None:
         """会话开始前连接 MCP 服务器"""
         try:
             asyncio.get_running_loop()
@@ -270,7 +270,7 @@ class MCPPlugin(HawiPlugin):
             if not self._connected:
                 asyncio.run(self.connect())
 
-    def _on_after_session(self, agent) -> None:
+    def _on_after_session(self, agent, ctx) -> None:
         """会话结束后断开连接"""
         if self._connected:
             try:

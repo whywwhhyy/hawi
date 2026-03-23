@@ -28,6 +28,8 @@ from hawi.models import (
     model_registry,
 )
 from hawi.plugin import HawiPlugin
+from hawi.plugin import PluginManager
+from hawi.plugin.hook_context import HookContext, HookResult
 from hawi.tool.types import AgentTool, ToolResult
 
 from hawi.errors import (
@@ -98,6 +100,7 @@ class _ExecutionState:
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     error: HawiError | str | None = None
     should_stop: bool = False
+    run_id: str = ""
 
 
 class HawiAgent:
@@ -173,15 +176,11 @@ class HawiAgent:
         else:
             self._model_error_policy = model_error_policy
 
-        # Store factory functions for clone/fork operations
-        self._plugin_factories: list[Callable[[], HawiPlugin]] = plugin_factories or []
-        # Store original plugins param for clone (these will have clone() called on them)
-        self._original_plugins: list[HawiPlugin] = plugins or []
-
-        # Initialize plugins: factories are called to create instances, plus any directly passed plugins
-        # Use empty list if None to avoid mutable default argument issue
-        self._plugins: list[HawiPlugin] = [f() for f in self._plugin_factories] + self._original_plugins
-        self._hooks: dict[str, Any] = {}
+        # Initialize PluginManager for plugin/tool/hook management
+        self._plugin_manager = PluginManager(
+            plugins=plugins,
+            plugin_factories=plugin_factories,
+        )
 
         # Convert system_prompt to list[ContentPart] if needed
         system_prompt_parts: list[ContentPart] | None = None
@@ -192,107 +191,15 @@ class HawiAgent:
 
         self._system_prompt = system_prompt_parts
 
-        # Collect tools from plugins and store them in the agent
-        self._tools = self._collect_tools_from_plugins()
-
         # Initialize context with tool definitions
+        defs = self._plugin_manager.get_tool_definitions()
         self._context = AgentContext(
             system_prompt=system_prompt_parts,
-            tool_definitions=self._convert_tools_to_definitions() if self._tools else None,
+            tool_definitions=defs if defs else None,
         )
 
         # Set up tool call context for runtime injection
         self._context.tool_call_context = ToolCallContext(agent=self)
-
-    def _collect_tools_from_plugins(self) -> list[AgentTool]:
-        """Collect tools from all plugins.
-
-        Returns:
-            List of unique tools (later plugins override earlier ones)
-        """
-        tools_by_name: dict[str, AgentTool] = {}
-        for plugin in self._plugins:
-            for tool in plugin.tools:
-                if tool.name in tools_by_name:
-                    import warnings
-                    warnings.warn(
-                        f"Tool '{tool.name}' is being overwritten by {plugin.__class__.__name__}",
-                        UserWarning,
-                        stacklevel=3,
-                    )
-                tools_by_name[tool.name] = tool
-
-            # Collect hooks from plugin
-            plugin_hooks = plugin.hooks
-            for hook_type, hook_fn in plugin_hooks.items():
-                self._hooks[hook_type] = hook_fn
-
-        return list(tools_by_name.values())
-
-    def _convert_tools_to_definitions(self) -> list[ToolDefinition]:
-        """Convert AgentTool instances to ToolDefinition format.
-
-        Returns:
-            List of ToolDefinition for model consumption
-        """
-        return [
-            {
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "schema": tool.parameters_schema,
-            }
-            for tool in self._tools
-        ]
-
-    def get_tool(self, name: str) -> AgentTool | None:
-        """Get a tool by name.
-
-        Args:
-            name: Tool name
-
-        Returns:
-            AgentTool if found, None otherwise
-        """
-        for tool in self._tools:
-            if tool.name == name:
-                return tool
-        return None
-
-    def add_tool(self, tool: AgentTool) -> None:
-        """Dynamically register a tool.
-
-        Updates both internal tool list and context tool definitions so the
-        next model request will include the new tool.
-
-        Args:
-            tool: AgentTool instance to add
-
-        Note:
-            If a tool with the same name already exists it will be replaced
-            with a warning.
-        """
-        if any(t.name == tool.name for t in self._tools):
-            import warnings
-            warnings.warn(
-                f"Tool '{tool.name}' already exists and will be overwritten.",
-                UserWarning,
-                stacklevel=2,
-            )
-            self._tools = [t for t in self._tools if t.name != tool.name]
-        self._tools.append(tool)
-        self._context.tool_definitions = self._convert_tools_to_definitions()
-
-    def remove_tool(self, name: str) -> None:
-        """Dynamically unregister a tool by name.
-
-        Args:
-            name: Name of the tool to remove
-        """
-        self._tools = [t for t in self._tools if t.name != name]
-        self._context.tool_definitions = (
-            self._convert_tools_to_definitions() if self._tools else None
-        )
 
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
@@ -300,6 +207,11 @@ class HawiAgent:
             'network': ModelErrorRetryPolicy(retry_count=10),
             'throttle': ModelErrorRetryPolicy(retry_count=3),
         })
+
+    @property
+    def plugins(self) -> PluginManager:
+        """Get the plugin manager for accessing and modifying plugins/tools/hooks."""
+        return self._plugin_manager
 
     @property
     def context(self) -> AgentContext:
@@ -341,20 +253,17 @@ class HawiAgent:
         Returns:
             New HawiAgent instance with copied state
         """
-        # Copy configuration
         new_agent = HawiAgent(
             model=self._default_model,
-            plugins=[plugin.clone() for plugin in self._original_plugins],
-            plugin_factories=self._plugin_factories.copy(),  # Copy factories list
             system_prompt=self._system_prompt,
             max_iterations=self._max_iterations,
-            event_bus=self._event_bus,
             model_error_policy=self._model_error_policy,
+            event_bus=self._event_bus,
+            streaming=self._streaming,
+            event_dump_file=self._dump_manager.dump_file if self._dump_manager else None,
         )
-
-        # Copy context (deep copy)
+        new_agent._plugin_manager = self._plugin_manager.clone()
         new_agent.set_context(self._context.copy())
-
         return new_agent
 
     def fork(self) -> HawiAgent:
@@ -365,22 +274,21 @@ class HawiAgent:
         """
         return self.clone()
 
-    async def _ainvoke_hook(self, hook_type: str, *args, **kwargs) -> None:
-        """Invoke a hook if registered, awaiting if it's async."""
-        hook = self._hooks.get(hook_type)
-        if hook:
-            try:
-                result = hook(*args, **kwargs)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception as e:
-                import warnings
+    async def _ainvoke_hook(self, hook_type: str, *args) -> HookResult | None:
+        """Invoke all registered hooks for the given type in registration order.
 
-                warnings.warn(
-                    f"Hook '{hook_type}' failed: {e}",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
+        Executes the chain until a hook returns a non-None ``HookResult``, then
+        stops and returns it. Returns ``None`` if no hook signals a control action.
+
+        Exceptions from hooks propagate normally and interrupt agent execution.
+        """
+        for hook in self._plugin_manager.get_hooks(hook_type):
+            result = hook(*args)
+            if inspect.isawaitable(result):
+                result = await result
+            if result is not None:
+                return result
+        return None
 
     def run(
         self,
@@ -533,7 +441,12 @@ class HawiAgent:
         policy = policy
         state = _ExecutionState()
         run_id = str(uuid.uuid4())[:8]
+        state.run_id = run_id
         start_time = time.time()
+
+        # Update tool definitions from PluginManager before execution
+        defs = self._plugin_manager.get_tool_definitions()
+        self._context.tool_definitions = defs if defs else None
 
         # Record initial message count to track delta for this invocation
         initial_message_count = len(self._context.messages)
@@ -566,10 +479,15 @@ class HawiAgent:
         )
 
         # before_session hook
-        await self._ainvoke_hook("before_session", self)
+        _hr = await self._ainvoke_hook("before_session", self, HookContext(run_id=run_id, iteration=0))
+        if _hr and _hr.action == "abort":
+            state.should_stop = True
 
         # before_conversation hook
-        await self._ainvoke_hook("before_conversation", self)
+        if not state.should_stop:
+            _hr = await self._ainvoke_hook("before_conversation", self, HookContext(run_id=run_id, iteration=0))
+            if _hr and _hr.action == "abort":
+                state.should_stop = True
 
         try:
             while not state.should_stop:
@@ -586,7 +504,13 @@ class HawiAgent:
                 state.iteration += 1
 
                 # before_model_call hook
-                await self._ainvoke_hook("before_model_call", self, self._context, m)
+                _hr = await self._ainvoke_hook(
+                    "before_model_call", self, self._context, m,
+                    HookContext(run_id=run_id, iteration=state.iteration, usage=cumulative_usage),
+                )
+                if _hr and _hr.action == "abort":
+                    state.should_stop = True
+                    break
 
                 # Model stream start
                 request_id = f"{run_id}-{state.iteration}"
@@ -747,7 +671,18 @@ class HawiAgent:
                 )
                 
                 # after_model_call hook
-                await self._ainvoke_hook("after_model_call", self, self._context, response)
+                _hr = await self._ainvoke_hook(
+                    "after_model_call", self, self._context, response,
+                    HookContext(
+                        run_id=run_id,
+                        iteration=state.iteration,
+                        duration_ms=(time.time() - model_call_start) * 1000,
+                        usage=usage,
+                        stop_reason=stop_reason,
+                    ),
+                )
+                if _hr and _hr.action == "abort":
+                    state.should_stop = True
 
                 # Add assistant message to context
                 # tool_calls are now included in content as ToolCallPart items
@@ -835,11 +770,18 @@ class HawiAgent:
             raise err from e
 
         finally:
+            _final_ctx = HookContext(
+                run_id=run_id,
+                iteration=state.iteration,
+                duration_ms=(time.time() - start_time) * 1000,
+                usage=cumulative_usage,
+                error=state.error if isinstance(state.error, Exception) else None,
+            )
             # after_conversation hook
-            await self._ainvoke_hook("after_conversation", self)
-            
+            await self._ainvoke_hook("after_conversation", self, _final_ctx)
+
             # after_session hook
-            await self._ainvoke_hook("after_session", self)
+            await self._ainvoke_hook("after_session", self, _final_ctx)
 
         # Build and return result
         duration_ms = (time.time() - start_time) * 1000
@@ -1060,12 +1002,20 @@ class HawiAgent:
 
         start_time = time.time()
 
-        # before_tool_calling hook
-        await self._ainvoke_hook("before_tool_calling", self, tool_name, arguments)
+        # Find tool early so hook context can include the tool object
+        tool = self._plugin_manager.get_tool(tool_name)
 
-        # Find tool
-        tool = self.get_tool(tool_name)
-        if tool is None:
+        # before_tool_calling hook
+        _before_ctx = HookContext(
+            run_id=state.run_id,
+            iteration=state.iteration,
+            tool_call_id=tool_call_id,
+            tool=tool,
+        )
+        _hr = await self._ainvoke_hook("before_tool_calling", self, tool_name, arguments, _before_ctx)
+        if _hr and _hr.action == "skip":
+            result = _hr.tool_result or ToolResult(success=False, error="Hook skipped tool without providing a result")
+        elif tool is None:
             err = ToolNotFoundError(f"Tool '{tool_name}' not found")
             result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
         elif getattr(tool, "audit", False):
@@ -1107,7 +1057,7 @@ class HawiAgent:
                             # Emit partial result event
                             await self._emit_event(
                                 AgentToolResultPartEvent.create(
-                                    run_id=getattr(self, '_current_run_id', ''),
+                                    run_id=state.run_id,
                                     tool_call_id=tool_call_id,
                                     part=str(part),
                                     part_index=len(parts) - 1,
@@ -1118,7 +1068,7 @@ class HawiAgent:
                         # Final part event
                         await self._emit_event(
                             AgentToolResultPartEvent.create(
-                                run_id=getattr(self, '_current_run_id', ''),
+                                run_id=state.run_id,
                                 tool_call_id=tool_call_id,
                                 part="",
                                 part_index=len(parts),
@@ -1144,7 +1094,16 @@ class HawiAgent:
         duration_ms = (time.time() - start_time) * 1000
 
         # after_tool_calling hook
-        await self._ainvoke_hook("after_tool_calling", self, tool_name, arguments, result)
+        await self._ainvoke_hook(
+            "after_tool_calling", self, tool_name, arguments, result,
+            HookContext(
+                run_id=state.run_id,
+                iteration=state.iteration,
+                tool_call_id=tool_call_id,
+                tool=tool,
+                duration_ms=duration_ms,
+            ),
+        )
 
         # Add tool result to context (unless audit pending - will be added after approval)
         if not (tool and getattr(tool, "audit", False)):
@@ -1210,7 +1169,7 @@ class HawiAgent:
 
         for pending in approved:
             # Execute the approved tool
-            tool = self.get_tool(pending.tool_name)
+            tool = self._plugin_manager.get_tool(pending.tool_name)
             if tool is None:
                 result = ToolResult(
                     success=False,

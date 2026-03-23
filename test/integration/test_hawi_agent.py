@@ -37,11 +37,11 @@ class CalculatorPlugin(HawiPlugin):
         self.events = []
 
     @before_conversation
-    def on_start(self, agent:HawiAgent):
+    def on_start(self, agent:HawiAgent, ctx):
         self.events.append("before_conversation")
 
     @after_conversation
-    def on_end(self, agent):
+    def on_end(self, agent, ctx):
         self.events.append("after_conversation")
 
     @tool
@@ -83,22 +83,22 @@ class AsyncHookPlugin(HawiPlugin):
         self.events = []
 
     @before_conversation
-    async def on_start(self, agent: HawiAgent):
+    async def on_start(self, agent: HawiAgent, ctx):
         await asyncio.sleep(0)  # Prove we're actually awaited
         self.events.append("before_conversation")
 
     @after_conversation
-    async def on_end(self, agent: HawiAgent):
+    async def on_end(self, agent: HawiAgent, ctx):
         await asyncio.sleep(0)
         self.events.append("after_conversation")
 
     @before_tool_calling
-    async def on_before_tool(self, agent: HawiAgent, tool_name: str, arguments: dict):
+    async def on_before_tool(self, agent: HawiAgent, tool_name: str, arguments: dict, ctx):
         await asyncio.sleep(0)
         self.events.append(f"before_tool_calling:{tool_name}")
 
     @after_tool_calling
-    async def on_after_tool(self, agent: HawiAgent, tool_name: str, arguments: dict, result):
+    async def on_after_tool(self, agent: HawiAgent, tool_name: str, arguments: dict, result, ctx):
         await asyncio.sleep(0)
         self.events.append(f"after_tool_calling:{tool_name}")
 

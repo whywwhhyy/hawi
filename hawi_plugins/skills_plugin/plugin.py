@@ -66,7 +66,7 @@ class SkillsPlugin(HawiPlugin):
         return result
 
     @before_conversation
-    def inject_skills_context(self, agent: Any):
+    def inject_skills_context(self, agent: Any, ctx):
         """Inject the list of available skills into the agent's system prompt."""
         # Re-scan to get latest skills
         self._scan_skills()
