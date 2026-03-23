@@ -96,6 +96,48 @@ class WeatherTool(AgentTool):
                 return ToolResult(success=True, output=data)
 ```
 
+## 动态工具管理
+
+### 运行时添加工具
+
+```python
+from hawi.agent import HawiAgent
+
+agent = HawiAgent(model=model)
+
+# 动态添加工具
+new_tool = CalculatorTool()
+agent.add_tool(new_tool)
+
+# 工具会立即生效，下一次模型请求时会包含该工具
+result = agent.run("计算 1+1")
+```
+
+### 运行时移除工具
+
+```python
+# 按名称移除工具
+agent.remove_tool("calculator")
+
+# 移除后 tool_definitions 会自动更新
+```
+
+### 注意事项
+
+- 如果添加已存在的工具名，会发出警告并覆盖原有工具
+- 移除最后一个工具后，`context.tool_definitions` 会设为 `None`
+
+```python
+import warnings
+
+# 添加已存在的工具会触发警告
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter("always")
+    agent.add_tool(CalculatorTool())
+    assert len(w) == 1
+    assert "already exists" in str(w[0].message)
+```
+
 ## 工具配置
 
 ### 需要审批的工具

@@ -29,12 +29,15 @@ def _auto_load_config():
 
         # 至少存在一个配置文件才自动加载
         if apikey_path.exists() or models_path.exists():
-            from .config import setup_registry
-            from .models import model_registry
+            from hawi.models import model_registry
 
-            setup_registry(registry=model_registry)
+            # 加载配置文件
+            if models_path.exists():
+                model_registry.load_config(models_path)
     except Exception:
         # 自动加载失败不阻止导入，让用户手动处理
+        import logging
+        logging.log(logging.WARN, "Failed loading model config file. Create a models.yaml, or set env HAWI_AUTO_CONFIG=0 to suppress this warning")
         pass
 
 

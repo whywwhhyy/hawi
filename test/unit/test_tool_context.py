@@ -6,6 +6,8 @@ context information hidden from the LLM.
 
 from typing import Any
 
+import pytest
+
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.tool.types import AgentTool, ToolResult
 
@@ -96,7 +98,9 @@ class NoContextTool(AgentTool):
 
 class MockAgent:
     """Mock agent for testing."""
-    pass
+
+    def __init__(self) -> None:
+        self.context = AgentContext()
 
 
 class TestToolCallContext:
@@ -338,3 +342,149 @@ class TestToolTags:
         safe_tools = [t for t in tools if "safe" in t.tags]
         assert len(safe_tools) == 1
         assert safe_tools[0].name == "tool1"
+
+
+# ---------------------------------------------------------------------------
+# ToolCallContext API
+# ---------------------------------------------------------------------------
+
+class TestToolCallContextAPI:
+    """Tests for ToolCallContext bounded API (.context and .agent properties)."""
+
+    def test_context_property_returns_agent_context(self):
+        """ctx.context delegates to the agent's AgentContext."""
+        mock = MockAgent()
+        ctx = ToolCallContext(agent=mock)  # type: ignore[arg-type]
+        assert ctx.context is mock.context
+        assert isinstance(ctx.context, AgentContext)
+
+    def test_agent_property_returns_agent(self):
+        """ctx.agent returns the underlying agent."""
+        mock = MockAgent()
+        ctx = ToolCallContext(agent=mock)  # type: ignore[arg-type]
+        assert ctx.agent is mock
+
+    def test_context_and_agent_consistent(self):
+        """ctx.context and ctx.agent.context are the same object."""
+        mock = MockAgent()
+        ctx = ToolCallContext(agent=mock)  # type: ignore[arg-type]
+        assert ctx.context is ctx.agent.context  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# HawiAgent dynamic tool registration
+# ---------------------------------------------------------------------------
+
+def _make_simple_tool(name: str) -> AgentTool:
+    """Create a minimal AgentTool for testing."""
+
+    class _T(AgentTool):
+        @property
+        def name(self) -> str:
+            return _name
+
+        @property
+        def description(self) -> str:
+            return f"Tool {_name}"
+
+        @property
+        def parameters_schema(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def run(self, **kwargs: Any) -> ToolResult:  # type: ignore[override]
+            return ToolResult(success=True, output=_name)
+
+    _name = name
+    return _T()
+
+
+class MockModel:
+    """Minimal model stub sufficient for HawiAgent construction."""
+
+    @property
+    def model_id(self) -> str:
+        return "mock"
+
+    def _prepare_request_impl(self, request):
+        return {}
+
+    def _parse_response_impl(self, response):
+        return {}
+
+    def _invoke_impl(self, request):
+        raise NotImplementedError
+
+    # HawiAgent only calls ainvoke in practice; keep other methods as stubs
+    async def ainvoke(self, *args, **kwargs):
+        return
+        yield  # pragma: no cover
+
+
+class TestHawiAgentDynamicTools:
+    """Tests for HawiAgent.add_tool() and remove_tool()."""
+
+    def _make_agent(self) -> Any:
+        """Create a HawiAgent with a mock model."""
+        from hawi.agent import HawiAgent
+        return HawiAgent(model=MockModel())  # type: ignore[arg-type]
+
+    def test_add_tool_registers_new_tool(self):
+        """add_tool() makes the tool available via get_tool()."""
+        agent = self._make_agent()
+        t = _make_simple_tool("dynamic_tool")
+
+        agent.add_tool(t)
+
+        assert agent.get_tool("dynamic_tool") is t
+
+    def test_add_tool_updates_tool_definitions(self):
+        """add_tool() updates context.tool_definitions for model requests."""
+        agent = self._make_agent()
+        initial_count = len(agent.context.tool_definitions or [])
+
+        agent.add_tool(_make_simple_tool("new_tool"))
+
+        defs = agent.context.tool_definitions or []
+        assert len(defs) == initial_count + 1
+        assert any(d["name"] == "new_tool" for d in defs)
+
+    def test_add_tool_warns_on_duplicate(self):
+        """add_tool() emits UserWarning when overwriting an existing tool."""
+        agent = self._make_agent()
+        agent.add_tool(_make_simple_tool("dup"))
+
+        with pytest.warns(UserWarning, match="dup"):
+            agent.add_tool(_make_simple_tool("dup"))
+
+        # Only one tool with that name should exist
+        assert sum(1 for t in agent._tools if t.name == "dup") == 1
+
+    def test_remove_tool_unregisters_tool(self):
+        """remove_tool() removes the tool from get_tool() lookup."""
+        agent = self._make_agent()
+        agent.add_tool(_make_simple_tool("to_remove"))
+        assert agent.get_tool("to_remove") is not None
+
+        agent.remove_tool("to_remove")
+
+        assert agent.get_tool("to_remove") is None
+
+    def test_remove_tool_updates_tool_definitions(self):
+        """remove_tool() removes the definition from context.tool_definitions."""
+        agent = self._make_agent()
+        agent.add_tool(_make_simple_tool("to_remove"))
+
+        agent.remove_tool("to_remove")
+
+        defs = agent.context.tool_definitions or []
+        assert all(d["name"] != "to_remove" for d in defs)
+
+    def test_remove_all_tools_sets_definitions_to_none(self):
+        """When the last tool is removed, tool_definitions becomes None."""
+        agent = self._make_agent()
+        assert not agent._tools  # start with no tools
+        agent.add_tool(_make_simple_tool("only"))
+
+        agent.remove_tool("only")
+
+        assert agent.context.tool_definitions is None

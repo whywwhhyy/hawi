@@ -296,7 +296,7 @@ context.clear_pending_tool_calls()
 
 ## ToolCallContext
 
-工具执行时的运行时上下文：
+工具执行时的运行时上下文。提供有界 API，通过属性访问 agent 内部能力，接口清晰、意图明确。
 
 ```python
 from hawi.agent.context import ToolCallContext
@@ -306,7 +306,46 @@ context.tool_call_context = ToolCallContext(agent=agent)
 
 # 工具中可以访问
 class MyTool(AgentTool):
+    context = "ctx"  # 声明需要注入的参数名
+
     def run(self, **kwargs):
-        agent = self.context.agent  # 访问 agent 实例
-        # ...
+        ctx: ToolCallContext = kwargs["ctx"]
+        
+        # 访问对话上下文（消息历史、system prompt）
+        messages = ctx.context.messages
+        
+        # 访问完整 agent（sub-agent 编排、动态工具注册等）
+        agent = ctx.agent
+```
+
+### 属性说明
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `context` | `AgentContext` | 对话上下文，包含消息历史、system prompt、历史操作等 |
+| `agent` | `HawiAgent` | 完整 agent 实例，支持 sub-agent 编排、动态工具注册等 |
+
+### 使用场景
+
+```python
+# 动态工具注册示例
+class DynamicToolTool(AgentTool):
+    name = "register_tool"
+    description = "动态注册新工具"
+    context = "ctx"  # 注入 ToolCallContext
+
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "tool_name": {"type": "string"},
+            "tool_code": {"type": "string"}
+        },
+        "required": ["tool_name", "tool_code"]
+    }
+
+    def run(self, tool_name: str, tool_code: str, ctx: ToolCallContext) -> ToolResult:
+        # 访问 agent 动态注册工具
+        new_tool = create_tool_from_code(tool_code)
+        ctx.agent.add_tool(new_tool)
+        return ToolResult(success=True, output=f"Registered {tool_name}")
 ```

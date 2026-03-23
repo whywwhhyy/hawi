@@ -259,6 +259,41 @@ class HawiAgent:
                 return tool
         return None
 
+    def add_tool(self, tool: AgentTool) -> None:
+        """Dynamically register a tool.
+
+        Updates both internal tool list and context tool definitions so the
+        next model request will include the new tool.
+
+        Args:
+            tool: AgentTool instance to add
+
+        Note:
+            If a tool with the same name already exists it will be replaced
+            with a warning.
+        """
+        if any(t.name == tool.name for t in self._tools):
+            import warnings
+            warnings.warn(
+                f"Tool '{tool.name}' already exists and will be overwritten.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._tools = [t for t in self._tools if t.name != tool.name]
+        self._tools.append(tool)
+        self._context.tool_definitions = self._convert_tools_to_definitions()
+
+    def remove_tool(self, name: str) -> None:
+        """Dynamically unregister a tool by name.
+
+        Args:
+            name: Name of the tool to remove
+        """
+        self._tools = [t for t in self._tools if t.name != name]
+        self._context.tool_definitions = (
+            self._convert_tools_to_definitions() if self._tools else None
+        )
+
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
         return defaultdict(ModelErrorStopPolicy, {
@@ -1046,8 +1081,7 @@ class HawiAgent:
             tool_arguments = dict(arguments)
             context_param = getattr(tool, "context", None)
             if context_param and self._context.tool_call_context:
-                # Inject the tool call context (currently just the agent reference)
-                tool_arguments[context_param] = self._context.tool_call_context.agent
+                tool_arguments[context_param] = self._context.tool_call_context
 
             try:
                 # Validate parameters before execution
@@ -1187,7 +1221,7 @@ class HawiAgent:
                 tool_arguments = dict(pending.arguments)
                 context_param = getattr(tool, "context", None)
                 if context_param and self._context.tool_call_context:
-                    tool_arguments[context_param] = self._context.tool_call_context.agent
+                    tool_arguments[context_param] = self._context.tool_call_context
 
                 try:
                     result = await tool.ainvoke(tool_arguments)

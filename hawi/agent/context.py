@@ -25,18 +25,34 @@ if TYPE_CHECKING:
     from .agent import HawiAgent
 
 
-@dataclass
 class ToolCallContext:
-    """Runtime context for tool execution.
+    """工具执行时注入的有界 API。
 
-    Simple data class providing access to agent runtime information.
-    Can be extended with additional fields as needed.
+    替代直接暴露 HawiAgent：工具通过此对象访问 agent 内部能力，
+    接口清晰、意图明确。
 
-    Attributes:
-        agent: Reference to the HawiAgent instance
+    工具声明需要注入时，在类上设置 context 属性：
+        class MyTool(AgentTool):
+            context = "ctx"  # 参数名称
+            def run(self, ..., ctx: ToolCallContext): ...
+
+    属性:
+        context: 对话上下文（消息历史、system prompt、历史操作）
+        agent:   完整 agent（sub-agent 编排、工具管理等）
     """
 
-    agent: HawiAgent
+    def __init__(self, agent: HawiAgent) -> None:
+        self._agent = agent
+
+    @property
+    def context(self) -> AgentContext:
+        """直接访问对话上下文（消息历史、system prompt）。"""
+        return self._agent.context
+
+    @property
+    def agent(self) -> HawiAgent:
+        """访问完整 agent（sub-agent 编排、动态工具注册等）。"""
+        return self._agent
 
 
 @dataclass
