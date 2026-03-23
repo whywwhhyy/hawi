@@ -30,6 +30,14 @@ graph LR
     subgraph HookTypes["Hook 类型"]
         direction TB
 
+        BS["before_session"]
+        BS_T["触发: Agent.run() 开始"]
+        BS_M["可修改: Agent配置/初始状态"]
+
+        BE["after_session"]
+        BE_T["触发: Agent.run() 结束"]
+        BE_M["可修改: 无(清理操作)"]
+
         BC["before_conversation"]
         BC_T["触发: 会话开始时"]
         BC_M["可修改: Agent上下文/system_prompt"]
@@ -55,6 +63,8 @@ graph LR
         ATC_M["可修改: result/可修改结果"]
     end
 
+    BS --- BS_T --- BS_M
+    BE --- BE_T --- BE_M
     BC --- BC_T --- BC_M
     AC --- AC_T --- AC_M
     BMC --- BMC_T --- BMC_M
@@ -65,21 +75,47 @@ graph LR
 
 ## 使用方法
 
+### Session 级别 Hook
+
+Session 级别的 Hook 在整个 Agent.run() 生命周期内只执行一次，适合做初始化和清理工作：
+
+```python
+from hawi.plugin import HawiPlugin
+from hawi.plugin.decorators import before_session, after_session
+
+class SessionPlugin(HawiPlugin):
+    """Session 级别插件示例"""
+
+    @before_session
+    async def on_session_start(self, agent):
+        """在 Agent.run() 开始时执行"""
+        print("🚀 Session 启动")
+        # 初始化资源
+        self.metrics = []
+
+    @after_session
+    async def on_session_end(self, agent):
+        """在 Agent.run() 结束时执行"""
+        print("🏁 Session 结束")
+        # 清理资源或上报指标
+        print(f"本次 Session 共调用 {len(self.metrics)} 次模型")
+```
+
 ### 基础插件
 
 ```python
 from hawi.plugin import HawiPlugin
-from hawi.plugin.decorators import hook
+from hawi.plugin.decorators import before_conversation, after_conversation
 
 class MyPlugin(HawiPlugin):
     """示例插件"""
 
-    @hook("before_conversation")
+    @before_conversation
     async def on_start(self, agent):
         """会话开始时执行"""
         print(f"会话开始，当前消息数: {len(agent.context.messages)}")
 
-    @hook("after_conversation")
+    @after_conversation
     async def on_end(self, agent):
         """会话结束时执行"""
         print("会话结束")
@@ -88,10 +124,12 @@ class MyPlugin(HawiPlugin):
 ### 干预工具调用
 
 ```python
+from hawi.plugin.decorators import before_tool_calling, after_tool_calling
+
 class ToolInterventionPlugin(HawiPlugin):
     """干预工具调用的示例"""
 
-    @hook("before_tool_calling")
+    @before_tool_calling
     async def on_before_tool(self, agent, tool_name, arguments):
         """
         在工具调用前执行。
@@ -108,7 +146,7 @@ class ToolInterventionPlugin(HawiPlugin):
         if tool_name == "execute":
             arguments["timeout"] = 30  # 添加超时限制
 
-    @hook("after_tool_calling")
+    @after_tool_calling
     async def on_after_tool(self, agent, tool_name, arguments, result):
         """
         在工具调用后执行。
@@ -129,10 +167,12 @@ class ToolInterventionPlugin(HawiPlugin):
 ### 修改 Model 请求
 
 ```python
+from hawi.plugin.decorators import before_model_call, after_model_call
+
 class ModelInterceptorPlugin(HawiPlugin):
     """拦截和修改 Model 请求"""
 
-    @hook("before_model_call")
+    @before_model_call
     async def on_before_model(self, agent, context, model):
         """
         在 Model 调用前执行。
@@ -146,7 +186,7 @@ class ModelInterceptorPlugin(HawiPlugin):
         if agent.context.system_prompt:
             agent.context.system_prompt += "\n注意：请使用中文回答。"
 
-    @hook("after_model_call")
+    @after_model_call
     async def on_after_model(self, agent, context, response):
         """
         在 Model 响应后执行。
@@ -291,7 +331,13 @@ async def on_before_tool(self, agent, tool_name, arguments):
 ```python
 from hawi.agent import HawiAgent
 from hawi.plugin import HawiPlugin
-from hawi.plugin.decorators import hook
+from hawi.plugin.decorators import (
+    before_conversation,
+    after_conversation,
+    before_model_call,
+    before_tool_calling,
+    after_tool_calling,
+)
 
 class LoggingPlugin(HawiPlugin):
     """完整的日志记录插件"""
@@ -300,27 +346,27 @@ class LoggingPlugin(HawiPlugin):
         self.call_count = 0
         self.tool_stats = {}
 
-    @hook("before_conversation")
+    @before_conversation
     async def on_start(self, agent):
         print(f"🚀 会话开始")
         self.call_count = 0
 
-    @hook("before_model_call")
+    @before_model_call
     async def on_before_model(self, agent, context, model):
         self.call_count += 1
         print(f"🤖 第 {self.call_count} 次 Model 调用")
 
-    @hook("before_tool_calling")
+    @before_tool_calling
     async def on_before_tool(self, agent, tool_name, arguments):
         print(f"🔧 调用工具: {tool_name}")
         self.tool_stats[tool_name] = self.tool_stats.get(tool_name, 0) + 1
 
-    @hook("after_tool_calling")
+    @after_tool_calling
     async def on_after_tool(self, agent, tool_name, arguments, result):
         status = "✅" if result.success else "❌"
         print(f"{status} 工具 {tool_name} 执行完成")
 
-    @hook("after_conversation")
+    @after_conversation
     async def on_end(self, agent):
         print(f"🏁 会话结束")
         print(f"   Model 调用次数: {self.call_count}")

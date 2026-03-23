@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, TypedDict, NotRequired, Any, Callable, Union
 
+from hawi.tool.types import ToolResult
+
 if TYPE_CHECKING:
     from hawi.agent import HawiAgent
     from hawi.agent.context import AgentContext
@@ -16,7 +18,7 @@ AfterConversationFunc = Callable[["HawiAgent"], None]
 BeforeModelCallFunc = Callable[["HawiAgent", "AgentContext", "Model"], None]
 AfterModelCallFunc = Callable[["HawiAgent", "AgentContext", "MessageResponse"], None]
 BeforeToolCallFunc = Callable[["HawiAgent", str, dict[str, Any]], None]
-AfterToolCallFunc = Callable[["HawiAgent", str, dict[str, Any], Any], None]
+AfterToolCallFunc = Callable[["HawiAgent", str, dict[str, Any], ToolResult], None]
 
 
 # ===== Hook types for methods (with self) =====
@@ -28,7 +30,7 @@ AfterConversationMethod = Callable[[Any, "HawiAgent"], None]
 BeforeModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "Model"], None]
 AfterModelCallMethod = Callable[[Any, "HawiAgent", "AgentContext", "MessageResponse"], None]
 BeforeToolCallMethod = Callable[[Any, "HawiAgent", str, dict[str, Any]], None]
-AfterToolCallMethod = Callable[[Any, "HawiAgent", str, dict[str, Any], Any], None]
+AfterToolCallMethod = Callable[[Any, "HawiAgent", str, dict[str, Any], ToolResult], None]
 
 
 # ===== Union types for decorators (accept both functions and methods) =====
