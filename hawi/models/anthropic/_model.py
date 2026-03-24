@@ -23,6 +23,14 @@ from hawi.models import (
     ToolCallPart,
     ReasoningPart,
 )
+from hawi.errors import (
+    NetworkError,
+    RemoteError,
+    ThrottleError,
+    DeniedError,
+    ValidationError,
+    UnknownModelError,
+)
 from ._converters import (
     AsyncContentConverter,
     ContentConverter,
@@ -37,6 +45,130 @@ from ._streaming import (
 from ._utils import convert_system_prompt, map_stop_reason
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_anthropic_error(e: Exception) -> Exception:
+    """Convert Anthropic SDK errors to Hawi ModelError.
+    
+    This function converts Anthropic SDK exceptions to Hawi ModelError subclasses
+    for consistent error handling across all model implementations.
+    
+    Anthropic Error Hierarchy:
+        AnthropicError
+        ├── APIError
+        │   ├── APIConnectionError (network connection failed)
+        │   │   └── APITimeoutError (request timeout)
+        │   ├── APIResponseValidationError (invalid response from API)
+        │   └── APIStatusError (HTTP status code based)
+        │       ├── BadRequestError (400)
+        │       ├── AuthenticationError (401)
+        │       ├── PermissionDeniedError (403)
+        │       ├── NotFoundError (404)
+        │       ├── ConflictError (409)
+        │       ├── UnprocessableEntityError (422)
+        │       ├── RateLimitError (429)
+        │       └── InternalServerError (5xx)
+    
+    Mapping to Hawi errors:
+        - NetworkError: APIConnectionError, APITimeoutError (transport layer)
+        - RemoteError: InternalServerError (5xx), other server-side errors
+        - ThrottleError: RateLimitError (429)
+        - DeniedError: AuthenticationError (401), PermissionDeniedError (403)
+        - ValidationError: BadRequestError (400), UnprocessableEntityError (422),
+          NotFoundError (404), ConflictError (409), APIResponseValidationError
+        - UnknownModelError: other API errors
+    
+    Args:
+        e: The Anthropic SDK exception.
+        
+    Returns:
+        A Hawi ModelError subclass instance, or original exception if not convertible.
+    """
+    try:
+        from anthropic import (
+            APIError,
+            APIConnectionError,
+            APITimeoutError,
+            APIResponseValidationError,
+            APIStatusError,
+            AuthenticationError,
+            BadRequestError,
+            ConflictError,
+            InternalServerError,
+            NotFoundError,
+            PermissionDeniedError,
+            RateLimitError,
+            UnprocessableEntityError,
+        )
+        
+        # Rate limit error (429) -> ThrottleError
+        if isinstance(e, RateLimitError):
+            return ThrottleError(f"Anthropic rate limit exceeded: {e}")
+        
+        # Authentication error (401) -> DeniedError
+        if isinstance(e, AuthenticationError):
+            return DeniedError(f"Anthropic authentication failed: {e}")
+        
+        # Permission denied (403) -> DeniedError
+        if isinstance(e, PermissionDeniedError):
+            return DeniedError(f"Anthropic permission denied: {e}")
+        
+        # Connection and timeout errors -> NetworkError (transport layer)
+        if isinstance(e, (APIConnectionError, APITimeoutError)):
+            return NetworkError(f"Anthropic connection error: {e}")
+        
+        # Internal server error (5xx) -> RemoteError (server-side)
+        if isinstance(e, InternalServerError):
+            return RemoteError(f"Anthropic server error: {e}")
+        
+        # Bad request (400) -> ValidationError
+        if isinstance(e, BadRequestError):
+            return ValidationError(f"Anthropic bad request: {e}")
+        
+        # Not found (404) -> ValidationError (usually invalid model ID)
+        if isinstance(e, NotFoundError):
+            return ValidationError(f"Anthropic resource not found: {e}")
+        
+        # Conflict (409) -> ValidationError
+        if isinstance(e, ConflictError):
+            return ValidationError(f"Anthropic conflict error: {e}")
+        
+        # Unprocessable entity (422) -> ValidationError
+        if isinstance(e, UnprocessableEntityError):
+            return ValidationError(f"Anthropic validation failed: {e}")
+        
+        # Response validation error -> ValidationError
+        if isinstance(e, APIResponseValidationError):
+            return ValidationError(f"Anthropic response validation error: {e}")
+        
+        # Generic APIStatusError with specific status code
+        if isinstance(e, APIStatusError):
+            status_code = getattr(e, 'status_code', None)
+            if status_code == 401:
+                return DeniedError(f"Anthropic authentication failed: {e}")
+            if status_code == 403:
+                return DeniedError(f"Anthropic permission denied: {e}")
+            if status_code == 429:
+                return ThrottleError(f"Anthropic rate limit exceeded: {e}")
+            if status_code and 500 <= status_code < 600:
+                return RemoteError(f"Anthropic server error ({status_code}): {e}")
+        
+        # Generic APIError with network-related keywords
+        if isinstance(e, APIError):
+            error_msg = str(e).lower()
+            network_keywords = ['timeout', 'connection', 'network', 'dns', 'unreachable', 'refused']
+            if any(kw in error_msg for kw in network_keywords):
+                return NetworkError(f"Anthropic network error: {e}")
+            
+            # Default: unknown model error
+            return UnknownModelError(f"Anthropic API error: {e}")
+        
+        # Not an Anthropic error, return as-is
+        return e
+        
+    except ImportError:
+        # anthropic module not available, return original exception
+        return e
 
 
 class AnthropicModel(Model):
@@ -327,12 +459,24 @@ class AnthropicModel(Model):
         if needs_async_conversion(
             request.messages, self.enable_image_download
         ):
-            return asyncio.run(self._async_invoke_impl(request))
+            try:
+                return asyncio.run(self._async_invoke_impl(request))
+            except Exception as e:
+                converted = _convert_anthropic_error(e)
+                if converted is not e:
+                    raise converted from e
+                raise
 
         req = self._prepare_request_sync(request)
-        response = self.client.messages.create(**req)
-        result = self._parse_response_impl(response.model_dump())
-        return result
+        try:
+            response = self.client.messages.create(**req)
+            result = self._parse_response_impl(response.model_dump())
+            return result
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
 
     async def _async_invoke_impl(
         self,
@@ -340,8 +484,14 @@ class AnthropicModel(Model):
     ) -> MessageResponse:
         """异步辅助方法，用于同步调用中的异步转换"""
         req = await self._prepare_request_async(request)
-        response = await self.async_client.messages.create(**req)
-        return self._parse_response_impl(response.model_dump())
+        try:
+            response = await self.async_client.messages.create(**req)
+            return self._parse_response_impl(response.model_dump())
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
 
     async def _ainvoke_impl(
         self,
@@ -358,7 +508,14 @@ class AnthropicModel(Model):
         from typing import cast
 
         req = await self._prepare_request_async(request)
-        response = await self.async_client.messages.create(**req)
+        try:
+            response = await self.async_client.messages.create(**req)
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        
         result = self._parse_response_impl(response.model_dump())
 
         # Yield content blocks as DeltaPart sequence
@@ -419,11 +576,23 @@ class AnthropicModel(Model):
                     if isinstance(item, dict):  # DeltaPart is a dict
                         yield item
 
-            yield from run_async_stream(_filtered_stream())
+            try:
+                yield from run_async_stream(_filtered_stream())
+            except Exception as e:
+                converted = _convert_anthropic_error(e)
+                if converted is not e:
+                    raise converted from e
+                raise
             return
 
         req = self._prepare_request_sync(request)
-        yield from stream_response(self.client, req)
+        try:
+            yield from stream_response(self.client, req)
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
 
     async def _astream_impl(
         self, request: MessageRequest
@@ -438,9 +607,15 @@ class AnthropicModel(Model):
         """
         req = await self._prepare_request_async(request)
 
-        async with self.async_client.messages.stream(**req) as stream:
-            handler = _AnthropicStreamHandler(stream)
-            async for event in stream:
-                for delta_part in handler.handle_event(event):
-                    yield delta_part
-            yield handler._create_finish_part()
+        try:
+            async with self.async_client.messages.stream(**req) as stream:
+                handler = _AnthropicStreamHandler(stream)
+                async for event in stream:
+                    for delta_part in handler.handle_event(event):
+                        yield delta_part
+                yield handler._create_finish_part()
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise

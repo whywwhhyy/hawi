@@ -3,6 +3,7 @@
 Tests the MiniMax model implementation using Anthropic-compatible API.
 """
 
+import functools
 import pytest
 
 from hawi.models.minimax.minimax_anthropic import MiniMaxAnthropicModel
@@ -16,6 +17,82 @@ HAS_MINIMAX_KEY = MINIMAX_API_KEY is not None and MINIMAX_API_KEY.strip() != ""
 
 # Skip reason for tests requiring API key
 SKIP_REASON = "MiniMax API key not found (set MINIMAX_API_KEY or configure models.yaml)"
+
+
+def _is_minimax_retryable_error(e: Exception) -> bool:
+    """Check if an exception is a MiniMax 794/1000 retryable error.
+    
+    This function checks for MiniMax API specific errors:
+    - openai.APIError with message pattern "unknown error, 794 (1000)"
+    - HTTP 794 status code in error body
+    - MiniMax error code 1000 (internal error)
+    
+    Args:
+        e: The exception to check.
+        
+    Returns:
+        True if the error is a retryable MiniMax error, False otherwise.
+    """
+    # Only check openai.APIError (or its subclasses)
+    try:
+        from openai import APIError
+        if not isinstance(e, APIError):
+            return False
+    except ImportError:
+        # If openai module not available, fall back to string check
+        pass
+    
+    error_msg = str(e)
+    
+    # Check for MiniMax specific error patterns
+    # Pattern 1: "unknown error, 794 (1000)" - the most common pattern
+    if "unknown error, 794" in error_msg and "(1000)" in error_msg:
+        return True
+    
+    # Pattern 2: Check error body for structured error codes
+    # APIError.body may contain {'error': {'code': '794' or 1000}}
+    if hasattr(e, 'body') and e.body is not None:
+        body = e.body
+        if isinstance(body, dict):
+            error_body = body.get('error', {})
+            if isinstance(error_body, dict):
+                code = error_body.get('code')
+                # Check for MiniMax error codes that indicate temporary issues
+                if code in (794, '794', 1000, '1000'):
+                    return True
+    
+    return False
+
+
+def retry_on_794(max_retries: int = 3):
+    """Decorator to retry tests on MiniMax 794/1000 error.
+    
+    Retries tests when MiniMax API returns temporary internal errors:
+    - Error 794: MiniMax internal HTTP status code
+    - Error 1000: MiniMax "unknown error" business code
+    
+    Args:
+        max_retries: Maximum number of retry attempts.
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if _is_minimax_retryable_error(e):
+                        last_exception = e
+                        if attempt < max_retries - 1:
+                            print(f"\nMiniMax error {e} on attempt {attempt + 1}, retrying...")
+                            continue
+                    # If not a retryable error or last attempt, re-raise
+                    raise
+            # All retries exhausted
+            raise last_exception
+        return wrapper
+    return decorator
 
 
 def _create_user_message(content: str) -> Message:
@@ -211,6 +288,7 @@ class TestMiniMaxAnthropicM21Integration:
         assert response.stop_reason == "end_turn"
         assert response.usage is not None
 
+    @retry_on_794(max_retries=3)
     def test_streaming_response(self, model: MiniMaxAnthropicModel):
         """Test streaming response with M2.1."""
         events = list(model.invoke(

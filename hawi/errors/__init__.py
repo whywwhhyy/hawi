@@ -15,6 +15,7 @@ from .error import (
 from .model_errors import (
     ModelError,
     NetworkError,
+    RemoteError,
     ThrottleError,
     DeniedError,
     ValidationError,
@@ -40,6 +41,7 @@ __all__ = [
     # Model
     "ModelError",
     "NetworkError",
+    "RemoteError",
     "ThrottleError",
     "DeniedError",
     "ValidationError",

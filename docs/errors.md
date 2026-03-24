@@ -9,6 +9,7 @@ HawiError (基类)
 ├── ConfigurationError      # 配置错误
 ├── ModelError             # 模型相关错误
 │   ├── NetworkError       # 网络连接错误
+│   ├── RemoteError        # 远程服务错误 (5xx/服务不可用)
 │   ├── ThrottleError      # 速率限制 (429)
 │   ├── DeniedError        # 访问被拒绝 (401/403)
 │   ├── ValidationError    # 数据格式错误

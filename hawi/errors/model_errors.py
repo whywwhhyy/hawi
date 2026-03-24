@@ -18,9 +18,19 @@ class ModelError(HawiError):
         return cast(ModelErrorType, self._error_type)
 
 class NetworkError(ModelError):
-    """网络错误（连接失败、超时等）"""
+    """网络错误（连接失败、超时、DNS 解析失败等）"""
     def __init__(self, msg: Optional[str] = None):
         super().__init__('network', msg or "Network error occurred")
+
+
+class RemoteError(ModelError):
+    """远程服务错误（服务器内部错误、服务不可用等）
+    
+    当远程 API 服务器返回 5xx 错误、内部错误或
+    服务临时不可用时抛出。此类错误通常可以重试。
+    """
+    def __init__(self, msg: Optional[str] = None):
+        super().__init__('remote', msg or "Remote service error occurred")
 
 
 class ThrottleError(ModelError):

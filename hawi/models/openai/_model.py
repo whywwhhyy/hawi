@@ -27,6 +27,14 @@ from hawi.models import (
     ToolCallPart,
     ReasoningPart,
 )
+from hawi.errors import (
+    NetworkError,
+    RemoteError,
+    ThrottleError,
+    DeniedError,
+    ValidationError,
+    UnknownModelError,
+)
 from ._converters import (
     prepare_request,
     convert_openai_content_to_part,
@@ -36,6 +44,139 @@ from ._converters import (
 from ._streaming import StreamProcessor
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_openai_error(e: Exception) -> Exception:
+    """Convert OpenAI SDK errors to Hawi ModelError.
+    
+    This function converts OpenAI SDK exceptions to Hawi ModelError subclasses
+    for consistent error handling across all OpenAI-compatible models.
+    
+    OpenAI Error Hierarchy:
+        OpenAIError
+        ├── APIError
+        │   ├── APIConnectionError (network connection failed)
+        │   │   └── APITimeoutError (request timeout)
+        │   ├── APIResponseValidationError (invalid response from API)
+        │   └── APIStatusError (HTTP status code based)
+        │       ├── BadRequestError (400)
+        │       ├── AuthenticationError (401)
+        │       ├── PermissionDeniedError (403)
+        │       ├── NotFoundError (404)
+        │       ├── ConflictError (409)
+        │       ├── UnprocessableEntityError (422)
+        │       ├── RateLimitError (429)
+        │       └── InternalServerError (5xx)
+        ├── ContentFilterFinishReasonError (content filtered)
+        └── LengthFinishReasonError (max_tokens reached)
+    
+    Mapping to Hawi errors:
+        - NetworkError: APIConnectionError, APITimeoutError (transport layer)
+        - RemoteError: InternalServerError (5xx), other server-side errors
+        - ThrottleError: RateLimitError (429)
+        - DeniedError: AuthenticationError (401), PermissionDeniedError (403)
+        - ValidationError: BadRequestError (400), UnprocessableEntityError (422),
+          NotFoundError (404), ConflictError (409), APIResponseValidationError
+        - UnknownModelError: other API errors
+    
+    Args:
+        e: The OpenAI SDK exception.
+        
+    Returns:
+        A Hawi ModelError subclass instance, or original exception if not convertible.
+    """
+    try:
+        from openai import (
+            APIError,
+            APIConnectionError,
+            APITimeoutError,
+            APIResponseValidationError,
+            APIStatusError,
+            AuthenticationError,
+            BadRequestError,
+            ConflictError,
+            InternalServerError,
+            NotFoundError,
+            PermissionDeniedError,
+            RateLimitError,
+            UnprocessableEntityError,
+            ContentFilterFinishReasonError,
+            LengthFinishReasonError,
+        )
+        
+        # Special finish reason errors - these are not really errors but signals
+        # that generation stopped for a specific reason. Re-raise as-is.
+        if isinstance(e, (ContentFilterFinishReasonError, LengthFinishReasonError)):
+            return e
+        
+        # Rate limit error (429) -> ThrottleError
+        if isinstance(e, RateLimitError):
+            return ThrottleError(f"Rate limit exceeded: {e}")
+        
+        # Authentication error (401) -> DeniedError
+        if isinstance(e, AuthenticationError):
+            return DeniedError(f"Authentication failed: {e}")
+        
+        # Permission denied (403) -> DeniedError
+        if isinstance(e, PermissionDeniedError):
+            return DeniedError(f"Permission denied: {e}")
+        
+        # Connection and timeout errors -> NetworkError (transport layer)
+        if isinstance(e, (APIConnectionError, APITimeoutError)):
+            return NetworkError(f"Connection error: {e}")
+        
+        # Internal server error (5xx) -> RemoteError (server-side)
+        if isinstance(e, InternalServerError):
+            return RemoteError(f"Server error: {e}")
+        
+        # Bad request (400) -> ValidationError
+        if isinstance(e, BadRequestError):
+            return ValidationError(f"Bad request: {e}")
+        
+        # Not found (404) -> ValidationError (usually invalid model ID)
+        if isinstance(e, NotFoundError):
+            return ValidationError(f"Resource not found: {e}")
+        
+        # Conflict (409) -> ValidationError
+        if isinstance(e, ConflictError):
+            return ValidationError(f"Conflict error: {e}")
+        
+        # Unprocessable entity (422) -> ValidationError
+        if isinstance(e, UnprocessableEntityError):
+            return ValidationError(f"Validation failed: {e}")
+        
+        # Response validation error -> ValidationError
+        if isinstance(e, APIResponseValidationError):
+            return ValidationError(f"Response validation error: {e}")
+        
+        # Generic APIStatusError with specific status code
+        if isinstance(e, APIStatusError):
+            status_code = getattr(e, 'status_code', None)
+            if status_code == 401:
+                return DeniedError(f"Authentication failed: {e}")
+            if status_code == 403:
+                return DeniedError(f"Permission denied: {e}")
+            if status_code == 429:
+                return ThrottleError(f"Rate limit exceeded: {e}")
+            if status_code and 500 <= status_code < 600:
+                return RemoteError(f"Server error ({status_code}): {e}")
+        
+        # Generic APIError with network-related keywords
+        if isinstance(e, APIError):
+            error_msg = str(e).lower()
+            network_keywords = ['timeout', 'connection', 'network', 'dns', 'unreachable', 'refused']
+            if any(kw in error_msg for kw in network_keywords):
+                return NetworkError(f"Network error: {e}")
+            
+            # Default: unknown model error
+            return UnknownModelError(f"API error: {e}")
+        
+        # Not an OpenAI error, return as-is
+        return e
+        
+    except ImportError:
+        # openai module not available, return original exception
+        return e
 
 
 class OpenAIModel(Model):
@@ -234,8 +375,14 @@ class OpenAIModel(Model):
             MessageResponse: 完整的模型响应
         """
         req = self._prepare_request_impl(request)
-        response = self.client.chat.completions.create(**req)
-        return self._parse_response_impl(response.model_dump())
+        try:
+            response = self.client.chat.completions.create(**req)
+            return self._parse_response_impl(response.model_dump())
+        except Exception as e:
+            converted = _convert_openai_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
 
     def _prepare_stream_request(self, request: MessageRequest) -> dict[str, Any]:
         """准备流式请求的通用配置
@@ -261,7 +408,15 @@ class OpenAIModel(Model):
 
         processor = StreamProcessor()
 
-        for chunk in self.client.chat.completions.create(**req):
+        try:
+            stream = self.client.chat.completions.create(**req)
+        except Exception as e:
+            converted = _convert_openai_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+
+        for chunk in stream:
             chunk_dict = chunk.model_dump()
             yield from processor.process_chunk(chunk_dict)
 
@@ -277,17 +432,22 @@ class OpenAIModel(Model):
         Yields:
             DeltaPart 增量块序列
         """
-        import time
         import asyncio
 
         # 在线程池中执行同步 API 调用
         loop = asyncio.get_event_loop()
         req = self._prepare_request_impl(request)
 
-        response = await loop.run_in_executor(
-            None,
-            lambda: self.client.chat.completions.create(**req)
-        )
+        try:
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(**req)
+            )
+        except Exception as e:
+            converted = _convert_openai_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
 
         result = self._parse_response_impl(response.model_dump())
 

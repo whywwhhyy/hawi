@@ -18,6 +18,7 @@ AgentErrorType = Literal[
 
 ModelErrorType = Literal[
     'network',
+    'remote',
     'throttle',
     'access',
     'validation',
@@ -27,7 +28,7 @@ ModelErrorType = Literal[
 ErrorType = AgentErrorType | ModelErrorType | Literal['configuration', 'unknown']
 
 
-class HawiError(BaseException):
+class HawiError(Exception):
     """Hawi 框架基础异常"""
 
     _error_type: ErrorType

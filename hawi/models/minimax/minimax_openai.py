@@ -13,7 +13,9 @@ from typing import Any
 
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
+from hawi.models.openai._model import _convert_openai_error as _base_convert_openai_error
 from hawi.models.message import MessageResponse, DeltaPart, ContentPart, MessageRequest
+from hawi.errors import RemoteError, ThrottleError, DeniedError, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,81 @@ logger = logging.getLogger(__name__)
 THINK_TAG_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 THINK_START_PATTERN = re.compile(r"<think>")
 THINK_END_PATTERN = re.compile(r"</think>")
+
+
+def _convert_minimax_error(e: Exception) -> Exception:
+    """Convert MiniMax-specific errors to Hawi ModelError.
+    
+    This function extends the base OpenAI error conversion with MiniMax-specific
+    error code handling. MiniMax uses custom error codes in the response body.
+    
+    MiniMax Error Codes:
+        - 794, 1000: Temporary internal errors -> RemoteError (retryable)
+        - 1002, 2045, 1041: Rate limiting -> ThrottleError
+        - 1004, 2049: Authentication errors -> DeniedError
+        - 1008: Insufficient balance -> DeniedError
+        - 2013: Invalid parameters -> ValidationError
+        - 1026, 1027: Sensitive content -> ValidationError
+    
+    Args:
+        e: The exception from OpenAI SDK.
+        
+    Returns:
+        A Hawi ModelError subclass instance, or original exception if not convertible.
+    """
+    # First try the base OpenAI error conversion
+    converted = _base_convert_openai_error(e)
+    
+    # If base conversion handled it (or it's not an APIError), return as-is
+    if converted is not e:
+        return converted
+    
+    # Handle MiniMax-specific error codes
+    try:
+        from openai import APIError
+        
+        if isinstance(e, APIError):
+            error_msg = str(e)
+            
+            # Check for MiniMax error code 794, 1000: temporary internal errors
+            if "794" in error_msg or "1000" in error_msg:
+                return RemoteError(f"MiniMax temporary error: {e}")
+            
+            # Check error body for structured error codes
+            body = getattr(e, 'body', None)
+            if isinstance(body, dict):
+                error_body = body.get('error', {})
+                if isinstance(error_body, dict):
+                    code = error_body.get('code')
+                    
+                    # 794, 1000: temporary internal errors (retryable)
+                    if code in (794, '794', 1000, '1000'):
+                        return RemoteError(f"MiniMax temporary error ({code}): {e}")
+                    
+                    # 1004, 2049: authentication errors
+                    if code in (1004, '1004', 2049, '2049'):
+                        return DeniedError(f"MiniMax authentication failed ({code}): {e}")
+                    
+                    # 1002, 2045, 1041: rate limiting
+                    if code in (1002, '1002', 2045, '2045', 1041, '1041'):
+                        return ThrottleError(f"MiniMax rate limit ({code}): {e}")
+                    
+                    # 1008: insufficient balance
+                    if code in (1008, '1008'):
+                        return DeniedError(f"MiniMax insufficient balance: {e}")
+                    
+                    # 2013: invalid parameters
+                    if code in (2013, '2013'):
+                        return ValidationError(f"MiniMax invalid parameters ({code}): {e}")
+                    
+                    # 1026, 1027: sensitive content
+                    if code in (1026, '1026', 1027, '1027'):
+                        return ValidationError(f"MiniMax sensitive content ({code}): {e}")
+        
+        return e
+        
+    except ImportError:
+        return e
 
 
 class MiniMaxOpenAIModel(OpenAIModel):
@@ -65,6 +142,27 @@ class MiniMaxOpenAIModel(OpenAIModel):
             **params
         )
 
+    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+        """同步非流式调用 - 包装父类实现并处理 MiniMax 特定错误"""
+        try:
+            return super()._invoke_impl(request)
+        except Exception as e:
+            converted = _convert_minimax_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+
+    async def _ainvoke_impl(self, request: MessageRequest):
+        """异步非流式调用 - 包装父类实现并处理 MiniMax 特定错误"""
+        try:
+            async for delta in super()._ainvoke_impl(request):
+                yield delta
+        except Exception as e:
+            converted = _convert_minimax_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+
     def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
         """
         解析响应，提取 <think> 标签中的 thinking 内容
@@ -74,7 +172,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
 
         # 从内容中提取 <think> 标签
         thinking_content = None
-        text_content:list[ContentPart] = []
+        text_content: list[ContentPart] = []
 
         for part in msg_response.content:
             if part.get("type") == "text":
@@ -113,7 +211,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
         return msg_response
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
-        """同步流式调用 - 处理 <think> 标签"""
+        """同步流式调用 - 处理 <think> 标签并捕获 MiniMax 特定错误"""
         req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
@@ -124,7 +222,15 @@ class MiniMaxOpenAIModel(OpenAIModel):
         thinking_started = False
         thinking_content = ""
         
-        for chunk in self.client.chat.completions.create(**req):
+        try:
+            stream = self.client.chat.completions.create(**req)
+        except Exception as e:
+            converted = _convert_minimax_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        
+        for chunk in stream:
             chunk_dict = chunk.model_dump()
             
             # 提取 delta 内容
@@ -227,7 +333,7 @@ class MiniMaxOpenAIModel(OpenAIModel):
     async def _astream_impl(
         self, request: MessageRequest
     ) -> AsyncGenerator[DeltaPart, None]:
-        """异步流式调用 - 处理 <think> 标签"""
+        """异步流式调用 - 处理 <think> 标签并捕获 MiniMax 特定错误"""
         req = self._prepare_stream_request(request)
 
         processor = StreamProcessor()
@@ -237,7 +343,14 @@ class MiniMaxOpenAIModel(OpenAIModel):
         in_thinking = False
         thinking_started = False
         
-        stream = await self.async_client.chat.completions.create(**req)
+        try:
+            stream = await self.async_client.chat.completions.create(**req)
+        except Exception as e:
+            converted = _convert_minimax_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        
         async with stream:
             async for chunk in stream:
                 chunk_dict = chunk.model_dump()

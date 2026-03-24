@@ -5,6 +5,7 @@ MiniMax Anthropic API 兼容模型
 
 特殊处理:
 - 处理 MiniMax 特有的 thinking 和 signature 事件
+- 处理 MiniMax 特有的错误码
 """
 
 from __future__ import annotations
@@ -31,8 +32,85 @@ from hawi.models.anthropic._streaming import (
 )
 from hawi.models.anthropic._converters import needs_async_conversion
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
+from hawi.models.anthropic._model import _convert_anthropic_error as _base_convert_anthropic_error
+from hawi.errors import RemoteError, ThrottleError, DeniedError, ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_minimax_anthropic_error(e: Exception) -> Exception:
+    """Convert MiniMax-specific errors when using Anthropic SDK.
+    
+    This function extends the base Anthropic error conversion with MiniMax-specific
+    error code handling.
+    
+    MiniMax Error Codes (via Anthropic endpoint):
+        - 794, 1000: Temporary internal errors -> RemoteError (retryable)
+        - 1002, 2045, 1041: Rate limiting -> ThrottleError
+        - 1004, 2049: Authentication errors -> DeniedError
+        - 1008: Insufficient balance -> DeniedError
+        - 2013: Invalid parameters -> ValidationError
+        - 1026, 1027: Sensitive content -> ValidationError
+    
+    Args:
+        e: The exception from Anthropic SDK.
+        
+    Returns:
+        A Hawi ModelError subclass instance, or original exception if not convertible.
+    """
+    # First try the base Anthropic error conversion
+    converted = _base_convert_anthropic_error(e)
+    
+    # If base conversion handled it (or it's not an APIError), return as-is
+    if converted is not e:
+        return converted
+    
+    # Handle MiniMax-specific error codes
+    try:
+        from anthropic import APIError
+        
+        if isinstance(e, APIError):
+            error_msg = str(e)
+            
+            # Check for MiniMax error code 794, 1000: temporary internal errors
+            if "794" in error_msg or "1000" in error_msg:
+                return RemoteError(f"MiniMax temporary error: {e}")
+            
+            # Check error body for structured error codes
+            body = getattr(e, 'body', None)
+            if isinstance(body, dict):
+                error_body = body.get('error', {})
+                if isinstance(error_body, dict):
+                    code = error_body.get('code')
+                    
+                    # 794, 1000: temporary internal errors (retryable)
+                    if code in (794, '794', 1000, '1000'):
+                        return RemoteError(f"MiniMax temporary error ({code}): {e}")
+                    
+                    # 1004, 2049: authentication errors
+                    if code in (1004, '1004', 2049, '2049'):
+                        return DeniedError(f"MiniMax authentication failed ({code}): {e}")
+                    
+                    # 1002, 2045, 1041: rate limiting
+                    if code in (1002, '1002', 2045, '2045', 1041, '1041'):
+                        return ThrottleError(f"MiniMax rate limit ({code}): {e}")
+                    
+                    # 1008: insufficient balance
+                    if code in (1008, '1008'):
+                        return DeniedError(f"MiniMax insufficient balance: {e}")
+                    
+                    # 2013: invalid parameters
+                    if code in (2013, '2013'):
+                        return ValidationError(f"MiniMax invalid parameters ({code}): {e}")
+                    
+                    # 1026, 1027: sensitive content
+                    if code in (1026, '1026', 1027, '1027'):
+                        return ValidationError(f"MiniMax sensitive content ({code}): {e}")
+        
+        return e
+        
+    except ImportError:
+        return e
 
 
 class MiniMaxAnthropicStreamHandler(_AnthropicStreamHandler):
@@ -204,16 +282,34 @@ class MiniMaxAnthropicModel(AnthropicModel):
         if needs_async_conversion(
             request.messages, self.enable_image_download
         ):
-            yield from run_async_stream(self._astream_impl(request))
+            try:
+                yield from run_async_stream(self._astream_impl(request))
+            except Exception as e:
+                converted = _convert_minimax_anthropic_error(e)
+                if converted is not e:
+                    raise converted from e
+                raise
             return
 
         req = self._prepare_request_sync(request)
-        yield from minimax_stream_response(self.client, req)
+        try:
+            yield from minimax_stream_response(self.client, req)
+        except Exception as e:
+            converted = _convert_minimax_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
 
     async def _astream_impl(
         self, request: MessageRequest
     ) -> AsyncGenerator[DeltaPart]:
         """异步流式调用 - 使用 MiniMax 专属的 handler"""
         req = await self._prepare_request_async(request)
-        async for chunk in minimax_stream_response_async(self.async_client, req):
-            yield chunk
+        try:
+            async for chunk in minimax_stream_response_async(self.async_client, req):
+                yield chunk
+        except Exception as e:
+            converted = _convert_minimax_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
