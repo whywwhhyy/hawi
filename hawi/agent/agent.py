@@ -42,7 +42,7 @@ from hawi.errors import (
     ToolNotFoundError,
     ToolExecutionError,
 )
-from .events import (
+from hawi.events import (
     Event,
     EventBus,
     EventHandler,

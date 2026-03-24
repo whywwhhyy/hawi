@@ -70,8 +70,7 @@ class PluginManager:
         plugins: list[HawiPlugin] | None = None,
         plugin_factories: list[Callable[[], HawiPlugin]] | None = None,
     ) -> None:
-        from hawi.plugin import HawiPlugin
-
+        """Initialize PluginManager"""
         self._plugin_factories = plugin_factories or []
         factory_plugins = [f() for f in self._plugin_factories]
         self._plugins: list[HawiPlugin] = factory_plugins + list(plugins) if plugins else factory_plugins

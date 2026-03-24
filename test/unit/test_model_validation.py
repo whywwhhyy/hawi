@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from hawi.agent import HawiAgent
 from hawi.models import DeepSeekModel, KimiModel
-from hawi.agent.events import AgentErrorEvent, ModelErrorEvent
+from hawi.events import AgentErrorEvent, ModelErrorEvent
 from hawi.errors import AgentError, ModelError
 
 

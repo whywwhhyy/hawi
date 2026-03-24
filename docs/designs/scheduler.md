@@ -1,0 +1,5 @@
+我想在HawiAgent的基础上实现一个HawiScheduler，用来支持复杂的消息处理和编排
+1. 支持三种消息队列：一种是排队消息，仅在工具调用结束后才被用来调用agent；一种是插入消息，如果下一条消息是工具result，则合并到工具result message中，如果下一条消息是用户消息，则插队先进；最后一种是紧急消息，会打断当前进行中与还未开始的工具调用，并且尽可能合并为一条消息
+2. 支持原子地移除某条指定的消息、清空某个队列或清空所有队列
+3. 拦截、透传或再处理HawiAgent发出的事件，如果有必要也要设计新的事件（比如agent.interrupt、scheduler.interrupt、scheduler.enqueue等）。请携带一个初版设计与我详细讨论
+4. 其他特性：这个scheduler是为了always-on background agent和multi agent system而设计的，请按照这两个场景进行brainstorm，提供一些方案出来（如有必要也可以实现为多种scheduler）

@@ -29,7 +29,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from hawi.agent.events import (
+from hawi.events import (
     Event,
     ModelContentBlockStartEvent,
     ModelContentBlockDeltaEvent,

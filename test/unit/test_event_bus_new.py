@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from hawi.agent.events.event import Event
-from hawi.agent.events.event_bus import EventBus
+from hawi.events.event import Event
+from hawi.events.event_bus import EventBus
 
 
 # =============================================================================

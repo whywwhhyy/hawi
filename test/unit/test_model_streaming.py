@@ -17,8 +17,8 @@ from hawi.models.message import (
 )
 from hawi.errors import ModelError
 from hawi.models.message import TokenUsage
-from hawi.agent.events.event import Event
-from hawi.agent.events.model_events import (
+from hawi.events.event import Event
+from hawi.events.model_events import (
     ModelStreamStartEvent,
     ModelStreamStopEvent,
     ModelContentBlockStartEvent,

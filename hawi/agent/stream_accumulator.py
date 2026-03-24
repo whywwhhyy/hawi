@@ -17,7 +17,7 @@ from hawi.models import (
     ToolCallPart,
 )
 
-from .events import (
+from hawi.events import (
     Event,
     ModelContentBlockDeltaEvent,
     ModelContentBlockStartEvent,

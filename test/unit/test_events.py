@@ -8,7 +8,7 @@ import io
 import pytest
 
 
-from hawi.agent.events import (
+from hawi.events import (
     Event,
     EventBus,
     # Model events
