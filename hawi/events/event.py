@@ -1,12 +1,12 @@
+
 """
 Event base class for Hawi Event System.
 
 Events are:
 - Read-only and immutable
-- Produced by Model and Agent
+- Produced by Model, Agent, and Scheduler
 - Non-blocking, multi-consumer
 """
-
 
 from __future__ import annotations
 
@@ -19,34 +19,43 @@ from pydantic import BaseModel, Field, ConfigDict
 logger = logging.getLogger(__name__)
 
 
-EventSource = Literal['model', 'agent']
+EventSource = Literal["model", "agent", "scheduler"]
 
 ModelEventType = Literal[
-    'model.stream_start',
-    'model.content_block_start',
-    'model.content_block_delta',
-    'model.content_block_stop',
-    'model.tool_call_block_start',
-    'model.tool_call_block_delta',
-    'model.tool_call_block_stop',
-    'model.content_metadata',
-    'model.metadata',
-    'model.retry',
-    'model.stream_stop',
-    'model.error',
+    "model.stream_start",
+    "model.content_block_start",
+    "model.content_block_delta",
+    "model.content_block_stop",
+    "model.tool_call_block_start",
+    "model.tool_call_block_delta",
+    "model.tool_call_block_stop",
+    "model.content_metadata",
+    "model.metadata",
+    "model.retry",
+    "model.stream_stop",
+    "model.error",
 ]
 
 AgentEventType = Literal[
-    'agent.run_start',
-    'agent.message_added',
-    'agent.tool_call',
-    'agent.tool_result_part',
-    'agent.tool_result',
-    'agent.run_stop',
-    'agent.error',
+    "agent.run_start",
+    "agent.message_added",
+    "agent.tool_call",
+    "agent.tool_result_part",
+    "agent.tool_result",
+    "agent.run_stop",
+    "agent.error",
 ]
 
-EventType = ModelEventType | AgentEventType
+SchedulerEventType = Literal[
+    "scheduler.enqueue",
+    "scheduler.dequeue",
+    "scheduler.interrupt",
+    "agent.interrupt",
+    "scheduler.yield",
+    "scheduler.resume",
+]
+
+EventType = ModelEventType | AgentEventType | SchedulerEventType
 
 
 class Event(BaseModel):
@@ -77,3 +86,11 @@ class Event(BaseModel):
         super().__init__(**data)
 
 
+__all__ = [
+    "Event",
+    "EventSource",
+    "EventType",
+    "ModelEventType",
+    "AgentEventType",
+    "SchedulerEventType",
+]

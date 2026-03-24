@@ -1,59 +1,46 @@
-"""Hawi Agent - Core agent implementation with LLM API support.
 
-This package provides:
-- HawiAgent: Core agent with tool execution and plugin support
-- AgentContext: Conversation state management
-- Model: Abstract base class for LLM providers
-- Events: Streaming event system
-- Result: Execution result types
-"""
+"""Hawi Agent module."""
 
-from hawi.errors import (
-    HawiError,
-    AgentError,
-    MaxIterationsError,
-    ModelError,
-    NetworkError,
-    ThrottleError,
-    DeniedError,
-    UnknownModelError,
-    ToolNotFoundError,
-    ToolValidationError,
-    ToolExecutionError,
-    ConfigurationError,
-)
-from .agent import HawiAgent
-from .context import AgentContext
-from .printers import (
-    PlainPrinter,
-    RichPrinter,
-)
+from .agent import HawiAgent, ModelErrorPolicy, ModelErrorRetryPolicy, ModelErrorNotifyPolicy, ModelErrorStopPolicy
+from .context import AgentContext, ToolCallContext
 from .result import AgentRunResult, ToolCallRecord
 
-# 这个别名用于提升项目中的含宝率
-Bao = HawiAgent
+# Re-export scheduler classes
+from .scheduler import (
+    HawiScheduler,
+    SchedulerError,
+    QueueType,
+    QueuedMessage,
+    MessageQueueManager,
+    EventMode,
+    EventInterceptor,
+    AgentExecutor,
+    SchedulerState,
+    ErrorAction,
+)
 
 __all__ = [
-    # Core
+    # Agent
     "HawiAgent",
-    "Bao",
+    "ModelErrorPolicy",
+    "ModelErrorRetryPolicy",
+    "ModelErrorNotifyPolicy",
+    "ModelErrorStopPolicy",
+    # Context
     "AgentContext",
-    "PlainPrinter",
-    "RichPrinter",
-    # Results
+    "ToolCallContext",
+    # Result
     "AgentRunResult",
     "ToolCallRecord",
-    # Errors
-    "HawiError",
-    "AgentError",
-    "MaxIterationsError",
-    "ModelError",
-    "NetworkError",
-    "ThrottleError",
-    "DeniedError",
-    "UnknownModelError",
-    "ToolNotFoundError",
-    "ToolValidationError",
-    "ToolExecutionError",
-    "ConfigurationError",
+    # Scheduler
+    "HawiScheduler",
+    "SchedulerError",
+    "QueueType",
+    "QueuedMessage",
+    "MessageQueueManager",
+    "EventMode",
+    "EventInterceptor",
+    "AgentExecutor",
+    "SchedulerState",
+    "ErrorAction",
 ]

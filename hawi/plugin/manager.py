@@ -246,7 +246,7 @@ class PluginManager:
 
         # 3. Clone dynamic tools
         for tool in self._dynamic.tools:
-            # dynamic tools are registered as insatnces, thus here we use same instances
+            # dynamic tools are registered as instances, thus here we use same instances
             new_manager._dynamic.add_tool(tool)
 
         # 4. Copy dynamic hooks (function references, shared same function object)

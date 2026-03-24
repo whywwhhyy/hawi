@@ -155,6 +155,20 @@ graph LR
     end
 ```
 
+### Scheduler 事件（由 Scheduler 产生）
+
+```mermaid
+graph LR
+    subgraph SchedulerEvents["Scheduler Events"]
+        ENQ["scheduler.enqueue<br/>消息入队"]
+        DEQ["scheduler.dequeue<br/>消息出队"]
+        INT["scheduler.interrupt<br/>调度器打断执行"]
+        AINT["agent.interrupt<br/>Agent 被请求打断"]
+        YLD["scheduler.yield<br/>Scheduler 让出控制权"]
+        RSM["scheduler.resume<br/>外部恢复执行"]
+    end
+```
+
 ## 架构设计
 
 ### 事件流程
@@ -249,7 +263,7 @@ class MyPlugin(HawiPlugin):
 @dataclass(frozen=True, slots=True)
 class Event:
     type: str                    # 事件类型
-    source: Literal["model", "agent"]  # 事件来源
+    source: Literal["model", "agent", "scheduler"]  # 事件来源
     timestamp: float             # 时间戳
     metadata: dict[str, Any]     # 元数据（事件特定数据）
 ```

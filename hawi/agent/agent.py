@@ -201,6 +201,11 @@ class HawiAgent:
         # Set up tool call context for runtime injection
         self._context.tool_call_context = ToolCallContext(agent=self)
 
+        # Initialize interrupt state for cooperative cancellation
+        self._cancel_event = asyncio.Event()
+        self._current_tool_calls: list[ToolCallPart] = []
+        self._interrupted_tool_call_ids: list[str] = []
+
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
         return defaultdict(ModelErrorStopPolicy, {
@@ -273,6 +278,41 @@ class HawiAgent:
             New HawiAgent instance with copied state
         """
         return self.clone()
+
+    def interrupt(self, reason: str = "user") -> list[str]:
+        """Interrupt current agent execution.
+
+        Signals the agent to stop after the current operation completes.
+        This is a cooperative cancellation mechanism - the agent will check
+        the interrupt flag at safe points and stop gracefully.
+
+        Args:
+            reason: Reason for interruption (e.g., "user", "scheduler", "timeout")
+
+        Returns:
+            List of tool_call_ids that were currently executing when interrupted
+        """
+        self._cancel_event.set()
+        interrupted_ids = [tc.get("id", "") for tc in self._current_tool_calls]
+        self._interrupted_tool_call_ids.extend(interrupted_ids)
+        return interrupted_ids
+
+    def clear_interrupt_state(self) -> None:
+        """Clear interrupt state for a fresh execution.
+
+        Should be called before starting a new agent run.
+        """
+        self._cancel_event.clear()
+        self._interrupted_tool_call_ids.clear()
+        self._current_tool_calls.clear()
+
+    def _check_interrupt(self) -> bool:
+        """Check if an interrupt has been requested.
+
+        Returns:
+            True if interrupted, False otherwise
+        """
+        return self._cancel_event.is_set()
 
     async def _ainvoke_hook(self, hook_type: str, *args) -> HookResult | None:
         """Invoke all registered hooks for the given type in registration order.
@@ -443,6 +483,9 @@ class HawiAgent:
         run_id = str(uuid.uuid4())[:8]
         state.run_id = run_id
         start_time = time.time()
+
+        # Clear any previous interrupt state for fresh execution
+        self.clear_interrupt_state()
 
         # Update tool definitions from PluginManager before execution
         defs = self._plugin_manager.get_tool_definitions()
@@ -715,19 +758,45 @@ class HawiAgent:
 
                 # Execute tool calls
                 for tc in tool_calls:
-                    record = await self._execute_tool(tc, state)
-                    state.tool_calls.append(record)
+                    # Check for interrupt before executing tool
+                    if self._check_interrupt():
+                        # Interrupted - stop processing remaining tools
+                        break
+
+                    # Track this tool call as currently executing
+                    self._current_tool_calls.append(tc)
+                    try:
+                        record = await self._execute_tool(tc, state)
+                        state.tool_calls.append(record)
+                        await self._emit_event(
+                            AgentToolResultEvent.create(
+                                run_id=run_id,
+                                tool_call_id=record.tool_call_id,
+                                success=record.result.success,
+                                result_preview=str(record.result.output),
+                                duration_ms=record.duration_ms,
+                                result_obj=record.result,
+                            ),
+                            event_bus,
+                        )
+                    finally:
+                        # Remove from current tool calls
+                        if tc in self._current_tool_calls:
+                            self._current_tool_calls.remove(tc)
+
+                # Check if execution was interrupted
+                if self._check_interrupt():
+                    stop_reason = "interrupted"
                     await self._emit_event(
-                        AgentToolResultEvent.create(
+                        AgentRunStopEvent.create(
                             run_id=run_id,
-                            tool_call_id=record.tool_call_id,
-                            success=record.result.success,
-                            result_preview=str(record.result.output),
-                            duration_ms=record.duration_ms,
-                            result_obj=record.result,
+                            stop_reason=stop_reason,
+                            duration_ms=(time.time() - start_time) * 1000,
+                            usage=cumulative_usage,
                         ),
                         event_bus,
                     )
+                    break
 
                 # Continue loop for next iteration
 

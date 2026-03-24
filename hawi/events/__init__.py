@@ -1,3 +1,4 @@
+
 """
 Hawi Event System
 
@@ -8,6 +9,7 @@ Hawi Event System
 命名规范：
 - Model*Event: 由 Model 产生的事件
 - Agent*Event: 由 Agent 产生的事件
+- Scheduler*Event: 由 Scheduler 产生的事件
 """
 
 from .event import (
@@ -16,6 +18,7 @@ from .event import (
     EventType,
     ModelEventType,
     AgentEventType,
+    SchedulerEventType,
 )
 from .model_events import (
     ModelStreamStartEvent,
@@ -40,6 +43,14 @@ from .agent_events import (
     AgentMessageAddedEvent,
     AgentErrorEvent,
 )
+from .scheduler_events import (
+    SchedulerEnqueueEvent,
+    SchedulerDequeueEvent,
+    SchedulerInterruptEvent,
+    AgentInterruptEvent,
+    SchedulerYieldEvent,
+    SchedulerResumeEvent,
+)
 from .event_bus import (
     EventBus,
     EventHandler,
@@ -59,7 +70,8 @@ __all__ = [
     "EventType",
     "ModelEventType",
     "AgentEventType",
-    # Model (re-exported from hawi.models.message)
+    "SchedulerEventType",
+    # Model
     "ModelStreamStartEvent",
     "ModelStreamStopEvent",
     "ModelContentBlockStartEvent",
@@ -80,6 +92,13 @@ __all__ = [
     "AgentToolResultEvent",
     "AgentMessageAddedEvent",
     "AgentErrorEvent",
+    # Scheduler
+    "SchedulerEnqueueEvent",
+    "SchedulerDequeueEvent",
+    "SchedulerInterruptEvent",
+    "AgentInterruptEvent",
+    "SchedulerYieldEvent",
+    "SchedulerResumeEvent",
     # Dump Manager
     "DumpManager",
 ]

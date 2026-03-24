@@ -272,7 +272,7 @@ class TestPluginManagerClone:
         pm.add_tool(tool)
         pm2 = pm.clone()
         assert len(pm2.get_tools()) == 1
-        assert pm2.get_tool("mock_tool") is not tool  # different instance
+        assert pm2.get_tool("mock_tool") is tool  # same instance (shared)
 
     def test_clone_mask(self):
         pm = PluginManager()
@@ -347,7 +347,7 @@ class TestHawiAgentPluginManagerIntegration:
         assert cloned._plugin_manager is not agent._plugin_manager
         # But it should have the same tools
         assert cloned.plugins.get_tool("mock_tool") is not None
-        assert cloned.plugins.get_tool("mock_tool") is not tool  # Different instance
+        assert cloned.plugins.get_tool("mock_tool") is tool  # Same instance (shared)
 
     def test_agent_with_plugin_factories(self):
         """HawiAgent correctly initializes PluginManager with plugin factories."""
