@@ -4,6 +4,9 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from hawi.models.message import (
+    ContentPart
+)
 from hawi.agent.scheduler import (
     QueueType,
     QueuedMessage,
@@ -60,7 +63,7 @@ class TestQueuedMessage:
         assert preview.endswith("...")
 
     def test_get_content_preview_content_parts(self):
-        content = [{"type": "text", "text": "hello world"}]
+        content:list[ContentPart] = [{"type": "text", "text": "hello world"}]
         msg = QueuedMessage.create(content, QueueType.NORMAL)
         assert msg.get_content_preview() == "hello world"
 
@@ -92,14 +95,17 @@ class TestMessageQueueManager:
         msg1 = qm.enqueue_urgent("first")
         msg2 = qm.enqueue_urgent("second")
         assert qm.get_queue_lengths()["urgent"] == 1
-        assert qm.dequeue_urgent().id == msg2.id
+        urgent_message = qm.dequeue_urgent()
+        assert urgent_message and urgent_message.id == msg2.id
 
     def test_dequeue_order(self):
         qm = MessageQueueManager()
         msg1 = qm.enqueue_high_prio("first")
         msg2 = qm.enqueue_high_prio("second")
-        assert qm.dequeue_high_prio().id == msg1.id
-        assert qm.dequeue_high_prio().id == msg2.id
+        msg = qm.dequeue_high_prio()
+        assert msg and msg.id == msg1.id
+        msg = qm.dequeue_high_prio()
+        assert msg and msg.id == msg2.id
 
     def test_dequeue_empty_returns_none(self):
         qm = MessageQueueManager()
@@ -110,7 +116,8 @@ class TestMessageQueueManager:
     def test_peek_high_prio(self):
         qm = MessageQueueManager()
         msg = qm.enqueue_high_prio("peek me")
-        assert qm.peek_high_prio().id == msg.id
+        peeked = qm.peek_high_prio()
+        assert peeked and peeked.id == msg.id
         assert qm.has_high_prio()  # Should not remove
 
     def test_insert_front_normal(self):
@@ -118,8 +125,10 @@ class TestMessageQueueManager:
         msg1 = qm.enqueue_normal("first")
         msg2 = QueuedMessage.create("second", QueueType.NORMAL)
         qm.insert_front_normal(msg2)
-        assert qm.dequeue_normal().id == msg2.id
-        assert qm.dequeue_normal().id == msg1.id
+        msg = qm.dequeue_normal()
+        assert msg and msg.id == msg2.id
+        msg = qm.dequeue_normal()
+        assert msg and msg.id == msg1.id
 
     def test_get_queue_lengths(self):
         qm = MessageQueueManager()

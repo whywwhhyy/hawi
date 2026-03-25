@@ -304,23 +304,10 @@ class HawiScheduler:
     async def _on_agent_idle(self) -> None:
         """Handle agent idle state.
 
-        Check NORMAL queue and execute next message.
+        Called when agent run stops. Only updates scheduler state,
+        actual message execution is handled by run_forever() main loop.
         """
-        # Check for high priority messages first
-        if self._queue_manager.has_high_prio():
-            msg = self._queue_manager.dequeue_high_prio()
-            if msg:
-                await self._executor.execute(msg)
-                return
-
-        # Then check normal queue
-        if self._queue_manager.has_normal():
-            msg = self._queue_manager.dequeue_normal()
-            if msg:
-                await self._executor.execute(msg)
-                return
-
-        # No messages - scheduler is idle
+        # Just update state, let run_forever handle next message
         self._state = SchedulerState.IDLE
 
     async def _merge_high_prio_to_tool_result(
@@ -439,26 +426,40 @@ class HawiScheduler:
 
         while self._running:
             try:
-                # Check urgent first
+                # Check urgent first (always process, even if busy)
                 if self._queue_manager.has_urgent():
                     msg = self._queue_manager.dequeue_urgent()
                     if msg:
-                        await self._executor.execute(msg)
+                        # Interrupt current execution if any
+                        if not self._executor.is_idle:
+                            await self._executor.interrupt("urgent")
+                        # Start new execution
+                        task = self._executor.execute(msg)
+                        if task:
+                            self._state = SchedulerState.RUNNING
                         continue
 
-                # Check high priority
-                if self._queue_manager.has_high_prio() and self._executor.is_idle:
+                # Check high priority (only when idle)
+                if self._executor.is_idle and self._queue_manager.has_high_prio():
                     msg = self._queue_manager.dequeue_high_prio()
                     if msg:
-                        await self._executor.execute(msg)
+                        task = self._executor.execute(msg)
+                        if task:
+                            self._state = SchedulerState.RUNNING
                         continue
 
                 # Check normal (only when idle)
-                if self._queue_manager.has_normal() and self._executor.is_idle:
+                if self._executor.is_idle and self._queue_manager.has_normal():
                     msg = self._queue_manager.dequeue_normal()
                     if msg:
-                        await self._executor.execute(msg)
+                        task = self._executor.execute(msg)
+                        if task:
+                            self._state = SchedulerState.RUNNING
                         continue
+
+                # Update state to idle if executor is idle
+                if self._executor.is_idle:
+                    self._state = SchedulerState.IDLE
 
                 # No messages - wait
                 await asyncio.sleep(poll_interval)

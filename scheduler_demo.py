@@ -16,13 +16,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import time
 import warnings
 from datetime import datetime
 from typing import Literal
-
-# Interactive REPL
-import readline
 
 # 过滤 Pydantic 警告
 warnings.filterwarnings(
@@ -110,6 +106,7 @@ class SchedulerDemo:
         self.running = False
         self.message_counter = 0
         self.event_log: list[str] = []
+        self._input_queue: asyncio.Queue[str] = asyncio.Queue()
 
         # 订阅事件以显示调度器活动
         self.scheduler.subscribe(self._on_scheduler_event)
@@ -119,26 +116,27 @@ class SchedulerDemo:
         """处理调度器事件。"""
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         if event.type.startswith("scheduler."):
-            self.event_log.append(f"[{timestamp}] {event.type}: {event.message_id if hasattr(event, 'message_id') else ''}")
+            self.event_log.append(f"[{timestamp}] {event.type}")
             # 打印重要事件
             if event.type == "scheduler.enqueue":
-                print(f"  📥 [Scheduler] 消息入队: {event.message_id} ({event.queue_type})")
+                print(f"  📥 消息入队: {event.message_id} ({event.queue_type})")
             elif event.type == "scheduler.interrupt":
-                print(f"  ⚡ [Scheduler] 执行中断: {event.reason}")
+                print(f"  ⚡ 执行中断: {event.reason}")
 
     def _on_agent_event(self, event: Event) -> None:
         """处理 Agent 事件。"""
         if event.type == "agent.run_start":
-            print(f"  ▶️  [Agent] Run 开始: {event.run_id}")
+            print(f"  ▶️  Agent Run 开始: {event.run_id}")
         elif event.type == "agent.run_stop":
-            print(f"  ⏹️  [Agent] Run 结束: {event.stop_reason}")
+            print(f"  ⏹️  Agent Run 结束: {event.stop_reason}")
 
     def show_status(self) -> None:
         """显示当前队列状态。"""
         lengths = self.scheduler.get_queue_lengths()
         state = self.scheduler.state
-        print(f"\n  📊 调度器状态: {state.name}")
-        print(f"     队列长度: 紧急={lengths['urgent']} 高优={lengths['high_prio']} 普通={lengths['normal']}")
+        exec_state = self.scheduler._executor.state
+        print(f"\n  📊 调度器: {state.name} | 执行器: {exec_state.name}")
+        print(f"     队列: 紧急={lengths['urgent']} 高优={lengths['high_prio']} 普通={lengths['normal']}")
         print()
 
     def enqueue_message(self, content: str, queue: Literal["normal", "high_prio", "urgent"], show_confirm: bool = True) -> str | None:
@@ -148,43 +146,22 @@ class SchedulerDemo:
             self.message_counter += 1
             if show_confirm:
                 emoji = {"normal": "📨", "high_prio": "🔼", "urgent": "🔴"}
-                print(f"  {emoji[queue]} 已入队 [{queue}]: {content[:50]}{'...' if len(content) > 50 else ''}")
+                preview = content[:50] + ('...' if len(content) > 50 else '')
+                print(f"  {emoji[queue]} [{queue}] {preview}")
             return msg_id
         except Exception as e:
             print(f"  ❌ 入队失败: {e}")
             return None
 
-    async def run_scheduler_loop(self) -> None:
+    async def run_scheduler(self) -> None:
         """在后台运行调度器循环。"""
-        self.running = True
         print("  🚀 调度器已启动")
-        await self.scheduler.run_forever(poll_interval=0.5)
-
-    def stop_scheduler(self) -> None:
-        """停止调度器。"""
-        self.scheduler.stop()
-        self.running = False
-        print("  🛑 调度器已停止")
-
-    async def process_one(self) -> None:
-        """处理队列中的下一条消息。"""
-        lengths = self.scheduler.get_queue_lengths()
-        total = sum(lengths.values())
-        if total == 0:
-            print("  ℹ️  队列为空")
-            return
-
-        # 简单的单次处理：检查队列并执行
-        if lengths["urgent"] > 0:
-            print("  ⚡ 处理紧急消息...")
-        elif lengths["high_prio"] > 0:
-            print("  🔼 处理高优先级消息...")
-        elif lengths["normal"] > 0:
-            print("  📨 处理普通消息...")
-
-        # 注意：实际处理由调度器在 run_forever 中完成
-        # 这里我们只是等待一下让调度器有机会执行
-        await asyncio.sleep(1)
+        try:
+            await self.scheduler.run_forever(poll_interval=0.5)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            print("  🛑 调度器已停止")
 
     def show_help(self) -> None:
         """显示帮助信息。"""
@@ -193,15 +170,10 @@ class SchedulerDemo:
 
   队列操作:
     n <消息>      - 入队普通消息 (normal)
-    h <消息>      - 入队高优先级消息 (high_prio)
+    h <消息>      - 入队高优先级消息 (high_prio)  
     u <消息>      - 入队紧急消息 (urgent) - 会打断当前执行
     status        - 显示队列状态
     clear [queue] - 清空队列 (normal/high_prio/urgent/all)
-
-  调度控制:
-    run           - 启动调度器循环 (处理队列消息)
-    stop          - 停止调度器
-    step          - 单步执行 (处理一条消息)
 
   信息展示:
     events        - 显示最近的事件日志
@@ -214,32 +186,47 @@ class SchedulerDemo:
     /model        - 显示当前模型
 """)
 
-    async def interactive_loop(self) -> None:
-        """交互式命令循环。"""
-        print("\n" + "=" * 50)
-        print("  🎯 HawiScheduler 交互式演示")
-        print("=" * 50)
-        print("\n输入 'help' 查看可用命令\n")
-
-        scheduler_task: asyncio.Task | None = None
-
+    async def read_input(self) -> None:
+        """在后台读取用户输入。"""
+        loop = asyncio.get_event_loop()
+        
         while True:
             try:
-                prompt_str = "scheduler> " if not self.running else "(running)> "
-                user_input = input(prompt_str).strip()
+                # 使用 run_in_executor 让 input 不会阻塞事件循环
+                is_idle = self.scheduler._executor.is_idle
+                prompt_str = "scheduler> " if is_idle else "(running)> "
+                user_input = await loop.run_in_executor(
+                    None, lambda: input(prompt_str)
+                )
+                await self._input_queue.put(user_input)
+            except EOFError:
+                await self._input_queue.put("exit")
+                break
+            except KeyboardInterrupt:
+                await self._input_queue.put("exit")
+                break
+            except Exception as e:
+                # 其他错误，打印并继续
+                print(f"\n  输入错误: {e}")
+                await asyncio.sleep(0.1)
 
-                if not user_input:
+    async def process_commands(self) -> None:
+        """处理用户命令。"""
+        while self.running:
+            try:
+                # 等待输入（带超时，以便定期更新状态）
+                try:
+                    user_input = await asyncio.wait_for(
+                        self._input_queue.get(), timeout=0.5
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                if not user_input.strip():
                     continue
 
                 # 退出命令
                 if user_input.lower() in ["exit", "quit", "q"]:
-                    if scheduler_task and not scheduler_task.done():
-                        self.stop_scheduler()
-                        scheduler_task.cancel()
-                        try:
-                            await scheduler_task
-                        except asyncio.CancelledError:
-                            pass
                     break
 
                 # 帮助
@@ -278,30 +265,6 @@ class SchedulerDemo:
                             print(f"  ❌ 未知队列类型: {queue}")
                     continue
 
-                # 调度控制
-                if user_input == "run":
-                    if scheduler_task is None or scheduler_task.done():
-                        scheduler_task = asyncio.create_task(self.run_scheduler_loop())
-                        print("  ▶️  调度器正在后台运行...")
-                    else:
-                        print("  ℹ️  调度器已在运行")
-                    continue
-
-                if user_input == "stop":
-                    self.stop_scheduler()
-                    if scheduler_task and not scheduler_task.done():
-                        scheduler_task.cancel()
-                        try:
-                            await scheduler_task
-                        except asyncio.CancelledError:
-                            pass
-                    scheduler_task = None
-                    continue
-
-                if user_input == "step":
-                    await self.process_one()
-                    continue
-
                 # 信息展示
                 if user_input == "events":
                     print("\n  📜 最近事件:")
@@ -329,15 +292,43 @@ class SchedulerDemo:
                 # 默认：作为普通消息入队
                 self.enqueue_message(user_input, "normal")
 
-            except EOFError:
-                break
-            except KeyboardInterrupt:
-                print("\n  使用 'exit' 命令退出")
-                continue
             except Exception as e:
                 print(f"  ❌ 错误: {e}")
-                import traceback
-                traceback.print_exc()
+
+    async def interactive_loop(self) -> None:
+        """交互式命令循环。"""
+        print("\n" + "=" * 50)
+        print("  🎯 HawiScheduler 交互式演示")
+        print("=" * 50)
+        print("\n调度器在后台自动运行，直接输入消息即可入队")
+        print("输入 'help' 查看可用命令\n")
+
+        # 先设置 running 标志
+        self.running = True
+        
+        # 启动调度器（后台任务）
+        scheduler_task = asyncio.create_task(self.run_scheduler())
+        
+        # 启动输入读取（后台任务）
+        input_task = asyncio.create_task(self.read_input())
+        
+        # 处理命令（主循环）
+        try:
+            await self.process_commands()
+        finally:
+            # 清理
+            self.running = False
+            self.scheduler.stop()
+            scheduler_task.cancel()
+            input_task.cancel()
+            try:
+                await scheduler_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await input_task
+            except asyncio.CancelledError:
+                pass
 
 
 async def auto_demo(scheduler: HawiScheduler) -> None:
@@ -354,7 +345,7 @@ async def auto_demo(scheduler: HawiScheduler) -> None:
     print()
 
     # 启动调度器
-    scheduler_task = asyncio.create_task(demo.run_scheduler_loop())
+    scheduler_task = asyncio.create_task(demo.run_scheduler())
     await asyncio.sleep(0.5)
 
     # 演示 1: 普通消息入队
@@ -362,20 +353,20 @@ async def auto_demo(scheduler: HawiScheduler) -> None:
     demo.enqueue_message("请介绍一下 Python 编程语言", "normal")
     demo.enqueue_message("Python 的列表和元组有什么区别", "normal")
     demo.show_status()
-    await asyncio.sleep(3)
+    await asyncio.sleep(5)
 
-    # 演示 2: 高优先级消息
+    # 演示 2: 高优先级消息（如果正在执行，会在工具调用后插入）
     print("\n📌 演示 2: 高优先级消息插队")
     demo.enqueue_message("[重要] 请先回答这个问题: 什么是装饰器?", "high_prio")
     demo.show_status()
-    await asyncio.sleep(3)
+    await asyncio.sleep(5)
 
     # 演示 3: 紧急消息（打断）
     print("\n📌 演示 3: 紧急消息打断当前执行")
     print("   (如果有正在执行的普通任务会被中断)")
     demo.enqueue_message("[紧急] 停止当前任务，回答这个紧急问题: 2+2=?", "urgent")
     demo.show_status()
-    await asyncio.sleep(3)
+    await asyncio.sleep(5)
 
     # 演示 4: 批量入队
     print("\n📌 演示 4: 批量入队展示优先级处理")
@@ -386,12 +377,12 @@ async def auto_demo(scheduler: HawiScheduler) -> None:
     demo.show_status()
 
     print("\n⏳ 等待队列处理...")
-    await asyncio.sleep(10)
+    await asyncio.sleep(15)
 
     # 结束
     print("\n📌 演示结束")
     demo.show_status()
-    demo.stop_scheduler()
+    demo.scheduler.stop()
     scheduler_task.cancel()
     try:
         await scheduler_task
@@ -430,7 +421,7 @@ def main():
         print(f"   流式输出: 已启用")
     print()
 
-    # 设置事件打印机
+    # 设置事件打印机（实时输出）
     printer = create_printer("auto", streaming=streaming)
     scheduler.agent.subscribe(printer.handle)
 

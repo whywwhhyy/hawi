@@ -1,4 +1,3 @@
-
 """Agent executor for HawiScheduler.
 
 Manages agent execution lifecycle and interruption.
@@ -46,6 +45,7 @@ class AgentExecutor:
         self._state = SchedulerState.IDLE
         self._current_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        self._last_result: AgentRunResult | None = None
 
     @property
     def state(self) -> SchedulerState:
@@ -55,12 +55,19 @@ class AgentExecutor:
     @property
     def is_idle(self) -> bool:
         """Check if executor is idle."""
-        return self._state == SchedulerState.IDLE
+        return self._state == SchedulerState.IDLE and (
+            self._current_task is None or self._current_task.done()
+        )
 
     @property
     def is_running(self) -> bool:
         """Check if executor is running."""
         return self._state == SchedulerState.RUNNING
+
+    @property
+    def last_result(self) -> AgentRunResult | None:
+        """Get last execution result."""
+        return self._last_result
 
     def _set_state(self, state: SchedulerState) -> None:
         """Update execution state."""
@@ -76,7 +83,7 @@ class AgentExecutor:
             List of interrupted tool call IDs
         """
         async with self._lock:
-            if self._state != SchedulerState.RUNNING:
+            if self._state == SchedulerState.IDLE:
                 return []
 
             self._set_state(SchedulerState.INTERRUPTING)
@@ -95,49 +102,67 @@ class AgentExecutor:
             # Cancel current task if running
             if self._current_task and not self._current_task.done():
                 self._current_task.cancel()
-                try:
-                    await self._current_task
-                except asyncio.CancelledError:
-                    pass
 
             self._set_state(SchedulerState.IDLE)
             return interrupted_ids
 
-    async def execute(self, message: QueuedMessage) -> AgentRunResult | None:
-        """Execute a queued message.
+    def execute(self, message: QueuedMessage) -> asyncio.Task | None:
+        """Execute a queued message (non-blocking).
+
+        This method starts the execution as a background task and returns
+        immediately, allowing the scheduler to continue processing.
 
         Args:
             message: Message to execute
 
         Returns:
-            Agent run result or None if execution failed
+            Task object for the execution, or None if couldn't start
         """
-        async with self._lock:
-            # Clear any previous interrupt state
-            self._agent.clear_interrupt_state()
+        if not self.is_idle:
+            return None
 
-            self._set_state(SchedulerState.RUNNING)
+        # Clear any previous interrupt state
+        self._agent.clear_interrupt_state()
+        self._set_state(SchedulerState.RUNNING)
+        self._last_result = None
 
+        # Create and start task
+        self._current_task = asyncio.create_task(
+            self._execute_with_error_handling(message)
+        )
+        return self._current_task
+
+    async def _execute_with_error_handling(self, message: QueuedMessage) -> None:
+        """Execute message with error handling."""
+        try:
+            result = await self._agent.arun(message.content)
+            self._last_result = result
+        except asyncio.CancelledError:
+            # Execution was cancelled (interrupted)
+            self._last_result = None
+        except Exception as e:
+            # Handle error through scheduler error hook
+            self._last_result = None
+            action = await self._scheduler._on_agent_error(e, message)
+            if action == ErrorAction.RETRY:
+                # Retry execution
+                await self._execute_with_error_handling(message)
+                return
+            elif action == ErrorAction.ABORT:
+                raise
+            # CONTINUE - just finish
+        finally:
+            self._set_state(SchedulerState.IDLE)
+
+    async def wait_for_complete(self) -> AgentRunResult | None:
+        """Wait for current execution to complete.
+
+        Returns:
+            Last execution result
+        """
+        if self._current_task and not self._current_task.done():
             try:
-                # Create task for agent execution
-                self._current_task = asyncio.create_task(
-                    self._agent.arun(message.content)
-                )
-                result = await self._current_task
-                return result
+                await self._current_task
             except asyncio.CancelledError:
-                # Execution was cancelled (interrupted)
-                return None
-            except Exception as e:
-                # Handle error through scheduler error hook
-                action = await self._scheduler._on_agent_error(e, message)
-                if action == ErrorAction.RETRY:
-                    # Retry execution
-                    return await self.execute(message)
-                elif action == ErrorAction.ABORT:
-                    raise
-                else:  # CONTINUE
-                    return None
-            finally:
-                self._current_task = None
-                self._set_state(SchedulerState.IDLE)
+                pass
+        return self._last_result
