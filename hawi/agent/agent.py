@@ -27,6 +27,7 @@ from hawi.models import (
     ToolDefinition,
     model_registry,
 )
+from hawi.models.message import MessageResponse
 from hawi.plugin import HawiPlugin
 from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
@@ -314,16 +315,50 @@ class HawiAgent:
         """
         return self._cancel_event.is_set()
 
-    async def _ainvoke_hook(self, hook_type: str, *args) -> HookResult | None:
-        """Invoke all registered hooks for the given type in registration order.
-
-        Executes the chain until a hook returns a non-None ``HookResult``, then
-        stops and returns it. Returns ``None`` if no hook signals a control action.
-
-        Exceptions from hooks propagate normally and interrupt agent execution.
-        """
+    async def _invoke_session_hook(self, hook_type: str, ctx: HookContext) -> HookResult | None:
+        """Invoke before/after_session and before/after_conversation hooks: (agent, ctx)."""
         for hook in self._plugin_manager.get_hooks(hook_type):
-            result = hook(*args)
+            result = hook(self, ctx)
+            if inspect.isawaitable(result):
+                result = await result
+            if result is not None:
+                return result
+        return None
+
+    async def _invoke_before_model_call(self, model: Model, ctx: HookContext) -> HookResult | None:
+        """Invoke before_model_call hook: (agent, model, ctx)."""
+        for hook in self._plugin_manager.get_hooks("before_model_call"):
+            result = hook(self, model, ctx)
+            if inspect.isawaitable(result):
+                result = await result
+            if result is not None:
+                return result
+        return None
+
+    async def _invoke_after_model_call(self, response: "MessageResponse", ctx: HookContext) -> HookResult | None:
+        """Invoke after_model_call hook: (agent, response, ctx)."""
+        for hook in self._plugin_manager.get_hooks("after_model_call"):
+            result = hook(self, response, ctx)
+            if inspect.isawaitable(result):
+                result = await result
+            if result is not None:
+                return result
+        return None
+
+    async def _invoke_before_tool_calling(self, tool_name: str, arguments: dict, ctx: HookContext) -> HookResult | None:
+        """Invoke before_tool_calling hook: (agent, tool_name, arguments, ctx)."""
+        for hook in self._plugin_manager.get_hooks("before_tool_calling"):
+            result = hook(self, tool_name, arguments, ctx)
+            if inspect.isawaitable(result):
+                result = await result
+            if result is not None:
+                return result
+        return None
+
+    async def _invoke_after_tool_calling(self, tool_name: str, arguments: dict, tool_result: ToolResult, ctx: HookContext) -> HookResult | None:
+        """Invoke after_tool_calling hook: (agent, tool_name, arguments, result, ctx)."""
+        for hook in self._plugin_manager.get_hooks("after_tool_calling"):
+            result = hook(self, tool_name, arguments, tool_result, ctx)
             if inspect.isawaitable(result):
                 result = await result
             if result is not None:
@@ -477,7 +512,6 @@ class HawiAgent:
     ) -> AgentRunResult:
         """Execute agent and return result (pure EventBus-driven)."""
 
-        m = model
         policy = policy
         state = _ExecutionState()
         run_id = str(uuid.uuid4())[:8]
@@ -522,18 +556,20 @@ class HawiAgent:
         )
 
         # before_session hook
-        _hr = await self._ainvoke_hook("before_session", self, HookContext(run_id=run_id, iteration=0))
+        _hr = await self._invoke_session_hook("before_session", HookContext(run_id=run_id, iteration=0))
         if _hr and _hr.action == "abort":
             state.should_stop = True
 
         # before_conversation hook
         if not state.should_stop:
-            _hr = await self._ainvoke_hook("before_conversation", self, HookContext(run_id=run_id, iteration=0))
+            _hr = await self._invoke_session_hook("before_conversation", HookContext(run_id=run_id, iteration=0))
             if _hr and _hr.action == "abort":
                 state.should_stop = True
 
         try:
             while not state.should_stop:
+                m = model  # reset per-iteration model (replace_model only affects one call)
+
                 # Check max iterations
                 if self._max_iterations is not None and state.iteration >= self._max_iterations:
                     err = MaxIterationsError(f"Maximum iterations ({self._max_iterations}) reached")
@@ -547,13 +583,30 @@ class HawiAgent:
                 state.iteration += 1
 
                 # before_model_call hook
-                _hr = await self._ainvoke_hook(
-                    "before_model_call", self, self._context, m,
-                    HookContext(run_id=run_id, iteration=state.iteration, usage=cumulative_usage),
+                _hr = await self._invoke_before_model_call(
+                    m,
+                    HookContext(run_id=run_id, iteration=state.iteration),
                 )
-                if _hr and _hr.action == "abort":
-                    state.should_stop = True
-                    break
+                if _hr:
+                    if _hr.action == "abort":
+                        state.should_stop = True
+                        break
+                    elif _hr.action == "replace_model" and _hr.model is not None:
+                        m = _hr.model  # use replacement model for this iteration only
+                    elif _hr.action == "restart_turn":
+                        continue  # skip model call, go to next loop iteration
+                    elif _hr.action == "reinvoke" and _hr.message is not None:
+                        self._context.add_user_message(_hr.message)
+                        await self._emit_event(
+                            AgentRunStopEvent.create(
+                                run_id=run_id,
+                                stop_reason="hook_reinvoke",
+                                duration_ms=(time.time() - start_time) * 1000,
+                                usage=cumulative_usage,
+                            ),
+                            event_bus,
+                        )
+                        return await self.arun(model=model, event_bus=event_bus, streaming=streaming)
 
                 # Model stream start
                 request_id = f"{run_id}-{state.iteration}"
@@ -704,7 +757,6 @@ class HawiAgent:
                 response_content: list[ContentPart] = content_parts
 
                 # Build response object for after_model_call hook
-                from hawi.models.message import MessageResponse
                 response = MessageResponse(
                     id=request_id,
                     role="assistant",
@@ -714,18 +766,29 @@ class HawiAgent:
                 )
                 
                 # after_model_call hook
-                _hr = await self._ainvoke_hook(
-                    "after_model_call", self, self._context, response,
+                _hr = await self._invoke_after_model_call(
+                    response,
                     HookContext(
                         run_id=run_id,
                         iteration=state.iteration,
                         duration_ms=(time.time() - model_call_start) * 1000,
-                        usage=usage,
-                        stop_reason=stop_reason,
                     ),
                 )
-                if _hr and _hr.action == "abort":
-                    state.should_stop = True
+                if _hr:
+                    if _hr.action == "abort":
+                        state.should_stop = True
+                    elif _hr.action == "reinvoke" and _hr.message is not None:
+                        self._context.add_user_message(_hr.message)
+                        await self._emit_event(
+                            AgentRunStopEvent.create(
+                                run_id=run_id,
+                                stop_reason="hook_reinvoke",
+                                duration_ms=(time.time() - start_time) * 1000,
+                                usage=cumulative_usage,
+                            ),
+                            event_bus,
+                        )
+                        return await self.arun(model=model, event_bus=event_bus, streaming=streaming)
 
                 # Add assistant message to context
                 # tool_calls are now included in content as ToolCallPart items
@@ -843,14 +906,13 @@ class HawiAgent:
                 run_id=run_id,
                 iteration=state.iteration,
                 duration_ms=(time.time() - start_time) * 1000,
-                usage=cumulative_usage,
                 error=state.error if isinstance(state.error, Exception) else None,
             )
             # after_conversation hook
-            await self._ainvoke_hook("after_conversation", self, _final_ctx)
+            await self._invoke_session_hook("after_conversation", _final_ctx)
 
             # after_session hook
-            await self._ainvoke_hook("after_session", self, _final_ctx)
+            await self._invoke_session_hook("after_session", _final_ctx)
 
         # Build and return result
         duration_ms = (time.time() - start_time) * 1000
@@ -1081,7 +1143,7 @@ class HawiAgent:
             tool_call_id=tool_call_id,
             tool=tool,
         )
-        _hr = await self._ainvoke_hook("before_tool_calling", self, tool_name, arguments, _before_ctx)
+        _hr = await self._invoke_before_tool_calling(tool_name, arguments, _before_ctx)
         if _hr and _hr.action == "skip":
             result = _hr.tool_result or ToolResult(success=False, error="Hook skipped tool without providing a result")
         elif tool is None:
@@ -1163,8 +1225,8 @@ class HawiAgent:
         duration_ms = (time.time() - start_time) * 1000
 
         # after_tool_calling hook
-        await self._ainvoke_hook(
-            "after_tool_calling", self, tool_name, arguments, result,
+        await self._invoke_after_tool_calling(
+            tool_name, arguments, result,
             HookContext(
                 run_id=state.run_id,
                 iteration=state.iteration,

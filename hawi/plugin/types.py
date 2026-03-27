@@ -6,7 +6,6 @@ from .hook_context import HookContext, HookResult
 
 if TYPE_CHECKING:
     from hawi.agent import HawiAgent
-    from hawi.agent.context import AgentContext
     from hawi.models import Model
     from hawi.models import MessageResponse
 
@@ -22,8 +21,8 @@ BeforeSessionMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookRe
 AfterSessionMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]
 BeforeConversationMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]
 AfterConversationMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]
-BeforeModelCallMethod:TypeAlias = Callable[[Any, "HawiAgent", "AgentContext", "Model", HookContext], HookReturnType]
-AfterModelCallMethod:TypeAlias = Callable[[Any, "HawiAgent", "AgentContext", "MessageResponse", HookContext], HookReturnType]
+BeforeModelCallMethod:TypeAlias = Callable[[Any, "HawiAgent", "Model", HookContext], HookReturnType]
+AfterModelCallMethod:TypeAlias = Callable[[Any, "HawiAgent", "MessageResponse", HookContext], HookReturnType]
 BeforeToolCallMethod:TypeAlias = Callable[[Any, "HawiAgent", str, dict, HookContext], HookReturnType]
 AfterToolCallMethod:TypeAlias = Callable[[Any, "HawiAgent", str, dict, ToolResult, HookContext], HookReturnType]
 

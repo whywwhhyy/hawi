@@ -18,6 +18,20 @@ R = TypeVar("R")
 
 
 def before_session(func: BeforeSessionMethod) -> BeforeSessionMethod:
+    """Hook called once at the start of an agent session (before any run).
+
+    Args:
+        agent: The HawiAgent instance.
+        ctx: HookContext with run_id and iteration=0.
+
+    Context operations (safe at this point):
+        Modifications to ``agent.context`` take effect before the first
+        model call of the session.
+
+    Returns:
+        - ``None`` to continue normally.
+        - ``HookResult.abort(reason)`` to terminate the agent run.
+    """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_session")
     return func
@@ -30,6 +44,20 @@ def after_session(func: AfterSessionMethod) -> AfterSessionMethod:
 
 
 def before_conversation(func: BeforeConversationMethod) -> BeforeConversationMethod:
+    """Hook called at the start of each conversation turn.
+
+    Args:
+        agent: The HawiAgent instance.
+        ctx: HookContext with run_id and iteration=0.
+
+    Context operations (safe at this point):
+        Modifications to ``agent.context`` take effect before the first
+        model call of this conversation.
+
+    Returns:
+        - ``None`` to continue normally.
+        - ``HookResult.abort(reason)`` to terminate the agent run.
+    """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_conversation")
     return func
@@ -42,15 +70,24 @@ def after_conversation(func: AfterConversationMethod) -> AfterConversationMethod
 
 
 def before_model_call(func: BeforeModelCallMethod) -> BeforeModelCallMethod:
-    """Hook called before model invocation.
-
-    Can be used to modify context or add per-turn system prompt instructions.
+    """Hook called before each model invocation.
 
     Args:
-        agent: The HawiAgent instance
-        context: The AgentContext
-        model: The Model to be called
-        ctx: HookContext with run_id, iteration, cumulative usage
+        agent: The HawiAgent instance. Access context via ``agent.context``.
+        model: The Model about to be called.
+        ctx: HookContext with run_id and iteration.
+
+    Context operations (safe at this point):
+        Modifications to ``agent.context`` (inject, collapse, truncate,
+        add_user_message, etc.) take effect in the upcoming model call.
+
+    Returns:
+        - ``None`` to continue normally.
+        - ``HookResult.replace_model(model)`` to use a different model for
+          this call only.
+        - ``HookResult.restart_turn()`` to skip this model call and continue
+          to the next loop iteration.
+        - ``HookResult.abort(reason)`` to terminate the agent run.
     """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_model_call")
@@ -58,15 +95,29 @@ def before_model_call(func: BeforeModelCallMethod) -> BeforeModelCallMethod:
 
 
 def after_model_call(func: AfterModelCallMethod) -> AfterModelCallMethod:
-    """Hook called after model invocation.
-
-    Can be used to modify the response, track latency, or enforce budgets.
+    """Hook called after each model invocation, before the assistant message
+    is written to context.
 
     Args:
-        agent: The HawiAgent instance
-        context: The AgentContext
-        response: The MessageResponse from the model
-        ctx: HookContext with run_id, iteration, duration_ms, usage, stop_reason
+        agent: The HawiAgent instance. Access context via ``agent.context``.
+        response: The MessageResponse from the model (contains stop_reason,
+            usage, content).
+        ctx: HookContext with run_id, iteration, and duration_ms.
+
+    Timing note:
+        The assistant message has NOT yet been added to ``agent.context``
+        at this point. It will be added immediately after this hook returns.
+
+    Context operations (safe at this point):
+        You may call ``agent.context`` operations here; they will take effect
+        before the assistant message is written.
+
+    Returns:
+        - ``None`` to continue normally.
+        - ``HookResult.reinvoke(message)`` to append a message to context,
+          stop the current run (stop_reason ``"hook_reinvoke"``), and
+          re-invoke the agent with the new message.
+        - ``HookResult.abort(reason)`` to terminate the agent run.
     """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_model_call")
@@ -76,13 +127,27 @@ def after_model_call(func: AfterModelCallMethod) -> AfterModelCallMethod:
 def before_tool_calling(func: BeforeToolCallMethod) -> BeforeToolCallMethod:
     """Hook called before tool execution.
 
-    Return ``HookResult.skip(result)`` to bypass the tool and use a synthetic result.
-
     Args:
-        agent: The HawiAgent instance
-        tool_name: Name of the tool being called
-        arguments: Dict of arguments (mutable — changes are reflected in the call)
-        ctx: HookContext with run_id, iteration, tool_call_id, tool object
+        agent: The HawiAgent instance.
+        tool_name: Name of the tool being called (always present, even if
+            the tool object is not found).
+        arguments: Mutable dict of arguments. Changes made here are
+            reflected in the actual tool call.
+        ctx: HookContext with run_id, iteration, tool_call_id, and tool
+            (the AgentTool object, or None if the tool was not found).
+
+    Note:
+        ``tool_name`` is always a string. ``ctx.tool`` is the resolved
+        AgentTool object and may be None if the tool name is unrecognised.
+
+    Context operations (safe at this point):
+        Modifications to ``agent.context`` take effect before the tool runs.
+
+    Returns:
+        - ``None`` to continue normally.
+        - ``HookResult.skip(result)`` to bypass tool execution and use
+          ``result`` as the synthetic tool output.
+        - ``HookResult.abort(reason)`` to terminate the agent run.
     """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "before_tool_calling")
@@ -90,16 +155,29 @@ def before_tool_calling(func: BeforeToolCallMethod) -> BeforeToolCallMethod:
 
 
 def after_tool_calling(func: AfterToolCallMethod) -> AfterToolCallMethod:
-    """Hook called after tool execution.
-
-    Can be used to transform the result, cache it, or collect statistics.
+    """Hook called after tool execution, before the tool result is written
+    to context.
 
     Args:
-        agent: The HawiAgent instance
-        tool_name: Name of the tool that was called
-        arguments: Dict of arguments used
-        result: ToolResult (mutable — changes are reflected in the conversation)
-        ctx: HookContext with run_id, iteration, tool_call_id, tool, duration_ms
+        agent: The HawiAgent instance.
+        tool_name: Name of the tool that was called.
+        arguments: Dict of arguments that were used.
+        result: Mutable ToolResult. Changes made here are reflected in
+            the tool result written to context.
+        ctx: HookContext with run_id, iteration, tool_call_id, tool, and
+            duration_ms.
+
+    Timing note:
+        The tool result has NOT yet been added to ``agent.context`` at this
+        point. It will be added immediately after this hook returns.
+
+    Context operations (safe at this point):
+        Modifications to ``agent.context`` take effect before the tool
+        result is written.
+
+    Returns:
+        - ``None`` to continue normally.
+        - ``HookResult.abort(reason)`` to terminate the agent run.
     """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_tool_calling")

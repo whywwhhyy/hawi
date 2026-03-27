@@ -29,7 +29,6 @@ def make_ctx(**kwargs: str | int | float | None) -> HookContext:
     # Extract values to handle type conversion properly
     tool_call_id_val = kwargs.get("tool_call_id")
     duration_ms_val = kwargs.get("duration_ms")
-    stop_reason_val = kwargs.get("stop_reason")
     
     return HookContext(
         run_id=kwargs.get("run_id", "test-run"),  # type: ignore[arg-type]
@@ -37,8 +36,6 @@ def make_ctx(**kwargs: str | int | float | None) -> HookContext:
         tool_call_id=str(tool_call_id_val) if tool_call_id_val is not None else None,
         tool=None,  # type: ignore[arg-type]
         duration_ms=float(duration_ms_val) if duration_ms_val is not None else None,
-        usage=None,  # type: ignore[arg-type]
-        stop_reason=str(stop_reason_val) if stop_reason_val is not None else None,
         error=None,  # type: ignore[arg-type]
     )
 
@@ -470,7 +467,7 @@ class TestHookChain:
 
         agent = HawiAgent(model=MagicMock(), plugins=[PluginA(), PluginB()])
         ctx = make_ctx()
-        await agent._ainvoke_hook("before_session", MagicMock(), ctx)
+        await agent._invoke_session_hook("before_session", ctx)
 
         assert calls == ["A", "B"]
 
@@ -494,7 +491,7 @@ class TestHookChain:
 
         agent = HawiAgent(model=MagicMock(), plugins=[PluginA(), PluginB()])
         ctx = make_ctx()
-        result = await agent._ainvoke_hook("before_tool_calling", MagicMock(), "tool", {}, ctx)
+        result = await agent._invoke_before_tool_calling("tool", {}, ctx)
 
         assert calls == ["A"]  # B was not called
         assert result is not None
@@ -520,7 +517,7 @@ class TestHookChain:
                 return None
 
         agent = HawiAgent(model=MagicMock(), plugins=[PluginA(), PluginB()])
-        result = await agent._ainvoke_hook("before_session", MagicMock(), make_ctx())
+        result = await agent._invoke_session_hook("before_session", make_ctx())
 
         assert calls == ["A", "B"]
         assert result is None
@@ -537,7 +534,7 @@ class TestHookChain:
 
         agent = HawiAgent(model=MagicMock(), plugins=[BadPlugin()])
         with pytest.raises(ValueError, match="hook error"):
-            await agent._ainvoke_hook("before_session", MagicMock(), make_ctx())
+            await agent._invoke_session_hook("before_session", make_ctx())
 
 
 class TestHookResult:
