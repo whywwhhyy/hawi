@@ -1,6 +1,7 @@
 """DeepSeekAnthropicModel integration tests.
 
 Tests the DeepSeek model implementation using Anthropic-compatible API.
+Uses Model Registry for model creation.
 """
 
 import pytest
@@ -8,14 +9,19 @@ import pytest
 from hawi.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration import get_deepseek_api_key
+from test.integration.models import has_factory, create_model, skip_on_rate_limit
 
-# Check if API key is available
-DEEPSEEK_API_KEY = get_deepseek_api_key()
-HAS_DEEPSEEK_KEY = DEEPSEEK_API_KEY is not None and DEEPSEEK_API_KEY.strip() != ""
+# Note: DeepSeek Anthropic models use the reasoner-openai factory which returns Anthropic format
+# Check the models.yaml for actual factory names
+DEEPSEEK_CHAT_FACTORY = "deepseek-chat-openai"  # Uses Anthropic format in test
+DEEPSEEK_REASONER_FACTORY = "deepseek-reasoner-openai"
 
-# Skip reason for tests requiring API key
-SKIP_REASON = "DeepSeek API key not found (set DEEPSEEK_API_KEY or configure models.yaml)"
+# Check if factories are available
+HAS_DEEPSEEK_CHAT = has_factory(DEEPSEEK_CHAT_FACTORY)
+HAS_DEEPSEEK_REASONER = has_factory(DEEPSEEK_REASONER_FACTORY)
+
+# Skip reason for tests requiring factory
+SKIP_REASON = f"Factory '{DEEPSEEK_CHAT_FACTORY}' not found in models.yaml"
 
 
 def _create_user_message(content: str) -> Message:
@@ -177,26 +183,21 @@ class TestDeepSeekAnthropicUnit:
         assert "[文档内容]" in content[1]["text"]
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK_CHAT, reason=SKIP_REASON)
 class TestDeepSeekAnthropicIntegration:
     """Integration tests requiring real DeepSeek API access."""
 
     @pytest.fixture
     def model(self) -> DeepSeekAnthropicModel:
-        """Create a DeepSeek Anthropic model instance."""
-        return DeepSeekAnthropicModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek Anthropic model instance from registry."""
+        return create_model(DEEPSEEK_CHAT_FACTORY)
 
     @pytest.fixture
     def reasoner_model(self) -> DeepSeekAnthropicModel:
-        """Create a DeepSeek Reasoner model instance."""
-        return DeepSeekAnthropicModel(
-            model_id="deepseek-reasoner",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek Reasoner model instance from registry."""
+        return create_model(DEEPSEEK_REASONER_FACTORY)
 
+    @skip_on_rate_limit
     def test_simple_chat_completion(self, model: DeepSeekAnthropicModel):
         """Test basic chat completion."""
         response = model.invoke(
@@ -213,6 +214,7 @@ class TestDeepSeekAnthropicIntegration:
         assert response.usage["input_tokens"] > 0
         assert response.usage["output_tokens"] > 0
 
+    @skip_on_rate_limit
     def test_reasoner_chat_completion(self, reasoner_model: DeepSeekAnthropicModel):
         """Test Reasoner model chat completion with reasoning."""
         response = reasoner_model.invoke(
@@ -225,6 +227,7 @@ class TestDeepSeekAnthropicIntegration:
         # Reasoner model may have reasoning content
         assert response.usage is not None
 
+    @skip_on_rate_limit
     def test_streaming_response(self, model: DeepSeekAnthropicModel):
         """Test streaming response."""
         events = list(model.invoke(
@@ -237,6 +240,7 @@ class TestDeepSeekAnthropicIntegration:
 
         assert len(content_events) > 0
 
+    @skip_on_rate_limit
     def test_tool_call_formatting(self, model: DeepSeekAnthropicModel):
         """Test tool call request formatting."""
         from hawi.models.message import ToolDefinition
@@ -269,6 +273,7 @@ class TestDeepSeekAnthropicIntegration:
             assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
+    @skip_on_rate_limit
     def test_multi_turn_conversation(self, model: DeepSeekAnthropicModel):
         """Test multi-turn conversation."""
         messages = [
@@ -290,18 +295,16 @@ class TestDeepSeekAnthropicIntegration:
         assert "Alice" in response2_content[0].get("text", "")
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK_REASONER, reason=f"Factory '{DEEPSEEK_REASONER_FACTORY}' not found")
 class TestDeepSeekAnthropicReasonerMultiTurn:
     """Tests for Reasoner model multi-turn with reasoning content."""
 
     @pytest.fixture
     def reasoner_model(self) -> DeepSeekAnthropicModel:
-        """Create a DeepSeek Reasoner model."""
-        return DeepSeekAnthropicModel(
-            model_id="deepseek-reasoner",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek Reasoner model from registry."""
+        return create_model(DEEPSEEK_REASONER_FACTORY)
 
+    @skip_on_rate_limit
     def test_reasoner_with_tool_call(self, reasoner_model: DeepSeekAnthropicModel):
         """Test Reasoner model supports tool calls (V3.2+).
 

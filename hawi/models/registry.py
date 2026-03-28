@@ -2,9 +2,15 @@
 
 设计原则：
 - 单例模式：全局唯一实例
-- 职责：Model 类注册表 + Factory 注册表
+- 职责：Model 类注册表 + Factory 注册表 + Template 注册表
 - 无对象池：每次 create_model 创建新实例
 - 自动配置加载：首次使用时自动加载默认配置路径
+
+配置格式：
+- 特殊字段使用 __ 前缀避免冲突：__class, __parent
+- 也支持不加前缀的别名：class, parent（向后兼容）
+- __class: 指定 Model 类名（factory 必需）
+- __parent: 继承的模板或工厂名称（字符串或列表）
 """
 
 from __future__ import annotations
@@ -24,14 +30,16 @@ __all__ = [
     "get_model_class",
     "load_config",
     "list_factories",
+    "list_templates",
     "CircularDependencyError",
     "UnknownFactoryError",
-    "UnknownApiKeyAliasError",
+    "UnknownTemplateError",
+    "InvalidInheritanceError",
 ]
 
 
 class CircularDependencyError(Exception):
-    """Factory 循环继承错误"""
+    """Factory/Template 循环继承错误"""
     pass
 
 
@@ -40,9 +48,109 @@ class UnknownFactoryError(Exception):
     pass
 
 
-class UnknownApiKeyAliasError(Exception):
-    """未知 API Key 别名错误"""
+class UnknownTemplateError(Exception):
+    """未知 Template 错误"""
     pass
+
+
+class InvalidInheritanceError(Exception):
+    """无效的继承关系错误"""
+    pass
+
+
+# 特殊字段名（使用 __ 前缀避免冲突，也支持无前缀的别名）
+CLASS_FIELD = "__class"
+CLASS_FIELD_ALIAS = "class"
+PARENT_FIELD = "__parent"
+PARENT_FIELD_ALIAS = "parent"
+
+
+def _get_special_field(data: dict[str, Any], field: str, alias: str) -> tuple[Any, bool]:
+    """获取特殊字段值，优先使用 @_ 前缀的字段
+    
+    Returns:
+        (值, 是否找到)
+    """
+    if field in data:
+        return data[field], True
+    if alias in data:
+        return data[alias], True
+    return None, False
+
+
+def _pop_special_field(data: dict[str, Any], field: str, alias: str) -> Any:
+    """弹出特殊字段值，优先使用 @_ 前缀的字段"""
+    if field in data:
+        return data.pop(field)
+    if alias in data:
+        return data.pop(alias)
+    return None
+
+
+def _normalize_parent(parent: Union[str, list, None]) -> list[str]:
+    """将 parent 字段规范化为列表
+    
+    - 字符串 -> [字符串]
+    - None -> []
+    - 列表 -> 保持原样
+    """
+    if parent is None:
+        return []
+    if isinstance(parent, str):
+        return [parent]
+    if isinstance(parent, list):
+        return parent
+    raise ValueError(f"Invalid parent type: {type(parent)}, expected str or list")
+
+
+class TemplateConfig:
+    """Template 配置对象
+    
+    Template 是属性集合，可以被 factory 或其他 template 继承。
+    - 可以有 @class 字段（作为预设的类名）
+    - 可以有 @parent 字段（只能继承其他 template）
+    - 其他字段都是属性
+    """
+
+    def __init__(
+        self,
+        arguments: dict[str, Any],
+        class_name: Optional[str] = None,
+        parents: Optional[list[str]] = None,
+    ):
+        self.arguments = arguments
+        self.class_name = class_name  # template 可以有预设的 class
+        self.parents = parents or []
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TemplateConfig:
+        """从配置字典创建"""
+        data = data.copy()
+        class_name = _pop_special_field(data, CLASS_FIELD, CLASS_FIELD_ALIAS)
+        parent = _pop_special_field(data, PARENT_FIELD, PARENT_FIELD_ALIAS)
+        parents = _normalize_parent(parent)
+        # 剩余字段都是 arguments
+        return cls(class_name=class_name, arguments=data, parents=parents)
+
+    def to_dict(self, use_prefix: bool = False) -> dict[str, Any]:
+        """转换为配置字典
+        
+        Args:
+            use_prefix: 是否使用 @_ 前缀，默认 False
+        """
+        class_key = CLASS_FIELD if use_prefix else CLASS_FIELD_ALIAS
+        parent_key = PARENT_FIELD if use_prefix else PARENT_FIELD_ALIAS
+        
+        result = {}
+        if self.class_name is not None:
+            result[class_key] = self.class_name
+        if self.parents:
+            if len(self.parents) == 1:
+                result[parent_key] = self.parents[0]
+            else:
+                result[parent_key] = self.parents
+        result.update(self.arguments)
+        return result
 
 
 class FactoryConfig:
@@ -52,26 +160,61 @@ class FactoryConfig:
         self,
         class_name: str,
         arguments: dict[str, Any],
-        parent: Optional[str] = None,
+        parent: Optional[Union[str, list[str]]] = None,
     ):
         self.class_name = class_name
         self.arguments = arguments
-        self.parent = parent
+        # 内部统一使用列表存储
+        self._parents = _normalize_parent(parent)
+
+    @property
+    def parent(self) -> Optional[Union[str, list[str]]]:
+        """向后兼容的 parent 属性
+        
+        - 无 parent 时返回 None
+        - 单 parent 时返回字符串（向后兼容）
+        - 多 parent 时返回列表
+        """
+        if not self._parents:
+            return None
+        if len(self._parents) == 1:
+            return self._parents[0]
+        return self._parents
+
+    @property
+    def parents(self) -> list[str]:
+        """返回 parent 列表"""
+        return self._parents
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FactoryConfig:
         """从配置字典创建"""
         data = data.copy()
-        class_name = data.pop("class")
-        parent = data.pop("parent", None)
+        class_name = _pop_special_field(data, CLASS_FIELD, CLASS_FIELD_ALIAS)
+        # class_name 可以为 None，如果 parent 会提供它
+        parent = _pop_special_field(data, PARENT_FIELD, PARENT_FIELD_ALIAS)
         # 剩余字段都是 arguments
-        return cls(class_name=class_name, arguments=data, parent=parent)
+        return cls(
+            class_name=class_name or "",  # 空字符串表示需要继承
+            arguments=data,
+            parent=parent
+        )
 
-    def to_dict(self) -> dict[str, Any]:
-        """转换为配置字典"""
-        result = {"class": self.class_name, **self.arguments}
-        if self.parent:
-            result["parent"] = self.parent
+    def to_dict(self, use_prefix: bool = False) -> dict[str, Any]:
+        """转换为配置字典
+        
+        Args:
+            use_prefix: 是否使用 @_ 前缀，默认 False（向后兼容）
+        """
+        class_key = CLASS_FIELD if use_prefix else CLASS_FIELD_ALIAS
+        parent_key = PARENT_FIELD if use_prefix else PARENT_FIELD_ALIAS
+        
+        result = {class_key: self.class_name, **self.arguments}
+        if self._parents:
+            if len(self._parents) == 1:
+                result[parent_key] = self._parents[0]
+            else:
+                result[parent_key] = self._parents
         return result
 
 
@@ -110,8 +253,9 @@ class ModelRegistry:
     def _initialize(self) -> None:
         """初始化（仅执行一次）"""
         self._classes: dict[str, type[Model]] = {}
+        self._templates: dict[str, TemplateConfig] = {}
         self._factories: dict[str, FactoryConfig] = {}
-        self._api_keys: dict[str, str] = {}
+
         self._auto_load_needed: bool = True
 
         # 注册内置 Model 类
@@ -187,6 +331,53 @@ class ModelRegistry:
         return list(self._classes.keys())
 
     # ========================================================================
+    # Template 管理
+    # ========================================================================
+
+    def register_template(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        class_name: Optional[str] = None,
+        parents: Optional[list[str]] = None,
+        quiet: bool = False,
+    ) -> None:
+        """注册 Template
+
+        Args:
+            name: Template 名称
+            arguments: 属性字典
+            class_name: 可选的预设 Model 类名
+            parents: 继承的 template 名称列表
+            quiet: 是否静默（不输出覆盖警告）
+        """
+        if name in self._templates and not quiet:
+            print(f"[ModelRegistry] Template '{name}' overridden")
+
+        self._templates[name] = TemplateConfig(
+            class_name=class_name, arguments=arguments, parents=parents or []
+        )
+
+    def unregister_template(self, name: str) -> bool:
+        """注销 Template"""
+        if name in self._templates:
+            del self._templates[name]
+            return True
+        return False
+
+    def get_template(self, name: str) -> Optional[TemplateConfig]:
+        """获取 Template 配置"""
+        return self._templates.get(name)
+
+    def list_templates(self) -> list[str]:
+        """列出所有已注册的 template 名称"""
+        return list(self._templates.keys())
+
+    def has_template(self, name: str) -> bool:
+        """检查 template 是否存在"""
+        return name in self._templates
+
+    # ========================================================================
     # Factory 管理
     # ========================================================================
 
@@ -195,7 +386,8 @@ class ModelRegistry:
         name: str,
         class_name: str,
         arguments: dict[str, Any],
-        parent: Optional[str] = None,
+        parent: Optional[Union[str, list[str]]] = None,
+        parents: Optional[list[str]] = None,
         quiet: bool = False,
     ) -> None:
         """注册 Factory
@@ -204,14 +396,26 @@ class ModelRegistry:
             name: Factory 名称
             class_name: Model 类名
             arguments: 实例化参数
-            parent: 继承的 factory 名称
+            parent: 继承的 template/factory 名称（字符串或列表，向后兼容）
+            parents: 继承的 template/factory 名称列表（与 parent 互斥）
             quiet: 是否静默（不输出覆盖警告）
         """
         if name in self._factories and not quiet:
             print(f"[ModelRegistry] Factory '{name}' overridden")
 
+        # 处理 parent/parents 参数
+        if parent is not None and parents is not None:
+            raise ValueError("Cannot specify both 'parent' and 'parents'")
+        
+        if parents is not None:
+            parent_list = parents
+        elif parent is not None:
+            parent_list = _normalize_parent(parent)
+        else:
+            parent_list = []
+
         self._factories[name] = FactoryConfig(
-            class_name=class_name, arguments=arguments, parent=parent
+            class_name=class_name, arguments=arguments, parent=parent_list
         )
 
     def unregister_factory(self, name: str) -> bool:
@@ -274,15 +478,69 @@ class ModelRegistry:
         if overrides:
             arguments.update(overrides)
 
-        # 解析占位符替换（api_key 别名 + 环境变量）
+        # 解析占位符替换（环境变量）
         arguments = self._resolve_substitutions(arguments)
 
         return model_class(**arguments)
 
+    def _resolve_template(
+        self, name: str, visited: Optional[set[str]] = None
+    ) -> TemplateConfig:
+        """解析 template 配置，处理 parent 继承
+        
+        Template 只能以其他 template 为 parent。
+        多 parent 时按列表顺序合并属性（后面的覆盖前面的）。
+        """
+        if visited is None:
+            visited = set()
+
+        if name in visited:
+            raise CircularDependencyError(
+                f"Circular parent detected: {' -> '.join(visited)} -> {name}"
+            )
+
+        config = self._templates.get(name)
+        if config is None:
+            raise UnknownTemplateError(f"Template '{name}' not found")
+
+        if not config.parents:
+            return config
+
+        # 按顺序合并所有 parent
+        visited.add(name)
+        merged_args: dict[str, Any] = {}
+        merged_class: Optional[str] = None
+
+        for parent_name in config.parents:
+            if parent_name in self._templates:
+                # 只能继承 template
+                parent = self._resolve_template(parent_name, visited.copy())
+                merged_class = parent.class_name or merged_class
+                merged_args.update(parent.arguments)
+            else:
+                raise InvalidInheritanceError(
+                    f"Template '{name}' cannot inherit from '{parent_name}': "
+                    f"template can only inherit from template"
+                )
+
+        # 当前配置覆盖 parent 配置
+        merged_class = config.class_name or merged_class
+        merged_args.update(config.arguments)
+
+        return TemplateConfig(
+            class_name=merged_class,
+            arguments=merged_args,
+            parents=[],  # 已解析，不需要保留
+        )
+
     def _resolve_factory(
         self, name: str, visited: Optional[set[str]] = None
     ) -> FactoryConfig:
-        """解析 factory 配置，处理 parent 继承"""
+        """解析 factory 配置，处理 parent 继承
+        
+        Factory 可以以 template 或 factory 为 parent。
+        多 parent 时按列表顺序合并属性（后面的覆盖前面的）。
+        """
         if visited is None:
             visited = set()
 
@@ -295,72 +553,64 @@ class ModelRegistry:
         if config is None:
             raise UnknownFactoryError(f"Factory '{name}' not found")
 
-        if config.parent:
-            visited.add(name)
-            # 递归解析父配置
-            parent = self._resolve_factory(config.parent, visited)
-            # 合并：父配置 + 当前配置
-            merged_args = {**parent.arguments, **config.arguments}
-            return FactoryConfig(
-                class_name=config.class_name or parent.class_name,
-                arguments=merged_args,
-                parent=None,  # 已解析，不需要保留
+        if not config.parents:
+            return config
+
+        # 按顺序合并所有 parent
+        visited.add(name)
+        merged_args: dict[str, Any] = {}
+        merged_class: Optional[str] = None
+
+        for parent_name in config.parents:
+            if parent_name in self._templates:
+                # 继承 template
+                parent = self._resolve_template(parent_name, visited.copy())
+                merged_class = parent.class_name or merged_class
+                merged_args.update(parent.arguments)
+            elif parent_name in self._factories:
+                # 继承 factory
+                parent = self._resolve_factory(parent_name, visited.copy())
+                merged_class = parent.class_name or merged_class
+                merged_args.update(parent.arguments)
+            else:
+                raise UnknownFactoryError(
+                    f"Factory '{name}' parent '{parent_name}' not found "
+                    f"(neither template nor factory)"
+                )
+
+        # 当前配置覆盖 parent 配置
+        merged_class = config.class_name or merged_class
+        merged_args.update(config.arguments)
+
+        if not merged_class:
+            raise InvalidInheritanceError(
+                f"Factory '{name}' has no class specified and no parent provides one"
             )
 
-        return config
+        return FactoryConfig(
+            class_name=merged_class,
+            arguments=merged_args,
+            parent=[],  # 已解析，不需要保留
+        )
 
     def _resolve_substitutions(self, value: Any) -> Any:
-        """递归解析所有占位符替换（API Keys 别名 + 环境变量）
+        """递归解析占位符替换（环境变量）
 
         支持语法：
-        - ${api_keys.ALIAS}   -> 从 api_keys 配置中查找
         - ${ENV_VAR}          -> 从环境变量中查找
         - ${ENV_VAR:default}  -> 环境变量带默认值
-
-        优先级：api_keys 别名 > 环境变量
-
-        Raises:
-            UnknownApiKeyAliasError: 当 ${api_keys.ALIAS} 找不到对应别名时
         """
         if isinstance(value, str):
             # 完整字符串是单一占位符
             if value.startswith("${") and value.endswith("}"):
                 inner = value[2:-1]
-
-                # 1. 处理 ${api_keys.ALIAS}
-                prefix = "api_keys."
-                if inner.startswith(prefix):
-                    alias = inner[len(prefix):]  # 提取 ALIAS
-                    if alias in self._api_keys:
-                        return self._api_keys[alias]
-                    # 别名不存在，抛出明确错误
-                    raise UnknownApiKeyAliasError(
-                        f"Unknown API key alias '${{api_keys.{alias}}}'. "
-                        f"Available aliases: {list(self._api_keys.keys())}"
-                    )
-
-                # 2. 处理 ${ENV_VAR} 或 ${ENV_VAR:default}
+                # 处理 ${ENV_VAR} 或 ${ENV_VAR:default}
                 if ":" in inner:
                     env_var, default = inner.split(":", 1)
                     return os.environ.get(env_var, default)
                 return os.environ.get(inner, value)
 
             # 处理嵌入的占位符
-            # 先处理 api_keys 别名
-            api_keys_pattern = r"\$\{api_keys\.([^}]+)\}"
-
-            def replace_api_keys(match: re.Match) -> str:
-                alias = match.group(1)
-                if alias not in self._api_keys:
-                    raise UnknownApiKeyAliasError(
-                        f"Unknown API key alias '${{api_keys.{alias}}}'. "
-                        f"Available aliases: {list(self._api_keys.keys())}"
-                    )
-                return self._api_keys[alias]
-
-            value = re.sub(api_keys_pattern, replace_api_keys, value)
-
-            # 再处理环境变量
             env_pattern = r"\$\{([^}:]+)(?::([^}]*))?\}"
 
             def replace_env_var(match: re.Match) -> str:
@@ -458,32 +708,37 @@ class ModelRegistry:
 
         try:
             with open(path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
+                data = yaml.safe_load(f) or {}
 
-            # 加载 API Key
-            if "api_keys" in data:
-                self._api_keys.update(data["api_keys"])
+            # 加载 Templates
+            if "templates" in data and data["templates"]:
+                templates = data["templates"]
+                for name, config in templates.items():
+                    template_config = TemplateConfig.from_dict(config)
+                    self.register_template(
+                        name=name,
+                        class_name=template_config.class_name,
+                        arguments=template_config.arguments,
+                        parents=template_config.parents,
+                        quiet=quiet,
+                    )
                 if not quiet:
-                    print(f"[ModelRegistry] Loaded {len(data['api_keys'])} API keys from {path}")
+                    print(f"[ModelRegistry] Loaded {len(templates)} templates from {path}")
 
-            if not data or "factories" not in data:
+            # 加载 Factories
+            if "factories" in data:
+                factories = data["factories"]
+                for name, config in factories.items():
+                    factory_config = FactoryConfig.from_dict(config)
+                    self.register_factory(
+                        name=name,
+                        class_name=factory_config.class_name,
+                        arguments=factory_config.arguments,
+                        parents=factory_config.parents,
+                        quiet=quiet,
+                    )
                 if not quiet:
-                    print(f"[ModelRegistry] No factories found in {path}")
-                return
-
-            factories = data["factories"]
-            for name, config in factories.items():
-                factory_config = FactoryConfig.from_dict(config)
-                self.register_factory(
-                    name=name,
-                    class_name=factory_config.class_name,
-                    arguments=factory_config.arguments,
-                    parent=factory_config.parent,
-                    quiet=quiet,
-                )
-
-            if not quiet:
-                print(f"[ModelRegistry] Loaded {len(factories)} factories from {path}")
+                    print(f"[ModelRegistry] Loaded {len(factories)} factories from {path}")
 
         except yaml.YAMLError as e:
             raise ValueError(f"Invalid YAML in {path}: {e}")
@@ -491,8 +746,8 @@ class ModelRegistry:
     def clear(self) -> None:
         """清空所有注册（主要用于测试）"""
         self._factories.clear()
+        self._templates.clear()
         self._classes.clear()
-        self._api_keys.clear()
         self._auto_load_needed = True
         self._register_builtin_classes()
 
@@ -522,3 +777,8 @@ def load_config(path: Union[str, Path], quiet: bool = False) -> None:
 def list_factories() -> list[str]:
     """列出所有 factory 名称"""
     return model_registry.list_factories()
+
+
+def list_templates() -> list[str]:
+    """列出所有 template 名称"""
+    return model_registry.list_templates()

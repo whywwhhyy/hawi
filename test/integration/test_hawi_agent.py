@@ -1,7 +1,7 @@
 """Integration tests for HawiAgent.
 
 Tests the complete agent workflow with real API calls.
-Requires DEEPSEEK_API_KEY environment variable or models.yaml configuration.
+Uses Model Registry for model creation.
 """
 
 import asyncio
@@ -20,14 +20,16 @@ from hawi.plugin.decorators import (
     after_tool_calling,
 )
 
-from test.integration.models import get_deepseek_api_key
+from test.integration.models import has_factory, create_model
 
 
-# Check if API key is available
-DEEPSEEK_API_KEY = get_deepseek_api_key()
-HAS_DEEPSEEK_KEY = DEEPSEEK_API_KEY is not None and DEEPSEEK_API_KEY.strip() != ""
+# Factory name
+DEEPSEEK_FACTORY = "deepseek-chat-openai"
 
-SKIP_REASON = "DeepSeek API key not found (set DEEPSEEK_API_KEY or configure models.yaml)"
+# Check if factory is available
+HAS_DEEPSEEK = has_factory(DEEPSEEK_FACTORY)
+
+SKIP_REASON = f"Factory '{DEEPSEEK_FACTORY}' not found in models.yaml"
 
 
 class CalculatorPlugin(HawiPlugin):
@@ -103,18 +105,14 @@ class AsyncHookPlugin(HawiPlugin):
         self.events.append(f"after_tool_calling:{tool_name}")
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK, reason=SKIP_REASON)
 class TestHawiAgentIntegration:
     """Integration tests requiring real DeepSeek API access."""
 
     @pytest.fixture
     def model(self) -> Model:
-        """Create a DeepSeek model instance."""
-        return DeepSeekModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-            api='openai',
-        )
+        """Create a DeepSeek model instance from registry."""
+        return create_model(DEEPSEEK_FACTORY)
 
     @pytest.fixture
     def calculator_plugin(self) -> CalculatorPlugin:
@@ -239,17 +237,14 @@ class TestHawiAgentIntegration:
         assert len(result.tool_calls) <= 3  # Should be limited by max_iterations
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK, reason=SKIP_REASON)
 class TestHawiAgentAsync:
     """Async integration tests."""
 
     @pytest.fixture
     def agent(self) -> HawiAgent:
-        """Create a HawiAgent."""
-        model = DeepSeekModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a HawiAgent with model from registry."""
+        model = create_model(DEEPSEEK_FACTORY)
         plugin = CalculatorPlugin()
         return HawiAgent(
             model=model,
@@ -292,10 +287,7 @@ class TestHawiAgentAsync:
         runs and the events list stays empty.
         """
         plugin = AsyncHookPlugin()
-        model = DeepSeekModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        model = create_model(DEEPSEEK_FACTORY)
         agent = HawiAgent(model=model, plugins=[plugin])
 
         await agent.arun("Say 'hi'.")
@@ -312,10 +304,7 @@ class TestHawiAgentAsync:
         """Test that async before/after_tool_calling hooks are properly awaited."""
         plugin = AsyncHookPlugin()
         calc = CalculatorPlugin()
-        model = DeepSeekModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        model = create_model(DEEPSEEK_FACTORY)
         agent = HawiAgent(
             model=model,
             plugins=[calc, plugin],

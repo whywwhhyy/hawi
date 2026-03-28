@@ -1,8 +1,9 @@
-"""Exploratory tests for hook params redesign bugfix.
+"""Tests for hook params redesign.
 
-These tests run on the CURRENT (unfixed) code to confirm bugs exist.
-Tests 1.1 and 1.2 PASS because they assert AttributeError IS raised (confirming missing methods).
-Test 1.3 PASSES because it asserts the redundant context arg IS present (confirming the bug).
+These tests validate the hook system implementation.
+- Tests 1.1-1.3: Verified that the hook system is properly implemented
+- Tests 6.x: Verify HookResult factory methods work correctly
+- Tests 7.x: Verify hook behaviors are preserved
 """
 import pytest
 import asyncio
@@ -46,25 +47,28 @@ class MockModel(Model):
 
 
 # ---------------------------------------------------------------------------
-# Task 1.1 — HookResult.replace_model does not exist → AttributeError
+# Task 1.1 — HookResult.replace_model exists and works correctly
 # ---------------------------------------------------------------------------
 
-class TestHookResultReplaceModelMissing:
-    def test_replace_model_raises_attribute_error(self):
-        """1.1 HookResult.replace_model doesn't exist on unfixed code — should raise AttributeError."""
-        with pytest.raises(AttributeError):
-            HookResult.replace_model(model=MagicMock())
+class TestHookResultReplaceModelExists:
+    def test_replace_model_exists(self):
+        """1.1 HookResult.replace_model exists and creates correct result."""
+        m = MagicMock()
+        result = HookResult.replace_model(model=m)
+        assert result.action == "replace_model"
+        assert result.model is m
 
 
 # ---------------------------------------------------------------------------
-# Task 1.2 — HookResult.reinvoke does not exist → AttributeError
+# Task 1.2 — HookResult.reinvoke exists and works correctly
 # ---------------------------------------------------------------------------
 
-class TestHookResultReinvokeMissing:
-    def test_reinvoke_raises_attribute_error(self):
-        """1.2 HookResult.reinvoke doesn't exist on unfixed code — should raise AttributeError."""
-        with pytest.raises(AttributeError):
-            HookResult.reinvoke(message="test message")
+class TestHookResultReinvokeExists:
+    def test_reinvoke_exists(self):
+        """1.2 HookResult.reinvoke exists and creates correct result."""
+        result = HookResult.reinvoke(message="test message")
+        assert result.action == "reinvoke"
+        assert result.message == "test message"
 
 
 # ---------------------------------------------------------------------------
@@ -97,16 +101,15 @@ class TestBeforeModelCallRedundantContext:
         assert len(captured_args) >= 1, "before_model_call hook was never called"
 
         args = captured_args[0]
-        # On unfixed code: (agent, context, model, hook_ctx) = 4 args
-        # On fixed code:   (agent, model, hook_ctx)           = 3 args
-        assert len(args) == 4, (
-            f"Expected 4 args (agent, context, model, hook_ctx) on unfixed code, got {len(args)}: {args}"
+        # Fixed code: (agent, model, hook_ctx) = 3 args
+        assert len(args) == 3, (
+            f"Expected 3 args (agent, model, hook_ctx) on fixed code, got {len(args)}: {args}"
         )
 
-        from hawi.agent.context import AgentContext
-        # Second arg should be AgentContext (the redundant context parameter)
-        assert isinstance(args[1], AgentContext), (
-            f"Expected args[1] to be AgentContext (redundant context), got {type(args[1])}"
+        from hawi.models.model import Model as ModelBase
+        # Second arg should be Model (not AgentContext)
+        assert isinstance(args[1], ModelBase), (
+            f"Expected args[1] to be Model, got {type(args[1])}"
         )
 
 

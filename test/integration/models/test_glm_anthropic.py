@@ -8,19 +8,20 @@ import pytest
 
 from hawi.models.anthropic import AnthropicModel
 from hawi.models import Message
-from test.integration.models import get_glm_api_key
+from test.integration.models import has_factory, create_model, skip_on_rate_limit
 
 
-# Check if API key is available
-GLM_API_KEY = get_glm_api_key()
-HAS_GLM_KEY = GLM_API_KEY is not None and GLM_API_KEY.strip() != ""
+# Factory name
+GLM_ANTHROPIC_FACTORY = "glm-4.7-flash-anthropic"
 
-# Skip reason for tests requiring API key
-SKIP_REASON = "GLM API key not found (set GLM_API_KEY or configure models.yaml)"
-
-# GLM Anthropic-compatible endpoint
-# Reference: https://open.bigmodel.cn/dev/api/thirdparty-frame/anthropic-sdk
+# GLM Anthropic-compatible endpoint (used for unit tests)
 GLM_ANTHROPIC_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
+
+# Check if factories are available
+HAS_GLM = has_factory(GLM_ANTHROPIC_FACTORY)
+
+# Skip reason for tests requiring factory
+SKIP_REASON = f"Factory '{GLM_ANTHROPIC_FACTORY}' not found in models.yaml"
 
 
 def _create_user_message(content: str) -> Message:
@@ -57,23 +58,16 @@ class TestGLMAnthropicUnit:
         assert model.model_id == "glm-4"
 
 
-@pytest.mark.skipif(not HAS_GLM_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_GLM, reason=SKIP_REASON)
 class TestGLMAnthropicIntegration:
-    """Integration tests for GLM using standard AnthropicModel.
-
-    Note: These tests will be skipped if GLM does not support Anthropic API format.
-    If GLM API returns errors, it indicates GLM does not support Anthropic format.
-    """
+    """Integration tests for GLM using standard AnthropicModel."""
 
     @pytest.fixture
     def model(self) -> AnthropicModel:
-        """Create a GLM-4-Flash model instance using standard AnthropicModel."""
-        return AnthropicModel(
-            model_id="glm-4-flash",
-            api_key=GLM_API_KEY,
-            base_url=GLM_ANTHROPIC_BASE_URL,
-        )
+        """Create a GLM model instance from registry."""
+        return create_model(GLM_ANTHROPIC_FACTORY)
 
+    @skip_on_rate_limit
     def test_simple_chat_completion(self, model: AnthropicModel):
         """Test basic chat completion with GLM using standard AnthropicModel."""
         try:
@@ -93,6 +87,7 @@ class TestGLMAnthropicIntegration:
         except Exception as e:
             pytest.skip(f"GLM may not support Anthropic API format: {e}")
 
+    @skip_on_rate_limit
     def test_streaming_response(self, model: AnthropicModel):
         """Test streaming response with standard AnthropicModel."""
         try:
@@ -111,6 +106,7 @@ class TestGLMAnthropicIntegration:
         except Exception as e:
             pytest.skip(f"GLM may not support Anthropic streaming API: {e}")
 
+    @skip_on_rate_limit
     def test_tool_call_formatting(self, model: AnthropicModel):
         """Test tool call request formatting with standard AnthropicModel."""
         from hawi.models.message import ToolDefinition
@@ -147,18 +143,14 @@ class TestGLMAnthropicIntegration:
             pytest.skip(f"GLM may not support Anthropic tool calls: {e}")
 
 
-@pytest.mark.skipif(not HAS_GLM_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_GLM, reason=SKIP_REASON)
 class TestGLMAnthropicAsync:
     """Async integration tests for GLM using standard AnthropicModel."""
 
     @pytest.fixture
     def model(self) -> AnthropicModel:
-        """Create a GLM-4-Flash model instance using standard AnthropicModel."""
-        return AnthropicModel(
-            model_id="glm-4-flash",
-            api_key=GLM_API_KEY,
-            base_url=GLM_ANTHROPIC_BASE_URL,
-        )
+        """Create a GLM model instance from registry."""
+        return create_model(GLM_ANTHROPIC_FACTORY)
 
     @pytest.mark.asyncio
     async def test_async_non_streaming_chat_completion(self, model: AnthropicModel):

@@ -1,6 +1,7 @@
 """DeepSeekOpenAIModel integration tests.
 
 Tests the new DeepSeek model implementation based on hawi.agent.models.openai.
+Uses Model Registry for model creation.
 """
 
 import pytest
@@ -8,14 +9,18 @@ import pytest
 from hawi.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration.models import get_deepseek_api_key
+from test.integration.models import has_factory, create_model, skip_on_rate_limit, async_skip_on_rate_limit
 
-# Check if API key is available
-DEEPSEEK_API_KEY = get_deepseek_api_key()
-HAS_DEEPSEEK_KEY = DEEPSEEK_API_KEY is not None and DEEPSEEK_API_KEY.strip() != ""
+# Factory names
+DEEPSEEK_CHAT_FACTORY = "deepseek-chat-openai"
+DEEPSEEK_REASONER_FACTORY = "deepseek-reasoner-openai"
 
-# Skip reason for tests requiring API key
-SKIP_REASON = "DeepSeek API key not found (set DEEPSEEK_API_KEY or configure models.yaml)"
+# Check if factories are available
+HAS_DEEPSEEK_CHAT = has_factory(DEEPSEEK_CHAT_FACTORY)
+HAS_DEEPSEEK_REASONER = has_factory(DEEPSEEK_REASONER_FACTORY)
+
+# Skip reason for tests requiring factory
+SKIP_REASON = f"Factory '{DEEPSEEK_CHAT_FACTORY}' not found in models.yaml"
 
 
 def _create_user_message(content: str) -> Message:
@@ -140,26 +145,21 @@ class TestDeepSeekOpenAIUnit:
         assert result["content"] == "Tool result data"
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK_CHAT, reason=SKIP_REASON)
 class TestDeepSeekOpenAIIntegration:
     """Integration tests requiring real DeepSeek API access."""
 
     @pytest.fixture
     def model(self) -> DeepSeekOpenAIModel:
-        """Create a DeepSeek model instance."""
-        return DeepSeekOpenAIModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek model instance from registry."""
+        return create_model(DEEPSEEK_CHAT_FACTORY)
 
     @pytest.fixture
     def reasoner_model(self) -> DeepSeekOpenAIModel:
-        """Create a DeepSeek Reasoner model instance."""
-        return DeepSeekOpenAIModel(
-            model_id="deepseek-reasoner",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek Reasoner model instance from registry."""
+        return create_model(DEEPSEEK_REASONER_FACTORY)
 
+    @skip_on_rate_limit
     def test_simple_chat_completion(self, model: DeepSeekOpenAIModel):
         """Test basic chat completion."""
         response = model.invoke(
@@ -176,6 +176,7 @@ class TestDeepSeekOpenAIIntegration:
         assert response.usage["input_tokens"] > 0
         assert response.usage["output_tokens"] > 0
 
+    @skip_on_rate_limit
     def test_reasoner_chat_completion(self, reasoner_model: DeepSeekOpenAIModel):
         """Test Reasoner model chat completion with reasoning."""
         response = reasoner_model.invoke(
@@ -188,6 +189,7 @@ class TestDeepSeekOpenAIIntegration:
         # Note: reasoning_content might be in the response or None depending on API
         assert response.usage is not None
 
+    @skip_on_rate_limit
     def test_streaming_response(self, model: DeepSeekOpenAIModel):
         """Test streaming response."""
         events = list(model.invoke(
@@ -203,6 +205,7 @@ class TestDeepSeekOpenAIIntegration:
         assert len(finish_events) == 1
         assert finish_events[0]["stop_reason"] == "end_turn"
 
+    @skip_on_rate_limit
     def test_tool_call_formatting(self, model: DeepSeekOpenAIModel):
         """Test tool call request formatting."""
         from hawi.models.message import ToolDefinition
@@ -235,6 +238,7 @@ class TestDeepSeekOpenAIIntegration:
             assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
+    @skip_on_rate_limit
     def test_multi_turn_conversation(self, model: DeepSeekOpenAIModel):
         """Test multi-turn conversation."""
         messages = [
@@ -255,6 +259,7 @@ class TestDeepSeekOpenAIIntegration:
 
         assert "Alice" in response2_content[0].get("text", "")
 
+    @skip_on_rate_limit
     def test_balance_query(self, model: DeepSeekOpenAIModel):
         """Test balance query functionality."""
         balances = model.get_balance()
@@ -266,18 +271,16 @@ class TestDeepSeekOpenAIIntegration:
             assert balance.total_balance is not None
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK_REASONER, reason=f"Factory '{DEEPSEEK_REASONER_FACTORY}' not found")  
 class TestDeepSeekReasonerMultiTurn:
     """Tests for Reasoner model multi-turn with reasoning content."""
 
     @pytest.fixture
     def reasoner_model(self) -> DeepSeekOpenAIModel:
-        """Create a DeepSeek Reasoner model."""
-        return DeepSeekOpenAIModel(
-            model_id="deepseek-reasoner",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek Reasoner model from registry."""
+        return create_model(DEEPSEEK_REASONER_FACTORY)
 
+    @skip_on_rate_limit
     def test_reasoner_with_tool_call(self, reasoner_model: DeepSeekOpenAIModel):
         """Test Reasoner model supports tool calls (V3.2+).
 
@@ -315,6 +318,7 @@ class TestDeepSeekReasonerMultiTurn:
         # Response could be text, tool_call, or reasoning (for Reasoner model)
         assert content_list[0]["type"] in ["text", "tool_call", "reasoning"]
 
+    @skip_on_rate_limit
     def test_reasoner_tool_call_with_reasoning_content(self, reasoner_model: DeepSeekOpenAIModel):
         """Test Reasoner model handles reasoning_content in tool call scenarios.
 
@@ -353,19 +357,17 @@ class TestDeepSeekReasonerMultiTurn:
         # where reasoning_content must be passed back to the API
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK_CHAT, reason=SKIP_REASON)
 class TestDeepSeekOpenAIAsync:
     """Async integration tests for DeepSeek OpenAI API."""
 
     @pytest.fixture
     def model(self) -> DeepSeekOpenAIModel:
-        """Create a DeepSeek model instance."""
-        return DeepSeekOpenAIModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek model instance from registry."""
+        return create_model(DEEPSEEK_CHAT_FACTORY)
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_chat_completion(self, model: DeepSeekOpenAIModel):
         """Test async non-streaming chat completion."""
         events = []
@@ -396,6 +398,7 @@ class TestDeepSeekOpenAIAsync:
         assert "Async" in full_text or "Hello" in full_text
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_streaming_chat_completion(self, model: DeepSeekOpenAIModel):
         """Test async streaming chat completion."""
         events = []
@@ -417,6 +420,7 @@ class TestDeepSeekOpenAIAsync:
         assert "1" in full_text and "3" in full_text
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_streaming_events_structure(self, model: DeepSeekOpenAIModel):
         """Test that async streaming produces correct event structure."""
         events = []
@@ -443,6 +447,7 @@ class TestDeepSeekOpenAIAsync:
             assert finish_event.get("stop_reason") is not None
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_default(self, model: DeepSeekOpenAIModel):
         """Test that ainvoke defaults to non-streaming when streaming parameter omitted."""
         events = []

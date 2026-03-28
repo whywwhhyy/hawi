@@ -9,14 +9,16 @@ import pytest
 from hawi.models.minimax.minimax_openai import MiniMaxOpenAIModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration.models import get_minimax_api_key
+from test.integration.models import has_factory, create_model, skip_on_rate_limit, async_skip_on_rate_limit
 
-# Check if API key is available
-MINIMAX_API_KEY = get_minimax_api_key()
-HAS_MINIMAX_KEY = MINIMAX_API_KEY is not None and MINIMAX_API_KEY.strip() != ""
+# Factory names
+MINIMAX_OPENAI_FACTORY = "minimax-m2.7"
 
-# Skip reason for tests requiring API key
-SKIP_REASON = "MiniMax API key not found (set MINIMAX_API_KEY or configure models.yaml)"
+# Check if factories are available
+HAS_MINIMAX_OPENAI = has_factory(MINIMAX_OPENAI_FACTORY)
+
+# Skip reason for tests requiring factory
+SKIP_REASON = f"Factory '{MINIMAX_OPENAI_FACTORY}' not found in models.yaml"
 
 
 def _is_minimax_retryable_error(e: Exception) -> bool:
@@ -195,18 +197,16 @@ class TestMiniMaxOpenAIUnit:
         assert result["content"] == "Tool result data"
 
 
-@pytest.mark.skipif(not HAS_MINIMAX_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_MINIMAX_OPENAI, reason=SKIP_REASON)
 class TestMiniMaxM25Integration:
     """Integration tests for MiniMax M2.5 model requiring real API access."""
 
     @pytest.fixture
     def model(self) -> MiniMaxOpenAIModel:
-        """Create a MiniMax M2.5 model instance."""
-        return MiniMaxOpenAIModel(
-            model_id="MiniMax-M2.5",
-            api_key=MINIMAX_API_KEY,
-        )
+        """Create a MiniMax M2.5 model instance from registry."""
+        return create_model(MINIMAX_OPENAI_FACTORY)
 
+    @skip_on_rate_limit
     def test_simple_chat_completion(self, model: MiniMaxOpenAIModel):
         """Test basic chat completion with M2.5."""
         response = model.invoke(
@@ -230,6 +230,7 @@ class TestMiniMaxM25Integration:
         assert response.usage["output_tokens"] > 0
 
     @retry_on_794(max_retries=3)
+    @skip_on_rate_limit
     def test_streaming_response(self, model: MiniMaxOpenAIModel):
         """Test streaming response."""
         events = list(model.invoke(
@@ -243,6 +244,7 @@ class TestMiniMaxM25Integration:
         assert len(content_events) > 0
         # finish event may not be present in some cases, so we just verify we got content
 
+    @skip_on_rate_limit
     def test_tool_call_formatting(self, model: MiniMaxOpenAIModel):
         """Test tool call request formatting."""
         from hawi.models.message import ToolDefinition
@@ -275,6 +277,7 @@ class TestMiniMaxM25Integration:
             assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
+    @skip_on_rate_limit
     def test_multi_turn_conversation(self, model: MiniMaxOpenAIModel):
         """Test multi-turn conversation."""
         messages = [
@@ -300,17 +303,15 @@ class TestMiniMaxM25Integration:
         assert "Alice" in response_text
 
 
-@pytest.mark.skipif(not HAS_MINIMAX_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_MINIMAX_OPENAI, reason=SKIP_REASON)
 class TestMiniMaxM21Integration:
     """Integration tests for MiniMax M2.1 model requiring real API access."""
 
     @pytest.fixture
     def model(self) -> MiniMaxOpenAIModel:
-        """Create a MiniMax M2.1 model instance."""
-        return MiniMaxOpenAIModel(
-            model_id="MiniMax-M2.1",
-            api_key=MINIMAX_API_KEY,
-        )
+        """Create a MiniMax M2.1 model instance from registry."""
+        # Use factory but override model_id to M2.1
+        return create_model(MINIMAX_OPENAI_FACTORY, model_id="MiniMax-M2.1")
 
     def test_simple_chat_completion(self, model: MiniMaxOpenAIModel):
         """Test basic chat completion with M2.1."""
@@ -341,19 +342,17 @@ class TestMiniMaxM21Integration:
         # finish event may not be present in some cases
 
 
-@pytest.mark.skipif(not HAS_MINIMAX_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_MINIMAX_OPENAI, reason=SKIP_REASON)
 class TestMiniMaxOpenAIAsync:
     """Async integration tests for MiniMax OpenAI API."""
 
     @pytest.fixture
     def model(self) -> MiniMaxOpenAIModel:
-        """Create a MiniMax M2.5 model instance."""
-        return MiniMaxOpenAIModel(
-            model_id="MiniMax-M2.5",
-            api_key=MINIMAX_API_KEY,
-        )
+        """Create a MiniMax M2.5 model instance from registry."""
+        return create_model(MINIMAX_OPENAI_FACTORY)
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_chat_completion(self, model: MiniMaxOpenAIModel):
         """Test async non-streaming chat completion."""
         events = []
@@ -381,6 +380,7 @@ class TestMiniMaxOpenAIAsync:
 
     @async_retry_on_794(max_retries=3)
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_streaming_chat_completion(self, model: MiniMaxOpenAIModel):
         """Test async streaming chat completion."""
         events = []
@@ -421,12 +421,10 @@ class TestMiniMaxOpenAIAsync:
         assert event_types[-1] in ["finish", "text_delta", "reasoning_delta"]
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_m21_model(self):
         """Test async non-streaming with M2.1 model."""
-        model = MiniMaxOpenAIModel(
-            model_id="MiniMax-M2.1",
-            api_key=MINIMAX_API_KEY,
-        )
+        model = create_model(MINIMAX_OPENAI_FACTORY, model_id="MiniMax-M2.1")
 
         events = []
         async for event in model.ainvoke(

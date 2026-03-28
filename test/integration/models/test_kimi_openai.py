@@ -15,7 +15,17 @@ from hawi.models.message import (
     ToolCallPart,
     ReasoningPart,
 )
-from test.integration.models import get_kimi_openai_api_key
+from test.integration.models import has_factory, create_model, skip_on_rate_limit, async_skip_on_rate_limit
+
+
+# Factory name
+KIMI_FACTORY = "moonshot-k2.5"
+
+# Check if factory is available
+HAS_KIMI = has_factory(KIMI_FACTORY)
+
+# Skip reason for tests requiring factory
+SKIP_REASON = f"Factory '{KIMI_FACTORY}' not found in models.yaml"
 
 
 # =============================================================================
@@ -93,12 +103,7 @@ def _create_tool_result_message(
         "metadata": None,
     }
 
-# Check if API key is available
-KIMI_API_KEY = get_kimi_openai_api_key()
-HAS_KIMI_KEY = KIMI_API_KEY is not None and KIMI_API_KEY.strip() != ""
 
-# Skip reason for tests requiring API key
-SKIP_REASON = "Kimi API key not found (set KIMI_API_KEY or configure models.yaml)"
 
 
 class TestKimiOpenAIUnit:
@@ -229,28 +234,21 @@ class TestKimiOpenAIUnit:
         assert len(result["reasoning_content"]) > 0
 
 
-@pytest.mark.skipif(not HAS_KIMI_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_KIMI, reason=SKIP_REASON)
 class TestKimiOpenAIIntegration:
     """Integration tests requiring real Kimi API access."""
 
     @pytest.fixture
     def model(self) -> KimiOpenAIModel:
-        """Create a Kimi model instance with default settings."""
-        return KimiOpenAIModel(
-            api_key=KIMI_API_KEY,
-            model_id="kimi-k2.5",
-            enable_thinking=True,
-        )
+        """Create a Kimi model instance with default settings from registry."""
+        return create_model(KIMI_FACTORY)
 
     @pytest.fixture
     def model_no_thinking(self) -> KimiOpenAIModel:
         """Create a Kimi model instance with thinking disabled."""
-        return KimiOpenAIModel(
-            api_key=KIMI_API_KEY,
-            model_id="kimi-k2.5",
-            enable_thinking=False,
-        )
+        return create_model(KIMI_FACTORY, enable_thinking=False)
 
+    @skip_on_rate_limit
     def test_simple_chat_with_thinking(self, model: KimiOpenAIModel):
         """Test basic chat completion with thinking enabled."""
         response = model.invoke(
@@ -266,6 +264,7 @@ class TestKimiOpenAIIntegration:
         assert response.usage["input_tokens"] > 0
         assert response.usage["output_tokens"] > 0
 
+    @skip_on_rate_limit
     def test_simple_chat_without_thinking(self, model_no_thinking: KimiOpenAIModel):
         """Test basic chat completion with thinking disabled."""
         response = model_no_thinking.invoke(
@@ -279,6 +278,7 @@ class TestKimiOpenAIIntegration:
         assert content_list[0]["type"] == "text"
         # May or may not have reasoning_content when thinking is disabled
 
+    @skip_on_rate_limit
     def test_streaming_response(self, model: KimiOpenAIModel):
         """Test streaming response with reasoning."""
         events = list(model.invoke(
@@ -293,6 +293,7 @@ class TestKimiOpenAIIntegration:
         assert len(content_events) > 0
         assert len(finish_events) == 1
 
+    @skip_on_rate_limit
     def test_multi_turn_conversation(self, model: KimiOpenAIModel):
         """Test multi-turn conversation."""
         messages = [
@@ -319,6 +320,7 @@ class TestKimiOpenAIIntegration:
         second_part = text_parts[0]
         assert "Bob" in second_part["text"]
 
+    @skip_on_rate_limit
     def test_balance_query(self, model: KimiOpenAIModel):
         """Test balance query functionality."""
         balances = model.get_balance()
@@ -330,19 +332,16 @@ class TestKimiOpenAIIntegration:
             assert balance.total_balance is not None
 
 
-@pytest.mark.skipif(not HAS_KIMI_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_KIMI, reason=SKIP_REASON)
 class TestKimiK25ToolCalls:
     """Tests for Kimi K2.5 tool calls with reasoning."""
 
     @pytest.fixture
     def model(self) -> KimiOpenAIModel:
-        """Create a Kimi K2.5 model instance."""
-        return KimiOpenAIModel(
-            api_key=KIMI_API_KEY,
-            model_id="kimi-k2.5",
-            enable_thinking=True,
-        )
+        """Create a Kimi K2.5 model instance from registry."""
+        return create_model(KIMI_FACTORY)
 
+    @skip_on_rate_limit
     def test_tool_call_with_reasoning(self, model: KimiOpenAIModel):
         """Test that tool calls work correctly with reasoning enabled."""
         from hawi.models.message import ToolDefinition
@@ -379,6 +378,7 @@ class TestKimiK25ToolCalls:
             # Model may respond directly with text
             assert "10000" in text_parts[0]["text"]
 
+    @skip_on_rate_limit
     def test_multi_turn_with_tool_result(self, model: KimiOpenAIModel):
         """Test multi-turn conversation with tool results."""
         from hawi.models.message import ToolDefinition
@@ -431,20 +431,17 @@ class TestKimiK25ToolCalls:
         assert len(response2.content) > 0
 
 
-@pytest.mark.skipif(not HAS_KIMI_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_KIMI, reason=SKIP_REASON)
 class TestKimiOpenAIAsync:
     """Async integration tests for Kimi OpenAI API."""
 
     @pytest.fixture
     def model(self) -> KimiOpenAIModel:
-        """Create a Kimi model instance with thinking enabled."""
-        return KimiOpenAIModel(
-            api_key=KIMI_API_KEY,
-            model_id="kimi-k2.5",
-            enable_thinking=True,
-        )
+        """Create a Kimi model instance from registry."""
+        return create_model(KIMI_FACTORY)
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_chat_completion(self, model: KimiOpenAIModel):
         """Test async non-streaming chat completion."""
         events = []
@@ -471,6 +468,7 @@ class TestKimiOpenAIAsync:
         assert "Kimi" in full_text or "Async" in full_text
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_streaming_chat_completion(self, model: KimiOpenAIModel):
         """Test async streaming chat completion with reasoning."""
         events = []
@@ -491,6 +489,7 @@ class TestKimiOpenAIAsync:
         assert "1" in full_text and "3" in full_text
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_streaming_events_structure(self, model: KimiOpenAIModel):
         """Test that async streaming produces correct event sequence."""
         events = []
@@ -510,13 +509,10 @@ class TestKimiOpenAIAsync:
         assert event_types[-1] == "finish"
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_with_thinking_disabled(self):
         """Test async non-streaming with thinking disabled."""
-        model = KimiOpenAIModel(
-            api_key=KIMI_API_KEY,
-            model_id="kimi-k2.5",
-            enable_thinking=False,
-        )
+        model = create_model(KIMI_FACTORY, enable_thinking=False)
 
         events = []
         async for event in model.ainvoke(

@@ -282,6 +282,40 @@ class TestPluginManagerClone:
 
 
 # =============================================================================
+# Mock Model for Agent Tests
+# =============================================================================
+
+from typing import Any, AsyncIterator
+from unittest.mock import AsyncMock
+from hawi.models.model import Model
+from hawi.models.message import MessageRequest
+
+
+class MockModelForAgent(Model):
+    """Minimal mock model for agent tests."""
+
+    @property
+    def model_id(self) -> str:
+        return "mock-model"
+
+    def _get_params(self) -> dict:
+        return {}
+
+    def _prepare_request_impl(self, request: MessageRequest) -> dict:
+        return {}
+
+    def _parse_response_impl(self, response: Any) -> Any:
+        return response
+
+    def _invoke_impl(self, request: MessageRequest) -> Any:
+        raise NotImplementedError
+
+    async def _astream_impl(self, request: MessageRequest) -> AsyncIterator[Any]:
+        yield {"type": "text_delta", "index": 0, "delta": "hello"}
+        yield {"type": "finish", "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+
+# =============================================================================
 # HawiAgent Integration Tests
 # =============================================================================
 
@@ -292,7 +326,7 @@ class TestHawiAgentPluginManagerIntegration:
         """HawiAgent initializes with PluginManager for plugin/tool/hook management."""
         from hawi.agent import HawiAgent
 
-        agent = HawiAgent(model="deepseek-chat")
+        agent = HawiAgent(model=MockModelForAgent())
 
         # Agent should have a PluginManager
         assert hasattr(agent, '_plugin_manager')
@@ -303,7 +337,7 @@ class TestHawiAgentPluginManagerIntegration:
         """agent.plugins returns the PluginManager instance."""
         from hawi.agent import HawiAgent
 
-        agent = HawiAgent(model="deepseek-chat")
+        agent = HawiAgent(model=MockModelForAgent())
 
         # plugins property should return the PluginManager
         assert isinstance(agent.plugins, PluginManager)
@@ -312,7 +346,7 @@ class TestHawiAgentPluginManagerIntegration:
         """Tools can be added to agent via agent.plugins.add_tool()."""
         from hawi.agent import HawiAgent
 
-        agent = HawiAgent(model="deepseek-chat")
+        agent = HawiAgent(model=MockModelForAgent())
         tool = MockTool()
 
         agent.plugins.add_tool(tool)
@@ -323,7 +357,7 @@ class TestHawiAgentPluginManagerIntegration:
         """Tool definitions can be retrieved via agent.plugins.get_tool_definitions()."""
         from hawi.agent import HawiAgent
 
-        agent = HawiAgent(model="deepseek-chat")
+        agent = HawiAgent(model=MockModelForAgent())
         tool = MockTool()
 
         agent.plugins.add_tool(tool)
@@ -337,7 +371,7 @@ class TestHawiAgentPluginManagerIntegration:
         """Cloning an agent clones the PluginManager."""
         from hawi.agent import HawiAgent
 
-        agent = HawiAgent(model="deepseek-chat")
+        agent = HawiAgent(model=MockModelForAgent())
         tool = MockTool()
         agent.plugins.add_tool(tool)
 
@@ -365,7 +399,7 @@ class TestHawiAgentPluginManagerIntegration:
         def factory():
             return TestPlugin()
 
-        agent = HawiAgent(model="deepseek-chat", plugin_factories=[factory])
+        agent = HawiAgent(model=MockModelForAgent(), plugin_factories=[factory])
 
         # Plugin should be created via factory
         assert len(agent.plugins.get_plugins()) == 1
@@ -382,7 +416,7 @@ class TestHawiAgentPluginManagerIntegration:
                 return [MockTool()]
 
         plugin = TestPlugin()
-        agent = HawiAgent(model="deepseek-chat", plugins=[plugin])
+        agent = HawiAgent(model=MockModelForAgent(), plugins=[plugin])
 
         # Plugin should be registered
         assert len(agent.plugins.get_plugins()) == 1

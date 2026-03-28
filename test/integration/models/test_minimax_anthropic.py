@@ -9,14 +9,16 @@ import pytest
 from hawi.models.minimax.minimax_anthropic import MiniMaxAnthropicModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration import get_minimax_api_key
+from test.integration.models import has_factory, create_model, skip_on_rate_limit
 
-# Check if API key is available
-MINIMAX_API_KEY = get_minimax_api_key()
-HAS_MINIMAX_KEY = MINIMAX_API_KEY is not None and MINIMAX_API_KEY.strip() != ""
+# Factory name
+MINIMAX_ANTHROPIC_FACTORY = "minimax-m2.7-anthropic"
 
-# Skip reason for tests requiring API key
-SKIP_REASON = "MiniMax API key not found (set MINIMAX_API_KEY or configure models.yaml)"
+# Check if factories are available
+HAS_MINIMAX_ANTHROPIC = has_factory(MINIMAX_ANTHROPIC_FACTORY)
+
+# Skip reason for tests requiring factory
+SKIP_REASON = f"Factory '{MINIMAX_ANTHROPIC_FACTORY}' not found in models.yaml"
 
 
 def _is_minimax_retryable_error(e: Exception) -> bool:
@@ -158,18 +160,16 @@ class TestMiniMaxAnthropicUnit:
         assert "metadata" not in req
 
 
-@pytest.mark.skipif(not HAS_MINIMAX_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_MINIMAX_ANTHROPIC, reason=SKIP_REASON)
 class TestMiniMaxAnthropicM25Integration:
     """Integration tests for MiniMax M2.5 model requiring real API access."""
 
     @pytest.fixture
     def model(self) -> MiniMaxAnthropicModel:
-        """Create a MiniMax M2.5 model instance."""
-        return MiniMaxAnthropicModel(
-            model_id="MiniMax-M2.5",
-            api_key=MINIMAX_API_KEY,
-        )
+        """Create a MiniMax M2.5 model instance from registry."""
+        return create_model(MINIMAX_ANTHROPIC_FACTORY)
 
+    @skip_on_rate_limit
     def test_simple_chat_completion(self, model: MiniMaxAnthropicModel):
         """Test basic chat completion with M2.5."""
         response = model.invoke(
@@ -192,6 +192,7 @@ class TestMiniMaxAnthropicM25Integration:
         assert response.usage["input_tokens"] > 0
         assert response.usage["output_tokens"] > 0
 
+    @skip_on_rate_limit
     def test_streaming_response(self, model: MiniMaxAnthropicModel):
         """Test streaming response."""
         events = list(model.invoke(
@@ -205,6 +206,7 @@ class TestMiniMaxAnthropicM25Integration:
         assert len(content_events) > 0
         # finish event may not be present in some cases, so we just verify we got content
 
+    @skip_on_rate_limit
     def test_tool_call_formatting(self, model: MiniMaxAnthropicModel):
         """Test tool call request formatting."""
         from hawi.models.message import ToolDefinition
@@ -237,6 +239,7 @@ class TestMiniMaxAnthropicM25Integration:
             assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
+    @skip_on_rate_limit
     def test_multi_turn_conversation(self, model: MiniMaxAnthropicModel):
         """Test multi-turn conversation."""
         messages = [
@@ -262,17 +265,14 @@ class TestMiniMaxAnthropicM25Integration:
         assert "Alice" in response_text
 
 
-@pytest.mark.skipif(not HAS_MINIMAX_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_MINIMAX_ANTHROPIC, reason=SKIP_REASON)
 class TestMiniMaxAnthropicM21Integration:
     """Integration tests for MiniMax M2.1 model requiring real API access."""
 
     @pytest.fixture
     def model(self) -> MiniMaxAnthropicModel:
-        """Create a MiniMax M2.1 model instance."""
-        return MiniMaxAnthropicModel(
-            model_id="MiniMax-M2.1",
-            api_key=MINIMAX_API_KEY,
-        )
+        """Create a MiniMax M2.1 model instance from registry."""
+        return create_model(MINIMAX_ANTHROPIC_FACTORY, model_id="MiniMax-M2.1")
 
     def test_simple_chat_completion(self, model: MiniMaxAnthropicModel):
         """Test basic chat completion with M2.1."""

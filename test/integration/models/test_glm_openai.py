@@ -9,15 +9,22 @@ import pytest
 from hawi.models.openai import OpenAIModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration.models import get_glm_api_key
+from test.integration.models import (
+    has_factory, 
+    create_model,
+    skip_on_rate_limit,
+    async_skip_on_rate_limit,
+)
 
 
-# Check if API key is available
-GLM_API_KEY = get_glm_api_key()
-HAS_GLM_KEY = GLM_API_KEY is not None and GLM_API_KEY.strip() != ""
+# Factory names
+GLM_FACTORY = "glm-4.7-flash-openai"
 
-# Skip reason for tests requiring API key
-SKIP_REASON = "GLM API key not found (set GLM_API_KEY or configure models.yaml)"
+# Check if factories are available
+HAS_GLM = has_factory(GLM_FACTORY)
+
+# Skip reason for tests requiring factory
+SKIP_REASON = f"Factory '{GLM_FACTORY}' not found in models.yaml"
 
 
 def _create_user_message(content: str) -> Message:
@@ -73,28 +80,21 @@ class TestGLMOpenAIUnit:
         assert model.model_id == "glm-4-air"
 
 
-@pytest.mark.skipif(not HAS_GLM_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_GLM, reason=SKIP_REASON)
 class TestGLMOpenAIIntegration:
     """Integration tests for GLM using standard OpenAIModel."""
 
     @pytest.fixture
     def model(self) -> OpenAIModel:
-        """Create a GLM-4-Flash model instance using standard OpenAIModel."""
-        return OpenAIModel(
-            model_id="glm-4-flash",
-            api_key=GLM_API_KEY,
-            base_url="https://open.bigmodel.cn/api/paas/v4",
-        )
+        """Create a GLM-4-Flash model instance from registry."""
+        return create_model(GLM_FACTORY)
 
     @pytest.fixture
     def model_glm4(self) -> OpenAIModel:
-        """Create a GLM-4 model instance using standard OpenAIModel."""
-        return OpenAIModel(
-            model_id="glm-4",
-            api_key=GLM_API_KEY,
-            base_url="https://open.bigmodel.cn/api/paas/v4",
-        )
+        """Create a GLM-4 model instance from registry."""
+        return create_model(GLM_FACTORY, model_id="glm-4")
 
+    @skip_on_rate_limit
     def test_simple_chat_completion(self, model: OpenAIModel):
         """Test basic chat completion with GLM-4-Flash using standard OpenAIModel."""
         response = model.invoke(
@@ -111,6 +111,7 @@ class TestGLMOpenAIIntegration:
         assert response.usage["input_tokens"] > 0
         assert response.usage["output_tokens"] > 0
 
+    @skip_on_rate_limit
     def test_streaming_response(self, model: OpenAIModel):
         """Test streaming response with standard OpenAIModel."""
         events = list(model.invoke(
@@ -126,6 +127,7 @@ class TestGLMOpenAIIntegration:
         assert len(finish_events) == 1
         assert finish_events[0]["stop_reason"] == "end_turn"
 
+    @skip_on_rate_limit
     def test_tool_call_formatting(self, model: OpenAIModel):
         """Test tool call request formatting with standard OpenAIModel."""
         from hawi.models.message import ToolDefinition
@@ -158,6 +160,7 @@ class TestGLMOpenAIIntegration:
             assert "location" in content_list[0]["arguments"]
             assert response.stop_reason == "tool_use"
 
+    @skip_on_rate_limit
     def test_multi_turn_conversation(self, model: OpenAIModel):
         """Test multi-turn conversation with standard OpenAIModel."""
         messages = [
@@ -178,6 +181,7 @@ class TestGLMOpenAIIntegration:
 
         assert "Alice" in response2_content[0].get("text", "")
 
+    @skip_on_rate_limit
     def test_glm4_chat_completion(self, model_glm4: OpenAIModel):
         """Test GLM-4 model with standard OpenAIModel."""
         response = model_glm4.invoke(
@@ -193,20 +197,17 @@ class TestGLMOpenAIIntegration:
         assert response.usage is not None
 
 
-@pytest.mark.skipif(not HAS_GLM_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_GLM, reason=SKIP_REASON)
 class TestGLMOpenAIAsync:
     """Async integration tests for GLM using standard OpenAIModel."""
 
     @pytest.fixture
     def model(self) -> OpenAIModel:
-        """Create a GLM-4-Flash model instance using standard OpenAIModel."""
-        return OpenAIModel(
-            model_id="glm-4-flash",
-            api_key=GLM_API_KEY,
-            base_url="https://open.bigmodel.cn/api/paas/v4",
-        )
+        """Create a GLM model instance from registry."""
+        return create_model(GLM_FACTORY)
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_chat_completion(self, model: OpenAIModel):
         """Test async non-streaming chat completion with standard OpenAIModel."""
         events = []
@@ -233,6 +234,7 @@ class TestGLMOpenAIAsync:
         assert "GLM" in full_text or "Async" in full_text
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_streaming_chat_completion(self, model: OpenAIModel):
         """Test async streaming chat completion with standard OpenAIModel."""
         events = []
@@ -252,6 +254,7 @@ class TestGLMOpenAIAsync:
         assert "1" in full_text and "3" in full_text
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_streaming_events_structure(self, model: OpenAIModel):
         """Test that async streaming produces correct event sequence."""
         events = []
@@ -271,6 +274,7 @@ class TestGLMOpenAIAsync:
         assert event_types[-1] == "finish"
 
     @pytest.mark.asyncio
+    @async_skip_on_rate_limit
     async def test_async_non_streaming_default(self, model: OpenAIModel):
         """Test that ainvoke defaults to non-streaming."""
         events = []

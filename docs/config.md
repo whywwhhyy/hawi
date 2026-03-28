@@ -16,21 +16,19 @@ Hawi 提供灵活的配置系统，支持 YAML 配置文件、环境变量和程
 ### 基本结构
 
 ```yaml
-# API Key 别名定义
-api_keys:
-  deepseek: sk-xxxxxxxxxxxxxxxxxxxxxxxx
-  kimi: sk-yyyyyyyyyyyyyyyyyyyyyyyy
-  openai: sk-zzzzzzzzzzzzzzzzzzzzzzzz
+# 属性模板定义
+templates:
+  deepseek-apikey:
+    api_key: sk-xxxxxxxxxxxxxxxxxxxxxxxx
+  
+  deepseek-base:
+    parent: deepseek-apikey
+    class: DeepSeekOpenAIModel
+    timeout: 60
+    max_retries: 3
 
 # 模型工厂定义
 factories:
-  # 基础配置
-  deepseek-base:
-    class: DeepSeekOpenAIModel
-    api_key: ${api_keys.deepseek}
-    timeout: 60
-    max_retries: 3
-  
   # 继承基础配置
   deepseek-chat:
     parent: deepseek-base
@@ -39,32 +37,11 @@ factories:
   deepseek-reasoner:
     parent: deepseek-base
     model_id: deepseek-reasoner
-    
-  # Kimi 配置
-  kimi-k2:
-    class: KimiOpenAIModel
-    api_key: ${api_keys.kimi}
-    model_id: kimi-k2-5
-    temperature: 0.7
 ```
 
 ### 占位符语法
 
-配置文件支持两种占位符：
-
-#### 1. API Key 别名
-
-```yaml
-api_keys:
-  mykey: sk-xxxxxxxxxx
-
-factories:
-  mymodel:
-    class: OpenAIModel
-    api_key: ${api_keys.mykey}  # 引用上面定义的别名
-```
-
-#### 2. 环境变量
+配置文件支持环境变量占位符：
 
 ```yaml
 factories:
@@ -171,18 +148,30 @@ if model_registry.has_factory("deepseek-chat"):
 ### models.yaml（新格式）
 
 ```yaml
-api_keys:
-  ds: sk-xxxxxxxxxxxxxxxxxxxxxxxx
-  kimi: sk-yyyyyyyyyyyyyyyyyyyyyyyy
-  openai: sk-zzzzzzzzzzzzzzzzzzzzzzzz
-
-factories:
+templates:
   # ========== DeepSeek ==========
+  deepseek-apikey:
+    api_key: sk-xxxxxxxxxxxxxxxxxxxxxxxx
+  
   deepseek-base:
+    parent: deepseek-apikey
     class: DeepSeekOpenAIModel
-    api_key: ${api_keys.ds}
     timeout: 60
   
+  # ========== Kimi ==========
+  kimi-config:
+    class: KimiOpenAIModel
+    api_key: sk-yyyyyyyyyyyyyyyyyyyyyyyy
+    temperature: 0.7
+    max_tokens: 8192
+  
+  # ========== OpenAI ==========
+  openai-config:
+    class: OpenAIModel
+    api_key: sk-zzzzzzzzzzzzzzzzzzzzzzzz
+    temperature: 0.7
+
+factories:
   deepseek-chat:
     parent: deepseek-base
     model_id: deepseek-chat
@@ -191,24 +180,16 @@ factories:
     parent: deepseek-base
     model_id: deepseek-reasoner
   
-  # ========== Kimi ==========
   kimi-k2:
-    class: KimiOpenAIModel
-    api_key: ${api_keys.kimi}
+    parent: kimi-config
     model_id: kimi-k2-5
-    temperature: 0.7
-    max_tokens: 8192
   
-  # ========== OpenAI ==========
   gpt-4o:
-    class: OpenAIModel
-    api_key: ${api_keys.openai}
+    parent: openai-config
     model_id: gpt-4o
-    temperature: 0.7
   
   gpt-4o-mini:
-    class: OpenAIModel
-    api_key: ${api_keys.openai}
+    parent: openai-config
     model_id: gpt-4o-mini
 ```
 
@@ -239,17 +220,18 @@ model = model_registry.create_model("my-gpt-4")
 
 ## 配置继承
 
-工厂配置支持继承，子配置可以覆盖父配置的参数：
+工厂配置支持继承，子配置可以覆盖父配置的参数。支持继承 template 或 factory：
 
 ```yaml
-factories:
-  # 基础配置
+templates:
+  # 基础配置（可被多个 factory 继承）
   openai-base:
     class: OpenAIModel
     api_key: ${OPENAI_API_KEY}
     timeout: 60
     temperature: 0.7
-  
+
+factories:
   # 继承并覆盖
   gpt-4-creative:
     parent: openai-base
@@ -265,6 +247,8 @@ factories:
 **注意**：
 - `class` 和 `arguments` 都可以继承和覆盖
 - 子配置的参数完全覆盖父配置的同名参数（不是合并）
+- Factory 可以继承 template 或其他 factory
+- Template 只能继承其他 template
 - 支持多级继承，但请避免循环依赖
 
 ## 与 Agent 集成
@@ -309,17 +293,22 @@ model = model_registry.create_model(
 
 1. **分离敏感信息**
    ```yaml
-   # 将 API Key 放在用户级配置
+   # 将 API Key 放在用户级 templates
    # ~/.hawi/models.yaml
-   api_keys:
-     openai: sk-...
+   templates:
+     openai-apikey:
+       api_key: sk-...
    
-   # 项目配置只定义工厂
+   # 项目配置继承并定义工厂
    # ./.hawi/models.yaml
+   templates:
+     openai-config:
+       parent: openai-apikey  # 从用户级配置继承 api_key
+       class: OpenAIModel
+   
    factories:
      gpt-4o:
-       class: OpenAIModel
-       api_key: ${api_keys.openai}
+       parent: openai-config
        model_id: gpt-4o
    ```
 

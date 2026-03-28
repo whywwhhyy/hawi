@@ -14,7 +14,7 @@ from hawi.models.registry import (
     FactoryConfig,
     CircularDependencyError,
     UnknownFactoryError,
-    UnknownApiKeyAliasError,
+    InvalidInheritanceError,
     model_registry,
     create_model,
     get_model_class,
@@ -257,6 +257,123 @@ class TestFactoryInheritance:
         assert resolved.arguments["temperature"] == 0.7  # from parent
         assert resolved.arguments["max_tokens"] == 256  # own
 
+    def test_factory_multiple_parents_order(self):
+        """Test factory with multiple parents - later parents override earlier ones."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        # Register templates with same key but different values
+        registry.register_template("first", {"api_key": "first-key", "temperature": 0.5})
+        registry.register_template("second", {"api_key": "second-key", "temperature": 0.7})
+        registry.register_template("third", {"api_key": "third-key"})
+
+        # Factory with multiple parents: [first, second, third]
+        # Expected: third's api_key wins, temperature from second (not overridden by third)
+        registry.register_factory(
+            "multi-parent-model",
+            "OpenAIModel",
+            {"model_id": "gpt-4"},
+            parents=["first", "second", "third"],
+            quiet=True,
+        )
+
+        resolved = registry._resolve_factory("multi-parent-model")
+        assert resolved.arguments["api_key"] == "third-key"  # from third (last)
+        assert resolved.arguments["temperature"] == 0.7  # from second
+        assert resolved.arguments["model_id"] == "gpt-4"  # own
+
+    def test_factory_mixed_parents_template_and_factory(self):
+        """Test factory inheriting from both templates and factories in specific order."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        # Template provides base config
+        registry.register_template("base-config", {"base_url": "https://api1.com", "timeout": 30})
+
+        # Factory provides model-specific config
+        registry.register_factory(
+            "model-base",
+            "OpenAIModel",
+            {"temperature": 0.7, "base_url": "https://api2.com"},  # overrides template's base_url
+            quiet=True,
+        )
+
+        # Another template for auth
+        registry.register_template("auth-config", {"api_key": "secret-key"})
+
+        # Factory with mixed parents: template -> factory -> template
+        registry.register_factory(
+            "final-model",
+            "OpenAIModel",
+            {"max_tokens": 512},
+            parents=["base-config", "model-base", "auth-config"],
+            quiet=True,
+        )
+
+        resolved = registry._resolve_factory("final-model")
+        # Order: base-config -> model-base -> auth-config -> own
+        assert resolved.arguments["base_url"] == "https://api2.com"  # from model-base
+        assert resolved.arguments["timeout"] == 30  # from base-config
+        assert resolved.arguments["temperature"] == 0.7  # from model-base
+        assert resolved.arguments["api_key"] == "secret-key"  # from auth-config (last)
+        assert resolved.arguments["max_tokens"] == 512  # own
+
+
+class TestTemplateInheritance:
+    """Tests for template parent/inheritance."""
+
+    def test_template_inherits_from_template(self):
+        """Test that template can inherit from another template."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_template("base", {"api_key": "base-key", "temperature": 0.5})
+        registry.register_template("child", {"temperature": 0.7}, parents=["base"])
+
+        resolved = registry._resolve_template("child")
+        assert resolved.arguments["api_key"] == "base-key"
+        assert resolved.arguments["temperature"] == 0.7  # overridden
+
+    def test_template_multiple_parents_order(self):
+        """Test template with multiple parents - later parents override earlier ones."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_template("first", {"a": 1, "b": 1, "c": 1})
+        registry.register_template("second", {"b": 2, "c": 2})
+        registry.register_template("third", {"c": 3})
+        registry.register_template("combined", {"d": 4}, parents=["first", "second", "third"])
+
+        resolved = registry._resolve_template("combined")
+        assert resolved.arguments["a"] == 1  # from first
+        assert resolved.arguments["b"] == 2  # from second (overrides first)
+        assert resolved.arguments["c"] == 3  # from third (overrides second)
+        assert resolved.arguments["d"] == 4  # own
+
+    def test_template_inherits_class_from_parent(self):
+        """Test that template can inherit __class from parent template."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_template("base", {"api_key": "key"}, class_name="OpenAIModel")
+        registry.register_template("child", {"temperature": 0.5}, parents=["base"])
+
+        resolved = registry._resolve_template("child")
+        assert resolved.class_name == "OpenAIModel"
+        assert resolved.arguments["api_key"] == "key"
+        assert resolved.arguments["temperature"] == 0.5
+
+    def test_template_cannot_inherit_from_factory(self):
+        """Test that template cannot inherit from factory."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_factory("some-factory", "OpenAIModel", {"api_key": "test"})
+        registry.register_template("bad-template", {}, parents=["some-factory"])
+
+        with pytest.raises(InvalidInheritanceError):
+            registry._resolve_template("bad-template")
+
 
 class TestEnvironmentVariableResolution:
     """Tests for ${ENV_VAR} syntax resolution."""
@@ -316,83 +433,6 @@ class TestEnvironmentVariableResolution:
         with patch.dict(os.environ, {"ITEM": "resolved"}):
             result = registry._resolve_substitutions(["${ITEM}", "static", "${ITEM}"])
             assert result == ["resolved", "static", "resolved"]
-
-
-class TestApiKeyAliasResolution:
-    """Tests for ${api_keys.ALIAS} syntax resolution."""
-
-    def test_resolve_api_key_alias(self):
-        """Test resolving ${api_keys.ALIAS} syntax."""
-        registry = ModelRegistry()
-        registry._api_keys = {"my-key": "secret-api-key"}
-
-        result = registry._resolve_substitutions({"api_key": "${api_keys.my-key}"})
-        assert result["api_key"] == "secret-api-key"
-
-    def test_resolve_unknown_api_key_alias_raises_error(self):
-        """Test that unknown alias raises UnknownApiKeyAliasError."""
-        registry = ModelRegistry()
-        registry._api_keys = {}
-
-        with pytest.raises(UnknownApiKeyAliasError) as exc_info:
-            registry._resolve_substitutions({"api_key": "${api_keys.unknown}"})
-        assert "${api_keys.unknown}" in str(exc_info.value)
-        assert "Available aliases" in str(exc_info.value)
-
-    def test_resolve_embedded_api_key_alias(self):
-        """Test ${api_keys.ALIAS} embedded in string."""
-        registry = ModelRegistry()
-        registry._api_keys = {"my-key": "secret123"}
-
-        result = registry._resolve_substitutions(
-            {"header": "Bearer ${api_keys.my-key}"}
-        )
-        assert result["header"] == "Bearer secret123"
-
-    def test_api_key_alias_priority_over_env_var(self):
-        """Test that api_key alias has priority over env var with same name."""
-        registry = ModelRegistry()
-        registry._api_keys = {"deepseek": "alias-key"}
-
-        with patch.dict(os.environ, {"api_key:deepseek": "env-key"}):
-            result = registry._resolve_substitutions({"api_key": "${api_keys.deepseek}"})
-            # Should resolve to alias value, not env var
-            assert result["api_key"] == "alias-key"
-
-    def test_resolve_nested_dict_with_api_key(self):
-        """Test api_key alias resolution in nested dictionaries."""
-        registry = ModelRegistry()
-        registry._api_keys = {"test-key": "resolved"}
-
-        result = registry._resolve_substitutions(
-            {
-                "level1": {
-                    "level2": {"api_key": "${api_keys.test-key}"},
-                }
-            }
-        )
-        assert result["level1"]["level2"]["api_key"] == "resolved"
-
-    def test_resolve_list_with_api_key(self):
-        """Test api_key alias resolution in lists."""
-        registry = ModelRegistry()
-        registry._api_keys = {"key1": "val1", "key2": "val2"}
-
-        result = registry._resolve_substitutions(
-            ["${api_keys.key1}", "static", "${api_keys.key2}"]
-        )
-        assert result == ["val1", "static", "val2"]
-
-    def test_api_key_and_env_var_in_same_string(self):
-        """Test mixed api_key alias and env var in same string."""
-        registry = ModelRegistry()
-        registry._api_keys = {"my-key": "api-secret"}
-
-        with patch.dict(os.environ, {"DOMAIN": "example.com"}):
-            result = registry._resolve_substitutions(
-                {"url": "https://${DOMAIN}/api?key=${api_keys.my-key}"}
-            )
-            assert result["url"] == "https://example.com/api?key=api-secret"
 
 
 class TestConfigLoading:

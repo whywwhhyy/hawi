@@ -75,11 +75,15 @@ from .strands import StrandsModel
 from .registry import (
     CircularDependencyError,
     FactoryConfig,
+    InvalidInheritanceError,
     ModelRegistry,
+    TemplateConfig,
     UnknownFactoryError,
+    UnknownTemplateError,
     create_model,
     get_model_class,
     list_factories,
+    list_templates,
     load_config,
     model_registry,
 )
@@ -147,11 +151,16 @@ __all__ = [
     "ModelRegistry",
     "model_registry",
     "FactoryConfig",
+    "TemplateConfig",
     "CircularDependencyError",
     "UnknownFactoryError",
+    "UnknownTemplateError",
+
+    "InvalidInheritanceError",
     # Convenience functions
     "create_model",
     "get_model_class",
     "load_config",
     "list_factories",
+    "list_templates",
 ]

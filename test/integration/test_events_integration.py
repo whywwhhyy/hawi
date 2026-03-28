@@ -16,15 +16,16 @@ from hawi.models import Model
 from hawi.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool
+from test.integration.models import has_factory, create_model
 
-from test.integration.models import get_deepseek_api_key
 
+# Factory name
+DEEPSEEK_FACTORY = "deepseek-chat-openai"
 
-# Check if API key is available
-DEEPSEEK_API_KEY = get_deepseek_api_key()
-HAS_DEEPSEEK_KEY = DEEPSEEK_API_KEY is not None and DEEPSEEK_API_KEY.strip() != ""
+# Check if factory is available
+HAS_DEEPSEEK = has_factory(DEEPSEEK_FACTORY)
 
-SKIP_REASON = "DeepSeek API key not found (set DEEPSEEK_API_KEY or configure models.yaml)"
+SKIP_REASON = f"Factory '{DEEPSEEK_FACTORY}' not found in models.yaml"
 
 
 class CalculatorPlugin(HawiPlugin):
@@ -50,17 +51,14 @@ class CalculatorPlugin(HawiPlugin):
             return f"Error: {e}"
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK, reason=SKIP_REASON)
 class TestEventFlowWithAgent:
     """Integration tests for event flow with real Agent execution."""
 
     @pytest.fixture
     def model(self) -> Model:
-        """Create a DeepSeek model instance."""
-        return DeepSeekModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create a DeepSeek model instance from registry."""
+        return create_model(DEEPSEEK_FACTORY)
 
     @pytest.fixture
     def agent(self, model: Model) -> HawiAgent:
@@ -281,16 +279,14 @@ class TestEventFlowWithAgent:
         assert run_stop_events[0].stop_reason == "end_turn"
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK, reason=SKIP_REASON)
 class TestEventFiltering:
     """Tests for event filtering and selective subscription."""
 
     @pytest.fixture
     def model(self) -> Model:
-        return DeepSeekModel(
-            model_id="deepseek-chat",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create DeepSeek model from registry."""
+        return create_model(DEEPSEEK_FACTORY)
 
     @pytest.fixture
     def agent(self, model: Model) -> HawiAgent:
@@ -345,16 +341,16 @@ class TestEventFiltering:
         assert "agent.run_start" in all_events
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_KEY, reason=SKIP_REASON)
+@pytest.mark.skipif(not HAS_DEEPSEEK, reason=SKIP_REASON)
 class TestEventWithReasoningModel:
     """Tests for events with reasoning/thinking models."""
 
+    DEEPSEEK_REASONER_FACTORY = "deepseek-reasoner-openai"
+
     @pytest.fixture
     def model(self) -> Model:
-        return DeepSeekModel(
-            model_id="deepseek-reasoner",
-            api_key=DEEPSEEK_API_KEY,
-        )
+        """Create DeepSeek Reasoner model from registry."""
+        return create_model(self.DEEPSEEK_REASONER_FACTORY)
 
     @pytest.fixture
     def agent(self, model: Model) -> HawiAgent:
