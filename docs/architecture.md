@@ -46,7 +46,7 @@ Hawi 采用分层架构设计，确保关注点分离和单向依赖。
 ### 1. 单向依赖
 
 ```
-agent → tool → utils
+agent → tool → utils → gui (optional)
 ```
 
 - 上层可以依赖下层
@@ -207,6 +207,26 @@ ExitHandler            # 退出处理器（多层清理保证）
 RichPrinter            # 富文本终端输出
 BasePrinter            # 基类（自定义实现）
 PlainPrinter           # 纯文本逐行输出
+```
+
+### GUI 模块
+
+```python
+# 主应用
+HawiGuiApp             # GUI 主应用类
+python -m hawi_gui     # 命令行启动
+
+# 核心组件
+ChatView               # 聊天视图（流式输出、工具调用显示）
+InputArea              # 输入区域（优先级切换、发送）
+StatusBarFrame         # 状态栏（调度器/Agent状态、队列长度）
+ModelSelectionDialog   # 模型选择对话框
+
+# 通信协议
+SchedulerThread        # 调度器桥接线程
+CmdEnqueue             # 消息入队命令
+UiTextDelta            # 流式文本更新
+UiToolCall/UiToolResult # 工具调用/结果展示
 ```
 
 ## 扩展点
