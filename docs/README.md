@@ -19,6 +19,7 @@ Hawi Agent 框架的官方文档。
 | [models.md](./models.md) | 模型适配器使用指南 |
 | [tools.md](./tools.md) | 工具系统使用指南 |
 | [lifecycle.md](./lifecycle.md) | 生命周期管理（ExitHandler） |
+| [loader.md](./loader.md) | ModuleLoader 动态模块加载器 |
 | [config.md](./config.md) | 配置系统（YAML/环境变量） |
 | [messages.md](./messages.md) | 消息类型系统详解 |
 | [result.md](./result.md) | Agent 执行结果 |
