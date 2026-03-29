@@ -269,6 +269,39 @@ agent = HawiAgent(model=model)
 result = agent.run("Hello!")
 ```
 
+### 运行时模型切换
+
+支持在 Agent 运行过程中动态切换模型，无需重建 Agent 实例，保留现有上下文：
+
+```python
+from hawi.agent import HawiAgent
+from hawi.models import DeepSeekModel
+
+# 初始化 Agent
+agent = HawiAgent(model="deepseek-chat")
+
+# 与 Agent 对话
+result = agent.run("Hello!")
+
+# 运行时切换到其他模型（保留上下文）
+agent.set_model("kimi-k2-5")
+
+# 继续对话，使用新模型
+result = agent.run("继续刚才的话题")
+
+# 也可以直接传入 Model 实例
+agent.set_model(DeepSeekModel(model_id="deepseek-reasoner"))
+
+# 获取当前模型
+current_model = agent.model
+print(f"当前模型: {current_model.model_id}")
+```
+
+这种方式在以下场景特别有用：
+- **多模型对比**：对同一问题使用不同模型对比结果
+- **成本优化**：简单任务用便宜模型，复杂任务用强大模型
+- **GUI 切换**：用户可以在界面上实时切换模型（如 Ctrl+M 快捷键）
+
 ## Strands 适配器
 
 使用 Strands 框架的模型：

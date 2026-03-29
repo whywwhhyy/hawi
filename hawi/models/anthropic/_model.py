@@ -245,6 +245,24 @@ class AnthropicModel(Model):
         """模型标识符"""
         return self._model_id
 
+    def reset(self) -> None:
+        """重置模型状态，关闭并清除缓存的客户端连接。"""
+        super().reset()
+        # Close and clear cached clients
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+            self._client = None
+        if self._async_client is not None:
+            try:
+                # Async client will be garbage collected
+                pass
+            except Exception:
+                pass
+            self._async_client = None
+
     @property
     def client(self) -> Anthropic:
         """获取或创建 Anthropic 客户端"""

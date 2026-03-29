@@ -106,6 +106,16 @@ class Model(ABC):
         # 此时同步调用 invoke/stream 会被阻止，以避免阻塞事件循环
         self._async_only: bool = False
 
+    def reset(self) -> None:
+        """重置模型状态。
+
+        清除缓存的客户端连接和其他运行时状态。
+        在切换模型时调用，确保旧模型资源被正确释放。
+
+        子类应覆盖此方法以清理特定资源，并调用 super().reset()。
+        """
+        pass  # 基类无资源需要清理
+
     @property
     @abstractmethod
     def model_id(self) -> str:

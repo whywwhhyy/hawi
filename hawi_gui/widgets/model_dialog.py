@@ -1,6 +1,7 @@
 """ModelSelectionDialog — model picker used at startup and for in-app switching."""
 
 from __future__ import annotations
+from typing import Callable
 
 import tkinter as tk
 from tkinter import ttk
@@ -57,7 +58,7 @@ class ModelSelectionDialog(tk.Toplevel):
         pad = {"padx": 16, "pady": 8}
 
         # Title label
-        ttk.Label(self, text="选择模型工厂", font=("TkDefaultFont", 14, "bold")).pack(**pad)
+        ttk.Label(self, text="Select Model", font=("TkDefaultFont", 14, "bold")).pack(**pad)
 
         # Search box
         self._search_var = tk.StringVar()
@@ -65,9 +66,11 @@ class ModelSelectionDialog(tk.Toplevel):
         search_frame = ttk.Frame(self)
         search_frame.pack(fill=tk.X, padx=16, pady=(0, 4))
         ttk.Label(search_frame, text="搜索:").pack(side=tk.LEFT)
-        ttk.Entry(search_frame, textvariable=self._search_var, width=30).pack(
-            side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True
-        )
+        self._search_entry = ttk.Entry(search_frame, textvariable=self._search_var, width=30)
+        self._search_entry.pack(side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True)
+        self._search_entry.bind("<Up>", self._on_up)
+        self._search_entry.bind("<Down>", self._on_down)
+        self._search_entry.bind("<Return>", self._on_select_event)
 
         # Listbox
         list_frame = tk.Frame(self, bg=COLORS["bg_chat"])
@@ -97,6 +100,12 @@ class ModelSelectionDialog(tk.Toplevel):
         self._listbox.bind("<Double-Button-1>", self._on_select_event)
         self._listbox.bind("<Return>", self._on_select_event)
 
+        # Keyboard navigation
+        self._listbox.bind("<Up>", self._on_up)
+        self._listbox.bind("<Down>", self._on_down)
+        self._listbox.bind("<Key>", self._on_listbox_key)
+        self.bind("<Control-f>", self._focus_search)
+
         # Buttons
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, padx=16, pady=(4, 12))
@@ -112,7 +121,6 @@ class ModelSelectionDialog(tk.Toplevel):
         # Select first item
         if self._factories:
             self._listbox.selection_set(0)
-            self._listbox.focus_set()
 
     def _populate(self, items: list[str]):
         self._listbox.delete(0, tk.END)
@@ -139,6 +147,59 @@ class ModelSelectionDialog(tk.Toplevel):
     def _on_cancel(self):
         self.result = None
         self.destroy()
+
+    def _on_up(self, event=None):
+        """Move selection up, wrapping to bottom at top."""
+        items = self._listbox.get(0, tk.END)
+        if not items:
+            return "break"
+        sel = self._listbox.curselection()
+        if sel:
+            idx = sel[0]
+            new_idx = len(items) - 1 if idx == 0 else idx - 1
+        else:
+            new_idx = len(items) - 1
+        self._listbox.selection_clear(0, tk.END)
+        self._listbox.selection_set(new_idx)
+        self._listbox.see(new_idx)
+        return "break"
+
+    def _on_down(self, event=None):
+        """Move selection down, wrapping to top at bottom."""
+        items = self._listbox.get(0, tk.END)
+        if not items:
+            return "break"
+        sel = self._listbox.curselection()
+        if sel:
+            idx = sel[0]
+            new_idx = 0 if idx >= len(items) - 1 else idx + 1
+        else:
+            new_idx = 0
+        self._listbox.selection_clear(0, tk.END)
+        self._listbox.selection_set(new_idx)
+        self._listbox.see(new_idx)
+        return "break"
+
+    def _on_listbox_key(self, event):
+        """Redirect printable characters to search box."""
+        # Ignore special keys
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab", "Home", "End",
+                            "Prior", "Next", "Shift_L", "Shift_R", "Control_L", "Control_R",
+                            "Alt_L", "Alt_R", "Meta_L", "Meta_R"):
+            return
+        # Redirect printable characters to search
+        if event.char and event.char.isprintable():
+            self._search_entry.focus_set()
+            current = self._search_var.get()
+            self._search_var.set(current + event.char)
+            self._search_entry.icursor(tk.END)
+            return "break"
+
+    def _focus_search(self, event=None):
+        """Focus the search entry."""
+        self._search_entry.focus_set()
+        self._search_entry.select_range(0, tk.END)
+        return "break"
 
     def _center(self, parent: tk.Widget):
         self.update_idletasks()

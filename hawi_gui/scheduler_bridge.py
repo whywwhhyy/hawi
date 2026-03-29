@@ -182,13 +182,14 @@ class SchedulerThread(threading.Thread):
                         self._scheduler.clear_queue(cmd.queue)
 
             elif isinstance(cmd, CmdSwitchModel):
-                await self._teardown_scheduler()
-                try:
-                    await self._init_scheduler(cmd.factory_name)
-                    self.factory_name = cmd.factory_name
-                    self._send_ui(UiReady(factory_name=cmd.factory_name))
-                except Exception as exc:
-                    self._send_ui(UiError(message=f"切换模型失败: {exc}"))
+                # Switch model without recreating scheduler - preserves context
+                if self._scheduler:
+                    try:
+                        self._scheduler.agent.set_model(cmd.factory_name)
+                        self.factory_name = cmd.factory_name
+                        self._send_ui(UiReady(factory_name=cmd.factory_name))
+                    except Exception as exc:
+                        self._send_ui(UiError(message=f"切换模型失败: {exc}"))
 
     # ─── Event handlers ───────────────────────────────────────────────────────
 

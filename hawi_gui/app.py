@@ -88,7 +88,11 @@ class HawiGuiApp:
 
     def _build_widgets(self):
         # Status bar (top)
-        self.status_bar = StatusBarFrame(self.root, factory_name=self.factory_name)
+        self.status_bar = StatusBarFrame(
+            self.root,
+            factory_name=self.factory_name,
+            on_model_click=self._show_model_switcher,
+        )
         self.status_bar.pack(side=tk.TOP, fill=tk.X)
 
         # Chat view (middle, expands)
@@ -101,6 +105,7 @@ class HawiGuiApp:
 
     def _bind_shortcuts(self):
         self.root.bind("<Control-l>", self._cmd_clear_context)
+        self.root.bind("<Control-m>", self._show_model_switcher_event)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ─── Run ─────────────────────────────────────────────────────────────────
@@ -279,6 +284,11 @@ class HawiGuiApp:
         self.chat_view.add_system("✓ 对话上下文已清空")
 
     # ─── Model switching ──────────────────────────────────────────────────────
+
+    def _show_model_switcher_event(self, event=None):
+        """Handler for Ctrl+M keyboard shortcut."""
+        self._show_model_switcher()
+        return "break"
 
     def _show_model_switcher(self):
         from hawi.models import model_registry

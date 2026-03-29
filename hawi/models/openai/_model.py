@@ -231,6 +231,25 @@ class OpenAIModel(Model):
         """模型标识符"""
         return self._model_id
 
+    def reset(self) -> None:
+        """重置模型状态，关闭并清除缓存的客户端连接。"""
+        super().reset()
+        # Close and clear cached clients
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+            self._client = None
+        if self._async_client is not None:
+            try:
+                # Async client may need async close, but we can't await here
+                # The client will be garbage collected
+                pass
+            except Exception:
+                pass
+            self._async_client = None
+
     @property
     def client(self) -> OpenAI:
         """获取或创建 OpenAI 客户端"""

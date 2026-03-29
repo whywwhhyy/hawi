@@ -236,6 +236,33 @@ class HawiAgent:
         """
         self._context = context
 
+    def set_model(self, model: Model | str) -> None:
+        """Replace the default model for this agent.
+
+        Args:
+            model: New model to use. Can be:
+                - Model instance (direct use)
+                - str (factory name from models.yaml, e.g., "deepseek-chat")
+
+        Example:
+            # Switch to a different model
+            agent.set_model("kimi-k2-5")
+
+            # Or use a model instance directly
+            from hawi.models import DeepSeekModel
+            agent.set_model(DeepSeekModel(model_id="deepseek-chat"))
+        """
+        if isinstance(model, str):
+            model = model_registry.create_model(model)
+        # Reset current model state before replacing
+        self._default_model.reset()
+        self._default_model = model
+
+    @property
+    def model(self) -> Model:
+        """Get the current default model."""
+        return self._default_model
+
     def clone(self) -> HawiAgent:
         """Create a clone of this agent with copied state.
 

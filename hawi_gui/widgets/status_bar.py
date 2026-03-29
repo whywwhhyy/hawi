@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from typing import Callable
 
 from ..protocol import UiStatusUpdate
 from ..theme import COLORS, STATE_COLORS, QUEUE_COLORS
@@ -12,9 +13,16 @@ from ..theme import COLORS, STATE_COLORS, QUEUE_COLORS
 class StatusBarFrame(ttk.Frame):
     """Top bar: Scheduler state | Agent state | Queue lengths | Model name."""
 
-    def __init__(self, parent: tk.Widget, factory_name: str = "", **kwargs):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        factory_name: str = "",
+        on_model_click: Callable[[], None] | None = None,
+        **kwargs
+    ):
         super().__init__(parent, style="StatusBar.TFrame", **kwargs)
         self._factory_name = factory_name
+        self._on_model_click = on_model_click
         self._build()
 
     def _build(self):
@@ -55,12 +63,19 @@ class StatusBarFrame(ttk.Frame):
         )
         self._normal_label.pack(side=tk.LEFT, padx=6, pady=4)
 
-        # Model name (right side)
-        self._model_label = ttk.Label(
-            self, text=self._factory_name,
-            style="StatusBarSecondary.TLabel",
+        # Model name (right side, clickable)
+        self._model_label = tk.Label(
+            self,
+            text=self._factory_name,
+            bg=COLORS["bg_window"],
+            fg=COLORS["queue_normal"],
+            font=("TkDefaultFont", 11, "underline"),
+            cursor="hand2",
         )
         self._model_label.pack(side=tk.RIGHT, padx=8, pady=4)
+
+        if self._on_model_click:
+            self._model_label.bind("<Button-1>", lambda e: self._on_model_click())
 
     def update_status(self, msg: UiStatusUpdate):
         """Update all labels from a UiStatusUpdate message."""
