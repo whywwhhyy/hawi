@@ -14,14 +14,20 @@ from .protocol import (
     CmdStop,
     CmdSwitchModel,
     QueueKind,
+    UiAgentInterrupt,
+    UiDebugInfo,
     UiError,
     UiInterrupt,
+    UiModelMetadata,
+    UiModelRetry,
     UiReady,
     UiRunStart,
     UiRunStop,
     UiStatusUpdate,
     UiTextDelta,
+    UiThinkingDelta,
     UiToolCall,
+    UiToolCallDelta,
     UiToolResult,
 )
 from .scheduler_bridge import SchedulerThread
@@ -34,7 +40,7 @@ from .widgets.status_bar import StatusBarFrame
 HELP_TEXT = (
     "命令: /clear(清空上下文)  /cq(清普通队列)  /chq(清高优队列)  "
     "/cuq(清紧急队列)  /ca(清所有队列)  /quit(退出)\n"
-    "快捷键: Tab(切换优先级)  Ctrl+L(清空上下文)  Esc(清空输入)"
+    "快捷键: Shift+Tab(切换优先级)  Ctrl+L(清空上下文)  Esc(清空输入)"
 )
 
 
@@ -138,12 +144,16 @@ class HawiGuiApp:
             pass
 
         if batch:
+            # Check if at bottom before processing batch
+            at_bottom = self.chat_view._is_at_bottom()
             # Enable text widget once for the whole batch
             self.chat_view.text.config(state=tk.NORMAL)
             for msg in batch:
                 self._dispatch(msg)
             self.chat_view.text.config(state=tk.DISABLED)
-            self.chat_view.text.see(tk.END)
+            # Only auto-scroll if user was already at bottom
+            if at_bottom:
+                self.chat_view.text.see(tk.END)
 
         self.root.after(50, self._poll_ui_queue)
 
@@ -172,6 +182,12 @@ class HawiGuiApp:
                 self.chat_view.start_agent_message(msg.run_id)
             self.chat_view.append_delta(msg.run_id, msg.delta)
 
+        elif isinstance(msg, UiThinkingDelta):
+            if msg.run_id not in self._active_runs:
+                self._active_runs.add(msg.run_id)
+                self.chat_view.start_agent_message(msg.run_id)
+            self.chat_view.append_thinking(msg.run_id, msg.delta)
+
         elif isinstance(msg, UiRunStop):
             self._active_runs.discard(msg.run_id)
             self.chat_view.finish_agent_message(msg.run_id, msg.stop_reason, msg.duration_ms)
@@ -180,7 +196,7 @@ class HawiGuiApp:
             args_preview = ", ".join(
                 f"{k}={str(v)[:40]}" for k, v in msg.arguments.items()
             ) if msg.arguments else ""
-            self.chat_view.add_tool_call(msg.tool_name, args_preview, msg.run_id)
+            self.chat_view.add_tool_call(msg.tool_name, args_preview, msg.run_id, msg.tool_call_id)
 
         elif isinstance(msg, UiToolResult):
             self.chat_view.add_tool_result(
@@ -191,7 +207,41 @@ class HawiGuiApp:
             self.chat_view.add_interrupt(msg.reason)
 
         elif isinstance(msg, UiError):
-            self.chat_view.add_system(f"错误: {msg.message}")
+            self.chat_view.add_error("", msg.message)
+
+        elif isinstance(msg, UiModelMetadata):
+            self.chat_view.add_model_metadata(
+                msg.run_id,
+                msg.input_tokens,
+                msg.output_tokens,
+                msg.total_tokens,
+                msg.latency_ms,
+            )
+
+        elif isinstance(msg, UiModelRetry):
+            self.chat_view.add_retry_info(
+                msg.run_id,
+                msg.attempt,
+                msg.max_retries,
+                msg.error_type,
+                msg.error_message,
+            )
+
+        elif isinstance(msg, UiToolCallDelta):
+            self.chat_view.append_tool_call_delta(
+                msg.run_id,
+                msg.tool_call_id,
+                msg.delta,
+            )
+
+        elif isinstance(msg, UiAgentInterrupt):
+            self.chat_view.add_agent_interrupt(
+                msg.run_id,
+                msg.interrupt_type,
+            )
+
+        elif isinstance(msg, UiDebugInfo):
+            self.chat_view.add_debug_info(msg.message)
 
     # ─── Input handling ───────────────────────────────────────────────────────
 

@@ -36,14 +36,23 @@ class StatusBarFrame(ttk.Frame):
 
         ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, pady=4)
 
-        # Queue lengths
-        self._urgent_label = ttk.Label(self, text="紧急: 0", style="StatusBar.TLabel")
+        # Queue lengths (初始为0，显示灰色)
+        self._urgent_label = ttk.Label(
+            self, text="紧急: 0", style="StatusBar.TLabel",
+            foreground=COLORS["text_secondary"]
+        )
         self._urgent_label.pack(side=tk.LEFT, padx=(12, 6), pady=4)
 
-        self._high_label = ttk.Label(self, text="高优: 0", style="StatusBar.TLabel")
+        self._high_label = ttk.Label(
+            self, text="高优: 0", style="StatusBar.TLabel",
+            foreground=COLORS["text_secondary"]
+        )
         self._high_label.pack(side=tk.LEFT, padx=6, pady=4)
 
-        self._normal_label = ttk.Label(self, text="普通: 0", style="StatusBar.TLabel")
+        self._normal_label = ttk.Label(
+            self, text="普通: 0", style="StatusBar.TLabel",
+            foreground=COLORS["text_secondary"]
+        )
         self._normal_label.pack(side=tk.LEFT, padx=6, pady=4)
 
         # Model name (right side)

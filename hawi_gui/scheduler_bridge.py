@@ -23,14 +23,20 @@ from .protocol import (
     CmdStop,
     CmdSwitchModel,
     QueueKind,
+    UiAgentInterrupt,
+    UiDebugInfo,
     UiError,
     UiInterrupt,
+    UiModelMetadata,
+    UiModelRetry,
     UiReady,
     UiRunStart,
     UiRunStop,
     UiStatusUpdate,
     UiTextDelta,
+    UiThinkingDelta,
     UiToolCall,
+    UiToolCallDelta,
     UiToolResult,
 )
 
@@ -101,6 +107,7 @@ class SchedulerThread(threading.Thread):
         self._active_tool_calls: dict[str, dict] = {}
         self._last_enqueued_kind: QueueKind = "normal"
         self._pending_run: dict[str, QueueKind] = {}
+        self._tool_call_buffers: dict[str, str] = {}  # tool_call_id -> accumulated arguments
 
         agent.event_bus.subscribe(self._on_agent_event)
         self._scheduler.event_bus.subscribe(self._on_scheduler_event)
@@ -207,8 +214,73 @@ class SchedulerThread(threading.Thread):
                     ))
 
         elif etype == "model.content_block_delta":
-            if event.delta_type == "text" and event.delta and self._active_run_id:
+            if not self._active_run_id:
+                return
+            if event.delta_type == "text" and event.delta:
                 self._send_ui(UiTextDelta(delta=event.delta, run_id=self._active_run_id))
+            elif event.delta_type == "reasoning" and event.delta:
+                self._send_ui(UiThinkingDelta(delta=event.delta, run_id=self._active_run_id))
+
+        elif etype == "model.metadata":
+            run_id = self._active_run_id or ""
+            usage = event.usage or {}
+            self._send_ui(UiModelMetadata(
+                run_id=run_id,
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+                latency_ms=event.latency_ms,
+            ))
+
+        elif etype == "model.retry":
+            run_id = self._active_run_id or ""
+            self._send_ui(UiModelRetry(
+                run_id=run_id,
+                attempt=event.attempt,
+                max_retries=event.max_retries,
+                error_type=event.error_type,
+                error_message=event.error_message,
+            ))
+
+        elif etype == "model.error":
+            self._send_ui(UiError(message=f"[Model Error] {event.error.error_type}: {event.error.message}"))
+
+        elif etype == "agent.error":
+            self._send_ui(UiError(message=f"[Agent Error] {event.error.error_type}: {event.error.message}"))
+
+        elif etype == "model.tool_call_block_delta":
+            run_id = self._active_run_id or ""
+            tool_call_id = event.tool_call_id
+            delta = event.arguments_delta
+            # Accumulate and send
+            if tool_call_id not in self._tool_call_buffers:
+                self._tool_call_buffers[tool_call_id] = ""
+            self._tool_call_buffers[tool_call_id] += delta
+            self._send_ui(UiToolCallDelta(
+                run_id=run_id,
+                tool_call_id=tool_call_id,
+                delta=delta,
+            ))
+
+        elif etype == "agent.interrupt":
+            self._send_ui(UiAgentInterrupt(
+                run_id=event.run_id,
+                interrupt_type=event.interrupt_type,
+            ))
+
+        # Debug events
+        elif etype == "model.stream_start":
+            self._send_ui(UiDebugInfo(message=f"Model stream started"))
+
+        elif etype == "model.stream_stop":
+            self._send_ui(UiDebugInfo(message=f"Model stream stopped: {event.stop_reason}"))
+
+        elif etype == "model.content_block_start":
+            self._send_ui(UiDebugInfo(message=f"Content block start: {event.block_type}"))
+
+        elif etype == "model.content_block_stop":
+            block_type = event.block_type if event.content else "unknown"
+            self._send_ui(UiDebugInfo(message=f"Content block stop: {block_type}"))
 
         elif etype == "agent.run_stop":
             self._pending_run.pop(event.run_id, None)
@@ -255,6 +327,9 @@ class SchedulerThread(threading.Thread):
             qk = event.queue_type
             if qk in ("normal", "high_prio", "urgent"):
                 self._last_enqueued_kind = qk
+            self._send_ui(UiDebugInfo(message=f"Dequeue from {qk}"))
+        elif event.type == "scheduler.enqueue":
+            self._send_ui(UiDebugInfo(message=f"Enqueue to {event.queue_type}: {event.content_preview[:30]}..."))
 
     # ─── External API ─────────────────────────────────────────────────────────
 

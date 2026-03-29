@@ -74,6 +74,13 @@ class UiTextDelta:
 
 
 @dataclass
+class UiThinkingDelta:
+    """Streaming thinking/reasoning chunk from the model."""
+    delta: str
+    run_id: str
+
+
+@dataclass
 class UiRunStop:
     """An agent run has completed."""
     run_id: str
@@ -110,4 +117,45 @@ class UiInterrupt:
 @dataclass
 class UiError:
     """An error occurred."""
+    message: str
+
+
+@dataclass
+class UiModelMetadata:
+    """Model metadata (token usage, latency)."""
+    run_id: str
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    latency_ms: float | None
+
+
+@dataclass
+class UiModelRetry:
+    """Model retry information."""
+    run_id: str
+    attempt: int
+    max_retries: int
+    error_type: str
+    error_message: str
+
+
+@dataclass
+class UiToolCallDelta:
+    """Tool call arguments streaming delta."""
+    run_id: str
+    tool_call_id: str
+    delta: str
+
+
+@dataclass
+class UiAgentInterrupt:
+    """Agent was interrupted."""
+    run_id: str
+    interrupt_type: str  # "user" | "scheduler" | "error"
+
+
+@dataclass
+class UiDebugInfo:
+    """Debug information (stream start/stop, enqueue/dequeue, etc)."""
     message: str

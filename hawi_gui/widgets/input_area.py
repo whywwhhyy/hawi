@@ -21,7 +21,7 @@ class InputArea(ttk.Frame):
     ):
         super().__init__(parent, style="InputArea.TFrame", **kwargs)
         self.on_submit = on_submit
-        self._current_queue: QueueKind = "normal"
+        self._current_queue: QueueKind = "high_prio"
         self._queue_order: list[QueueKind] = ["normal", "high_prio", "urgent"]
         self._queue_labels: dict[QueueKind, ttk.Label] = {}
         self._build()
@@ -35,7 +35,7 @@ class InputArea(ttk.Frame):
         indicator_row = ttk.Frame(self, style="InputArea.TFrame")
         indicator_row.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(4, 0))
 
-        ttk.Label(indicator_row, text="Tab 切换:", style="InputArea.TLabel").pack(
+        ttk.Label(indicator_row, text="Shift+Tab 切换:", style="InputArea.TLabel").pack(
             side=tk.LEFT, padx=(0, 4)
         )
         for kind in self._queue_order:
@@ -72,7 +72,7 @@ class InputArea(ttk.Frame):
         # Key bindings
         self.text_input.bind("<Return>",       self._on_return)
         self.text_input.bind("<Escape>",       self._on_escape)
-        self.text_input.bind("<Tab>",          self._on_tab)
+        self.text_input.bind("<Shift-Tab>",    self._on_tab)
 
         # Send button
         self.send_btn = ttk.Button(
@@ -80,6 +80,7 @@ class InputArea(ttk.Frame):
             text="发送",
             style="Send.TButton",
             command=self._send,
+            width=6,
         )
         self.send_btn.pack(side=tk.LEFT, padx=(8, 0))
 
@@ -89,7 +90,7 @@ class InputArea(ttk.Frame):
             if kind == self._current_queue:
                 lbl.config(style="QueueActive.TLabel", foreground=color)
             else:
-                lbl.config(style="QueueInactive.TLabel")
+                lbl.config(style="QueueInactive.TLabel", foreground=COLORS["text_secondary"])
 
     def _on_return(self, event: tk.Event) -> str:
         """Enter sends; Shift+Enter inserts newline."""
