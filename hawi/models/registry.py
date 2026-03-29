@@ -28,6 +28,7 @@ __all__ = [
     "model_registry",
     "create_model",
     "get_model_class",
+    "get_factory_arguments",
     "load_config",
     "list_factories",
     "list_templates",
@@ -437,6 +438,44 @@ class ModelRegistry:
         """检查 factory 是否存在"""
         return name in self._factories
 
+    def get_factory_arguments(self, name: str, expanded: bool = False) -> dict[str, Any]:
+        """获取 Factory 的参数
+
+        Args:
+            name: Factory 名称
+            expanded: 是否展开继承链，获取合并后的完整参数
+                     - False (默认): 返回原始参数（不包含继承的参数）
+                     - True: 返回展开后的完整参数（包含从 parent/template 继承合并后的参数）
+
+        Returns:
+            Factory 的参数字典
+
+        Raises:
+            UnknownFactoryError: factory 不存在
+
+        Example:
+            # 获取原始参数
+            args = registry.get_factory_arguments("deepseek-chat")
+            # {"model_id": "deepseek-chat"}
+
+            # 获取展开后的完整参数（继承链已合并）
+            full_args = registry.get_factory_arguments("deepseek-chat", expanded=True)
+            # {"model_id": "deepseek-chat", "api_key": "...", "temperature": 0.7}
+        """
+        # 自动加载配置（首次使用，除非被显式禁用）
+        self._ensure_auto_load()
+
+        if name not in self._factories:
+            raise UnknownFactoryError(f"Factory '{name}' not found")
+
+        if expanded:
+            # 解析继承链，获取合并后的完整参数
+            resolved = self._resolve_factory(name)
+            return resolved.arguments.copy()
+        else:
+            # 返回原始参数（不包含继承的参数）
+            return self._factories[name].arguments.copy()
+
     # ========================================================================
     # 模型创建
     # ========================================================================
@@ -767,6 +806,19 @@ def create_model(
 def get_model_class(name: str) -> Optional[type[Model]]:
     """通过类名获取 Model 类"""
     return model_registry.get_model_class(name)
+
+
+def get_factory_arguments(name: str, expanded: bool = False) -> dict[str, Any]:
+    """获取 Factory 的参数
+
+    Args:
+        name: Factory 名称
+        expanded: 是否展开继承链，获取合并后的完整参数
+
+    Returns:
+        Factory 的参数字典
+    """
+    return model_registry.get_factory_arguments(name, expanded)
 
 
 def load_config(path: Union[str, Path], quiet: bool = False) -> None:

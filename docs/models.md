@@ -357,7 +357,27 @@ aliases = registry.list_aliases()
 print(aliases)  # {'gpt': 'OpenAIModel', 'deepseek': 'DeepSeekModel', ...}
 ```
 
+### 获取 Factory 参数
+
+使用 `get_factory_arguments()` 方法可以获取已注册 Factory 的配置参数：
+
+```python
+from hawi.models import model_registry
+
+# 获取原始参数（不包含继承的参数）
+args = model_registry.get_factory_arguments("my-model")
+print(args)  # {'model_id': 'my-model'}
+
+# 获取展开后的完整参数（包含从 parent/template 继承的参数）
+full_args = model_registry.get_factory_arguments("my-model", expanded=True)
+print(full_args)  # {'model_id': 'my-model', 'api_key': '...', 'temperature': 0.7}
+```
+
+这对于调试配置或查看继承链展开后的最终参数非常有用。
+
 ### 对象池模式 (obtain_model)
++++++++
+
 
 `obtain_model()` 是 `create()` 的增强版本，支持实例复用（对象池模式）。推荐使用此方法获取模型实例。
 
