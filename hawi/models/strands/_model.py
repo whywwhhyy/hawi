@@ -35,6 +35,7 @@ from hawi.models import (
 from ._converters import (
     _convert_content_to_strands,
     _convert_messages_to_strands,
+    _convert_single_message_to_strands,
     _convert_part_to_strands_block,
     _convert_strands_block_to_part,
     _convert_strands_tool_use_to_part,
@@ -422,6 +423,36 @@ class StrandsModel(Model):
         async for event in strands_stream:
             for chunk in _convert_strands_event_to_stream_part(event, state):
                 yield chunk
+
+    # ==========================================================================
+    # Internal Conversion Methods (for testing and backward compatibility)
+    # ==========================================================================
+
+    def _convert_messages_to_strands(self, messages: list[Message]) -> list[dict[str, Any]]:
+        """Convert Hawi messages to Strands format."""
+        return _convert_messages_to_strands(messages)
+
+    def _convert_single_message_to_strands(self, msg: Message) -> dict[str, Any]:
+        """Convert single Hawi message to Strands format."""
+        return _convert_single_message_to_strands(msg)
+
+    def _convert_tool_definition_to_strands(self, tool: ToolDefinition) -> dict[str, Any]:
+        """Convert Hawi tool definition to Strands format."""
+        return _convert_tool_definition_to_strands(tool)
+
+    def _convert_tool_choice_to_strands(self, tool_choice: ToolChoice) -> dict[str, Any]:
+        """Convert Hawi tool choice to Strands format."""
+        return _convert_tool_choice_to_strands(tool_choice)
+
+    def _convert_strands_event_to_stream_part(
+        self, event: Any, state: dict[str, Any]
+    ) -> Iterator[DeltaPart]:
+        """Convert Strands streaming event to DeltaPart."""
+        return _convert_strands_event_to_stream_part(event, state)
+
+    def _map_strands_stop_reason(self, reason: str) -> str:
+        """Map Strands stop reason to Hawi format."""
+        return _map_strands_stop_reason(reason)
 
     # ==========================================================================
     # Balance Query (Optional)
