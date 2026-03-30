@@ -72,8 +72,7 @@ class PluginManager:
     ) -> None:
         """Initialize PluginManager"""
         self._plugin_factories = plugin_factories or []
-        factory_plugins = [f() for f in self._plugin_factories]
-        self._plugins: list[HawiPlugin] = factory_plugins + list(plugins) if plugins else factory_plugins
+        self._plugins: list[HawiPlugin] = [f() for f in self._plugin_factories] + (plugins or [])
 
         # Collect hooks from plugins (aggregate from PluginHooks TypedDict to list)
         self._hooks: dict[str, list[Callable[..., HookReturnType]]] = {}

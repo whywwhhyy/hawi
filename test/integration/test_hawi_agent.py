@@ -20,16 +20,17 @@ from hawi.plugin.decorators import (
     after_tool_calling,
 )
 
-from test.integration.models import has_factory, create_model
+from test.integration.models import has_model, create_model
 
 
-# Factory name
-DEEPSEEK_FACTORY = "deepseek-chat-openai"
+# Model name
+DEEPSEEK_MODEL = "deepseek-openai/deepseek-chat"
+DEFAULT_MODEL = DEEPSEEK_MODEL
 
-# Check if factory is available
-HAS_DEEPSEEK = has_factory(DEEPSEEK_FACTORY)
+# Check if model is available
+HAS_DEEPSEEK = has_model(DEFAULT_MODEL)
 
-SKIP_REASON = f"Factory '{DEEPSEEK_FACTORY}' not found in models.yaml"
+SKIP_REASON = f"Model '{DEFAULT_MODEL}' not found in models.yaml"
 
 
 class CalculatorPlugin(HawiPlugin):
@@ -112,7 +113,7 @@ class TestHawiAgentIntegration:
     @pytest.fixture
     def model(self) -> Model:
         """Create a DeepSeek model instance from registry."""
-        return create_model(DEEPSEEK_FACTORY)
+        return create_model(DEFAULT_MODEL)
 
     @pytest.fixture
     def calculator_plugin(self) -> CalculatorPlugin:
@@ -244,7 +245,7 @@ class TestHawiAgentAsync:
     @pytest.fixture
     def agent(self) -> HawiAgent:
         """Create a HawiAgent with model from registry."""
-        model = create_model(DEEPSEEK_FACTORY)
+        model = create_model(DEFAULT_MODEL)
         plugin = CalculatorPlugin()
         return HawiAgent(
             model=model,
@@ -287,7 +288,7 @@ class TestHawiAgentAsync:
         runs and the events list stays empty.
         """
         plugin = AsyncHookPlugin()
-        model = create_model(DEEPSEEK_FACTORY)
+        model = create_model(DEFAULT_MODEL)
         agent = HawiAgent(model=model, plugins=[plugin])
 
         await agent.arun("Say 'hi'.")
@@ -304,7 +305,7 @@ class TestHawiAgentAsync:
         """Test that async before/after_tool_calling hooks are properly awaited."""
         plugin = AsyncHookPlugin()
         calc = CalculatorPlugin()
-        model = create_model(DEEPSEEK_FACTORY)
+        model = create_model(DEFAULT_MODEL)
         agent = HawiAgent(
             model=model,
             plugins=[calc, plugin],

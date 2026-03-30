@@ -1,4 +1,4 @@
-"""Entry point: python -m hawi_gui [factory_name]"""
+"""Entry point: python -m hawi_gui [model_name]"""
 
 import os
 import sys
@@ -22,32 +22,32 @@ if user_config.exists():
 if project_config.exists():
     model_registry.load_config(project_config, quiet=True)
 
-available = model_registry.list_factories()
+available = model_registry.list_models()
 if not available:
     print("No model factories found. Please configure ~/.hawi/models.yaml")
     sys.exit(1)
 
 # Check command-line argument
-factory_name = None
+model_name = None
 for arg in sys.argv[1:]:
     if arg in available:
-        factory_name = arg
+        model_name = arg
         break
 
 # Show selection dialog if no arg
-if factory_name is None:
+if model_name is None:
     root = tk.Tk()
     root.withdraw()
     dlg = ModelSelectionDialog(root, available, title="选择模型工厂", modal=True)
     root.wait_window(dlg)
-    factory_name = dlg.result
-    if factory_name is None:
+    model_name = dlg.result
+    if model_name is None:
         root.destroy()
         sys.exit(0)
     root.deiconify()
 else:
     root = None
 
-print(f"Using: {factory_name}")
-app = HawiGuiApp(factory_name=factory_name, root=root)
+print(f"Using: {model_name}")
+app = HawiGuiApp(model_name=model_name, root=root)
 app.run()

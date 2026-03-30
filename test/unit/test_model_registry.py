@@ -1,7 +1,7 @@
 """Tests for ModelRegistry singleton.
 
 Tests the singleton pattern, class/factory registration, configuration loading,
-factory inheritance (parent), and environment variable resolution.
+factory inheritance (template), and environment variable resolution.
 """
 
 import os
@@ -11,16 +11,16 @@ from unittest.mock import patch, MagicMock
 
 from hawi.models.registry import (
     ModelRegistry,
-    FactoryConfig,
+    ModelConfig,
     CircularDependencyError,
-    UnknownFactoryError,
+    UnknownModelError,
     InvalidInheritanceError,
     model_registry,
     create_model,
     get_model_class,
-    list_factories,
+    list_models,
     load_config,
-    get_factory_arguments,
+    get_model_arguments,
 )
 from hawi.models import OpenAIModel, Model
 
@@ -89,177 +89,177 @@ class TestClassRegistration:
         assert registry.get_model_class("TestModel") is AnthropicModel
 
 
-class TestFactoryRegistration:
-    """Tests for factory registration and management."""
+class TestModelRegistration:
+    """Tests for model registration and management."""
 
-    def test_register_factory_adds_factory(self):
-        """Test registering a new factory."""
+    def test_register_model_adds_model(self):
+        """Test registering a new model."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "test-factory",
             "OpenAIModel",
             {"model_id": "gpt-4", "api_key": "test"},
             quiet=True,
         )
 
-        assert "test-factory" in registry.list_factories()
-        assert registry.has_factory("test-factory")
+        assert "test-factory" in registry.list_models()
+        assert registry.has_model("test-factory")
 
-    def test_get_factory_returns_config(self):
+    def test_get_model_returns_config(self):
         """Test retrieving factory configuration."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "test-factory",
             "DeepSeekOpenAIModel",
             {"model_id": "deepseek-chat"},
             quiet=True,
         )
 
-        config = registry.get_factory("test-factory")
-        assert isinstance(config, FactoryConfig)
+        config = registry.get_model("test-factory")
+        assert isinstance(config, ModelConfig)
         assert config.class_name == "DeepSeekOpenAIModel"
         assert config.arguments["model_id"] == "deepseek-chat"
 
-    def test_unregister_factory_removes_factory(self):
+    def test_unregister_model_removes_factory(self):
         """Test unregistering a factory."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "temp-factory", "OpenAIModel", {"model_id": "test"}, quiet=True
         )
-        assert registry.has_factory("temp-factory")
+        assert registry.has_model("temp-factory")
 
-        result = registry.unregister_factory("temp-factory")
+        result = registry.unregister_model("temp-factory")
         assert result is True
-        assert not registry.has_factory("temp-factory")
+        assert not registry.has_model("temp-factory")
 
     def test_unregister_nonexistent_factory_returns_false(self):
         """Test unregistering unknown factory returns False."""
         registry = ModelRegistry()
         registry.clear()
 
-        result = registry.unregister_factory("nonexistent")
+        result = registry.unregister_model("nonexistent")
         assert result is False
 
 
 class TestFactoryInheritance:
-    """Tests for factory parent/inheritance."""
+    """Tests for factory template/inheritance."""
 
-    def test_resolve_factory_parent(self):
-        """Test that factory inherits from parent factory."""
+    def test_resolve_model_template(self):
+        """Test that factory inherits from template factory."""
         registry = ModelRegistry()
         registry.clear()
 
         # Register base factory
-        registry.register_factory(
+        registry.register_model(
             "base-model",
             "OpenAIModel",
             {"model_id": "gpt-4", "temperature": 0.7},
             quiet=True,
         )
 
-        # Register child factory with parent
-        registry.register_factory(
+        # Register child factory with template
+        registry.register_model(
             "child-model",
             "OpenAIModel",
             {"max_tokens": 512},
-            parent="base-model",
+            template="base-model",
             quiet=True,
         )
 
         # Resolve and check merged config
-        resolved = registry._resolve_factory("child-model")
+        resolved = registry._resolve_model("child-model")
         assert resolved.class_name == "OpenAIModel"
         assert resolved.arguments["model_id"] == "gpt-4"  # inherited
         assert resolved.arguments["temperature"] == 0.7  # inherited
         assert resolved.arguments["max_tokens"] == 512  # own
 
-    def test_child_overrides_parent_arguments(self):
-        """Test that child factory arguments override parent."""
+    def test_child_overrides_template_arguments(self):
+        """Test that child factory arguments override template."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "base-model", "OpenAIModel", {"temperature": 0.7}, quiet=True
         )
 
-        registry.register_factory(
+        registry.register_model(
             "override-model",
             "OpenAIModel",
             {"temperature": 0.5},
-            parent="base-model",
+            template="base-model",
             quiet=True,
         )
 
-        resolved = registry._resolve_factory("override-model")
+        resolved = registry._resolve_model("override-model")
         assert resolved.arguments["temperature"] == 0.5
 
     def test_circular_dependency_raises_error(self):
-        """Test that circular parent raises CircularDependencyError."""
+        """Test that circular template raises CircularDependencyError."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
-            "factory-a", "OpenAIModel", {}, parent="factory-b", quiet=True
+        registry.register_model(
+            "factory-a", "OpenAIModel", {}, template="factory-b", quiet=True
         )
-        registry.register_factory(
-            "factory-b", "OpenAIModel", {}, parent="factory-a", quiet=True
+        registry.register_model(
+            "factory-b", "OpenAIModel", {}, template="factory-a", quiet=True
         )
 
         with pytest.raises(CircularDependencyError):
-            registry._resolve_factory("factory-a")
+            registry._resolve_model("factory-a")
 
-    def test_unknown_parent_raises_error(self):
+    def test_unknown_template_raises_error(self):
         """Test that extending unknown factory raises error."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "orphan-model",
             "OpenAIModel",
             {},
-            parent="nonexistent-parent",
+            template="nonexistent-template",
             quiet=True,
         )
 
-        with pytest.raises(UnknownFactoryError):
-            registry._resolve_factory("orphan-model")
+        with pytest.raises(UnknownModelError):
+            registry._resolve_model("orphan-model")
 
     def test_multi_level_inheritance(self):
-        """Test parent chain with multiple levels."""
+        """Test template chain with multiple levels."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
-            "grandparent", "OpenAIModel", {"base_url": "http://api.com"}, quiet=True
+        registry.register_model(
+            "grandtemplate", "OpenAIModel", {"base_url": "http://api.com"}, quiet=True
         )
-        registry.register_factory(
-            "parent",
+        registry.register_model(
+            "template",
             "OpenAIModel",
             {"temperature": 0.7},
-            parent="grandparent",
+            template="grandtemplate",
             quiet=True,
         )
-        registry.register_factory(
+        registry.register_model(
             "child",
             "OpenAIModel",
             {"max_tokens": 256},
-            parent="parent",
+            template="template",
             quiet=True,
         )
 
-        resolved = registry._resolve_factory("child")
-        assert resolved.arguments["base_url"] == "http://api.com"  # from grandparent
-        assert resolved.arguments["temperature"] == 0.7  # from parent
+        resolved = registry._resolve_model("child")
+        assert resolved.arguments["base_url"] == "http://api.com"  # from grandtemplate
+        assert resolved.arguments["temperature"] == 0.7  # from template
         assert resolved.arguments["max_tokens"] == 256  # own
 
-    def test_factory_multiple_parents_order(self):
-        """Test factory with multiple parents - later parents override earlier ones."""
+    def test_factory_multiple_templates_order(self):
+        """Test factory with multiple templates - later templates override earlier ones."""
         registry = ModelRegistry()
         registry.clear()
 
@@ -268,23 +268,23 @@ class TestFactoryInheritance:
         registry.register_template("second", {"api_key": "second-key", "temperature": 0.7})
         registry.register_template("third", {"api_key": "third-key"})
 
-        # Factory with multiple parents: [first, second, third]
+        # Factory with multiple templates: [first, second, third]
         # Expected: third's api_key wins, temperature from second (not overridden by third)
-        registry.register_factory(
-            "multi-parent-model",
+        registry.register_model(
+            "multi-template-model",
             "OpenAIModel",
             {"model_id": "gpt-4"},
-            parents=["first", "second", "third"],
+            templates=["first", "second", "third"],
             quiet=True,
         )
 
-        resolved = registry._resolve_factory("multi-parent-model")
+        resolved = registry._resolve_model("multi-template-model")
         assert resolved.arguments["api_key"] == "third-key"  # from third (last)
         assert resolved.arguments["temperature"] == 0.7  # from second
         assert resolved.arguments["model_id"] == "gpt-4"  # own
 
-    def test_factory_mixed_parents_template_and_factory(self):
-        """Test factory inheriting from both templates and factories in specific order."""
+    def test_factory_mixed_templates_template_and_factory(self):
+        """Test factory inheriting from both templates and models in specific order."""
         registry = ModelRegistry()
         registry.clear()
 
@@ -292,7 +292,7 @@ class TestFactoryInheritance:
         registry.register_template("base-config", {"base_url": "https://api1.com", "timeout": 30})
 
         # Factory provides model-specific config
-        registry.register_factory(
+        registry.register_model(
             "model-base",
             "OpenAIModel",
             {"temperature": 0.7, "base_url": "https://api2.com"},  # overrides template's base_url
@@ -302,16 +302,16 @@ class TestFactoryInheritance:
         # Another template for auth
         registry.register_template("auth-config", {"api_key": "secret-key"})
 
-        # Factory with mixed parents: template -> factory -> template
-        registry.register_factory(
+        # Factory with mixed templates: template -> factory -> template
+        registry.register_model(
             "final-model",
             "OpenAIModel",
             {"max_tokens": 512},
-            parents=["base-config", "model-base", "auth-config"],
+            templates=["base-config", "model-base", "auth-config"],
             quiet=True,
         )
 
-        resolved = registry._resolve_factory("final-model")
+        resolved = registry._resolve_model("final-model")
         # Order: base-config -> model-base -> auth-config -> own
         assert resolved.arguments["base_url"] == "https://api2.com"  # from model-base
         assert resolved.arguments["timeout"] == 30  # from base-config
@@ -321,7 +321,7 @@ class TestFactoryInheritance:
 
 
 class TestTemplateInheritance:
-    """Tests for template parent/inheritance."""
+    """Tests for template template/inheritance."""
 
     def test_template_inherits_from_template(self):
         """Test that template can inherit from another template."""
@@ -335,8 +335,8 @@ class TestTemplateInheritance:
         assert resolved.arguments["api_key"] == "base-key"
         assert resolved.arguments["temperature"] == 0.7  # overridden
 
-    def test_template_multiple_parents_order(self):
-        """Test template with multiple parents - later parents override earlier ones."""
+    def test_template_multiple_templates_order(self):
+        """Test template with multiple templates - later templates override earlier ones."""
         registry = ModelRegistry()
         registry.clear()
 
@@ -351,8 +351,8 @@ class TestTemplateInheritance:
         assert resolved.arguments["c"] == 3  # from third (overrides second)
         assert resolved.arguments["d"] == 4  # own
 
-    def test_template_inherits_class_from_parent(self):
-        """Test that template can inherit __class from parent template."""
+    def test_template_inherits_class_from_template(self):
+        """Test that template can inherit __class from template template."""
         registry = ModelRegistry()
         registry.clear()
 
@@ -369,7 +369,7 @@ class TestTemplateInheritance:
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory("some-factory", "OpenAIModel", {"api_key": "test"})
+        registry.register_model("some-factory", "OpenAIModel", {"api_key": "test"})
         registry.register_template("bad-template", {}, parents=["some-factory"])
 
         with pytest.raises(InvalidInheritanceError):
@@ -440,13 +440,13 @@ class TestConfigLoading:
     """Tests for YAML configuration loading."""
 
     def test_load_config_from_yaml(self, tmp_path):
-        """Test loading factories from YAML file."""
+        """Test loading models from YAML file."""
         registry = ModelRegistry()
         registry.clear()
 
         config_file = tmp_path / "models.yaml"
         config_file.write_text("""
-factories:
+models:
   test-model:
     class: OpenAIModel
     model_id: gpt-4
@@ -455,33 +455,33 @@ factories:
 
         registry.load_config(config_file, quiet=True)
 
-        assert "test-model" in registry.list_factories()
-        config = registry.get_factory("test-model")
+        assert "test-model" in registry.list_models()
+        config = registry.get_model("test-model")
         assert config is not None
         assert config.class_name == "OpenAIModel"
         assert config.arguments["model_id"] == "gpt-4"
 
-    def test_load_config_with_parent(self, tmp_path):
-        """Test loading YAML with parent inheritance."""
+    def test_load_config_with_template(self, tmp_path):
+        """Test loading YAML with template inheritance."""
         registry = ModelRegistry()
         registry.clear()
 
         config_file = tmp_path / "models.yaml"
         config_file.write_text("""
-factories:
+models:
   base-model:
     class: OpenAIModel
     model_id: gpt-4
 
   derived-model:
     class: OpenAIModel
-    parent: base-model
+    template: base-model
     temperature: 0.5
 """)
 
         registry.load_config(config_file, quiet=True)
 
-        resolved = registry._resolve_factory("derived-model")
+        resolved = registry._resolve_model("derived-model")
         assert resolved.arguments["model_id"] == "gpt-4"  # inherited
         assert resolved.arguments["temperature"] == 0.5  # own
 
@@ -492,7 +492,7 @@ factories:
 
         config_file = tmp_path / "models.yaml"
         config_file.write_text("""
-factories:
+models:
   env-model:
     class: OpenAIModel
     api_key: ${TEST_API_KEY}
@@ -501,7 +501,7 @@ factories:
         with patch.dict(os.environ, {"TEST_API_KEY": "resolved_secret"}):
             registry.load_config(config_file, quiet=True)
             # Note: env vars are resolved at create_model time, not load time
-            config = registry.get_factory("env-model")
+            config = registry.get_model("env-model")
             assert config is not None
             assert config.arguments["api_key"] == "${TEST_API_KEY}"
 
@@ -525,8 +525,8 @@ factories:
         with pytest.raises(ValueError):
             registry.load_config(config_file)
 
-    def test_load_config_without_factories_key(self, tmp_path, monkeypatch):
-        """Test loading YAML without factories key is handled."""
+    def test_load_config_without_models_key(self, tmp_path, monkeypatch):
+        """Test loading YAML without models key is handled."""
         monkeypatch.setenv("HAWI_NO_AUTO_LOAD", "1")
         registry = ModelRegistry()
         registry.clear()
@@ -536,7 +536,7 @@ factories:
 
         # Should not raise, just warn
         registry.load_config(config_file, quiet=True)
-        assert registry.list_factories() == []
+        assert registry.list_models() == []
 
 
 class TestCreateModel:
@@ -547,7 +547,7 @@ class TestCreateModel:
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "openai-test",
             "OpenAIModel",
             {"model_id": "gpt-4", "api_key": "test-key"},
@@ -559,11 +559,11 @@ class TestCreateModel:
         assert model.model_id == "gpt-4"
 
     def test_create_model_unknown_factory_raises(self):
-        """Test that unknown factory raises UnknownFactoryError."""
+        """Test that unknown factory raises UnknownModelError."""
         registry = ModelRegistry()
         registry.clear()
 
-        with pytest.raises(UnknownFactoryError):
+        with pytest.raises(UnknownModelError):
             registry.create_model("nonexistent-factory")
 
     def test_create_model_unknown_class_raises(self):
@@ -571,14 +571,14 @@ class TestCreateModel:
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "bad-factory",
             "NonExistentClass",
             {"api_key": "test"},
             quiet=True,
         )
 
-        with pytest.raises(UnknownFactoryError):
+        with pytest.raises(UnknownModelError):
             registry.create_model("bad-factory")
 
     def test_create_model_with_overrides(self):
@@ -586,7 +586,7 @@ class TestCreateModel:
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "openai-test",
             "OpenAIModel",
             {"model_id": "gpt-4", "api_key": "test-key"},
@@ -601,7 +601,7 @@ class TestCreateModel:
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "env-model",
             "OpenAIModel",
             {"model_id": "gpt-4", "api_key": "${ENV_API_KEY}"},
@@ -623,7 +623,7 @@ class TestConvenienceFunctions:
     def test_create_model_convenience_function(self):
         """Test create_model() convenience function uses global registry."""
         model_registry.clear()
-        model_registry.register_factory(
+        model_registry.register_model(
             "test-model",
             "OpenAIModel",
             {"model_id": "gpt-4", "api_key": "test"},
@@ -642,15 +642,15 @@ class TestConvenienceFunctions:
         cls = get_model_class("TestModel")
         assert cls is OpenAIModel
 
-    def test_list_factories_convenience_function(self):
-        """Test list_factories() convenience function."""
+    def test_list_models_convenience_function(self):
+        """Test list_models() convenience function."""
         model_registry.clear()
-        model_registry.register_factory(
+        model_registry.register_model(
             "test-factory", "OpenAIModel", {"api_key": "test"}, quiet=True
         )
 
-        factories = list_factories()
-        assert "test-factory" in factories
+        models = list_models()
+        assert "test-factory" in models
 
     def test_load_config_convenience_function(self, tmp_path):
         """Test load_config() convenience function."""
@@ -658,29 +658,29 @@ class TestConvenienceFunctions:
 
         config_file = tmp_path / "test.yaml"
         config_file.write_text("""
-factories:
+models:
   loaded-model:
     class: OpenAIModel
     api_key: test
 """)
 
         load_config(config_file, quiet=True)
-        assert "loaded-model" in model_registry.list_factories()
+        assert "loaded-model" in model_registry.list_models()
 
 
 class TestClear:
     """Tests for registry clear functionality."""
 
-    def test_clear_removes_factories(self):
-        """Test that clear() removes all factories."""
+    def test_clear_removes_models(self):
+        """Test that clear() removes all models."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory("test", "OpenAIModel", {}, quiet=True)
-        assert registry.list_factories()
+        registry.register_model("test", "OpenAIModel", {}, quiet=True)
+        assert registry.list_models()
 
         registry.clear()
-        assert registry.list_factories() == []
+        assert registry.list_models() == []
 
     def test_clear_re_registers_builtin_classes(self):
         """Test that clear() re-registers built-in classes."""
@@ -694,81 +694,81 @@ class TestClear:
         assert registry.get_model_class("OpenAIModel") is OpenAIModel
 
 
-class TestFactoryConfig:
-    """Tests for FactoryConfig dataclass."""
+class TestModelConfig:
+    """Tests for ModelConfig dataclass."""
 
     def test_factory_config_from_dict(self):
-        """Test creating FactoryConfig from dictionary."""
+        """Test creating ModelConfig from dictionary."""
         data = {
             "class": "OpenAIModel",
             "model_id": "gpt-4",
             "api_key": "test",
-            "parent": "base-model",
+            "template": "base-model",
         }
 
-        config = FactoryConfig.from_dict(data)
+        config = ModelConfig.from_dict(data)
         assert config.class_name == "OpenAIModel"
         assert config.arguments == {"model_id": "gpt-4", "api_key": "test"}
-        assert config.parent == "base-model"
+        assert config.template == "base-model"
 
     def test_factory_config_from_dict_copies_data(self):
         """Test that from_dict doesn't modify original data."""
         data = {"class": "OpenAIModel", "api_key": "test"}
         original_keys = set(data.keys())
 
-        FactoryConfig.from_dict(data)
+        ModelConfig.from_dict(data)
 
         assert set(data.keys()) == original_keys
 
     def test_factory_config_to_dict(self):
-        """Test converting FactoryConfig to dictionary."""
-        config = FactoryConfig(
+        """Test converting ModelConfig to dictionary."""
+        config = ModelConfig(
             class_name="OpenAIModel",
             arguments={"model_id": "gpt-4"},
-            parent="base",
+            template="base",
         )
 
         data = config.to_dict()
         assert data == {
             "class": "OpenAIModel",
             "model_id": "gpt-4",
-            "parent": "base",
+            "template": "base",
         }
 
-    def test_factory_config_to_dict_without_parent(self):
-        """Test to_dict when parent is None."""
-        config = FactoryConfig(
-            class_name="OpenAIModel", arguments={"api_key": "test"}, parent=None
+    def test_factory_config_to_dict_without_template(self):
+        """Test to_dict when template is None."""
+        config = ModelConfig(
+            class_name="OpenAIModel", arguments={"api_key": "test"}, template=None
         )
 
         data = config.to_dict()
-        assert "parent" not in data
+        assert "template" not in data
 
 
 class TestGetFactoryArguments:
-    """Tests for get_factory_arguments method."""
+    """Tests for get_model_arguments method."""
 
     def test_get_original_arguments(self):
         """Test getting original arguments without expansion."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "base-model",
             "OpenAIModel",
             {"temperature": 0.7, "base_url": "https://api.example.com"},
             quiet=True,
         )
-        registry.register_factory(
+        registry.register_model(
             "child-model",
             "OpenAIModel",
             {"model_id": "gpt-4"},
-            parent="base-model",
+            template="base-model",
             quiet=True,
         )
 
         # expanded=False should return only own arguments
-        args = registry.get_factory_arguments("child-model", expanded=False)
+        args = registry.get_model_arguments("child-model", expanded=False)
         assert args == {"model_id": "gpt-4"}
         assert "temperature" not in args
 
@@ -777,103 +777,103 @@ class TestGetFactoryArguments:
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "base-model",
             "OpenAIModel",
             {"temperature": 0.7, "base_url": "https://api.example.com"},
             quiet=True,
         )
-        registry.register_factory(
+        registry.register_model(
             "child-model",
             "OpenAIModel",
             {"model_id": "gpt-4"},
-            parent="base-model",
+            template="base-model",
             quiet=True,
         )
 
         # expanded=True should return merged arguments
-        args = registry.get_factory_arguments("child-model", expanded=True)
+        args = registry.get_model_arguments("child-model", expanded=True)
         assert args["model_id"] == "gpt-4"  # own
         assert args["temperature"] == 0.7  # inherited
         assert args["base_url"] == "https://api.example.com"  # inherited
 
-    def test_expanded_child_overrides_parent(self):
-        """Test that expanded args show child overriding parent."""
+    def test_expanded_child_overrides_template(self):
+        """Test that expanded args show child overriding template."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "base-model",
             "OpenAIModel",
             {"temperature": 0.7, "max_tokens": 512},
             quiet=True,
         )
-        registry.register_factory(
+        registry.register_model(
             "child-model",
             "OpenAIModel",
-            {"temperature": 0.5},  # override parent's temperature
-            parent="base-model",
+            {"temperature": 0.5},  # override template's temperature
+            template="base-model",
             quiet=True,
         )
 
-        args = registry.get_factory_arguments("child-model", expanded=True)
+        args = registry.get_model_arguments("child-model", expanded=True)
         assert args["temperature"] == 0.5  # child's value
-        assert args["max_tokens"] == 512  # inherited from parent
+        assert args["max_tokens"] == 512  # inherited from template
 
-    def test_get_factory_arguments_returns_copy(self):
+    def test_get_model_arguments_returns_copy(self):
         """Test that returned arguments are a copy, not reference."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "test-model",
             "OpenAIModel",
             {"key": "value"},
             quiet=True,
         )
 
-        args = registry.get_factory_arguments("test-model", expanded=False)
+        args = registry.get_model_arguments("test-model", expanded=False)
         args["key"] = "modified"  # modify returned dict
 
         # original should be unchanged
-        original = registry.get_factory_arguments("test-model", expanded=False)
+        original = registry.get_model_arguments("test-model", expanded=False)
         assert original["key"] == "value"
 
-    def test_get_factory_arguments_unknown_factory_raises(self):
-        """Test that unknown factory raises UnknownFactoryError."""
+    def test_get_model_arguments_unknown_factory_raises(self):
+        """Test that unknown factory raises UnknownModelError."""
         registry = ModelRegistry()
         registry.clear()
 
-        with pytest.raises(UnknownFactoryError):
-            registry.get_factory_arguments("nonexistent")
+        with pytest.raises(UnknownModelError):
+            registry.get_model_arguments("nonexistent")
 
-    def test_get_factory_arguments_default_expanded_is_false(self):
+    def test_get_model_arguments_default_expanded_is_false(self):
         """Test that expanded defaults to False."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "base-model",
             "OpenAIModel",
             {"temperature": 0.7},
             quiet=True,
         )
-        registry.register_factory(
+        registry.register_model(
             "child-model",
             "OpenAIModel",
             {"model_id": "gpt-4"},
-            parent="base-model",
+            template="base-model",
             quiet=True,
         )
 
         # default should be expanded=False
-        args = registry.get_factory_arguments("child-model")
+        args = registry.get_model_arguments("child-model")
         assert args == {"model_id": "gpt-4"}  # only own args
 
-    def test_convenience_function_get_factory_arguments(self):
-        """Test get_factory_arguments convenience function."""
+    def test_convenience_function_get_model_arguments(self):
+        """Test get_model_arguments convenience function."""
         model_registry.clear()
-        model_registry.register_factory(
+        model_registry.register_model(
             "test-model",
             "OpenAIModel",
             {"temperature": 0.7, "model_id": "gpt-4"},
@@ -881,41 +881,41 @@ class TestGetFactoryArguments:
         )
 
         # Test convenience function
-        args = get_factory_arguments("test-model", expanded=False)
+        args = get_model_arguments("test-model", expanded=False)
         assert args == {"temperature": 0.7, "model_id": "gpt-4"}
 
-    def test_expanded_with_multiple_parents(self):
-        """Test expanded arguments with multiple parents."""
+    def test_expanded_with_multiple_templates(self):
+        """Test expanded arguments with multiple templates."""
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_factory(
+        registry.register_model(
             "first",
             "OpenAIModel",
             {"a": 1, "b": 1},
             quiet=True,
         )
-        registry.register_factory(
+        registry.register_model(
             "second",
             "OpenAIModel",
             {"b": 2, "c": 2},
             quiet=True,
         )
-        registry.register_factory(
+        registry.register_model(
             "combined",
             "OpenAIModel",
             {"d": 4},
-            parents=["first", "second"],
+            templates=["first", "second"],
             quiet=True,
         )
 
-        args = registry.get_factory_arguments("combined", expanded=True)
+        args = registry.get_model_arguments("combined", expanded=True)
         assert args["a"] == 1  # from first
         assert args["b"] == 2  # from second (overrides first)
         assert args["c"] == 2  # from second
         assert args["d"] == 4  # own
 
-    def test_expanded_with_template_parent(self):
+    def test_expanded_with_template_template(self):
         """Test expanded arguments when inheriting from template."""
         registry = ModelRegistry()
         registry.clear()
@@ -924,14 +924,14 @@ class TestGetFactoryArguments:
             "auth-template",
             {"api_key": "secret-key"},
         )
-        registry.register_factory(
+        registry.register_model(
             "model-with-auth",
             "OpenAIModel",
             {"model_id": "gpt-4"},
-            parents=["auth-template"],
+            templates=["auth-template"],
             quiet=True,
         )
 
-        args = registry.get_factory_arguments("model-with-auth", expanded=True)
+        args = registry.get_model_arguments("model-with-auth", expanded=True)
         assert args["model_id"] == "gpt-4"  # own
         assert args["api_key"] == "secret-key"  # from template

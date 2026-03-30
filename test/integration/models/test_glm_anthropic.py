@@ -8,20 +8,20 @@ import pytest
 
 from hawi.models.anthropic import AnthropicModel
 from hawi.models import Message
-from test.integration.models import has_factory, create_model, skip_on_rate_limit
+from test.integration.models import has_model, create_model, skip_on_rate_limit
 
 
-# Factory name
-GLM_ANTHROPIC_FACTORY = "glm-4.7-flash-anthropic"
+# Model name
+GLM_ANTHROPIC_MODEL = "glm-anthropic/GLM-4.7-Flash"
 
 # GLM Anthropic-compatible endpoint (used for unit tests)
 GLM_ANTHROPIC_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
 
-# Check if factories are available
-HAS_GLM = has_factory(GLM_ANTHROPIC_FACTORY)
+# Check if models are available
+HAS_GLM = has_model(GLM_ANTHROPIC_MODEL)
 
-# Skip reason for tests requiring factory
-SKIP_REASON = f"Factory '{GLM_ANTHROPIC_FACTORY}' not found in models.yaml"
+# Skip reason for tests requiring model
+SKIP_REASON = f"Model '{GLM_ANTHROPIC_MODEL}' not found in models.yaml"
 
 
 def _create_user_message(content: str) -> Message:
@@ -65,7 +65,9 @@ class TestGLMAnthropicIntegration:
     @pytest.fixture
     def model(self) -> AnthropicModel:
         """Create a GLM model instance from registry."""
-        return create_model(GLM_ANTHROPIC_FACTORY)
+        model =create_model(GLM_ANTHROPIC_MODEL)
+        assert isinstance(model, AnthropicModel)
+        return model
 
     @skip_on_rate_limit
     def test_simple_chat_completion(self, model: AnthropicModel):
@@ -150,7 +152,9 @@ class TestGLMAnthropicAsync:
     @pytest.fixture
     def model(self) -> AnthropicModel:
         """Create a GLM model instance from registry."""
-        return create_model(GLM_ANTHROPIC_FACTORY)
+        model =create_model(GLM_ANTHROPIC_MODEL)
+        assert isinstance(model, AnthropicModel)
+        return model
 
     @pytest.mark.asyncio
     async def test_async_non_streaming_chat_completion(self, model: AnthropicModel):

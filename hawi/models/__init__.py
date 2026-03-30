@@ -74,16 +74,16 @@ from .minimax import MiniMaxModel
 from .strands import StrandsModel
 from .registry import (
     CircularDependencyError,
-    FactoryConfig,
+    ModelConfig,
     InvalidInheritanceError,
     ModelRegistry,
     TemplateConfig,
-    UnknownFactoryError,
+    UnknownModelError,
     UnknownTemplateError,
     create_model,
-    get_factory_arguments,
+    get_model_arguments,
     get_model_class,
-    list_factories,
+    list_models,
     list_templates,
     load_config,
     model_registry,
@@ -151,18 +151,18 @@ __all__ = [
     # Registry
     "ModelRegistry",
     "model_registry",
-    "FactoryConfig",
+    "ModelConfig",
     "TemplateConfig",
     "CircularDependencyError",
-    "UnknownFactoryError",
+    "UnknownModelError",
     "UnknownTemplateError",
 
     "InvalidInheritanceError",
     # Convenience functions
     "create_model",
-    "get_factory_arguments",
+    "get_model_arguments",
     "get_model_class",
     "load_config",
-    "list_factories",
+    "list_models",
     "list_templates",
 ]

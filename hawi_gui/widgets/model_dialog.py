@@ -10,22 +10,22 @@ from ..theme import COLORS
 
 
 class ModelSelectionDialog(tk.Toplevel):
-    """Modal/non-modal dialog for selecting a model factory.
+    """Modal/non-modal dialog for selecting a model config.
 
     Usage (startup, modal):
-        dlg = ModelSelectionDialog(parent, factories, title="Select Model")
+        dlg = ModelSelectionDialog(parent, models, title="Select Model")
         parent.wait_window(dlg)
         selected = dlg.result  # None if cancelled
 
     Usage (in-app, non-modal):
-        dlg = ModelSelectionDialog(parent, factories, modal=False,
+        dlg = ModelSelectionDialog(parent, models, modal=False,
                                    on_select=callback)
     """
 
     def __init__(
         self,
         parent: tk.Widget,
-        factories: list[str],
+        models: list[str],
         title: str = "选择模型",
         modal: bool = True,
         on_select: "Callable[[str], None] | None" = None,
@@ -33,7 +33,7 @@ class ModelSelectionDialog(tk.Toplevel):
         super().__init__(parent)
         self.title(title)
         self.result: str | None = None
-        self._factories = factories
+        self._models = models
         self._on_select = on_select
         self._modal = modal
 
@@ -87,7 +87,7 @@ class ModelSelectionDialog(tk.Toplevel):
             relief=tk.FLAT,
             borderwidth=0,
             activestyle="none",
-            height=min(len(self._factories), 12),
+            height=min(len(self._models), 12),
             width=40,
         )
         sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self._listbox.yview)
@@ -95,7 +95,7 @@ class ModelSelectionDialog(tk.Toplevel):
         self._listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self._populate(self._factories)
+        self._populate(self._models)
 
         self._listbox.bind("<Double-Button-1>", self._on_select_event)
         self._listbox.bind("<Return>", self._on_select_event)
@@ -119,7 +119,7 @@ class ModelSelectionDialog(tk.Toplevel):
         self.bind("<Escape>", lambda e: self._on_cancel())
 
         # Select first item
-        if self._factories:
+        if self._models:
             self._listbox.selection_set(0)
 
     def _populate(self, items: list[str]):
@@ -129,7 +129,7 @@ class ModelSelectionDialog(tk.Toplevel):
 
     def _on_search(self, *_):
         query = self._search_var.get().lower()
-        filtered = [f for f in self._factories if query in f.lower()]
+        filtered = [f for f in self._models if query in f.lower()]
         self._populate(filtered)
         if filtered:
             self._listbox.selection_set(0)

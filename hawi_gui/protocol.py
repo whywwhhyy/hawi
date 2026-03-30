@@ -38,8 +38,8 @@ class CmdStop:
 
 @dataclass
 class CmdSwitchModel:
-    """Hot-switch to a different model factory."""
-    factory_name: str
+    """Hot-switch to a different model config."""
+    model_name: str
 
 
 # ─── Scheduler → UI ──────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ class CmdSwitchModel:
 @dataclass
 class UiReady:
     """Scheduler initialized and ready for messages."""
-    factory_name: str
+    model_name: str
 
 
 @dataclass

@@ -9,16 +9,16 @@ import pytest
 from hawi.models.minimax.minimax_openai import MiniMaxOpenAIModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration.models import has_factory, create_model, skip_on_rate_limit, async_skip_on_rate_limit
+from test.integration.models import has_model, create_model, skip_on_rate_limit, async_skip_on_rate_limit
 
-# Factory names
-MINIMAX_OPENAI_FACTORY = "minimax-m2.7"
+# Model names
+MINIMAX_OPENAI_MODEL = "minimax-openai/minimax-m2.7"
 
-# Check if factories are available
-HAS_MINIMAX_OPENAI = has_factory(MINIMAX_OPENAI_FACTORY)
+# Check if models are available
+HAS_MINIMAX_OPENAI = has_model(MINIMAX_OPENAI_MODEL)
 
-# Skip reason for tests requiring factory
-SKIP_REASON = f"Factory '{MINIMAX_OPENAI_FACTORY}' not found in models.yaml"
+# Skip reason for tests requiring model
+SKIP_REASON = f"Model '{MINIMAX_OPENAI_MODEL}' not found in models.yaml"
 
 
 def _is_minimax_retryable_error(e: Exception) -> bool:
@@ -204,7 +204,9 @@ class TestMiniMaxM25Integration:
     @pytest.fixture
     def model(self) -> MiniMaxOpenAIModel:
         """Create a MiniMax M2.5 model instance from registry."""
-        return create_model(MINIMAX_OPENAI_FACTORY)
+        model = create_model(MINIMAX_OPENAI_MODEL)
+        assert isinstance(model, MiniMaxOpenAIModel)
+        return model
 
     @skip_on_rate_limit
     def test_simple_chat_completion(self, model: MiniMaxOpenAIModel):
@@ -310,8 +312,10 @@ class TestMiniMaxM21Integration:
     @pytest.fixture
     def model(self) -> MiniMaxOpenAIModel:
         """Create a MiniMax M2.1 model instance from registry."""
-        # Use factory but override model_id to M2.1
-        return create_model(MINIMAX_OPENAI_FACTORY, model_id="MiniMax-M2.1")
+        # Use model but override model_id to M2.1
+        model = create_model(MINIMAX_OPENAI_MODEL, model_id="MiniMax-M2.1")
+        assert isinstance(model, MiniMaxOpenAIModel)
+        return model
 
     def test_simple_chat_completion(self, model: MiniMaxOpenAIModel):
         """Test basic chat completion with M2.1."""
@@ -349,7 +353,9 @@ class TestMiniMaxOpenAIAsync:
     @pytest.fixture
     def model(self) -> MiniMaxOpenAIModel:
         """Create a MiniMax M2.5 model instance from registry."""
-        return create_model(MINIMAX_OPENAI_FACTORY)
+        model = create_model(MINIMAX_OPENAI_MODEL)
+        assert isinstance(model, MiniMaxOpenAIModel)
+        return model
 
     @pytest.mark.asyncio
     @async_skip_on_rate_limit
@@ -424,7 +430,7 @@ class TestMiniMaxOpenAIAsync:
     @async_skip_on_rate_limit
     async def test_async_non_streaming_m21_model(self):
         """Test async non-streaming with M2.1 model."""
-        model = create_model(MINIMAX_OPENAI_FACTORY, model_id="MiniMax-M2.1")
+        model = create_model(MINIMAX_OPENAI_MODEL, model_id="MiniMax-M2.1")
 
         events = []
         async for event in model.ainvoke(

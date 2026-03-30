@@ -14,17 +14,17 @@ from hawi.models.message import (
     ToolCallPart,
     ReasoningPart,
 )
-from test.integration.models import has_factory, create_model, skip_on_rate_limit
+from test.integration.models import has_model, create_model, skip_on_rate_limit
 
 
-# Factory name
-KIMI_CODE_FACTORY = "kimi-code"
+# Model name
+KIMI_CODE_MODEL = "kimi-code/kimi-for-coding"
 
-# Check if factory is available
-HAS_KIMI_CODE = has_factory(KIMI_CODE_FACTORY)
+# Check if model is available
+HAS_KIMI_CODE = has_model(KIMI_CODE_MODEL)
 
-# Skip reason for tests requiring factory
-SKIP_REASON = f"Factory '{KIMI_CODE_FACTORY}' not found in models.yaml"
+# Skip reason for tests requiring model
+SKIP_REASON = f"Model '{KIMI_CODE_MODEL}' not found in models.yaml"
 
 
 # =============================================================================
@@ -137,7 +137,9 @@ class TestKimiAnthropicIntegration:
     @pytest.fixture
     def model(self) -> KimiAnthropicModel:
         """Create a Kimi Anthropic model instance from registry."""
-        return create_model(KIMI_CODE_FACTORY)
+        model = create_model(KIMI_CODE_MODEL)
+        assert isinstance(model, KimiAnthropicModel)
+        return model
 
     @skip_on_rate_limit
     def test_simple_chat_completion(self, model: KimiAnthropicModel):
@@ -235,7 +237,9 @@ class TestKimiAnthropicToolCalls:
     @pytest.fixture
     def model(self) -> KimiAnthropicModel:
         """Create a Kimi Anthropic model instance from registry."""
-        return create_model(KIMI_CODE_FACTORY)
+        model = create_model(KIMI_CODE_MODEL)
+        assert isinstance(model, KimiAnthropicModel)
+        return model
 
     @skip_on_rate_limit
     def test_tool_call_with_citations(self, model: KimiAnthropicModel):

@@ -9,16 +9,16 @@ import pytest
 from hawi.models.minimax.minimax_anthropic import MiniMaxAnthropicModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration.models import has_factory, create_model, skip_on_rate_limit
+from test.integration.models import has_model, create_model, skip_on_rate_limit
 
-# Factory name
-MINIMAX_ANTHROPIC_FACTORY = "minimax-m2.7-anthropic"
+# Model name
+MINIMAX_ANTHROPIC_MODEL = "minimax-anthropic/minimax-m2.7"
 
-# Check if factories are available
-HAS_MINIMAX_ANTHROPIC = has_factory(MINIMAX_ANTHROPIC_FACTORY)
+# Check if models are available
+HAS_MINIMAX_ANTHROPIC = has_model(MINIMAX_ANTHROPIC_MODEL)
 
-# Skip reason for tests requiring factory
-SKIP_REASON = f"Factory '{MINIMAX_ANTHROPIC_FACTORY}' not found in models.yaml"
+# Skip reason for tests requiring model
+SKIP_REASON = f"Model '{MINIMAX_ANTHROPIC_MODEL}' not found in models.yaml"
 
 
 def _is_minimax_retryable_error(e: Exception) -> bool:
@@ -167,7 +167,9 @@ class TestMiniMaxAnthropicM25Integration:
     @pytest.fixture
     def model(self) -> MiniMaxAnthropicModel:
         """Create a MiniMax M2.5 model instance from registry."""
-        return create_model(MINIMAX_ANTHROPIC_FACTORY)
+        model = create_model(MINIMAX_ANTHROPIC_MODEL)
+        assert isinstance(model, MiniMaxAnthropicModel)
+        return model
 
     @skip_on_rate_limit
     def test_simple_chat_completion(self, model: MiniMaxAnthropicModel):
@@ -272,7 +274,9 @@ class TestMiniMaxAnthropicM21Integration:
     @pytest.fixture
     def model(self) -> MiniMaxAnthropicModel:
         """Create a MiniMax M2.1 model instance from registry."""
-        return create_model(MINIMAX_ANTHROPIC_FACTORY, model_id="MiniMax-M2.1")
+        model = create_model(MINIMAX_ANTHROPIC_MODEL, model_id="MiniMax-M2.1")
+        assert isinstance(model, MiniMaxAnthropicModel)
+        return model
 
     def test_simple_chat_completion(self, model: MiniMaxAnthropicModel):
         """Test basic chat completion with M2.1."""

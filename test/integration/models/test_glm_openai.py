@@ -10,21 +10,21 @@ from hawi.models.openai import OpenAIModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
 from test.integration.models import (
-    has_factory, 
+    has_model, 
     create_model,
     skip_on_rate_limit,
     async_skip_on_rate_limit,
 )
 
 
-# Factory names
-GLM_FACTORY = "glm-4.7-flash-openai"
+# Model names
+GLM_OPENAI_MODEL = "glm-openai/GLM-4.7-Flash"
 
-# Check if factories are available
-HAS_GLM = has_factory(GLM_FACTORY)
+# Check if models are available
+HAS_GLM = has_model(GLM_OPENAI_MODEL)
 
-# Skip reason for tests requiring factory
-SKIP_REASON = f"Factory '{GLM_FACTORY}' not found in models.yaml"
+# Skip reason for tests requiring model
+SKIP_REASON = f"Model '{GLM_OPENAI_MODEL}' not found in models.yaml"
 
 
 def _create_user_message(content: str) -> Message:
@@ -87,12 +87,16 @@ class TestGLMOpenAIIntegration:
     @pytest.fixture
     def model(self) -> OpenAIModel:
         """Create a GLM-4-Flash model instance from registry."""
-        return create_model(GLM_FACTORY)
+        model = create_model(GLM_OPENAI_MODEL)
+        assert isinstance(model, OpenAIModel)
+        return model
 
     @pytest.fixture
     def model_glm4(self) -> OpenAIModel:
         """Create a GLM-4 model instance from registry."""
-        return create_model(GLM_FACTORY, model_id="glm-4")
+        model = create_model(GLM_OPENAI_MODEL, model_id="glm-4")
+        assert isinstance(model, OpenAIModel)
+        return model
 
     @skip_on_rate_limit
     def test_simple_chat_completion(self, model: OpenAIModel):
@@ -204,7 +208,9 @@ class TestGLMOpenAIAsync:
     @pytest.fixture
     def model(self) -> OpenAIModel:
         """Create a GLM model instance from registry."""
-        return create_model(GLM_FACTORY)
+        model = create_model(GLM_OPENAI_MODEL)
+        assert isinstance(model, OpenAIModel)
+        return model
 
     @pytest.mark.asyncio
     @async_skip_on_rate_limit

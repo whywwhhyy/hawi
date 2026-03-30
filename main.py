@@ -32,11 +32,11 @@ def create_model_from_argv(argv: list[str]) -> tuple[str, Model]:
 
     流程：
     1. 从 ~/.hawi/models.yaml 和 ./.hawi/models.yaml 自动加载配置
-    2. 选择 factory（从 argv 或交互式）
-    3. 使用 factory 创建模型实例
+    2. 选择 model（从 argv 或交互式）
+    3. 使用 model config 创建模型实例
 
     配置格式示例（models.yaml）：
-        factories:
+        models:
           deepseek-chat:
             class: DeepSeekOpenAIModel
             model_id: deepseek-chat
@@ -57,23 +57,23 @@ def create_model_from_argv(argv: list[str]) -> tuple[str, Model]:
     if project_config.exists():
         model_registry.load_config(project_config, quiet=True)
 
-    # 调试：显示已加载的 factories
+    # 调试：显示已加载的 models
     if os.environ.get("HAWI_DEBUG"):
-        print(f"[DEBUG] Loaded factories: {model_registry.list_factories()}")
-        config = model_registry.get_factory("deepseek-chat")
+        print(f"[DEBUG] Loaded models: {model_registry.list_models()}")
+        config = model_registry.get_model("deepseek-chat")
         if config:
             api_key_preview = config.arguments.get("api_key", "N/A")
             if api_key_preview and len(str(api_key_preview)) > 10:
                 api_key_preview = str(api_key_preview)[:10] + "..."
             print(f"[DEBUG] deepseek-chat api_key: {api_key_preview}")
 
-    available_factories = model_registry.list_factories()
-    if not available_factories:
+    available_models = model_registry.list_models()
+    if not available_models:
         raise RuntimeError(
-            "No model factories available.\n"
-            "Please create ~/.hawi/models.yaml or ./.hawi/models.yaml with factory definitions.\n"
+            "No model configurations available.\n"
+            "Please create ~/.hawi/models.yaml or ./.hawi/models.yaml with model definitions.\n"
             "Example:\n"
-            "  factories:\n"
+            "  models:\n"
             "    deepseek-chat:\n"
             "      class: DeepSeekOpenAIModel\n"
             "      model_id: deepseek-chat\n"
@@ -81,34 +81,34 @@ def create_model_from_argv(argv: list[str]) -> tuple[str, Model]:
             "      api_key: ${DEEPSEEK_API_KEY}"
         )
 
-    # 从 argv 或交互式选择 factory
-    factory_name = None
+    # 从 argv 或交互式选择 model
+    model_name = None
     for arg in argv[:]:
-        if arg in available_factories:
+        if arg in available_models:
             argv.remove(arg)
-            factory_name = arg
+            model_name = arg
             break
 
-    if factory_name is None:
+    if model_name is None:
         # 交互式选择
-        factory_name = user_select(available_factories, "Select model factory:")
-        if factory_name is None:
+        model_name = user_select(available_models, "Select model:")
+        if model_name is None:
             print("")
             exit()
 
-    QUICK_ARGUMENTS.append(factory_name)
+    QUICK_ARGUMENTS.append(model_name)
 
-    # 使用 factory 创建模型
+    # 使用 model 创建模型
     try:
-        model = model_registry.create_model(factory_name)
+        model = model_registry.create_model(model_name)
     except Exception as e:
         raise RuntimeError(
-            f"Failed to create model from factory '{factory_name}': {e}\n"
+            f"Failed to create model from configuration '{model_name}': {e}\n"
             f"Please check your models.yaml configuration."
         )
 
     print(f"quick arguments: {' '.join(QUICK_ARGUMENTS)}")
-    return factory_name, model
+    return model_name, model
 
 def create_agent(model: Model, event_dump_file: str | None = None, streaming: bool = True) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
@@ -170,9 +170,9 @@ def main():
             event_dump_file = f".dumps/events_{timestamp}.jsonl"
 
     # Create agent using new config system
-    factory_name, model = create_model_from_argv(argv)
+    model_name, model = create_model_from_argv(argv)
     agent = create_agent(model, event_dump_file=event_dump_file, streaming=streaming)
-    print(f"Using factory: {factory_name}")
+    print(f"Using model: {model_name}")
     print(f"Model: {model.model_id}")
     if event_dump_file:
         print(f"Event dump: {event_dump_file}")

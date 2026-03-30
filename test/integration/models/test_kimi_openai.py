@@ -15,17 +15,17 @@ from hawi.models.message import (
     ToolCallPart,
     ReasoningPart,
 )
-from test.integration.models import has_factory, create_model, skip_on_rate_limit, async_skip_on_rate_limit
+from test.integration.models import has_model, create_model, skip_on_rate_limit, async_skip_on_rate_limit
 
 
-# Factory name
-KIMI_FACTORY = "moonshot-k2.5"
+# Model name
+KIMI_OPENAI_MODEL = "moonshot/kimi-k2.5"
 
-# Check if factory is available
-HAS_KIMI = has_factory(KIMI_FACTORY)
+# Check if model is available
+HAS_KIMI = has_model(KIMI_OPENAI_MODEL)
 
-# Skip reason for tests requiring factory
-SKIP_REASON = f"Factory '{KIMI_FACTORY}' not found in models.yaml"
+# Skip reason for tests requiring model
+SKIP_REASON = f"Model '{KIMI_OPENAI_MODEL}' not found in models.yaml"
 
 
 # =============================================================================
@@ -241,12 +241,16 @@ class TestKimiOpenAIIntegration:
     @pytest.fixture
     def model(self) -> KimiOpenAIModel:
         """Create a Kimi model instance with default settings from registry."""
-        return create_model(KIMI_FACTORY)
+        model = create_model(KIMI_OPENAI_MODEL)
+        assert isinstance(model, KimiOpenAIModel)
+        return model
 
     @pytest.fixture
     def model_no_thinking(self) -> KimiOpenAIModel:
         """Create a Kimi model instance with thinking disabled."""
-        return create_model(KIMI_FACTORY, enable_thinking=False)
+        model = create_model(KIMI_OPENAI_MODEL, enable_thinking=False)
+        assert isinstance(model, KimiOpenAIModel)
+        return model
 
     @skip_on_rate_limit
     def test_simple_chat_with_thinking(self, model: KimiOpenAIModel):
@@ -339,7 +343,9 @@ class TestKimiK25ToolCalls:
     @pytest.fixture
     def model(self) -> KimiOpenAIModel:
         """Create a Kimi K2.5 model instance from registry."""
-        return create_model(KIMI_FACTORY)
+        model = create_model(KIMI_OPENAI_MODEL)
+        assert isinstance(model, KimiOpenAIModel)
+        return model
 
     @skip_on_rate_limit
     def test_tool_call_with_reasoning(self, model: KimiOpenAIModel):
@@ -438,7 +444,9 @@ class TestKimiOpenAIAsync:
     @pytest.fixture
     def model(self) -> KimiOpenAIModel:
         """Create a Kimi model instance from registry."""
-        return create_model(KIMI_FACTORY)
+        model = create_model(KIMI_OPENAI_MODEL)
+        assert isinstance(model, KimiOpenAIModel)
+        return model
 
     @pytest.mark.asyncio
     @async_skip_on_rate_limit
@@ -512,7 +520,7 @@ class TestKimiOpenAIAsync:
     @async_skip_on_rate_limit
     async def test_async_non_streaming_with_thinking_disabled(self):
         """Test async non-streaming with thinking disabled."""
-        model = create_model(KIMI_FACTORY, enable_thinking=False)
+        model = create_model(KIMI_OPENAI_MODEL, enable_thinking=False)
 
         events = []
         async for event in model.ainvoke(

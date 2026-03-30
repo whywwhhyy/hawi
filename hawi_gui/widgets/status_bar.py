@@ -16,12 +16,12 @@ class StatusBarFrame(ttk.Frame):
     def __init__(
         self,
         parent: tk.Widget,
-        factory_name: str = "",
+        model_name: str = "",
         on_model_click: Callable[[], None] | None = None,
         **kwargs
     ):
         super().__init__(parent, style="StatusBar.TFrame", **kwargs)
-        self._factory_name = factory_name
+        self._model_name = model_name
         self._on_model_click = on_model_click
         self._build()
 
@@ -66,7 +66,7 @@ class StatusBarFrame(ttk.Frame):
         # Model name (right side, clickable)
         self._model_label = tk.Label(
             self,
-            text=self._factory_name,
+            text=self._model_name,
             bg=COLORS["bg_window"],
             fg=COLORS["queue_normal"],
             font=("TkDefaultFont", 11, "underline"),
@@ -108,7 +108,7 @@ class StatusBarFrame(ttk.Frame):
             foreground=COLORS["queue_normal"] if n > 0 else COLORS["text_secondary"],
         )
 
-    def set_model(self, factory_name: str):
+    def set_model(self, model_name: str):
         """Update the displayed model name."""
-        self._factory_name = factory_name
-        self._model_label.config(text=factory_name)
+        self._model_name = model_name
+        self._model_label.config(text=model_name)

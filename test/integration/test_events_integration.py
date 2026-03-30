@@ -16,16 +16,17 @@ from hawi.models import Model
 from hawi.models.deepseek import DeepSeekModel
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import tool
-from test.integration.models import has_factory, create_model
+from test.integration.models import has_model, create_model
 
 
 # Factory name
-DEEPSEEK_FACTORY = "deepseek-chat-openai"
+DEEPSEEK_MODEL = "deepseek-openai/deepseek-chat"
+DEFAULT_MODEL = DEEPSEEK_MODEL
 
-# Check if factory is available
-HAS_DEEPSEEK = has_factory(DEEPSEEK_FACTORY)
+# Check if model is available
+HAS_DEEPSEEK = has_model(DEFAULT_MODEL)
 
-SKIP_REASON = f"Factory '{DEEPSEEK_FACTORY}' not found in models.yaml"
+SKIP_REASON = f"Factory '{DEFAULT_MODEL}' not found in models.yaml"
 
 
 class CalculatorPlugin(HawiPlugin):
@@ -58,7 +59,7 @@ class TestEventFlowWithAgent:
     @pytest.fixture
     def model(self) -> Model:
         """Create a DeepSeek model instance from registry."""
-        return create_model(DEEPSEEK_FACTORY)
+        return create_model(DEFAULT_MODEL)
 
     @pytest.fixture
     def agent(self, model: Model) -> HawiAgent:
@@ -286,7 +287,7 @@ class TestEventFiltering:
     @pytest.fixture
     def model(self) -> Model:
         """Create DeepSeek model from registry."""
-        return create_model(DEEPSEEK_FACTORY)
+        return create_model(DEFAULT_MODEL)
 
     @pytest.fixture
     def agent(self, model: Model) -> HawiAgent:
@@ -345,12 +346,12 @@ class TestEventFiltering:
 class TestEventWithReasoningModel:
     """Tests for events with reasoning/thinking models."""
 
-    DEEPSEEK_REASONER_FACTORY = "deepseek-reasoner-openai"
+    DEEPSEEK_REASONER_MODEL = "deepseek-openai/deepseek-reasoner"
 
     @pytest.fixture
     def model(self) -> Model:
         """Create DeepSeek Reasoner model from registry."""
-        return create_model(self.DEEPSEEK_REASONER_FACTORY)
+        return create_model(self.DEEPSEEK_REASONER_MODEL)
 
     @pytest.fixture
     def agent(self, model: Model) -> HawiAgent:

@@ -143,7 +143,7 @@ class HawiAgent:
         Args:
             model: Default model for agent execution. Can be:
                 - Model instance (direct use)
-                - str (factory name from models.yaml, e.g., "deepseek-chat")
+                - str (model name from models.yaml, e.g., "deepseek-openai/deepseek-chat")
             plugins: List of plugins providing tools and hooks (default: empty list).
                 On clone, `plugin.clone()` is called for each plugin.
             plugin_factories: List of factory functions that create plugins (default: empty list).
@@ -242,7 +242,7 @@ class HawiAgent:
         Args:
             model: New model to use. Can be:
                 - Model instance (direct use)
-                - str (factory name from models.yaml, e.g., "deepseek-chat")
+                - str (model name from models.yaml, e.g., "deepseek-chat")
 
         Example:
             # Switch to a different model

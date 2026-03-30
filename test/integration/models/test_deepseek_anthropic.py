@@ -9,19 +9,19 @@ import pytest
 from hawi.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
 from hawi.models import Message
 from hawi.models.message import ContentPart
-from test.integration.models import has_factory, create_model, skip_on_rate_limit
+from test.integration.models import has_model, create_model, skip_on_rate_limit
 
-# Note: DeepSeek Anthropic models use the reasoner-openai factory which returns Anthropic format
-# Check the models.yaml for actual factory names
-DEEPSEEK_CHAT_FACTORY = "deepseek-chat-openai"  # Uses Anthropic format in test
-DEEPSEEK_REASONER_FACTORY = "deepseek-reasoner-openai"
+# Note: DeepSeek Anthropic models use the reasoner-openai model config which returns Anthropic format
+# Check the models.yaml for actual model names
+DEEPSEEK_CHAT_MODEL = "deepseek-anthropic/deepseek-chat"  # Uses Anthropic format in test
+DEEPSEEK_REASONER_MODEL = "deepseek-anthropic/deepseek-reasoner"
 
-# Check if factories are available
-HAS_DEEPSEEK_CHAT = has_factory(DEEPSEEK_CHAT_FACTORY)
-HAS_DEEPSEEK_REASONER = has_factory(DEEPSEEK_REASONER_FACTORY)
+# Check if models are available
+HAS_DEEPSEEK_CHAT = has_model(DEEPSEEK_CHAT_MODEL)
+HAS_DEEPSEEK_REASONER = has_model(DEEPSEEK_REASONER_MODEL)
 
-# Skip reason for tests requiring factory
-SKIP_REASON = f"Factory '{DEEPSEEK_CHAT_FACTORY}' not found in models.yaml"
+# Skip reason for tests requiring model config
+SKIP_REASON = f"Model '{DEEPSEEK_CHAT_MODEL}' not found in models.yaml"
 
 
 def _create_user_message(content: str) -> Message:
@@ -190,12 +190,16 @@ class TestDeepSeekAnthropicIntegration:
     @pytest.fixture
     def model(self) -> DeepSeekAnthropicModel:
         """Create a DeepSeek Anthropic model instance from registry."""
-        return create_model(DEEPSEEK_CHAT_FACTORY)
+        model = create_model(DEEPSEEK_CHAT_MODEL)
+        assert isinstance(model, DeepSeekAnthropicModel)
+        return model
 
     @pytest.fixture
     def reasoner_model(self) -> DeepSeekAnthropicModel:
         """Create a DeepSeek Reasoner model instance from registry."""
-        return create_model(DEEPSEEK_REASONER_FACTORY)
+        model = create_model(DEEPSEEK_REASONER_MODEL)
+        assert isinstance(model, DeepSeekAnthropicModel)
+        return model
 
     @skip_on_rate_limit
     def test_simple_chat_completion(self, model: DeepSeekAnthropicModel):
@@ -295,14 +299,16 @@ class TestDeepSeekAnthropicIntegration:
         assert "Alice" in response2_content[0].get("text", "")
 
 
-@pytest.mark.skipif(not HAS_DEEPSEEK_REASONER, reason=f"Factory '{DEEPSEEK_REASONER_FACTORY}' not found")
+@pytest.mark.skipif(not HAS_DEEPSEEK_REASONER, reason=f"Factory '{DEEPSEEK_REASONER_MODEL}' not found")
 class TestDeepSeekAnthropicReasonerMultiTurn:
     """Tests for Reasoner model multi-turn with reasoning content."""
 
     @pytest.fixture
     def reasoner_model(self) -> DeepSeekAnthropicModel:
         """Create a DeepSeek Reasoner model from registry."""
-        return create_model(DEEPSEEK_REASONER_FACTORY)
+        model = create_model(DEEPSEEK_REASONER_MODEL)
+        assert isinstance(model, DeepSeekAnthropicModel)
+        return model
 
     @skip_on_rate_limit
     def test_reasoner_with_tool_call(self, reasoner_model: DeepSeekAnthropicModel):

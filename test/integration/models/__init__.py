@@ -2,7 +2,7 @@
 Models integration tests for Hawi Agent.
 
 Uses Model Registry for all model creation and configuration.
-All tests should use factory names from models.yaml.
+All tests should use model names from models.yaml.
 """
 
 import functools
@@ -13,8 +13,8 @@ from hawi.models.registry import model_registry
 
 __all__ = [
     "model_registry",
-    "has_factory",
-    "list_factories",
+    "has_model",
+    "list_models",
     "create_model",
     "is_rate_limit_error",
     "skip_on_rate_limit",
@@ -22,29 +22,29 @@ __all__ = [
 ]
 
 
-def has_factory(name: str) -> bool:
-    """Check if a factory exists in the registry.
+def has_model(name: str) -> bool:
+    """Check if a model exists in the registry.
     
     Args:
         name: Factory name to check
         
     Returns:
-        True if factory exists, False otherwise
+        True if model exists, False otherwise
     """
-    return model_registry.has_factory(name)
+    return model_registry.has_model(name)
 
 
-def list_factories() -> list[str]:
-    """List all available factory names.
+def list_models() -> list[str]:
+    """List all available model names.
     
     Returns:
-        List of factory names
+        List of model names
     """
-    return model_registry.list_factories()
+    return model_registry.list_models()
 
 
 def create_model(name: str, **overrides):
-    """Create a model instance from factory.
+    """Create a model instance from model name.
     
     Args:
         name: Factory name

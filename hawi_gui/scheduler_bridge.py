@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hawi.agent import HawiAgent, HawiScheduler
+import hawi.events
 from hawi.events import Event
 from hawi.models import model_registry
 
@@ -48,12 +49,12 @@ class SchedulerThread(threading.Thread):
         self,
         ui_queue: "queue.Queue",
         cmd_queue: "queue.Queue",
-        factory_name: str,
+        model_name: str,
     ):
         super().__init__(daemon=True, name="SchedulerThread")
         self.ui_queue = ui_queue
         self.cmd_queue = cmd_queue
-        self.factory_name = factory_name
+        self.model_name = model_name
         self.loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
         self._scheduler: HawiScheduler | None = None
@@ -77,7 +78,7 @@ class SchedulerThread(threading.Thread):
     # ─── Async main ───────────────────────────────────────────────────────────
 
     async def _main(self):
-        await self._init_scheduler(self.factory_name)
+        await self._init_scheduler(self.model_name)
         self._ready.set()
 
         self._run_forever_task: asyncio.Task | None = None
@@ -86,9 +87,9 @@ class SchedulerThread(threading.Thread):
 
         await asyncio.gather(cmd_task, status_task, return_exceptions=True)
 
-    async def _init_scheduler(self, factory_name: str):
+    async def _init_scheduler(self, model_name: str):
         """Create agent and scheduler, subscribe to events."""
-        model = model_registry.create_model(factory_name)
+        model = model_registry.create_model(model_name)
 
         from hawi_plugins.skills_plugin import SkillsPlugin
         from hawi_plugins.web import WebPlugin
@@ -185,9 +186,9 @@ class SchedulerThread(threading.Thread):
                 # Switch model without recreating scheduler - preserves context
                 if self._scheduler:
                     try:
-                        self._scheduler.agent.set_model(cmd.factory_name)
-                        self.factory_name = cmd.factory_name
-                        self._send_ui(UiReady(factory_name=cmd.factory_name))
+                        self._scheduler.agent.set_model(cmd.model_name)
+                        self.model_name = cmd.model_name
+                        self._send_ui(UiReady(model_name=cmd.model_name))
                     except Exception as exc:
                         self._send_ui(UiError(message=f"切换模型失败: {exc}"))
 
@@ -197,10 +198,12 @@ class SchedulerThread(threading.Thread):
         etype = event.type
 
         if etype == "agent.run_start":
+            event = cast(hawi.events.AgentRunStartEvent, event)
             self._active_run_id = event.run_id
             self._pending_run[event.run_id] = self._last_enqueued_kind
 
         elif etype == "agent.message_added":
+            event = cast(hawi.events.AgentMessageAddedEvent, event)
             if event.role == "user":
                 text = ""
                 for part in event.content:
@@ -215,6 +218,7 @@ class SchedulerThread(threading.Thread):
                     ))
 
         elif etype == "model.content_block_delta":
+            event = cast(hawi.events.ModelContentBlockDeltaEvent, event)
             if not self._active_run_id:
                 return
             if event.delta_type == "text" and event.delta:
@@ -223,6 +227,7 @@ class SchedulerThread(threading.Thread):
                 self._send_ui(UiThinkingDelta(delta=event.delta, run_id=self._active_run_id))
 
         elif etype == "model.metadata":
+            event = cast(hawi.events.ModelMetadataEvent, event)
             run_id = self._active_run_id or ""
             usage = event.usage or {}
             self._send_ui(UiModelMetadata(
@@ -234,6 +239,7 @@ class SchedulerThread(threading.Thread):
             ))
 
         elif etype == "model.retry":
+            event = cast(hawi.events.ModelRetryEvent, event)
             run_id = self._active_run_id or ""
             self._send_ui(UiModelRetry(
                 run_id=run_id,
@@ -244,12 +250,15 @@ class SchedulerThread(threading.Thread):
             ))
 
         elif etype == "model.error":
+            event = cast(hawi.events.ModelErrorEvent, event)
             self._send_ui(UiError(message=f"[Model Error] {event.error.error_type}: {event.error.message}"))
 
         elif etype == "agent.error":
+            event = cast(hawi.events.AgentErrorEvent, event)
             self._send_ui(UiError(message=f"[Agent Error] {event.error.error_type}: {event.error.message}"))
 
         elif etype == "model.tool_call_block_delta":
+            event = cast(hawi.events.ModelToolCallBlockDeltaEvent, event)
             run_id = self._active_run_id or ""
             tool_call_id = event.tool_call_id
             delta = event.arguments_delta
@@ -264,6 +273,7 @@ class SchedulerThread(threading.Thread):
             ))
 
         elif etype == "agent.interrupt":
+            event = cast(hawi.events.AgentInterruptEvent, event)
             self._send_ui(UiAgentInterrupt(
                 run_id=event.run_id,
                 interrupt_type=event.interrupt_type,
@@ -274,16 +284,20 @@ class SchedulerThread(threading.Thread):
             self._send_ui(UiDebugInfo(message=f"Model stream started"))
 
         elif etype == "model.stream_stop":
+            event = cast(hawi.events.ModelStreamStopEvent, event)
             self._send_ui(UiDebugInfo(message=f"Model stream stopped: {event.stop_reason}"))
 
         elif etype == "model.content_block_start":
+            event = cast(hawi.events.ModelContentBlockStartEvent, event)
             self._send_ui(UiDebugInfo(message=f"Content block start: {event.block_type}"))
 
         elif etype == "model.content_block_stop":
+            event = cast(hawi.events.ModelContentBlockStopEvent, event)
             block_type = event.block_type if event.content else "unknown"
             self._send_ui(UiDebugInfo(message=f"Content block stop: {block_type}"))
 
         elif etype == "agent.run_stop":
+            event = cast(hawi.events.AgentRunStopEvent, event)
             self._pending_run.pop(event.run_id, None)
             if self._active_run_id == event.run_id:
                 self._active_run_id = None
@@ -294,6 +308,7 @@ class SchedulerThread(threading.Thread):
             ))
 
         elif etype == "agent.tool_call":
+            event = cast(hawi.events.AgentToolCallEvent, event)
             run_id = self._active_run_id or ""
             self._active_tool_calls[event.tool_call_id] = {
                 "tool_name": event.tool_name,
@@ -308,6 +323,7 @@ class SchedulerThread(threading.Thread):
             ))
 
         elif etype == "agent.tool_result":
+            event = cast(hawi.events.AgentToolResultEvent, event)
             call_info = self._active_tool_calls.pop(event.tool_call_id, {})
             tool_name = call_info.get("tool_name", event.tool_call_id)
             run_id = call_info.get("run_id", self._active_run_id or "")
@@ -323,13 +339,16 @@ class SchedulerThread(threading.Thread):
 
     def _on_scheduler_event(self, event: Event):
         if event.type == "scheduler.interrupt":
+            event = cast(hawi.events.SchedulerInterruptEvent, event)
             self._send_ui(UiInterrupt(reason=event.reason))
         elif event.type == "scheduler.dequeue":
+            event = cast(hawi.events.SchedulerDequeueEvent, event)
             qk = event.queue_type
             if qk in ("normal", "high_prio", "urgent"):
                 self._last_enqueued_kind = qk
             self._send_ui(UiDebugInfo(message=f"Dequeue from {qk}"))
         elif event.type == "scheduler.enqueue":
+            event = cast(hawi.events.SchedulerEnqueueEvent, event)
             self._send_ui(UiDebugInfo(message=f"Enqueue to {event.queue_type}: {event.content_preview[:30]}..."))
 
     # ─── External API ─────────────────────────────────────────────────────────

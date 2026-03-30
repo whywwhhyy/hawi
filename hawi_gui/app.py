@@ -47,15 +47,15 @@ HELP_TEXT = (
 class HawiGuiApp:
     """Main GUI application."""
 
-    def __init__(self, factory_name: str, root: tk.Tk | None = None):
-        self.factory_name = factory_name
+    def __init__(self, model_name: str, root: tk.Tk | None = None):
+        self.model_name = model_name
         self.ui_queue: queue.Queue = queue.Queue()
         self.cmd_queue: queue.Queue = queue.Queue()
         self._active_runs: set[str] = set()
         self._sched_thread: SchedulerThread | None = None
 
         self.root = root if root is not None else tk.Tk()
-        self.root.title(f"Hawi — {factory_name}")
+        self.root.title(f"Hawi — {model_name}")
         self.root.geometry("960x720")
         self.root.minsize(640, 480)
         self.root.configure(bg=COLORS["bg_window"])
@@ -75,9 +75,9 @@ class HawiGuiApp:
         menubar.add_cascade(label="模型", menu=model_menu)
         model_menu.add_command(label="切换模型…", command=self._show_model_switcher)
         model_menu.add_separator()
-        self._model_menu_label = tk.StringVar(value=f"当前: {self.factory_name}")
+        self._model_menu_label = tk.StringVar(value=f"当前: {self.model_name}")
         model_menu.add_command(
-            label=f"当前: {self.factory_name}",
+            label=f"当前: {self.model_name}",
             state=tk.DISABLED,
         )
         self._model_menu = model_menu
@@ -90,7 +90,7 @@ class HawiGuiApp:
         # Status bar (top)
         self.status_bar = StatusBarFrame(
             self.root,
-            factory_name=self.factory_name,
+            model_name=self.model_name,
             on_model_click=self._show_model_switcher,
         )
         self.status_bar.pack(side=tk.TOP, fill=tk.X)
@@ -115,7 +115,7 @@ class HawiGuiApp:
         self._sched_thread = SchedulerThread(
             ui_queue=self.ui_queue,
             cmd_queue=self.cmd_queue,
-            factory_name=self.factory_name,
+            model_name=self.model_name,
         )
         self._sched_thread.start()
         self.chat_view.add_system("正在启动 Scheduler…")
@@ -168,11 +168,11 @@ class HawiGuiApp:
             self.status_bar.update_status(msg)
 
         elif isinstance(msg, UiReady):
-            self.factory_name = msg.factory_name
-            self.root.title(f"Hawi — {msg.factory_name}")
-            self.status_bar.set_model(msg.factory_name)
-            self.chat_view.add_system(f"✓ 已切换到模型: {msg.factory_name}")
-            self._update_model_menu(msg.factory_name)
+            self.model_name = msg.model_name
+            self.root.title(f"Hawi — {msg.model_name}")
+            self.status_bar.set_model(msg.model_name)
+            self.chat_view.add_system(f"✓ 已切换到模型: {msg.model_name}")
+            self._update_model_menu(msg.model_name)
 
         elif isinstance(msg, UiRunStart):
             if msg.user_content:
@@ -292,28 +292,30 @@ class HawiGuiApp:
 
     def _show_model_switcher(self):
         from hawi.models import model_registry
-        factories = model_registry.list_factories()
-        if not factories:
+        models = model_registry.list_models()
+        if not models:
             self.chat_view.add_system("没有可用的模型工厂")
             return
         dlg = ModelSelectionDialog(
-            self.root, factories,
+            self.root, models,
             title="切换模型",
             modal=False,
             on_select=self._switch_model,
         )
 
-    def _switch_model(self, factory_name: str):
-        if factory_name == self.factory_name:
+    def _switch_model(self, model_name: str):
+        if model_name == self.model_name:
             return
-        self.chat_view.add_system(f"正在切换到模型: {factory_name}…")
-        self.cmd_queue.put(CmdSwitchModel(factory_name=factory_name))
+        self.chat_view.add_system(f"正在切换到模型: {model_name}…")
+        self.cmd_queue.put(CmdSwitchModel(model_name=model_name))
 
-    def _update_model_menu(self, factory_name: str):
+    def _update_model_menu(self, model_name: str):
         """Update the disabled menu label showing current model."""
         try:
             last_idx = self._model_menu.index(tk.END)
-            self._model_menu.entryconfig(last_idx, label=f"当前: {factory_name}")
+            if last_idx is None:
+                return
+            self._model_menu.entryconfig(last_idx, label=f"当前: {model_name}")
         except Exception:
             pass
 

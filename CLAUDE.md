@@ -53,7 +53,7 @@ utils          # Infrastructure layer - context, lifecycle, terminal UI
 
 #### Model Adapters (`hawi/agent/models/`)
 
-Unified interface for multiple LLM providers with factory pattern:
+Unified interface for multiple LLM providers with model pattern:
 
 ```
 Model (ABC)
