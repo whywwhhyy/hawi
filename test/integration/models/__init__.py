@@ -53,7 +53,7 @@ def create_model(name: str, **overrides):
     Returns:
         Model instance
     """
-    return model_registry.create_model(name, overrides=overrides or None)
+    return model_registry.create_model(name, **overrides)
 
 
 def is_rate_limit_error(e: Exception) -> bool:

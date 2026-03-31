@@ -69,19 +69,6 @@ PARENT_FIELD = "__parent"
 PARENT_FIELD_ALIAS = "parent"
 
 
-def _get_special_field(data: dict[str, Any], field: str, alias: str) -> tuple[Any, bool]:
-    """获取特殊字段值
-
-    Returns:
-        (值, 是否找到)
-    """
-    if field in data:
-        return data[field], True
-    if alias in data:
-        return data[alias], True
-    return None, False
-
-
 def _pop_special_field(data: dict[str, Any], field: str, alias: str) -> Any:
     """弹出特殊字段值，优先使用 @_ 前缀的字段"""
     if field in data:
@@ -495,26 +482,50 @@ class ModelRegistry:
     # ========================================================================
 
     def create_model(
-        self, name: str, overrides: Optional[dict[str, Any]] = None
+        self, name: str, **overrides: Any
     ) -> Model:
         """通过 Model 名称创建 Model 实例
 
         Args:
-            name: Model 名称
-            overrides: 覆盖参数
+            name: Model 名称，支持 "TEMPLATE/MODEL_ID" 格式
+                  如果 models.yaml 中没有定义，会自动使用 TEMPLATE 模板创建，
+                  并将 model_id 设置为 MODEL_ID
+            **overrides: 覆盖参数
 
         Returns:
             Model 实例
 
         Raises:
-            UnknownModelError: model 不存在
+            UnknownModelError: model 不存在且无法从模板自动创建
             UnknownModelError: Model 类未注册
+
+        Example:
+            # 使用预定义的 model
+            model = registry.create_model("deepseek-chat")
+
+            # 使用模板自动创建（假设 "openai" 模板已注册）
+            model = registry.create_model("openai/gpt-4")
+            # 等价于使用 openai 模板，model_id="gpt-4"
+
+            # 覆盖参数
+            model = registry.create_model("deepseek-chat", temperature=0.5)
         """
         # 自动加载配置（首次使用，除非被显式禁用）
         self._ensure_auto_load()
 
+        # 如果 model 不存在，尝试从 "TEMPLATE/MODEL_ID" 格式自动创建
         if name not in self._models:
-            raise UnknownModelError(f"Model '{name}' not found")
+            if "/" in name:
+                template_name, model_id = name.split("/", 1)
+                if template_name in self._templates:
+                    # 自动创建 model 配置
+                    self._create_model_from_template(name, template_name, model_id)
+                else:
+                    raise UnknownModelError(
+                        f"Model '{name}' not found and template '{template_name}' does not exist"
+                    )
+            else:
+                raise UnknownModelError(f"Model '{name}' not found")
 
         # 解析配置（处理 template 继承）
         resolved = self._resolve_model(name)
@@ -535,6 +546,31 @@ class ModelRegistry:
         arguments = self._resolve_substitutions(arguments)
 
         return model_class(**arguments)
+
+    def _create_model_from_template(
+        self, name: str, template_name: str, model_id: str
+    ) -> None:
+        """从模板自动创建 Model 配置
+
+        Args:
+            name: Model 名称（如 "openai/gpt-4"）
+            template_name: 模板名称（如 "openai"）
+            model_id: 模型 ID（如 "gpt-4"）
+        """
+        template = self._templates.get(template_name)
+        if template is None:
+            raise UnknownTemplateError(f"Template '{template_name}' not found")
+
+        # 确定 class_name：优先使用模板的 class_name
+        class_name = template.class_name or ""
+
+        # 创建 model 配置
+        # 格式：{__template: template_name, model_id: model_id, ...template_args}
+        self._models[name] = ModelConfig(
+            class_name=class_name,
+            arguments={"model_id": model_id, **template.arguments},
+            template=[template_name],
+        )
 
     def _resolve_template(
         self, name: str, visited: Optional[set[str]] = None
@@ -811,10 +847,18 @@ model_registry = ModelRegistry()
 
 # 便捷函数（直接通过模块调用）
 def create_model(
-    name: str, overrides: Optional[dict[str, Any]] = None
+    name: str, **overrides: Any
 ) -> Model:
-    """通过 Model 名称创建 Model 实例"""
-    return model_registry.create_model(name, overrides)
+    """通过 Model 名称创建 Model 实例
+
+    Args:
+        name: Model 名称，支持 "TEMPLATE/MODEL_ID" 格式
+        **overrides: 覆盖参数
+
+    Returns:
+        Model 实例
+    """
+    return model_registry.create_model(name, **overrides)
 
 
 def get_model_class(name: str) -> Optional[type[Model]]:

@@ -593,7 +593,7 @@ class TestCreateModel:
             quiet=True,
         )
 
-        model = registry.create_model("openai-test", overrides={"model_id": "gpt-3.5"})
+        model = registry.create_model("openai-test", model_id="gpt-3.5")
         assert model.model_id == "gpt-3.5"
 
     def test_create_model_resolves_env_vars(self):

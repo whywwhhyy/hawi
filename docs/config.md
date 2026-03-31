@@ -275,10 +275,8 @@ from hawi.models import model_registry
 # 创建模型时覆盖配置参数
 model = model_registry.create_model(
     "deepseek-chat",
-    overrides={
-        "temperature": 0.9,
-        "max_tokens": 4096
-    }
+    temperature=0.9,
+    max_tokens=4096,
 )
 ```
 
