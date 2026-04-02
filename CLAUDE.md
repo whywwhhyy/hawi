@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Project Overview
 
-**Hawi** is an AI Agent framework with model compatibility layers for multiple LLM providers (DeepSeek, Kimi/Moonshot). It provides persistent Python interpreter execution, a tool registry with two-layer architecture, and workflow orchestration.
+**Hawi** is an AI Agent framework with model compatibility layers for multiple LLM providers. It provides persistent Python interpreter execution, a plugin-based tool system, a unified event system, and a scheduler for agent orchestration.
 
 ## Development Commands
 
@@ -21,14 +21,11 @@ uv run <command>           # Run command in virtualenv
 pytest                     # Run all tests
 pytest test/unit/          # Unit tests only
 pytest test/integration/   # Integration tests only
-pytest test/unit/test_python_interpreter.py::TestPythonInterpreter::test_execute_simple_expression  # Single test
 ```
 
 **Running the Application:**
 ```bash
 uv run python main.py [provider] [prompt]
-uv run python main.py deepseek
-uv run python main.py kimi-oai
 ```
 
 ## Architecture
@@ -36,122 +33,61 @@ uv run python main.py kimi-oai
 ### Layer Structure (Dependency Direction: Top → Bottom)
 
 ```
-builder        # Configuration-based agent/workflow building (user interface)
+agent          # Execution layer - LLM interaction, tool loops, plugin hooks
     ↓
-workflow       # Orchestration layer - flow control and node execution
-    ↓
-agent          # Execution layer - LLM interaction and model adapters
+plugin         # Plugin system - HawiPlugin base, hooks, decorators, resources
     ↓
 tool           # Tool layer - core abstractions and registries
     ↓
-utils          # Infrastructure layer - context, lifecycle, terminal UI
+models         # Model layer - unified LLM adapter interface
+    ↓
+events         # Event system - EventBus, Model/Agent/Scheduler events
+    ↓
+utils          # Infrastructure layer - lifecycle, loader, terminal UI
 ```
 
 **Key Principle:** Single-direction dependencies. No cycles allowed.
 
 ### Core Components
 
-#### Model Adapters (`hawi/agent/models/`)
+#### Model Adapters (`hawi/models/`)
 
-Unified interface for multiple LLM providers with model pattern:
+Unified interface for multiple LLM providers:
 
-```
-Model (ABC)
-├── OpenAIModel
-│   ├── DeepSeekOpenAIModel      # DeepSeek via OpenAI API
-│   └── KimiOpenAIModel          # Kimi via OpenAI API
-├── AnthropicModel
-│   ├── DeepSeekAnthropicModel   # DeepSeek via Anthropic API
-│   └── KimiAnthropicModel       # Kimi via Anthropic API
-└── StrandsModel                 # Adapter for Strands framework
-```
+- **`Model`** (ABC): Base class defining `invoke()`, `stream()`, `ainvoke()`, `astream()`
+- **`OpenAIModel`**, **`AnthropicModel`**, **`StrandsModel`**: Provider-specific protocol adapters
+- **`DeepSeekModel`**, **`KimiModel`**, **`MiniMaxModel`**: High-level model entries resolved via `model_registry` and `models.yaml`
 
 **Usage:**
 ```python
-from hawi.models import DeepSeekModel, KimiModel
+from hawi.models import model_registry
 
-# Auto-detect API type based on URL
-deepseek = DeepSeekModel(model_id="deepseek-chat", api_key="...")
+# Create from registry (requires models.yaml)
+model = model_registry.create_model("deepseek-chat")
 
-# Force specific API format
-kimi = KimiModel(model_id="kimi-k2-5", api="openai")  # or "anthropic"
-
-# Use with agent
-agent = HawiAgent(model=deepseek, ...)
+# Or instantiate directly
+from hawi.models import DeepSeekModel
+model = DeepSeekModel(model_id="deepseek-chat", api_key="...")
 ```
-
-**DeepSeek API Compatibility:**
-
-| Feature | OpenAI API | Anthropic API |
-|---------|-----------|---------------|
-| Endpoint | `https://api.deepseek.com` | `https://api.deepseek.com/anthropic` |
-| Models | `deepseek-chat`, `deepseek-reasoner` | `deepseek-chat`, `deepseek-reasoner` |
-| Images/Documents | Not supported | Not supported |
-| `top_k` parameter | Not supported | Not supported |
-| `temperature`/`top_p` (reasoner) | Ignored | Ignored |
-| `thinking.budget_tokens` | Ignored | Ignored |
-| Parallel tool use | Supported | Ignored |
-
-References:
-- [DeepSeek OpenAI API](https://api-docs.deepseek.com/guides/openai_api)
-- [DeepSeek Anthropic API](https://api-docs.deepseek.com/guides/anthropic_api)
-- [DeepSeek Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)
-
-**Kimi API Compatibility:**
-
-| Feature | OpenAI API | Anthropic API |
-|---------|-----------|---------------|
-| Endpoint | `https://api.moonshot.cn/v1` | `https://api.kimi.com/coding` |
-| Thinking Mode | `temperature=1.0` | Supported |
-| K2.5 Fixed Params | `top_p=0.95, n=1` | - |
-| Citations | - | Returned in response |
-
-References:
-- [Strands Model Providers](https://strandsagents.com/latest/documentation/docs/user-guide/concepts/model-providers/)
-- [Kimi OpenAI Compatibility](https://platform.moonshot.cn/docs/guide/migrating-from-openai-to-kimi)
 
 #### Python Interpreter (`hawi_plugins/python_interpreter/`)
 
 Persistent subprocess Python execution with state management.
 
 ```python
-from hawi_plugins.python_interpreter import PythonInterpreter
+from hawi_plugins.python_interpreter import PythonInterpreterPlugin
 
-# As a plugin
-interpreter = PythonInterpreter()
-agent = HawiAgent(plugins=[interpreter], ...)
-
-# Direct usage
-result = interpreter.execute("x = 5\nprint(x * 2)")
-print(result.output)  # 10
+interpreter = PythonInterpreterPlugin()
+agent = HawiAgent(model=model, plugins=[interpreter])
 ```
-
-**Features:**
-- Length-prefix protocol for subprocess communication
-- State persistence between executions
-- Pre-imported modules: math, os, sys, json, datetime, time, random, re, collections, itertools, functools, pathlib, typing
 
 #### Tool System (`hawi/tool/`)
 
-Two-layer architecture for tool registration:
+- **`AgentTool`** (ABC): Base class for tools. Subclasses implement `name`, `description`, `parameters_schema`, and `run()` / `arun()`
+- **`@tool`**: Function-based decorator to create `AgentTool` instances from plain functions
+- **`ToolRegistry`**: Singleton registry with two layers (base factory layer + agent tool layer)
 
-```
-┌─────────────────────────────────────┐
-│         Agent Tool Layer            │
-│  (Instance-based, LLM-facing)       │
-│  - FunctionAgentTool instances      │
-│  - Direct tool execution            │
-└─────────────────────────────────────┘
-                  ↓
-┌─────────────────────────────────────┐
-│         Base Access Layer           │
-│  (Factory-based, infrastructure)    │
-│  - Jira, Confluence clients         │
-│  - Config-based creation            │
-└─────────────────────────────────────┘
-```
-
-**Creating a Tool:**
+**Class-based Tool:**
 ```python
 from hawi.tool import AgentTool, ToolResult
 
@@ -178,60 +114,30 @@ def my_function(input: str) -> dict:
     return {"result": input.upper()}
 ```
 
-#### Context System (`hawi/utils/context.py`)
+#### Plugin System (`hawi/plugin/`)
 
-Thread-safe context with reference counting for cross-thread/coroutine sharing.
+Plugins provide tools, hooks, and MCP-compatible resources.
 
-```python
-from hawi.utils import ContextManager
+- **`HawiPlugin`**: Base class. Auto-discovers methods decorated with `@tool`, `@before_session`, `@after_session`, etc.
+- **`PluginManager`**: Manages plugin lifecycle, tool definitions, and hook dispatch
+- **Resources**: `HawiResource`, `HawiLiteralResource`, `HawiFileResource`, `HawiDynamicResource`
 
-# Create context
-ctx_id = ContextManager.create({"user_id": "123"})
+#### Event System (`hawi/events/`)
 
-# Attach to current task
-ContextManager.attach(ctx_id)
-
-# Access anywhere in the same task
-user_id = ContextManager.get("user_id")
-
-# Fork for child tasks
-child_id = ContextManager.fork(ctx_id, {"extra": "data"})
-
-# Cleanup
-ContextManager.detach(ctx_id)
-```
-
-#### Lifecycle Management (`hawi/utils/lifecycle.py`)
-
-Multi-layer cleanup guarantee.
+Read-only, non-blocking event streaming for observability.
 
 ```python
-from hawi.utils import ExitHandler
-
-def cleanup():
-    print("Cleaning up resources...")
-
-# Register with priority (lower = earlier)
-ExitHandler.register(cleanup, priority=10, name="my_cleanup")
-```
-
-#### Event System (`hawi/agent/events.py`)
-
-Non-blocking, read-only event streaming for agent execution observability.
-
-```python
-from hawi.agent import EventBus
+from hawi.events import EventBus
 
 # Subscribe to events
-def on_tool_call(event):
-    print(f"Tool called: {event.metadata['tool_name']}")
-
-EventBus.subscribe("agent.tool_call", on_tool_call)
+EventBus().subscribe(callback, event_types=["agent.tool_call"])
 ```
+
+Event types: `Model*Event`, `Agent*Event`, `Scheduler*Event`.
 
 **Event vs Hook:**
 - **Events**: Non-blocking, read-only, multi-consumer (for logging, UI updates)
-- **Hooks**: Blocking, mutable, single-consumer (for intervention)
+- **Hooks**: Blocking, mutable, single-consumer (for intervention). Defined via plugin decorators.
 
 #### Agent Context (`hawi/agent/context.py`)
 
@@ -242,13 +148,18 @@ from hawi.agent import AgentContext
 
 context = AgentContext(
     messages=[],
-    tools=[my_tool],
-    system_prompt=[TextPart(text="You are a helpful assistant.")]
+    tool_definitions=defs,
+    system_prompt=[{"type": "text", "text": "You are a helpful assistant."}]
 )
-
-# Prepare request for model
-request = context.prepare_request()
 ```
+
+#### Scheduler (`hawi/agent/scheduler/`)
+
+Message queue management and agent orchestration.
+
+- **`HawiScheduler`**: Main scheduler
+- **`AgentExecutor`**: Executes agents with queue support
+- **`EventInterceptor`**: Intercepts and routes events
 
 ### Project Structure
 
@@ -256,35 +167,53 @@ request = context.prepare_request()
 hawi/
 ├── agent/              # Execution layer
 │   ├── agent.py        # HawiAgent main class
-│   ├── context.py      # AgentContext
-│   ├── events.py       # Event system
-│   ├── messages.py     # Message types
+│   ├── context.py      # AgentContext, ToolCallContext
+│   ├── result.py       # AgentRunResult, ToolCallRecord
+│   ├── scheduler/      # HawiScheduler, AgentExecutor, queues
+│   ├── printers/       # Output printers (plain, rich)
+│   └── stream_accumulator.py
+├── models/             # Model layer
 │   ├── model.py        # Model ABC
-│   ├── result.py       # AgentRunResult
-│   └── models/         # Model implementations
-│       ├── deepseek/   # DeepSeek adapters
-│       ├── kimi/       # Kimi adapters
-│       ├── openai/     # OpenAI base
-│       └── anthropic/  # Anthropic base
+│   ├── message.py      # Message types
+│   ├── registry.py     # ModelRegistry
+│   ├── openai/         # OpenAI adapter
+│   ├── anthropic/      # Anthropic adapter
+│   ├── deepseek/       # DeepSeek adapter
+│   ├── kimi/           # Kimi adapter
+│   ├── minimax/        # MiniMax adapter
+│   └── strands/        # Strands adapter
+├── plugin/             # Plugin system
+│   ├── plugin.py       # HawiPlugin base
+│   ├── manager.py      # PluginManager
+│   ├── decorators.py   # @tool, @before_session, etc.
+│   ├── hook_context.py # HookContext, HookResult
+│   ├── resource/       # MCP-compatible resources
+│   └── types.py        # Hook types
 ├── tool/               # Tool system
 │   ├── types.py        # AgentTool, ToolResult
 │   ├── registry.py     # ToolRegistry
 │   └── function_tool.py
-├── plugin/             # Plugin system
-│   ├── plugin.py       # HawiPlugin base
-│   ├── types.py        # Hook types
-│   └── decorators.py   # @tool, @before_session, etc.
-├── resources/          # MCP-compatible resources
-├── utils/              # Infrastructure
-│   ├── context.py      # ContextManager
-│   ├── lifecycle.py    # ExitHandler
-│   └── terminal.py     # Terminal UI
-└── workflow/           # Workflow orchestration (planned)
+├── events/             # Event system
+│   ├── event.py
+│   ├── event_bus.py
+│   ├── agent_events.py
+│   ├── model_events.py
+│   └── scheduler_events.py
+├── errors/             # Error types
+│   ├── agent_errors.py
+│   ├── model_errors.py
+│   └── error.py
+└── utils/              # Infrastructure
+    ├── lifecycle.py    # ExitHandler
+    ├── loader.py       # ModuleLoader
+    ├── markdown_streaming_parser.py
+    └── terminal.py
 
 hawi_plugins/           # Plugin implementations
-└── python_interpreter/
-    ├── python_interpreter.py
-    └── multi_python_interpreter.py
+├── python_interpreter/
+├── mcp_plugin/
+├── skills_plugin/
+└── web/
 
 test/
 ├── unit/               # Unit tests
@@ -296,25 +225,30 @@ test/
 **Basic Agent:**
 ```python
 from hawi.agent import HawiAgent
-from hawi.models import DeepSeekModel
+from hawi.models import model_registry
 
-model = DeepSeekModel(model_id="deepseek-chat")
+model = model_registry.create_model("deepseek-chat")
 agent = HawiAgent(model=model)
 
 result = agent.run("Hello, what can you do?")
-print(result.messages[-1]["content"][0]["text"])
+print(result.text)
 ```
 
 **With Tools:**
 ```python
 from hawi.tool import tool
+from hawi.plugin import HawiPlugin
 
 @tool()
 def calculator(expression: str) -> float:
     """Evaluate a mathematical expression."""
     return eval(expression)
 
-agent = HawiAgent(model=model, plugins=[calculator.to_plugin()])
+class CalculatorPlugin(HawiPlugin):
+    def __init__(self):
+        self._calc = calculator
+
+agent = HawiAgent(model=model, plugins=[CalculatorPlugin()])
 result = agent.run("What is 15 * 23?")
 ```
 
@@ -325,15 +259,7 @@ for event in agent.run("Tell me a story", stream=True):
         print(event.metadata["delta"], end="", flush=True)
 ```
 
-## References
-
-- [DeepSeek API Docs](https://api-docs.deepseek.com/)
-- [Kimi Platform](https://platform.moonshot.cn/)
-- [Strands Agents](https://strandsagents.com/)
-- [Anthropic API](https://docs.anthropic.com/)
-- [OpenAI API](https://platform.openai.com/docs/)
-
-### Import Conventions
+## Import Conventions
 
 **Within a package** - use relative imports:
 ```python
@@ -344,28 +270,10 @@ from .types import ToolResult
 **Across packages** - use absolute imports:
 ```python
 from hawi.tool import AgentTool, ToolRegistry
-from hawi.utils import ContextManager
+from hawi.events import EventBus
 ```
 
-### Testing Patterns
+## Testing Patterns
 
 - Tests use pytest fixtures for setup/teardown
-- Context isolation via `ContextManager` for test isolation
 - Integration tests require API keys (configured via `apikey.yaml`, gitignored)
-
-**Example:**
-```python
-import pytest
-from hawi.utils import ContextManager
-
-@pytest.fixture
-def isolated_context():
-    ctx_id = ContextManager.create({"test": True})
-    ContextManager.attach(ctx_id)
-    yield ctx_id
-    ContextManager.detach(ctx_id)
-
-def test_something(isolated_context):
-    # Test with isolated context
-    pass
-```
