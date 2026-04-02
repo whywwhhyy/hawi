@@ -60,9 +60,9 @@ def create_model_from_argv(argv: list[str]) -> tuple[str, Model]:
     # 调试：显示已加载的 models
     if os.environ.get("HAWI_DEBUG"):
         print(f"[DEBUG] Loaded models: {model_registry.list_models()}")
-        config = model_registry.get_model("deepseek-chat")
+        config = model_registry.get_model_config("deepseek-chat")
         if config:
-            api_key_preview = config.arguments.get("api_key", "N/A")
+            api_key_preview = config.properties.get("api_key", "N/A")
             if api_key_preview and len(str(api_key_preview)) > 10:
                 api_key_preview = str(api_key_preview)[:10] + "..."
             print(f"[DEBUG] deepseek-chat api_key: {api_key_preview}")

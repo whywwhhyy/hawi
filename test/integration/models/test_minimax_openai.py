@@ -12,7 +12,7 @@ from hawi.models.message import ContentPart
 from test.integration.models import has_model, create_model, skip_on_rate_limit, async_skip_on_rate_limit
 
 # Model names
-MINIMAX_OPENAI_MODEL = "minimax-openai/minimax-m2.7"
+MINIMAX_OPENAI_MODEL = "minimax-openai/MiniMax-M2.7"
 
 # Check if models are available
 HAS_MINIMAX_OPENAI = has_model(MINIMAX_OPENAI_MODEL)

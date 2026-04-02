@@ -12,7 +12,7 @@ from hawi.models.message import ContentPart
 from test.integration.models import has_model, create_model, skip_on_rate_limit
 
 # Model name
-MINIMAX_ANTHROPIC_MODEL = "minimax-anthropic/minimax-m2.7"
+MINIMAX_ANTHROPIC_MODEL = "minimax-anthropic/MiniMax-M2.7"
 
 # Check if models are available
 HAS_MINIMAX_ANTHROPIC = has_model(MINIMAX_ANTHROPIC_MODEL)

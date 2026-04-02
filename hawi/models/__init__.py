@@ -5,9 +5,9 @@ Hawi Agent 模型实现
 
 Example:
     from hawi.models import OpenAIModel
-    from hawi.models import ModelConfig
+    from hawi.models import ModelOverrideConfig
 
-    model = OpenAIModel(config=ModelConfig(
+    model = OpenAIModel(config=ModelOverrideConfig(
         model_id="gpt-4",
         api_key="..."
     ))
@@ -75,19 +75,39 @@ from .strands import StrandsModel
 from .registry import (
     CircularDependencyError,
     ModelConfig,
+    ModelOverrideConfig,
     InvalidInheritanceError,
+    ModelProviderConfig,
     ModelRegistry,
-    TemplateConfig,
     UnknownModelError,
     UnknownTemplateError,
-    create_model,
-    get_model_arguments,
-    get_model_class,
-    list_models,
-    list_templates,
-    load_config,
     model_registry,
 )
+
+# Convenience functions
+def create_model(name: str, **overrides):
+    """Create a model instance using the global registry."""
+    return model_registry.create_model(name, **overrides)
+
+def get_model_adapter(name: str):
+    """Get a model adapter class using the global registry."""
+    return model_registry.get_model_adapter(name)
+
+def get_model_config(name: str):
+    """Get model configuration using the global registry."""
+    return model_registry.get_model_config(name)
+
+def load_config(path, quiet: bool = False):
+    """Load configuration from a YAML file using the global registry."""
+    return model_registry.load_config(path, quiet=quiet)
+
+def list_models():
+    """List all available models using the global registry."""
+    return model_registry.list_models()
+
+def list_providers():
+    """List all registered providers using the global registry."""
+    return model_registry.list_providers()
 
 __all__ = [
     # Base classes
@@ -151,7 +171,7 @@ __all__ = [
     # Registry
     "ModelRegistry",
     "model_registry",
-    "ModelConfig",
+    "ModelOverrideConfig",
     "TemplateConfig",
     "CircularDependencyError",
     "UnknownModelError",
@@ -161,8 +181,8 @@ __all__ = [
     # Convenience functions
     "create_model",
     "get_model_arguments",
-    "get_model_class",
+    "get_model_adapter",
     "load_config",
     "list_models",
-    "list_templates",
+    "list_providers",
 ]

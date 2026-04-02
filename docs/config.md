@@ -122,7 +122,7 @@ factories = model_registry.list_factories()
 print(factories)
 
 # 列出所有 Model 类
-classes = model_registry.list_classes()
+classes = model_registry.list_model_adapters()
 print(classes)
 
 # 检查工厂是否存在
@@ -201,7 +201,7 @@ factories:
 from hawi.models import model_registry, OpenAIModel
 
 # 注册 Model 类（通常已内置，无需手动注册）
-model_registry.register_class("OpenAIModel", OpenAIModel)
+model_registry.register_adapter("OpenAIModel", OpenAIModel)
 
 # 注册工厂
 model_registry.register_factory(

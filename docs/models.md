@@ -318,95 +318,89 @@ agent = HawiAgent(model=model)
 
 ## 模型注册表 (ModelRegistry)
 
-Hawi 提供模型注册表功能，支持通过名字和参数字典动态创建模型实例。
+Hawi 提供模型注册表功能，支持通过 Provider/ModelId 格式动态创建模型实例。
 
 ### 基本用法
 
 ```python
-from hawi.models import model_registry, get_global_registry
+from hawi.models import model_registry
 
-# 使用模块级全局单例（预置所有内置模型）
-model = model_registry.create("DeepSeekModel", {"model_id": "deepseek-chat", "api_key": "..."})
+# 使用模块级全局单例创建模型
+# 格式: "provider_name/model_id"
+model = model_registry.create_model("openai/gpt-4", api_key="...")
 
-# 或获取全局注册表实例
-registry = get_global_registry()
-model = registry.create("OpenAIModel", {"model_id": "gpt-4o", "api_key": "..."})
+# 获取模型适配器类
+adapter = model_registry.get_model_adapter("OpenAIModel")
 ```
 
-### 创建独立注册表
+### 注册 Provider
 
 ```python
 from hawi.models import ModelRegistry
 
-# 创建空的独立注册表
 registry = ModelRegistry()
-registry.register(DeepSeekModel)
-registry.register(OpenAIModel, alias="gpt")
-model = registry.create("gpt", {"model_id": "gpt-4o", "api_key": "..."})
+registry.clear()
+
+# 注册 Provider（支持多个 Model ID）
+registry.register_provider(
+    name="my-provider",
+    adapter="OpenAIModel",
+    model_ids=["gpt-4", "gpt-3.5"],
+    properties={
+        "api_key": "your-api-key",
+        "temperature": 0.7,
+    },
+    quiet=True,
+)
+
+# 创建模型实例
+model = registry.create_model("my-provider/gpt-4")
 ```
 
-### 别名管理
+### 注册模型配置覆盖
+
+可以为特定的 Provider/ModelId 组合注册额外的配置覆盖：
 
 ```python
-# 注册时指定别名
-registry.register(DeepSeekModel, aliases=["deepseek", "ds"])
-
-# 动态添加别名
-registry.alias("OpenAIModel", "openai")
-registry.alias("OpenAIModel", "gpt")
-
-# 检查是否已注册
-if "deepseek" in registry:
-    print("DeepSeek is registered")
+# 为特定模型添加配置覆盖
+registry.register_model_config_override(
+    name="my-provider/gpt-4",
+    properties={
+        "temperature": 0.9,
+        "max_tokens": 4096,
+    },
+    quiet=True,
+)
 ```
 
-### 默认参数
+### 列出已注册的项
 
 ```python
-# 为特定模型设置全局默认参数
-registry.set_defaults("DeepSeekModel", {"temperature": 0.7, "max_tokens": 2048})
-
-# 创建实例时会自动合并默认参数（传入参数优先级更高）
-model = registry.create("DeepSeekModel", {"model_id": "deepseek-chat"})
-# 等同于: DeepSeekModel(temperature=0.7, max_tokens=2048, model_id="deepseek-chat", ...)
-
-# 获取默认参数
-defaults = registry.get_defaults("DeepSeekModel")
-
-# 清除默认参数
-registry.clear_defaults("DeepSeekModel")  # 清除特定模型
-registry.clear_defaults()  # 清除所有默认参数
-```
-
-### 列出已注册的模型
-
-```python
-# 列出所有已注册的模型类
+# 列出所有可用的模型名称
 models = registry.list_models()
-print(list(models.keys()))  # ['OpenAIModel', 'AnthropicModel', 'DeepSeekModel', ...]
+print(models)  # ['openai/gpt-4', 'deepseek/deepseek-chat', ...]
 
-# 列出所有别名
-aliases = registry.list_aliases()
-print(aliases)  # {'gpt': 'OpenAIModel', 'deepseek': 'DeepSeekModel', ...}
+# 列出所有 Provider
+providers = registry.list_providers()
+print(providers)  # ['openai', 'deepseek', 'kimi', ...]
+
+# 列出所有已注册的适配器类
+adapters = registry.list_model_adapters()
+print(adapters)  # ['OpenAIModel', 'AnthropicModel', 'DeepSeekOpenAIModel', ...]
 ```
 
-### 获取 Model 参数
+### 获取 Model 配置
 
-使用 `get_model_arguments()` 方法可以获取已注册 Model 的配置参数：
+使用 `get_model_config()` 方法可以获取模型的配置信息：
 
 ```python
 from hawi.models import model_registry
 
-# 获取原始参数（不包含继承的参数）
-args = model_registry.get_model_arguments("my-model")
-print(args)  # {'model_id': 'my-model'}
-
-# 获取展开后的完整参数（包含从 template 继承的参数）
-full_args = model_registry.get_model_arguments("my-model", expanded=True)
-print(full_args)  # {'model_id': 'my-model', 'api_key': '...', 'temperature': 0.7}
+# 获取模型配置
+config = model_registry.get_model_config("openai/gpt-4")
+print(config.adapter)      # "OpenAIModel"
+print(config.properties)  # {'api_key': '...', 'temperature': 0.7, ...}
 ```
-
-这对于调试配置或查看继承链展开后的最终参数非常有用。
 
 ### 对象池模式 (obtain_model)
 +++++++

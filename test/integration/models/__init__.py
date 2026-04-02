@@ -73,8 +73,23 @@ def is_rate_limit_error(e: Exception) -> bool:
     return False
 
 
+def is_auth_error(e: Exception) -> bool:
+    """Check if exception is an authentication error (401/403).
+    
+    This allows integration tests to skip when API keys are not configured.
+    """
+    error_msg = str(e).lower()
+    # HTTP 401/403 status codes
+    if "401" in error_msg or "403" in error_msg:
+        return True
+    # Common auth error keywords
+    if any(kw in error_msg for kw in ["authentication", "unauthorized", "api key", "access denied"]):
+        return True
+    return False
+
+
 def skip_on_rate_limit(func):
-    """Decorator that skips test on rate limit errors."""
+    """Decorator that skips test on rate limit or auth errors."""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -82,12 +97,14 @@ def skip_on_rate_limit(func):
         except Exception as e:
             if is_rate_limit_error(e):
                 pytest.skip(f"Rate limit exceeded: {e}")
+            if is_auth_error(e):
+                pytest.skip(f"Authentication failed (API key may be invalid): {e}")
             raise
     return wrapper
 
 
 def async_skip_on_rate_limit(func):
-    """Decorator that skips async test on rate limit errors."""
+    """Decorator that skips async test on rate limit or auth errors."""
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         try:
@@ -95,5 +112,7 @@ def async_skip_on_rate_limit(func):
         except Exception as e:
             if is_rate_limit_error(e):
                 pytest.skip(f"Rate limit exceeded: {e}")
+            if is_auth_error(e):
+                pytest.skip(f"Authentication failed (API key may be invalid): {e}")
             raise
     return wrapper
