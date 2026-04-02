@@ -41,6 +41,16 @@ filterwarnings = [
     "ignore::RuntimeWarning:asyncio.base_events",
 ]
 
+[project.scripts]
+hawi_gui = "hawi_gui.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+package = true
+
 [tool.uv.workspace]
 members = [
 ]
