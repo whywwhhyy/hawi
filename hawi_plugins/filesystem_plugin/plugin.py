@@ -19,7 +19,7 @@ class FileReadState:
     timestamp: float
     offset: Optional[int]
     limit: Optional[int]
-    is_partial_view: bool
+    show_line_numbers: bool
 
 
 class FileSystemPlugin(HawiPlugin):
@@ -45,6 +45,15 @@ class FileSystemPlugin(HawiPlugin):
         ".db", ".sqlite", ".sqlite3",
         ".pyc", ".pyo", ".class", ".o", ".a",
     }
+    _SYSTEM_WRITE_PREFIXES = (
+        "/System",
+        "/Library",
+        "/bin",
+        "/sbin",
+        "/etc",
+        "/private/etc",
+        "/usr",
+    )
 
     def __init__(self):
         self._read_state_cache: dict[str, FileReadState] = {}
@@ -64,6 +73,74 @@ class FileSystemPlugin(HawiPlugin):
         for i, line in enumerate(lines, start=start_line + 1):
             formatted.append(f"{i:4d}|{line}")
         return "".join(formatted)
+
+    def _detect_language(self, file_path: str) -> str:
+        """Best-effort language detection from file name/extension."""
+        basename = os.path.basename(file_path).lower()
+        extension = os.path.splitext(basename)[1]
+
+        special_names = {
+            "dockerfile": "dockerfile",
+            "makefile": "makefile",
+        }
+        extension_map = {
+            ".py": "python",
+            ".js": "javascript",
+            ".jsx": "javascriptreact",
+            ".ts": "typescript",
+            ".tsx": "typescriptreact",
+            ".json": "json",
+            ".md": "markdown",
+            ".markdown": "markdown",
+            ".yml": "yaml",
+            ".yaml": "yaml",
+            ".toml": "toml",
+            ".sh": "shell",
+            ".bash": "shell",
+            ".zsh": "shell",
+            ".html": "html",
+            ".css": "css",
+            ".scss": "scss",
+            ".java": "java",
+            ".go": "go",
+            ".rs": "rust",
+            ".rb": "ruby",
+            ".php": "php",
+            ".c": "c",
+            ".h": "c",
+            ".cpp": "cpp",
+            ".cc": "cpp",
+            ".cxx": "cpp",
+            ".hpp": "cpp",
+            ".cs": "csharp",
+            ".swift": "swift",
+            ".kt": "kotlin",
+            ".sql": "sql",
+            ".xml": "xml",
+            ".txt": "text",
+        }
+
+        return special_names.get(basename, extension_map.get(extension, "text"))
+
+    def _is_system_write_path(self, file_path: str) -> bool:
+        for prefix in self._SYSTEM_WRITE_PREFIXES:
+            try:
+                if os.path.commonpath([file_path, prefix]) == prefix:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def _validate_write_path(self, abs_path: str) -> Optional[ToolResult]:
+        if self._is_system_write_path(abs_path):
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Refusing to modify system path '{abs_path}'. "
+                    "Please choose a path outside protected system directories."
+                ),
+            )
+        return None
 
     def _check_concurrency(self, abs_path: str, state: FileReadState) -> Optional[ToolResult]:
         try:
@@ -145,6 +222,7 @@ class FileSystemPlugin(HawiPlugin):
         file_path: str,
         offset: Optional[int] = None,
         limit: Optional[int] = None,
+        show_line_numbers: bool = True,
     ) -> ToolResult:
         """
         读取文件内容，支持分页读取和行号格式输出。
@@ -176,12 +254,20 @@ class FileSystemPlugin(HawiPlugin):
             return ToolResult(success=False, error=f"Error checking file: {e}")
 
         cached = self._read_state_cache.get(abs_path)
-        if cached is not None and cached.mtime == mtime:
+        if (
+            cached is not None
+            and cached.mtime == mtime
+            and cached.offset == offset
+            and cached.limit == limit
+            and cached.show_line_numbers == show_line_numbers
+        ):
             return ToolResult(
                 success=True,
                 output={
                     "type": "file_unchanged",
-                    "file_path": abs_path,
+                    "file": {
+                        "filePath": abs_path,
+                    },
                 },
             )
 
@@ -196,8 +282,14 @@ class FileSystemPlugin(HawiPlugin):
             end = total
 
         selected = lines[start:end]
-        formatted = self._format_lines(selected, start)
+        formatted = (
+            self._format_lines(selected, start)
+            if show_line_numbers
+            else "".join(selected)
+        )
         is_partial = (start > 0) or (end < total)
+        returned_line_count = len(selected)
+        detected_language = self._detect_language(abs_path)
 
         header = ""
         if is_partial:
@@ -209,19 +301,22 @@ class FileSystemPlugin(HawiPlugin):
             timestamp=time.time(),
             offset=offset,
             limit=limit,
-            is_partial_view=is_partial,
+            show_line_numbers=show_line_numbers,
         )
 
         return ToolResult(
             success=True,
             output={
                 "type": "text",
-                "file_path": abs_path,
-                "content": header + formatted,
-                "total_lines": total,
-                "start_line": start,
-                "end_line": end,
-                "is_partial_view": is_partial,
+                "file": {
+                    "filePath": abs_path,
+                    "content": header + formatted,
+                    "numLines": returned_line_count,
+                    "startLine": start,
+                    "totalLines": total,
+                    "language": detected_language,
+                    "isTruncated": is_partial,
+                },
             },
         )
 
@@ -235,6 +330,9 @@ class FileSystemPlugin(HawiPlugin):
             content: 文件内容
         """
         abs_path = self._resolve_path(file_path)
+        path_error = self._validate_write_path(abs_path)
+        if path_error is not None:
+            return path_error
         file_exists = os.path.exists(abs_path)
 
         if file_exists and abs_path not in self._read_state_cache:
@@ -270,7 +368,7 @@ class FileSystemPlugin(HawiPlugin):
             timestamp=time.time(),
             offset=None,
             limit=None,
-            is_partial_view=False,
+            show_line_numbers=True,
         )
 
         hunks, git_diff = self._generate_structured_patch(
@@ -307,6 +405,9 @@ class FileSystemPlugin(HawiPlugin):
             replace_all: 如果为 true，替换所有匹配项；否则要求 old_string 必须唯一匹配
         """
         abs_path = self._resolve_path(file_path)
+        path_error = self._validate_write_path(abs_path)
+        if path_error is not None:
+            return path_error
 
         if abs_path not in self._read_state_cache:
             return ToolResult(
@@ -362,7 +463,7 @@ class FileSystemPlugin(HawiPlugin):
             timestamp=time.time(),
             offset=None,
             limit=None,
-            is_partial_view=False,
+            show_line_numbers=True,
         )
 
         hunks, git_diff = self._generate_structured_patch(
@@ -409,6 +510,7 @@ class FileSystemPlugin(HawiPlugin):
         self,
         pattern: str,
         path: Optional[str] = None,
+        glob: Optional[str] = None,
         file_glob: Optional[str] = None,
     ) -> ToolResult:
         """
@@ -420,6 +522,7 @@ class FileSystemPlugin(HawiPlugin):
             file_glob: 用于过滤文件名的 glob 模式，如 '*.py'
         """
         target = path or os.getcwd()
+        active_glob = glob or file_glob
 
         try:
             regex = re.compile(pattern)
@@ -440,7 +543,7 @@ class FileSystemPlugin(HawiPlugin):
                     filepath = os.path.join(root, filename)
                     if any(filename.lower().endswith(ext) for ext in self._BINARY_EXTENSIONS):
                         continue
-                    if file_glob and not fnmatch.fnmatch(filename, file_glob):
+                    if active_glob and not fnmatch.fnmatch(filename, active_glob):
                         continue
                     files_to_search.append(filepath)
         else:
@@ -459,7 +562,17 @@ class FileSystemPlugin(HawiPlugin):
             except Exception:
                 continue
 
+        filenames = sorted({match.split(":", 1)[0] for match in results})
+        content = "\n".join(results)
+
         return ToolResult(
             success=True,
-            output={"matches": results},
+            output={
+                "mode": "content",
+                "numFiles": len(filenames),
+                "filenames": filenames,
+                "content": content,
+                "numLines": len(results),
+                "numMatches": len(results),
+            },
         )

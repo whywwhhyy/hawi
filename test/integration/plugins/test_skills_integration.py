@@ -200,8 +200,16 @@ async def test_skills_plugin_end_to_end():
         response = await agent.arun("Please write a file")
         assert "Task completed" in response.text
         assert os.path.exists(os.path.join(tmp_dir, "test.txt"))
+
+        # Test 2: Read file via filesystem plugin
+        response = await agent.arun("Please read the file")
+        assert "Task completed" in response.text
+
+        # Test 3: Run shell command via shell plugin
+        response = await agent.arun("Please use shell")
+        assert "Task completed" in response.text
         
-        # Test 2: Use Skill
+        # Test 4: Use Skill
         # Verify system prompt has skills injected
         # Note: The agent's context is updated *before* the run starts if using hooks correctly.
         # But we need to run once to trigger the hook or check if it happened.

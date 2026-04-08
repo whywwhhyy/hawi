@@ -413,17 +413,67 @@ agent = HawiAgent(model=model, plugins=[plugin])
 
 | 工具 | 说明 |
 |------|------|
-| `read_file` | 读取文件内容，支持分页、行号格式、缓存去重 |
+| `read_file` | 读取文件内容，支持分页、语言检测、缓存去重 |
 | `write_file` | 覆盖写入文件（要求先读取，支持乐观并发控制） |
 | `edit_file` | 精确字符串替换编辑（要求先读取） |
 | `glob` | 基于 glob 模式查找文件 |
-| `grep` | 基于正则搜索文件内容（跳过二进制文件） |
+| `grep` | 基于正则搜索文件内容（跳过二进制文件和隐藏目录） |
+
+**read_file 参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `file_path` | str | 文件路径 |
+| `offset` | int (可选) | 起始行号 |
+| `limit` | int (可选) | 限制返回行数 |
+| `show_line_numbers` | bool (可选, 默认 True) | 是否显示行号 |
+
+**read_file 返回格式：**
+
+```python
+{
+    "type": "text",  # 或 "file_unchanged"（缓存命中）
+    "file": {
+        "filePath": "/path/to/file.py",
+        "content": "1|def foo():\n2|    pass\n",
+        "numLines": 2,
+        "startLine": 0,
+        "totalLines": 2,
+        "language": "python",  # 自动检测的语言类型
+        "isTruncated": False
+    }
+}
+```
+
+**grep 参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `pattern` | str | 正则表达式模式 |
+| `path` | str (可选) | 搜索路径 |
+| `glob` | str (可选) | 文件名过滤模式（如 `*.py`） |
+| `file_glob` | str (可选) | 同 glob（别名） |
+
+**grep 返回格式：**
+
+```python
+{
+    "mode": "content",
+    "numFiles": 1,
+    "numLines": 2,
+    "filenames": ["/path/to/file.py"],
+    "content": "/path/to/file.py:1: def foo():\n/path/to/file.py:2: def bar():\n"
+}
+```
 
 **特性：**
-- 乐观并发控制：文件修改前必须先读取，检查 mtime 防冲突
-- 原子写入：使用临时文件 + rename 确保写入完整性
-- 分页读取：支持 offset/limit 参数处理大文件
-- 缓存去重：相同 mtime 的文件不会重复返回内容
+- **乐观并发控制**：文件修改前必须先读取，检查 mtime 防冲突
+- **原子写入**：使用临时文件 + rename 确保写入完整性
+- **分页读取**：支持 offset/limit 参数处理大文件
+- **缓存去重**：相同 mtime 的文件不会重复返回内容
+- **语言检测**：自动根据文件扩展名检测编程语言（支持 30+ 种语言）
+- **系统路径保护**：拒绝写入 /System, /Library, /etc, /usr 等系统目录
+- **隐藏目录过滤**：grep 默认跳过以 `.` 开头的隐藏目录
 
 ### ShellPlugin
 

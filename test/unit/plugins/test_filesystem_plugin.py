@@ -38,9 +38,12 @@ class TestFileSystemPlugin:
         read_result = plugin.read_file(file_path)
         assert read_result.success is True
         assert read_result.output["type"] == "text"
+        assert read_result.output["file"]["filePath"] == os.path.abspath(file_path)
         # read_file now returns line-numbered content
-        assert "Hello, World!" in read_result.output["content"]
-        assert read_result.output["total_lines"] == 1
+        assert "Hello, World!" in read_result.output["file"]["content"]
+        assert read_result.output["file"]["numLines"] == 1
+        assert read_result.output["file"]["totalLines"] == 1
+        assert read_result.output["file"]["isTruncated"] is False
 
     def test_read_file_with_offset_limit(self, plugin, temp_dir):
         """Test read_file with offset and limit."""
@@ -52,12 +55,61 @@ class TestFileSystemPlugin:
         result = plugin.read_file(file_path, offset=1, limit=2)
         assert result.success is True
         assert result.output["type"] == "text"
-        content = result.output["content"]
+        content = result.output["file"]["content"]
         assert "   2|line2" in content
         assert "   3|line3" in content
         assert "line1" not in content.replace("[Lines", "")
         assert "line4" not in content
-        assert result.output["is_partial_view"] is True
+        assert result.output["file"]["numLines"] == 2
+        assert result.output["file"]["isTruncated"] is True
+
+    def test_read_file_clamps_offset_and_limit(self, plugin, temp_dir):
+        """read_file should clamp negative offsets and over-large limits."""
+        file_path = os.path.join(temp_dir, "test.txt")
+        with open(file_path, "w") as f:
+            f.write("line1\nline2\nline3\n")
+
+        result = plugin.read_file(file_path, offset=-10, limit=50)
+        assert result.success is True
+        assert result.output["file"]["startLine"] == 0
+        assert result.output["file"]["totalLines"] == 3
+        assert result.output["file"]["isTruncated"] is False
+        assert "   1|line1" in result.output["file"]["content"]
+        assert "   3|line3" in result.output["file"]["content"]
+
+    def test_read_file_without_line_numbers(self, plugin, temp_dir):
+        """read_file should allow suppressing line numbers."""
+        file_path = os.path.join(temp_dir, "plain.txt")
+        with open(file_path, "w") as f:
+            f.write("line1\nline2\n")
+
+        result = plugin.read_file(file_path, show_line_numbers=False)
+        assert result.success is True
+        assert result.output["file"]["content"] == "line1\nline2\n"
+        assert "   1|" not in result.output["file"]["content"]
+
+    def test_read_file_cache_respects_line_number_setting(self, plugin, temp_dir):
+        """Different formatting options should not return file_unchanged."""
+        file_path = os.path.join(temp_dir, "cache.txt")
+        with open(file_path, "w") as f:
+            f.write("line1\n")
+
+        first = plugin.read_file(file_path, show_line_numbers=False)
+        second = plugin.read_file(file_path, show_line_numbers=True)
+
+        assert first.output["type"] == "text"
+        assert second.output["type"] == "text"
+        assert "   1|line1" in second.output["file"]["content"]
+
+    def test_read_file_reports_language(self, plugin, temp_dir):
+        """read_file should include detected language metadata."""
+        file_path = os.path.join(temp_dir, "script.py")
+        with open(file_path, "w") as f:
+            f.write("print('hi')\n")
+
+        result = plugin.read_file(file_path)
+        assert result.success is True
+        assert result.output["file"]["language"] == "python"
 
     def test_edit_file(self, plugin, temp_dir):
         """Test edit_file tool."""
@@ -76,7 +128,7 @@ class TestFileSystemPlugin:
         # Clear cache to read actual file content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
         read_result = plugin.read_file(file_path)
-        assert "foo qux baz" in read_result.output["content"]
+        assert "foo qux baz" in read_result.output["file"]["content"]
 
     def test_edit_file_replace_all(self, plugin, temp_dir):
         """Test edit_file with replace_all."""
@@ -92,7 +144,7 @@ class TestFileSystemPlugin:
         # Clear cache to read actual file content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
         read_result = plugin.read_file(file_path)
-        assert "b b b" in read_result.output["content"]
+        assert "b b b" in read_result.output["file"]["content"]
 
     def test_edit_file_no_match(self, plugin, temp_dir):
         """Test edit_file with no match."""
@@ -125,10 +177,12 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("def .*\\(\\):", path=temp_dir)
         assert result.success is True
-        matches = result.output["matches"]
-        assert len(matches) == 2
-        assert any("hello" in r for r in matches)
-        assert any("world" in r for r in matches)
+        assert result.output["mode"] == "content"
+        assert result.output["numFiles"] == 1
+        assert result.output["numLines"] == 2
+        assert "test.py" in result.output["filenames"][0]
+        assert "hello" in result.output["content"]
+        assert "world" in result.output["content"]
 
     def test_grep_with_file_glob(self, plugin, temp_dir):
         """Test grep with file_glob filter."""
@@ -137,9 +191,42 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("def .*\\(\\):", path=temp_dir, file_glob="*.py")
         assert result.success is True
-        matches = result.output["matches"]
-        assert len(matches) == 1
-        assert "foo" in matches[0]
+        assert result.output["numFiles"] == 1
+        assert "foo" in result.output["content"]
+
+    def test_grep_with_glob_alias(self, plugin, temp_dir):
+        """grep should accept ClaudeCode-style glob parameter."""
+        plugin.write_file(os.path.join(temp_dir, "a.py"), "def foo(): pass\n")
+        plugin.write_file(os.path.join(temp_dir, "b.txt"), "def bar(): pass\n")
+
+        result = plugin.grep("def .*\\(\\):", path=temp_dir, glob="*.py")
+        assert result.success is True
+        assert result.output["numFiles"] == 1
+        assert result.output["filenames"] == [os.path.join(temp_dir, "a.py")]
+
+    def test_grep_single_file_path(self, plugin, temp_dir):
+        """grep should work when path points to a single file."""
+        file_path = os.path.join(temp_dir, "single.py")
+        plugin.write_file(file_path, "alpha\nbeta\ngamma\n")
+
+        result = plugin.grep("beta", path=file_path)
+        assert result.success is True
+        assert result.output["filenames"] == [file_path]
+        assert result.output["numFiles"] == 1
+        assert result.output["numLines"] == 1
+        assert result.output["content"] == f"{file_path}:2: beta"
+
+    def test_grep_invalid_regex(self, plugin, temp_dir):
+        """Invalid regex patterns should return a structured failure."""
+        result = plugin.grep("(", path=temp_dir)
+        assert result.success is False
+        assert "invalid regex pattern" in result.error
+
+    def test_grep_missing_path(self, plugin):
+        """Missing grep paths should return a structured failure."""
+        result = plugin.grep("hello", path="/definitely/not/real/path")
+        assert result.success is False
+        assert "does not exist" in result.error
 
     def test_read_file_not_found(self, plugin, temp_dir):
         """read_file returns ToolResult failure for missing file."""
@@ -158,7 +245,7 @@ class TestFileSystemPlugin:
 
         second = plugin.read_file(file_path)
         assert second.output["type"] == "file_unchanged"
-        assert second.output["file_path"] == os.path.abspath(file_path)
+        assert second.output["file"]["filePath"] == os.path.abspath(file_path)
 
     def test_write_file_requires_read_first(self, plugin, temp_dir):
         """Writing to an existing file without reading first fails."""
@@ -170,6 +257,12 @@ class TestFileSystemPlugin:
         assert result.success is False
         assert "MUST read it first" in result.error
 
+    def test_write_file_blocks_system_paths(self, plugin):
+        """Writing into protected system directories should be rejected."""
+        result = plugin.write_file("/System/test.txt", "blocked")
+        assert result.success is False
+        assert "Refusing to modify system path" in result.error
+
     def test_edit_file_requires_read_first(self, plugin, temp_dir):
         """Editing a file without reading first fails."""
         file_path = os.path.join(temp_dir, "test.txt")
@@ -179,6 +272,12 @@ class TestFileSystemPlugin:
         result = plugin.edit_file(file_path, old_string="existing", new_string="new")
         assert result.success is False
         assert "MUST read" in result.error
+
+    def test_edit_file_blocks_system_paths(self, plugin):
+        """Editing protected system directories should be rejected."""
+        result = plugin.edit_file("/etc/hosts", old_string="a", new_string="b")
+        assert result.success is False
+        assert "Refusing to modify system path" in result.error
 
     def test_optimistic_concurrency_write_file(self, plugin, temp_dir):
         """External modification between read and write fails."""
@@ -212,6 +311,30 @@ class TestFileSystemPlugin:
         assert result.success is False
         assert "modified externally" in result.error
 
+    def test_write_file_recreates_deleted_file_after_read(self, plugin, temp_dir):
+        """Deleting a file after read is treated as creating a fresh file."""
+        file_path = os.path.join(temp_dir, "test.txt")
+        plugin.write_file(file_path, "original")
+        plugin.read_file(file_path)
+        os.remove(file_path)
+
+        result = plugin.write_file(file_path, "new content")
+        assert result.success is True
+        assert result.output["type"] == "create"
+        with open(file_path, "r") as f:
+            assert f.read() == "new content"
+
+    def test_edit_file_fails_if_file_deleted_after_read(self, plugin, temp_dir):
+        """Deleting a file after read should fail optimistic edit checks."""
+        file_path = os.path.join(temp_dir, "test.txt")
+        plugin.write_file(file_path, "original")
+        plugin.read_file(file_path)
+        os.remove(file_path)
+
+        result = plugin.edit_file(file_path, old_string="original", new_string="new")
+        assert result.success is False
+        assert "deleted or is inaccessible" in result.error
+
     def test_edit_file_multiple_matches_no_replace_all(self, plugin, temp_dir):
         """Duplicate old_string without replace_all fails."""
         file_path = os.path.join(temp_dir, "test.txt")
@@ -232,7 +355,7 @@ class TestFileSystemPlugin:
         result = cloned.read_file(file_path)
         # Should return full text, not file_unchanged, because cloned cache is empty
         assert result.output["type"] == "text"
-        assert "hello" in result.output["content"]
+        assert "hello" in result.output["file"]["content"]
 
     def test_read_file_binary(self, plugin, temp_dir):
         """read_file returns failure for binary files."""
@@ -252,9 +375,10 @@ class TestFileSystemPlugin:
         result = plugin.read_file(file_path)
         assert result.success is True
         assert result.output["type"] == "text"
-        assert result.output["content"] == ""
-        assert result.output["total_lines"] == 0
-        assert result.output["is_partial_view"] is False
+        assert result.output["file"]["content"] == ""
+        assert result.output["file"]["numLines"] == 0
+        assert result.output["file"]["totalLines"] == 0
+        assert result.output["file"]["isTruncated"] is False
 
     def test_write_file_update_existing(self, plugin, temp_dir):
         """write_file to an existing file returns type 'update' with original_content and patch."""
@@ -313,7 +437,7 @@ class TestFileSystemPlugin:
         # Clear cache and re-read to verify actual disk content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
         result = plugin.read_file(file_path)
-        assert "beta" in result.output["content"]
+        assert "beta" in result.output["file"]["content"]
 
     def test_write_file_concurrent_ok(self, plugin, temp_dir):
         """write_file succeeds when file has not been modified since read."""
@@ -349,10 +473,29 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("secret", path=temp_dir)
         assert result.success is True
-        matches = result.output["matches"]
-        assert len(matches) == 1
-        assert "a.txt" in matches[0]
-        assert "b.png" not in matches[0]
+        assert result.output["numLines"] == 1
+        assert "a.txt" in result.output["content"]
+        assert "b.png" not in result.output["content"]
+        assert result.output["numFiles"] == 1
+
+    def test_grep_skips_hidden_directories(self, plugin, temp_dir):
+        """grep should ignore files under hidden directories."""
+        hidden_dir = os.path.join(temp_dir, ".hidden")
+        visible_dir = os.path.join(temp_dir, "visible")
+        os.makedirs(hidden_dir, exist_ok=True)
+        os.makedirs(visible_dir, exist_ok=True)
+
+        with open(os.path.join(hidden_dir, "secret.txt"), "w") as f:
+            f.write("needle\n")
+        with open(os.path.join(visible_dir, "public.txt"), "w") as f:
+            f.write("needle\n")
+
+        result = plugin.grep("needle", path=temp_dir)
+        assert result.success is True
+        assert result.output["numLines"] == 1
+        assert "public.txt" in result.output["content"]
+        assert ".hidden" not in result.output["content"]
+        assert result.output["filenames"] == [os.path.join(visible_dir, "public.txt")]
 
     def test_glob_absolute_pattern(self, plugin, temp_dir):
         """glob works with absolute path patterns."""

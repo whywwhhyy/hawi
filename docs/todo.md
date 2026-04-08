@@ -19,6 +19,10 @@
 
 - [x] 将skills plugin拆分为terminal和skills
 
+- [ ] filesystem plugin:
+    - [ ] read_file 增加语言相关的高亮/标注能力
+    - [ ] 评估是否需要和 ClaudeCode 一样补充更完整的 language detection 策略
+
 - [ ] 重构渐进式加载的tool设计，新增brief字段，使用tool_help来获得tool的详细介绍，run_tool来执行tool
 
 - [x] 优化各个hook的参数
