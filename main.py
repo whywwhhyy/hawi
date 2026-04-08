@@ -113,12 +113,16 @@ def create_model_from_argv(argv: list[str]) -> tuple[str, Model]:
 def create_agent(model: Model, event_dump_file: str | None = None, streaming: bool = True) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
     # print(model.get_balance())
+    from hawi_plugins.filesystem_plugin import FileSystemPlugin
+    from hawi_plugins.shell_plugin import ShellPlugin
     from hawi_plugins.skills_plugin import SkillsPlugin
     from hawi_plugins.web import WebPlugin
 
     return HawiAgent(
         model=model,
         plugins=[
+            FileSystemPlugin(),
+            ShellPlugin(),
             SkillsPlugin(skills_dir=".skills"),
             WebPlugin(),
         ],

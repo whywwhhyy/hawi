@@ -11,6 +11,8 @@ from hawi.models import (
     DeltaPart, DeltaTextPart, DeltaToolCallPart, DeltaFinishPart,
     ContentPart
 )
+from hawi_plugins.filesystem_plugin import FileSystemPlugin
+from hawi_plugins.shell_plugin import ShellPlugin
 from hawi_plugins.skills_plugin import SkillsPlugin
 
 class MockModel(Model):
@@ -72,9 +74,9 @@ class MockModel(Model):
                 ToolCallPart(
                     type="tool_call",
                     id=f"call_write_{self.call_count}",
-                    name="SkillsPlugin__write_file",
+                    name="FileSystemPlugin__write_file",
                     arguments={
-                        "path": os.path.join(self.workspace, "test.txt"), 
+                        "file_path": os.path.join(self.workspace, "test.txt"), 
                         "content": "hello world"
                     }
                 )
@@ -85,8 +87,8 @@ class MockModel(Model):
                 ToolCallPart(
                     type="tool_call",
                     id=f"call_read_{self.call_count}",
-                    name="SkillsPlugin__read_file",
-                    arguments={"path": os.path.join(self.workspace, "test.txt")}
+                    name="FileSystemPlugin__read_file",
+                    arguments={"file_path": os.path.join(self.workspace, "test.txt")}
                 )
             )
             
@@ -95,7 +97,7 @@ class MockModel(Model):
                 ToolCallPart(
                     type="tool_call",
                     id=f"call_shell_{self.call_count}",
-                    name="SkillsPlugin__run_shell",
+                    name="ShellPlugin__run_shell",
                     arguments={"command": "echo 'hello shell'"}
                 )
             )
@@ -187,8 +189,12 @@ async def test_skills_plugin_end_to_end():
 
         # Initialize
         model = MockModel(workspace=tmp_dir)
-        plugin = SkillsPlugin(skills_dir=skills_dir)
-        agent = HawiAgent(model=model, plugins=[plugin])
+        plugins = [
+            FileSystemPlugin(),
+            ShellPlugin(),
+            SkillsPlugin(skills_dir=skills_dir),
+        ]
+        agent = HawiAgent(model=model, plugins=plugins)
 
         # Test 1: Write file
         response = await agent.arun("Please write a file")

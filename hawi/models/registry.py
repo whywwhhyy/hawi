@@ -312,6 +312,8 @@ class ModelRegistry:
         从 providers 的 model_ids 动态生成所有 provider_name/model_id 组合，
         并合并 model_configs 中定义的额外模型。
         """
+        self._ensure_auto_load()
+
         models = []
         for provider in self._providers:
             for model_id in provider.model_ids:
@@ -320,6 +322,8 @@ class ModelRegistry:
 
     def has_model(self, name: str) -> bool:
         """检查 model 是否存在"""
+        self._ensure_auto_load()
+
         provider,model_id = name.split('/')
         for p in self._provider_groups.get(provider, []):
             if model_id in p.model_ids:
@@ -328,6 +332,7 @@ class ModelRegistry:
 
     def get_model_config(self, name: str) -> Optional[ModelConfig]:
         """获取 Model 配置（动态构建）"""
+        self._ensure_auto_load()
         
         provider,model_id = name.split('/')
 

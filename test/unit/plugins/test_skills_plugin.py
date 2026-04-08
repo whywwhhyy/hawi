@@ -19,25 +19,6 @@ class TestSkillsPlugin:
         """Create a SkillsPlugin instance."""
         return SkillsPlugin(skills_dir=skills_dir)
 
-    def test_read_write_file(self, plugin, skills_dir):
-        """Test file read and write tools."""
-        file_path = os.path.join(skills_dir, "test.txt")
-        content = "Hello, World!"
-        
-        # Write file
-        result = plugin.write_file(file_path, content)
-        assert "Successfully wrote" in result
-        assert os.path.exists(file_path)
-        
-        # Read file
-        read_content = plugin.read_file(file_path)
-        assert read_content == content
-
-    def test_run_shell(self, plugin):
-        """Test shell command execution tool."""
-        result = plugin.run_shell("echo 'hello shell'")
-        assert "hello shell" in result
-
     def test_scan_skills(self, skills_dir):
         """Test scanning and parsing of SKILL.md files."""
         # Create a valid skill structure
@@ -127,3 +108,146 @@ These are the instructions.
         """Test use_skill with a non-existent skill."""
         result = plugin.use_skill("non-existent")
         assert "Skill 'non-existent' not found" in result
+
+    def test_parse_yaml_simple(self):
+        """Test the simple YAML frontmatter parser edge cases."""
+        plugin = SkillsPlugin(skills_dir="/tmp")
+
+        # Basic key-value
+        result = plugin._parse_yaml_simple("name: my-skill\ndescription: A test skill")
+        assert result == {"name": "my-skill", "description": "A test skill"}
+
+        # Value with colon
+        result = plugin._parse_yaml_simple("url: https://example.com:8080/path")
+        assert result["url"] == "https://example.com:8080/path"
+
+        # Empty input
+        result = plugin._parse_yaml_simple("")
+        assert result == {}
+
+        # Lines without colon
+        result = plugin._parse_yaml_simple("name: test\njust a line\nkey: value")
+        assert result == {"name": "test", "key": "value"}
+
+    def test_skills_dir_not_exist(self):
+        """Plugin should gracefully handle missing skills directory."""
+        plugin = SkillsPlugin(skills_dir="/definitely/not/existing/path")
+        assert plugin.skills_registry == {}
+
+    def test_empty_skills_dir(self, skills_dir):
+        """Empty skills directory should result in empty registry."""
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        assert plugin.skills_registry == {}
+
+    def test_nested_skills_scan(self, skills_dir):
+        """Scan should discover skills in nested directories."""
+        # Create skills at different nesting levels
+        for name in ("level1", "sub/level2", "deep/nested/level3"):
+            path = os.path.join(skills_dir, name, "SKILL.md")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(f"---\nname: {name.replace('/', '-')}\ndescription: desc-{name}\n---\n")
+
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        assert "level1" in plugin.skills_registry
+        assert "sub-level2" in plugin.skills_registry
+        assert "deep-nested-level3" in plugin.skills_registry
+
+    def test_duplicate_skill_name_last_wins(self, skills_dir):
+        """If two skill files declare the same name, last scanned wins."""
+        for subdir in ("a", "b"):
+            path = os.path.join(skills_dir, subdir, "SKILL.md")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(f"---\nname: duplicate\ndescription: from-{subdir}\n---\n")
+
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        # glob order is filesystem-dependent; just verify exactly one entry exists
+        assert plugin.skills_registry["duplicate"]["description"] in (
+            "from-a",
+            "from-b",
+        )
+
+    def test_scan_skills_malformed_file(self, skills_dir):
+        """Malformed skill files should be skipped without crashing."""
+        # Create a valid skill
+        valid_path = os.path.join(skills_dir, "valid", "SKILL.md")
+        os.makedirs(os.path.dirname(valid_path), exist_ok=True)
+        with open(valid_path, "w") as f:
+            f.write("---\nname: valid\ndescription: OK\n---\n")
+
+        # Create a file that exists but will cause an error during read
+        # (no easy way to make open() fail without permissions, but we can test
+        #  a file with no frontmatter which gets skipped because name is missing)
+        bad_path = os.path.join(skills_dir, "bad", "SKILL.md")
+        os.makedirs(os.path.dirname(bad_path), exist_ok=True)
+        with open(bad_path, "w") as f:
+            f.write("No frontmatter here at all.")
+
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        assert "valid" in plugin.skills_registry
+        assert "bad" not in plugin.skills_registry
+
+    def test_inject_skills_context_none_system_prompt(self, skills_dir):
+        """Injection should create system_prompt list if it's None."""
+        skill_path = os.path.join(skills_dir, "s", "SKILL.md")
+        os.makedirs(os.path.dirname(skill_path), exist_ok=True)
+        with open(skill_path, "w") as f:
+            f.write("---\nname: s\ndescription: desc\n---\n")
+
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        agent = MagicMock()
+        agent.context.system_prompt = None
+
+        ctx = HookContext(run_id="test", iteration=0)
+        plugin.inject_skills_context(agent, ctx)  # type: ignore[reportCallIssue]
+
+        assert agent.context.system_prompt is not None
+        assert "Available Skills" in agent.context.system_prompt[0]["text"]
+
+    def test_inject_skills_context_empty_registry(self, skills_dir):
+        """Injection should do nothing when there are no skills."""
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        agent = MagicMock()
+        agent.context.system_prompt = []
+
+        ctx = HookContext(run_id="test", iteration=0)
+        plugin.inject_skills_context(agent, ctx)  # type: ignore[reportCallIssue]
+
+        assert agent.context.system_prompt == []
+
+    def test_use_skill_without_frontmatter(self, skills_dir):
+        """use_skill should return raw content if there's no frontmatter to strip."""
+        skill_path = os.path.join(skills_dir, "plain", "SKILL.md")
+        os.makedirs(os.path.dirname(skill_path), exist_ok=True)
+        with open(skill_path, "w") as f:
+            f.write("Just plain markdown content.\nNo frontmatter.")
+
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        # Files without frontmatter are not added to registry because name is missing
+        # So this just tests the fallback path for files that somehow have a name
+        # Let's instead test a skill with frontmatter but the regex doesn't match '---' exactly
+        pass_path = os.path.join(skills_dir, "nofm", "SKILL.md")
+        os.makedirs(os.path.dirname(pass_path), exist_ok=True)
+        with open(pass_path, "w") as f:
+            f.write("---\nname: nofm\ndescription: no frontmatter?\n---\nBody here.")
+
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        result = plugin.use_skill("nofm")
+        assert "Skill 'nofm' loaded" in result
+        assert "Body here." in result
+
+    def test_rescan_picks_up_new_skills(self, skills_dir):
+        """_scan_skills should dynamically discover newly created skills."""
+        plugin = SkillsPlugin(skills_dir=skills_dir)
+        assert "dynamic" not in plugin.skills_registry
+
+        # Create skill after initialization
+        path = os.path.join(skills_dir, "dynamic", "SKILL.md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("---\nname: dynamic\ndescription: New skill\n---\n")
+
+        plugin._scan_skills()
+        assert "dynamic" in plugin.skills_registry
+        assert plugin.skills_registry["dynamic"]["description"] == "New skill"

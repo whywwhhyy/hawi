@@ -394,6 +394,81 @@ class DatabaseTool(AgentTool):
             return ToolResult(success=False, error=str(e))
 ```
 
+## 内置插件
+
+Hawi 提供多个内置插件，可以直接集成到 Agent 中使用。
+
+### FileSystemPlugin
+
+文件系统操作插件，提供文件读写、编辑、搜索能力。
+
+```python
+from hawi_plugins.filesystem_plugin import FileSystemPlugin
+
+plugin = FileSystemPlugin()
+agent = HawiAgent(model=model, plugins=[plugin])
+```
+
+**提供的工具：**
+
+| 工具 | 说明 |
+|------|------|
+| `read_file` | 读取文件内容，支持分页、行号格式、缓存去重 |
+| `write_file` | 覆盖写入文件（要求先读取，支持乐观并发控制） |
+| `edit_file` | 精确字符串替换编辑（要求先读取） |
+| `glob` | 基于 glob 模式查找文件 |
+| `grep` | 基于正则搜索文件内容（跳过二进制文件） |
+
+**特性：**
+- 乐观并发控制：文件修改前必须先读取，检查 mtime 防冲突
+- 原子写入：使用临时文件 + rename 确保写入完整性
+- 分页读取：支持 offset/limit 参数处理大文件
+- 缓存去重：相同 mtime 的文件不会重复返回内容
+
+### ShellPlugin
+
+Shell 命令执行插件。
+
+```python
+from hawi_plugins.shell_plugin import ShellPlugin
+
+plugin = ShellPlugin()
+agent = HawiAgent(model=model, plugins=[plugin])
+```
+
+**提供的工具：**
+
+| 工具 | 说明 |
+|------|------|
+| `run_shell` | 执行 shell 命令，返回 stdout/stderr |
+
+### SkillsPlugin
+
+Claude Skills 架构实现，支持动态加载技能指令。
+
+```python
+from hawi_plugins.skills_plugin import SkillsPlugin
+
+plugin = SkillsPlugin(skills_dir=".skills")
+agent = HawiAgent(model=model, plugins=[plugin])
+```
+
+**提供的工具：**
+
+| 工具 | 说明 |
+|------|------|
+| `use_skill` | 加载指定技能到上下文中 |
+
+**技能文件格式：** 使用 YAML frontmatter 定义元数据：
+
+```markdown
+---
+name: my-skill
+description: 这是一个示例技能
+---
+这里是技能的指令内容...
+```
+
 ## 最佳实践
 
 1. **明确的描述**: 工具描述要清晰说明用途和参数

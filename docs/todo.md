@@ -17,7 +17,7 @@
 
 - [ ] 给plugin加上name和tags字段，设计依赖管理和冲突识别的机制
 
-- [ ] 将skills plugin拆分为terminal和skills
+- [x] 将skills plugin拆分为terminal和skills
 
 - [ ] 重构渐进式加载的tool设计，新增brief字段，使用tool_help来获得tool的详细介绍，run_tool来执行tool
 

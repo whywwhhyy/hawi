@@ -367,6 +367,72 @@ model_configs:
         with pytest.raises(ValueError):
             registry.load_config(config_file)
 
+    def test_has_model_triggers_auto_load(self, tmp_path):
+        """Test has_model() triggers auto-loading from the default project config."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        config_dir = tmp_path / ".hawi"
+        config_dir.mkdir()
+        config_file = config_dir / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: auto-provider
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: test-key
+""")
+
+        with patch("hawi.models.registry.Path.cwd", return_value=tmp_path):
+            assert registry.has_model("auto-provider/gpt-4")
+
+    def test_list_models_triggers_auto_load(self, tmp_path):
+        """Test list_models() triggers auto-loading from the default project config."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        config_dir = tmp_path / ".hawi"
+        config_dir.mkdir()
+        config_file = config_dir / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: auto-provider
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: test-key
+""")
+
+        with patch("hawi.models.registry.Path.cwd", return_value=tmp_path):
+            assert "auto-provider/gpt-4" in registry.list_models()
+
+    def test_get_model_config_triggers_auto_load(self, tmp_path):
+        """Test get_model_config() triggers auto-loading from the default project config."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        config_dir = tmp_path / ".hawi"
+        config_dir.mkdir()
+        config_file = config_dir / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: auto-provider
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: test-key
+""")
+
+        with patch("hawi.models.registry.Path.cwd", return_value=tmp_path):
+            config = registry.get_model_config("auto-provider/gpt-4")
+
+        assert config is not None
+        assert config.adapter == "OpenAIModel"
+
 
 class TestConvenienceFunctions:
     """Tests for module-level convenience functions."""
@@ -456,14 +522,15 @@ class TestClear:
         registry = ModelRegistry()
         registry.clear()
 
-        registry.register_provider(
-            "test", "OpenAIModel", ["gpt-4"], {}, quiet=True
-        )
-        assert registry.list_models()
+        with patch.dict(os.environ, {"HAWI_NO_AUTO_LOAD": "1"}):
+            registry.register_provider(
+                "test", "OpenAIModel", ["gpt-4"], {}, quiet=True
+            )
+            assert registry.list_models()
 
-        registry.clear()
-        assert registry.list_models() == []
-        assert registry.list_providers() == []
+            registry.clear()
+            assert registry.list_models() == []
+            assert registry.list_providers() == []
 
     def test_clear_re_registers_builtin_adapters(self):
         """Test that clear() re-registers built-in adapters."""
