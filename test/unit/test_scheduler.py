@@ -4,6 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from hawi.events import EventBus
 from hawi.models.message import (
     ContentPart
 )
@@ -236,18 +237,26 @@ class TestHawiSchedulerBasic:
     @pytest.fixture
     def mock_agent(self):
         agent = MagicMock()
-        agent.event_bus = MagicMock()
+        agent.event_bus = EventBus()
         agent.event_bus.subscribe = MagicMock()
+        agent.event_bus.unsubscribe = MagicMock(return_value=True)
         agent.interrupt = MagicMock(return_value=[])
         agent.clear_interrupt_state = MagicMock()
         agent.context = MagicMock()
         agent.context.messages = []
+        agent.subscribe = MagicMock()
+        agent.unsubscribe = MagicMock(return_value=True)
+        agent._emit_event = AsyncMock()
         return agent
 
     def test_scheduler_init(self, mock_agent):
         scheduler = HawiScheduler(mock_agent)
         assert scheduler.agent is mock_agent
         assert scheduler.state == SchedulerState.IDLE
+
+    def test_scheduler_reuses_agent_event_bus(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        assert scheduler.event_bus is mock_agent.event_bus
 
     def test_scheduler_enqueue_normal(self, mock_agent):
         scheduler = HawiScheduler(mock_agent)
@@ -289,6 +298,49 @@ class TestHawiSchedulerBasic:
         assert result == {"normal": 1, "high_prio": 1, "urgent": 1}
         assert scheduler.get_queue_lengths() == {"normal": 0, "high_prio": 0, "urgent": 0}
 
+    def test_scheduler_subscribe_proxies_to_agent(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+
+        def handler(_event):
+            return None
+
+        scheduler.subscribe(handler, ["scheduler.enqueue"])
+        mock_agent.subscribe.assert_called_once_with(handler, ["scheduler.enqueue"])
+
+    def test_scheduler_unsubscribe_proxies_to_agent(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+
+        def handler(_event):
+            return None
+
+        assert scheduler.unsubscribe(handler) is True
+        mock_agent.unsubscribe.assert_called_once_with(handler)
+
+    @pytest.mark.asyncio
+    async def test_scheduler_emits_dequeue_and_passes_event_bus_to_agent(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        override_bus = EventBus()
+        msg = scheduler._queue_manager.enqueue_normal("test", event_bus=override_bus)
+
+        executed_messages: list[QueuedMessage] = []
+
+        def fake_execute(message: QueuedMessage):
+            executed_messages.append(message)
+            return object()
+
+        scheduler._executor.execute = MagicMock(side_effect=fake_execute)
+
+        started = await scheduler._start_message_execution(msg)
+
+        assert started is True
+        assert executed_messages == [msg]
+        mock_agent._emit_event.assert_awaited_once()
+        emitted_event = mock_agent._emit_event.await_args.args[0]
+        emitted_bus = mock_agent._emit_event.await_args.args[1]
+        assert emitted_event.type == "scheduler.dequeue"
+        assert emitted_event.message_id == msg.id
+        assert emitted_bus is override_bus
+
 
 class TestHawiSchedulerErrorHooks:
     """Test HawiScheduler error hooks."""
@@ -296,12 +348,15 @@ class TestHawiSchedulerErrorHooks:
     @pytest.fixture
     def mock_agent(self):
         agent = MagicMock()
-        agent.event_bus = MagicMock()
+        agent.event_bus = EventBus()
         agent.event_bus.subscribe = MagicMock()
         agent.interrupt = MagicMock(return_value=[])
         agent.clear_interrupt_state = MagicMock()
         agent.context = MagicMock()
         agent.context.messages = []
+        agent.subscribe = MagicMock()
+        agent.unsubscribe = MagicMock(return_value=True)
+        agent._emit_event = AsyncMock()
         return agent
 
     @pytest.mark.asyncio
@@ -323,6 +378,24 @@ class TestHawiSchedulerErrorHooks:
         scheduler = HawiScheduler(mock_agent)
         action = await scheduler._on_scheduler_error(Exception("test"))
         assert action == ErrorAction.CONTINUE
+
+
+class TestAgentExecutorEventBus:
+    @pytest.mark.asyncio
+    async def test_execute_passes_message_event_bus_to_agent(self):
+        agent = MagicMock()
+        agent.arun = AsyncMock(return_value=MagicMock())
+        agent.clear_interrupt_state = MagicMock()
+        scheduler = MagicMock()
+        executor = AgentExecutor(agent, scheduler)
+        event_bus = EventBus()
+        message = QueuedMessage.create("hello", QueueType.NORMAL, event_bus=event_bus)
+
+        task = executor.execute(message)
+        assert task is not None
+        await task
+
+        agent.arun.assert_awaited_once_with("hello", event_bus=event_bus)
 
 
 if __name__ == "__main__":

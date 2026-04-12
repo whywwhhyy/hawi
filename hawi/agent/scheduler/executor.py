@@ -10,6 +10,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 from hawi.agent.result import AgentRunResult
+from hawi.events import EventBus
 from hawi.events.scheduler_events import SchedulerInterruptEvent
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ class AgentExecutor:
         self._current_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._last_result: AgentRunResult | None = None
+        self._current_event_bus: EventBus | None = None
 
     @property
     def state(self) -> SchedulerState:
@@ -68,6 +70,11 @@ class AgentExecutor:
     def last_result(self) -> AgentRunResult | None:
         """Get last execution result."""
         return self._last_result
+
+    @property
+    def current_event_bus(self) -> EventBus | None:
+        """Get the event bus override for the current execution."""
+        return self._current_event_bus
 
     def _set_state(self, state: SchedulerState) -> None:
         """Update execution state."""
@@ -96,7 +103,8 @@ class AgentExecutor:
                 SchedulerInterruptEvent.create(
                     reason=reason,
                     interrupted_tool_calls=interrupted_ids,
-                )
+                ),
+                self._current_event_bus,
             )
 
             # Cancel current task if running
@@ -125,6 +133,7 @@ class AgentExecutor:
         self._agent.clear_interrupt_state()
         self._set_state(SchedulerState.RUNNING)
         self._last_result = None
+        self._current_event_bus = message.event_bus
 
         # Create and start task
         self._current_task = asyncio.create_task(
@@ -135,7 +144,10 @@ class AgentExecutor:
     async def _execute_with_error_handling(self, message: QueuedMessage) -> None:
         """Execute message with error handling."""
         try:
-            result = await self._agent.arun(message.content)
+            result = await self._agent.arun(
+                message.content,
+                event_bus=message.event_bus,
+            )
             self._last_result = result
         except asyncio.CancelledError:
             # Execution was cancelled (interrupted)
@@ -153,6 +165,7 @@ class AgentExecutor:
             # CONTINUE - just finish
         finally:
             self._set_state(SchedulerState.IDLE)
+            self._current_event_bus = None
 
     async def wait_for_complete(self) -> AgentRunResult | None:
         """Wait for current execution to complete.

@@ -17,7 +17,7 @@ from typing import Any, Callable, Literal
 from hawi.agent.agent import HawiAgent
 from hawi.agent.result import AgentRunResult
 from hawi.events import Event, EventBus
-from hawi.events.agent_events import AgentToolResultEvent, AgentRunStopEvent
+from hawi.events.agent_events import AgentToolResultEvent
 from hawi.events.scheduler_events import (
     SchedulerEnqueueEvent,
     SchedulerDequeueEvent,
@@ -79,17 +79,13 @@ class HawiScheduler:
     def __init__(
         self,
         agent: HawiAgent,
-        *,
-        event_bus: EventBus | None = None,
     ) -> None:
         """Initialize the scheduler.
 
         Args:
             agent: Agent to schedule
-            event_bus: Optional event bus for publishing events
         """
         self._agent = agent
-        self._event_bus = event_bus or EventBus()
 
         # Queue management
         self._queue_manager = MessageQueueManager()
@@ -122,8 +118,8 @@ class HawiScheduler:
 
     @property
     def event_bus(self) -> EventBus:
-        """Get the scheduler event bus."""
-        return self._event_bus
+        """Get the underlying agent event bus."""
+        return self._agent.event_bus
 
     @property
     def state(self) -> SchedulerState:
@@ -154,6 +150,7 @@ class HawiScheduler:
         self,
         content: str | list[ContentPart],
         queue: Literal["normal", "high_prio", "urgent"] = "normal",
+        event_bus: EventBus | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """Enqueue a message.
@@ -161,6 +158,7 @@ class HawiScheduler:
         Args:
             content: Message content
             queue: Queue type ("normal", "high_prio", "urgent")
+            event_bus: Optional event bus override for this queued execution
             metadata: Optional metadata
 
         Returns:
@@ -170,7 +168,11 @@ class HawiScheduler:
             SchedulerError: If enqueue fails
         """
         if queue == "urgent":
-            msg = self._queue_manager.enqueue_urgent(content, metadata)
+            msg = self._queue_manager.enqueue_urgent(
+                content,
+                metadata,
+                event_bus=event_bus,
+            )
             # Urgent: trigger immediate interruption
             if not self._executor.is_idle:
                 try:
@@ -180,9 +182,17 @@ class HawiScheduler:
                     # No event loop running, will be handled on next loop iteration
                     pass
         elif queue == "high_prio":
-            msg = self._queue_manager.enqueue_high_prio(content, metadata)
+            msg = self._queue_manager.enqueue_high_prio(
+                content,
+                metadata,
+                event_bus=event_bus,
+            )
         else:
-            msg = self._queue_manager.enqueue_normal(content, metadata)
+            msg = self._queue_manager.enqueue_normal(
+                content,
+                metadata,
+                event_bus=event_bus,
+            )
 
         # Emit enqueue event (safely handle no event loop case)
         try:
@@ -193,7 +203,8 @@ class HawiScheduler:
                         message_id=msg.id,
                         queue_type=queue,
                         content_preview=msg.get_content_preview(),
-                    )
+                    ),
+                    event_bus,
                 )
             )
         except RuntimeError:
@@ -410,9 +421,30 @@ class HawiScheduler:
 
     # Event emission
 
-    async def _emit_event(self, event: Event) -> None:
-        """Emit event to event bus."""
-        await self._event_bus.publish_async(event)
+    async def _emit_event(
+        self,
+        event: Event,
+        event_bus: EventBus | None = None,
+    ) -> None:
+        """Emit scheduler event via the agent's event pipeline."""
+        await self._agent._emit_event(event, event_bus)
+
+    async def _start_message_execution(self, msg: QueuedMessage) -> bool:
+        """Emit dequeue event and hand the message to the executor."""
+        queue_name = msg.queue_type.name.lower()
+        await self._emit_event(
+            SchedulerDequeueEvent.create(
+                message_id=msg.id,
+                queue_type=queue_name,
+            ),
+            msg.event_bus,
+        )
+
+        task = self._executor.execute(msg)
+        if task:
+            self._state = SchedulerState.RUNNING
+            return True
+        return False
 
     # Main loop
 
@@ -433,29 +465,22 @@ class HawiScheduler:
                         # Interrupt current execution if any
                         if not self._executor.is_idle:
                             await self._executor.interrupt("urgent")
-                        # Start new execution
-                        task = self._executor.execute(msg)
-                        if task:
-                            self._state = SchedulerState.RUNNING
-                        continue
+                        if await self._start_message_execution(msg):
+                            continue
 
                 # Check high priority (only when idle)
                 if self._executor.is_idle and self._queue_manager.has_high_prio():
                     msg = self._queue_manager.dequeue_high_prio()
                     if msg:
-                        task = self._executor.execute(msg)
-                        if task:
-                            self._state = SchedulerState.RUNNING
-                        continue
+                        if await self._start_message_execution(msg):
+                            continue
 
                 # Check normal (only when idle)
                 if self._executor.is_idle and self._queue_manager.has_normal():
                     msg = self._queue_manager.dequeue_normal()
                     if msg:
-                        task = self._executor.execute(msg)
-                        if task:
-                            self._state = SchedulerState.RUNNING
-                        continue
+                        if await self._start_message_execution(msg):
+                            continue
 
                 # Update state to idle if executor is idle
                 if self._executor.is_idle:
@@ -497,9 +522,9 @@ class HawiScheduler:
         callback: Callable[[Event], None],
         event_types: list[str] | None = None,
     ) -> None:
-        """Subscribe to scheduler events."""
-        self._event_bus.subscribe(callback, event_types)
+        """Subscribe to the wrapped agent's event stream."""
+        self._agent.subscribe(callback, event_types)
 
     def unsubscribe(self, callback: Callable[[Event], None]) -> bool:
-        """Unsubscribe from scheduler events."""
-        return self._event_bus.unsubscribe(callback)
+        """Unsubscribe from the wrapped agent's event stream."""
+        return self._agent.unsubscribe(callback)

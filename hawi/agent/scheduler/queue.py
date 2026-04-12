@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable
 
+from hawi.events import EventBus
 from hawi.models.message import ContentPart
 
 
@@ -28,6 +29,7 @@ class QueuedMessage:
     content: str | list[ContentPart]
     queue_type: QueueType
     created_at: float
+    event_bus: EventBus | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     merged_tool_call_ids: list[str] = field(default_factory=list)
 
@@ -37,12 +39,15 @@ class QueuedMessage:
         content: str | list[ContentPart],
         queue_type: QueueType,
         metadata: dict[str, Any] | None = None,
+        *,
+        event_bus: EventBus | None = None,
     ) -> QueuedMessage:
         return cls(
             id=str(uuid.uuid4())[:8],
             content=content,
             queue_type=queue_type,
             created_at=time.time(),
+            event_bus=event_bus,
             metadata=metadata or {},
         )
 
@@ -70,28 +75,49 @@ class MessageQueueManager:
         self._pending_urgent: QueuedMessage | None = None
 
     def enqueue_normal(
-        self, content: str | list[ContentPart], metadata: dict[str, Any] | None = None
+        self,
+        content: str | list[ContentPart],
+        metadata: dict[str, Any] | None = None,
+        *,
+        event_bus: EventBus | None = None,
     ) -> QueuedMessage:
         msg = QueuedMessage.create(
-            content=content, queue_type=QueueType.NORMAL, metadata=metadata
+            content=content,
+            queue_type=QueueType.NORMAL,
+            event_bus=event_bus,
+            metadata=metadata,
         )
         self._normal_queue.append(msg)
         return msg
 
     def enqueue_high_prio(
-        self, content: str | list[ContentPart], metadata: dict[str, Any] | None = None
+        self,
+        content: str | list[ContentPart],
+        metadata: dict[str, Any] | None = None,
+        *,
+        event_bus: EventBus | None = None,
     ) -> QueuedMessage:
         msg = QueuedMessage.create(
-            content=content, queue_type=QueueType.HIGH_PRIO, metadata=metadata
+            content=content,
+            queue_type=QueueType.HIGH_PRIO,
+            event_bus=event_bus,
+            metadata=metadata,
         )
         self._high_prio_queue.append(msg)
         return msg
 
     def enqueue_urgent(
-        self, content: str | list[ContentPart], metadata: dict[str, Any] | None = None
+        self,
+        content: str | list[ContentPart],
+        metadata: dict[str, Any] | None = None,
+        *,
+        event_bus: EventBus | None = None,
     ) -> QueuedMessage:
         msg = QueuedMessage.create(
-            content=content, queue_type=QueueType.URGENT, metadata=metadata
+            content=content,
+            queue_type=QueueType.URGENT,
+            event_bus=event_bus,
+            metadata=metadata,
         )
         self._pending_urgent = msg
         return msg
