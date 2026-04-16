@@ -24,6 +24,18 @@ class WebPlugin(HawiPlugin):
         super().__init__()
         self._fetcher = Fetcher()
 
+    @classmethod
+    def gui_config_schema(cls) -> dict:
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def gui_default_config(cls) -> dict:
+        return {}
+
     def clone(self) -> 'WebPlugin':
         """
         创建副本用于 Agent fork/clone

@@ -1,7 +1,14 @@
 
 """Hawi Agent module."""
 
-from .agent import HawiAgent, ModelErrorPolicy, ModelErrorRetryPolicy, ModelErrorNotifyPolicy, ModelErrorStopPolicy
+from .agent import (
+    HawiAgent,
+    ModelErrorPolicy,
+    ModelErrorRetryPolicy,
+    ModelErrorNotifyPolicy,
+    ModelErrorStopPolicy,
+    SteerPartMergeMode,
+)
 from .context import AgentContext, ToolCallContext
 from .result import AgentRunResult, ToolCallRecord
 
@@ -26,6 +33,7 @@ __all__ = [
     "ModelErrorRetryPolicy",
     "ModelErrorNotifyPolicy",
     "ModelErrorStopPolicy",
+    "SteerPartMergeMode",
     # Context
     "AgentContext",
     "ToolCallContext",

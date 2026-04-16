@@ -8,6 +8,18 @@ class ShellPlugin(HawiPlugin):
     Shell 操作插件，提供运行 shell 命令的能力。
     """
 
+    @classmethod
+    def gui_config_schema(cls) -> dict:
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def gui_default_config(cls) -> dict:
+        return {}
+
     @tool
     def run_shell(self, command: str) -> str:
         """

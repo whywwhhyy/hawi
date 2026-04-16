@@ -5,9 +5,6 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from hawi.events import EventBus
-from hawi.models.message import (
-    ContentPart
-)
 from hawi.agent.scheduler import (
     QueueType,
     QueuedMessage,
@@ -20,10 +17,14 @@ from hawi.agent.scheduler import (
     HawiScheduler,
     SchedulerError,
 )
+from hawi.agent.agent import SteerPartMergeMode
 from hawi.events import (
     SchedulerEnqueueEvent,
     SchedulerDequeueEvent,
     SchedulerInterruptEvent,
+)
+from hawi.models.message import (
+    ContentPart
 )
 
 
@@ -247,6 +248,8 @@ class TestHawiSchedulerBasic:
         agent.subscribe = MagicMock()
         agent.unsubscribe = MagicMock(return_value=True)
         agent._emit_event = AsyncMock()
+        agent.has_active_tool_calls = False
+        agent.steer = MagicMock(return_value="steer-1234")
         return agent
 
     def test_scheduler_init(self, mock_agent):
@@ -269,6 +272,24 @@ class TestHawiSchedulerBasic:
         msg_id = scheduler.enqueue("test message", "high_prio")
         assert msg_id
         assert scheduler.get_queue_lengths()["high_prio"] == 1
+
+    def test_scheduler_steers_high_prio_message_during_active_tool(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        scheduler._executor._state = SchedulerState.RUNNING
+        mock_agent.has_active_tool_calls = True
+
+        msg_id = scheduler.enqueue(
+            "new steer",
+            "high_prio",
+            metadata={"steer_merge_mode": SteerPartMergeMode.USER_MESSAGE_TEMPLATE},
+        )
+
+        assert msg_id == "steer-1234"
+        assert scheduler.get_queue_lengths()["high_prio"] == 0
+        mock_agent.steer.assert_called_once_with(
+            "new steer",
+            merge_mode=SteerPartMergeMode.USER_MESSAGE_TEMPLATE,
+        )
 
     def test_scheduler_enqueue_urgent(self, mock_agent):
         scheduler = HawiScheduler(mock_agent)
@@ -357,6 +378,8 @@ class TestHawiSchedulerErrorHooks:
         agent.subscribe = MagicMock()
         agent.unsubscribe = MagicMock(return_value=True)
         agent._emit_event = AsyncMock()
+        agent.has_active_tool_calls = False
+        agent.steer = MagicMock(return_value="steer-1234")
         return agent
 
     @pytest.mark.asyncio
@@ -384,7 +407,7 @@ class TestAgentExecutorEventBus:
     @pytest.mark.asyncio
     async def test_execute_passes_message_event_bus_to_agent(self):
         agent = MagicMock()
-        agent.arun = AsyncMock(return_value=MagicMock())
+        agent._arun_internal = AsyncMock(return_value=MagicMock())
         agent.clear_interrupt_state = MagicMock()
         scheduler = MagicMock()
         executor = AgentExecutor(agent, scheduler)
@@ -395,7 +418,7 @@ class TestAgentExecutorEventBus:
         assert task is not None
         await task
 
-        agent.arun.assert_awaited_once_with("hello", event_bus=event_bus)
+        agent._arun_internal.assert_awaited_once_with("hello", event_bus=event_bus)
 
 
 if __name__ == "__main__":

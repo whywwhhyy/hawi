@@ -7,9 +7,10 @@ Scheduler → UI via ui_queue.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 QueueKind = Literal["normal", "high_prio", "urgent"]
+PluginConfigs = dict[str, dict[str, Any]]
 
 # ─── UI → Scheduler ──────────────────────────────────────────────────────────
 
@@ -37,9 +38,26 @@ class CmdStop:
 
 
 @dataclass
+class CmdInterrupt:
+    """Interrupt current agent execution without stopping scheduler thread."""
+    reason: str = "user"
+
+
+@dataclass
 class CmdSwitchModel:
     """Hot-switch to a different model config."""
     model_name: str
+
+
+@dataclass
+class CmdApplyPlugins:
+    """Apply plugin selection and plugin configs.
+
+    Notes:
+        The scheduler only applies this while idle.
+    """
+    selected_plugins: list[str]
+    plugin_configs: PluginConfigs
 
 
 # ─── Scheduler → UI ──────────────────────────────────────────────────────────
@@ -48,6 +66,8 @@ class CmdSwitchModel:
 class UiReady:
     """Scheduler initialized and ready for messages."""
     model_name: str
+    selected_plugins: list[str]
+    plugin_configs: PluginConfigs
 
 
 @dataclass
@@ -89,11 +109,10 @@ class UiRunStop:
 
 
 @dataclass
-class UiToolCall:
-    """A tool was invoked."""
+class UiToolCallStart:
+    """A tool call stream has started."""
     tool_name: str
     tool_call_id: str
-    arguments: dict
     run_id: str
 
 
@@ -149,6 +168,15 @@ class UiToolCallDelta:
 
 
 @dataclass
+class UiToolCallStop:
+    """Tool call arguments stream has completed."""
+    run_id: str
+    tool_call_id: str
+    tool_name: str
+    arguments: dict[str, Any]
+
+
+@dataclass
 class UiAgentInterrupt:
     """Agent was interrupted."""
     run_id: str
@@ -159,3 +187,12 @@ class UiAgentInterrupt:
 class UiDebugInfo:
     """Debug information (stream start/stop, enqueue/dequeue, etc)."""
     message: str
+
+
+@dataclass
+class UiPluginsApplied:
+    """Result of applying plugin configuration."""
+    success: bool
+    message: str
+    selected_plugins: list[str]
+    plugin_configs: PluginConfigs

@@ -58,6 +58,18 @@ class FileSystemPlugin(HawiPlugin):
     def __init__(self):
         self._read_state_cache: dict[str, FileReadState] = {}
 
+    @classmethod
+    def gui_config_schema(cls) -> dict:
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def gui_default_config(cls) -> dict:
+        return {}
+
     def clone(self) -> "FileSystemPlugin":
         """Return a fresh FileSystemPlugin with an empty read state cache."""
         new_plugin = FileSystemPlugin()

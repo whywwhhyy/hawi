@@ -23,6 +23,7 @@ MCP (Model Context Protocol) Hawi 插件
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from pathlib import Path
 
@@ -64,13 +65,40 @@ class MCPPlugin(HawiPlugin):
         # 现在 agent 可以使用 MCP 工具和资源了
     """
 
-    def __init__(self):
+    def __init__(self, config_path: str | None = None):
         super().__init__()
+        self._config_path = config_path
         self._pool = MCPClientPool()
         self._server_configs: list[dict[str, Any]] = []
         self._connected = False
         self._tool_wrappers: dict[str, _MCPToolWrapper] = {}
         self._resource_wrappers: dict[str, _MCPResourceWrapper] = {}
+
+    @classmethod
+    def gui_config_schema(cls) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "config_path": {
+                    "type": "string",
+                    "title": "MCP Config Path",
+                    "default": ".hawi/mcp/config.json",
+                    "description": "Path to MCP JSON config file containing mcpServers.",
+                }
+            },
+            "required": ["config_path"],
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def gui_default_config(cls) -> dict:
+        return {
+            "config_path": ".hawi/mcp/config.json",
+        }
+
+    def set_config_path(self, config_path: str | None) -> None:
+        """Set MCP JSON config path used by connect()."""
+        self._config_path = config_path
 
     def add_stdio_server(
         self,
@@ -204,7 +232,6 @@ class MCPPlugin(HawiPlugin):
             plugin.load_from_json()
         """
         import json
-        import os
 
         if path is None:
             # 从默认路径加载所有 JSON 文件
@@ -253,6 +280,38 @@ class MCPPlugin(HawiPlugin):
         if self._connected:
             return
 
+        if not self._server_configs:
+            if not self._config_path:
+                raise ValueError("MCP config path is required when no servers are configured.")
+
+            config_file = Path(self._config_path)
+            if not config_file.is_absolute():
+                config_file = Path.cwd() / config_file
+            config_file = config_file.resolve()
+
+            if not config_file.exists():
+                raise FileNotFoundError(f"MCP config file not found: {config_file}")
+            if not config_file.is_file():
+                raise ValueError(f"MCP config path is not a file: {config_file}")
+
+            try:
+                self.load_from_json(str(config_file))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid MCP config JSON: {config_file}") from exc
+            except Exception as exc:
+                raise RuntimeError(f"Failed to load MCP config: {config_file}: {exc}") from exc
+
+            if not self._server_configs:
+                raise ValueError(
+                    f"No MCP servers found in config file: {config_file}. "
+                    "Expected a non-empty 'mcpServers' object."
+                )
+
+        # Reset connection state before reconnect attempts.
+        self._pool = MCPClientPool()
+        self._tool_wrappers.clear()
+        self._resource_wrappers.clear()
+
         # 创建客户端
         for config in self._server_configs:
             if config["type"] == "stdio":
@@ -269,7 +328,10 @@ class MCPPlugin(HawiPlugin):
             self._pool.add_client(config["name"], client)
 
         # 连接所有客户端
-        await self._pool.connect_all()
+        try:
+            await self._pool.connect_all()
+        except Exception as exc:
+            raise RuntimeError(f"Failed to connect MCP servers: {exc}") from exc
         self._connected = True
 
         # 创建工具包装器
@@ -303,7 +365,7 @@ class MCPPlugin(HawiPlugin):
         Returns:
             全新的 MCPPlugin 实例
         """
-        new_plugin = MCPPlugin()
+        new_plugin = MCPPlugin(config_path=self._config_path)
         # 复制服务器配置，但不复制连接状态
         new_plugin._server_configs = self._server_configs.copy()
         # 新实例未连接，需要手动 connect()

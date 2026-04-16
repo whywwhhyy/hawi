@@ -144,7 +144,7 @@ class AgentExecutor:
     async def _execute_with_error_handling(self, message: QueuedMessage) -> None:
         """Execute message with error handling."""
         try:
-            result = await self._agent.arun(
+            result = await self._agent._arun_internal(
                 message.content,
                 event_bus=message.event_bus,
             )

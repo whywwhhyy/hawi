@@ -15,9 +15,9 @@ import logging
 from typing import Any, Callable, Literal
 
 from hawi.agent.agent import HawiAgent
+from hawi.agent.agent import SteerPartMergeMode
 from hawi.agent.result import AgentRunResult
 from hawi.events import Event, EventBus
-from hawi.events.agent_events import AgentToolResultEvent
 from hawi.events.scheduler_events import (
     SchedulerEnqueueEvent,
     SchedulerDequeueEvent,
@@ -182,6 +182,16 @@ class HawiScheduler:
                     # No event loop running, will be handled on next loop iteration
                     pass
         elif queue == "high_prio":
+            if not self._executor.is_idle:
+                merge_mode = self._resolve_steer_merge_mode(metadata)
+                msg_id = self._agent.steer(content, merge_mode=merge_mode)
+                self._emit_enqueue_event(
+                    message_id=msg_id,
+                    queue_type=queue,
+                    content=content,
+                    event_bus=event_bus,
+                )
+                return msg_id
             msg = self._queue_manager.enqueue_high_prio(
                 content,
                 metadata,
@@ -194,22 +204,12 @@ class HawiScheduler:
                 event_bus=event_bus,
             )
 
-        # Emit enqueue event (safely handle no event loop case)
-        try:
-            asyncio.get_running_loop()
-            asyncio.create_task(
-                self._emit_event(
-                    SchedulerEnqueueEvent.create(
-                        message_id=msg.id,
-                        queue_type=queue,
-                        content_preview=msg.get_content_preview(),
-                    ),
-                    event_bus,
-                )
-            )
-        except RuntimeError:
-            # No event loop running, skip event emission
-            pass
+        self._emit_enqueue_event(
+            message_id=msg.id,
+            queue_type=queue,
+            content=content,
+            event_bus=event_bus,
+        )
 
         return msg.id
 
@@ -285,32 +285,8 @@ class HawiScheduler:
             # Event was reprocessed or intercepted
             return
 
-        # Handle specific events
-        if event.type == "agent.tool_result":
-            await self._on_tool_call_end(event)
-        elif event.type == "agent.run_stop":
+        if event.type == "agent.run_stop":
             await self._on_agent_idle()
-
-    async def _on_tool_call_end(self, event: AgentToolResultEvent) -> None:
-        """Handle tool call completion.
-
-        Check HIGH_PRIO queue and merge or queue at front.
-        """
-        if not self._queue_manager.has_high_prio():
-            return
-
-        high_prio_msg = self._queue_manager.dequeue_high_prio()
-        if high_prio_msg is None:
-            return
-
-        # Check if last message is tool result
-        messages = self._agent.context.messages
-        if messages and messages[-1].get("role") == "tool":
-            # Merge into tool result
-            await self._merge_high_prio_to_tool_result(high_prio_msg)
-        else:
-            # Queue at front of normal queue
-            self._queue_manager.insert_front_normal(high_prio_msg)
 
     async def _on_agent_idle(self) -> None:
         """Handle agent idle state.
@@ -320,71 +296,6 @@ class HawiScheduler:
         """
         # Just update state, let run_forever handle next message
         self._state = SchedulerState.IDLE
-
-    async def _merge_high_prio_to_tool_result(
-        self,
-        high_prio_msg: QueuedMessage,
-        tool_call_id: str | None = None,
-        append_mode: Literal["text", "content_part", "auto"] = "auto",
-    ) -> bool:
-        """Merge high priority message into tool result.
-
-        Args:
-            high_prio_msg: Message to merge
-            tool_call_id: Target tool call ID (None for last one)
-            append_mode: How to append ("text", "content_part", or "auto")
-
-        Returns:
-            True if merge succeeded
-        """
-        messages = self._agent.context.messages
-        if not messages:
-            return False
-
-        # Find target tool result message
-        target_idx = len(messages) - 1
-        if tool_call_id:
-            # Find specific tool result
-            for i, msg in enumerate(reversed(messages)):
-                if msg.get("role") == "tool":
-                    content = msg.get("content", [])
-                    for part in content:
-                        if (
-                            isinstance(part, dict)
-                            and part.get("type") == "tool_result"
-                            and part.get("tool_call_id") == tool_call_id
-                        ):
-                            target_idx = len(messages) - 1 - i
-                            break
-
-        # Get content to merge
-        if isinstance(high_prio_msg.content, str):
-            merge_content = high_prio_msg.content
-        else:
-            # Extract text from content parts
-            texts = []
-            for part in high_prio_msg.content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    texts.append(part.get("text", ""))
-            merge_content = "\\n\\n".join(texts)
-
-        # Merge into tool result
-        target_msg = messages[target_idx]
-        target_content = list(target_msg.get("content", []))
-
-        for part in target_content:
-            if isinstance(part, dict) and part.get("type") == "tool_result":
-                current_content = part.get("content", "")
-                if isinstance(current_content, str):
-                    new_content = f"{current_content}\\n\\n[Additional context: {merge_content}]"
-                else:
-                    # Append as new content part
-                    new_content = list(current_content)
-                    new_content.append({"type": "text", "text": merge_content})
-                part["content"] = new_content
-                break
-
-        return True
 
     # Error handling
 
@@ -428,6 +339,61 @@ class HawiScheduler:
     ) -> None:
         """Emit scheduler event via the agent's event pipeline."""
         await self._agent._emit_event(event, event_bus)
+
+    def _resolve_steer_merge_mode(
+        self,
+        metadata: dict[str, Any] | None,
+    ) -> SteerPartMergeMode:
+        """Resolve the steer merge mode from queue metadata."""
+        if metadata is None:
+            return SteerPartMergeMode.APPEND_TO_TOOL_RESULT
+
+        raw_mode = metadata.get("steer_merge_mode")
+        if isinstance(raw_mode, SteerPartMergeMode):
+            return raw_mode
+        if isinstance(raw_mode, str):
+            try:
+                return SteerPartMergeMode(raw_mode)
+            except ValueError:
+                logger.warning("Unknown steer merge mode '%s', falling back to append.", raw_mode)
+        return SteerPartMergeMode.APPEND_TO_TOOL_RESULT
+
+    def _build_content_preview(self, content: str | list[ContentPart]) -> str:
+        """Build a short content preview without creating a queued message."""
+        if isinstance(content, str):
+            text = content
+        else:
+            texts = [
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            text = " ".join(texts)
+        return text[:97] + "..." if len(text) > 100 else text
+
+    def _emit_enqueue_event(
+        self,
+        *,
+        message_id: str,
+        queue_type: str,
+        content: str | list[ContentPart],
+        event_bus: EventBus | None = None,
+    ) -> None:
+        """Emit enqueue event when an event loop is available."""
+        try:
+            asyncio.get_running_loop()
+            asyncio.create_task(
+                self._emit_event(
+                    SchedulerEnqueueEvent.create(
+                        message_id=message_id,
+                        queue_type=queue_type,
+                        content_preview=self._build_content_preview(content),
+                    ),
+                    event_bus,
+                )
+            )
+        except RuntimeError:
+            pass
 
     async def _start_message_execution(self, msg: QueuedMessage) -> bool:
         """Emit dequeue event and hand the message to the executor."""
@@ -499,6 +465,10 @@ class HawiScheduler:
     def stop(self) -> None:
         """Stop the scheduler loop."""
         self._running = False
+
+    async def interrupt(self, reason: str = "user") -> list[str]:
+        """Interrupt current executor run without stopping scheduler loop."""
+        return await self._executor.interrupt(reason)
 
     # Multi-agent coordination
 

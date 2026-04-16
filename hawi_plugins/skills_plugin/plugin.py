@@ -21,6 +21,27 @@ class SkillsPlugin(HawiPlugin):
         # Pre-scan skills on init
         self._scan_skills()
 
+    @classmethod
+    def gui_config_schema(cls) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "skills_dir": {
+                    "type": "string",
+                    "title": "Skills Directory",
+                    "default": ".skills",
+                    "description": "Directory to scan for SKILL.md files.",
+                }
+            },
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def gui_default_config(cls) -> dict:
+        return {
+            "skills_dir": ".skills",
+        }
+
     def _scan_skills(self):
         """Scan for SKILL.md files and populate the registry."""
         self.skills_registry.clear()

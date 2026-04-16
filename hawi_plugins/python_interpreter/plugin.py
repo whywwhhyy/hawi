@@ -30,6 +30,34 @@ class PythonInterpreterPlugin(HawiPlugin):
             self.executor = PythonInterpreter(*args, **kwargs)
             self.running: bool = False
 
+    @classmethod
+    def gui_config_schema(cls) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "work_dir": {
+                    "type": "string",
+                    "title": "Work Directory",
+                    "default": ".hawi/python_interpreter",
+                    "description": "Working directory for interpreter scripts and project files.",
+                },
+                "print_execution": {
+                    "type": "boolean",
+                    "title": "Print Execution Logs",
+                    "default": False,
+                    "description": "Whether to print execution logs from the interpreter subprocess.",
+                },
+            },
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def gui_default_config(cls) -> dict:
+        return {
+            "work_dir": ".hawi/python_interpreter",
+            "print_execution": False,
+        }
+
     def __init__(self, work_dir: Optional[str] = None, print_execution: bool = False):
         """
         初始化多解释器管理器

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from .types import PluginHooks
 
@@ -78,3 +78,20 @@ class HawiPlugin:
             A plugin instance for the cloned agent. Default returns self.
         """
         return self
+
+    @classmethod
+    def gui_config_schema(cls) -> dict[str, Any]:
+        """JSON schema used by GUI to render plugin configuration fields.
+
+        Default: no configuration options.
+        """
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def gui_default_config(cls) -> dict[str, Any]:
+        """Default GUI configuration values for this plugin."""
+        return {}

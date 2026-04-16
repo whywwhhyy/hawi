@@ -10,11 +10,13 @@ import asyncio
 import inspect
 import json
 import os
+import threading
 import time
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Optional, Coroutine, Literal, Mapping, Callable, cast
 
 
@@ -102,6 +104,30 @@ class _ExecutionState:
     error: HawiError | str | None = None
     should_stop: bool = False
     run_id: str = ""
+
+
+class SteerPartMergeMode(str, Enum):
+    """How steer content should be merged with the next tool result."""
+
+    APPEND_TO_TOOL_RESULT = "append_to_tool_result"
+    USER_MESSAGE_TEMPLATE = "user_message_template"
+
+
+@dataclass
+class PendingSteer:
+    """Queued steer content to be applied to the next tool result."""
+
+    id: str
+    content: list[ContentPart]
+    merge_mode: SteerPartMergeMode
+
+
+@dataclass
+class PendingTurn:
+    """Queued user message that should drive the next agent turn."""
+
+    id: str
+    content: list[ContentPart]
 
 
 class HawiAgent:
@@ -206,6 +232,12 @@ class HawiAgent:
         self._cancel_event = asyncio.Event()
         self._current_tool_calls: list[ToolCallPart] = []
         self._interrupted_tool_call_ids: list[str] = []
+        self._steer_lock = threading.RLock()
+        self._pending_steers: list[PendingSteer] = []
+        self._pending_turns: list[PendingTurn] = []
+        self._session_lock = threading.RLock()
+        self._session_active = False
+        self._autonomous_run_task: asyncio.Task[AgentRunResult] | None = None
 
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
@@ -320,10 +352,19 @@ class HawiAgent:
         Returns:
             List of tool_call_ids that were currently executing when interrupted
         """
+        self.on_interrupt(reason)
         self._cancel_event.set()
         interrupted_ids = [tc.get("id", "") for tc in self._current_tool_calls]
         self._interrupted_tool_call_ids.extend(interrupted_ids)
         return interrupted_ids
+
+    def on_interrupt(self, reason: str = "user") -> None:
+        """Interrupt hook (no-op by default).
+
+        Subclasses or integrations can override this to react to interrupt
+        requests without changing the default cooperative cancel behavior.
+        """
+        return None
 
     def clear_interrupt_state(self) -> None:
         """Clear interrupt state for a fresh execution.
@@ -333,6 +374,9 @@ class HawiAgent:
         self._cancel_event.clear()
         self._interrupted_tool_call_ids.clear()
         self._current_tool_calls.clear()
+        with self._steer_lock:
+            self._pending_steers.clear()
+            self._pending_turns.clear()
 
     def _check_interrupt(self) -> bool:
         """Check if an interrupt has been requested.
@@ -341,6 +385,176 @@ class HawiAgent:
             True if interrupted, False otherwise
         """
         return self._cancel_event.is_set()
+
+    @property
+    def has_active_tool_calls(self) -> bool:
+        """Whether the agent is currently waiting on one or more tool calls."""
+        return len(self._current_tool_calls) > 0
+
+    def steer(
+        self,
+        content: str | list[ContentPart],
+        *,
+        merge_mode: SteerPartMergeMode = SteerPartMergeMode.APPEND_TO_TOOL_RESULT,
+    ) -> str:
+        """Queue steer content to be merged into the next tool result.
+
+        Args:
+            content: Steering message to merge with the next tool result.
+            merge_mode: Strategy for combining steer content with the tool result.
+
+        Returns:
+            A steer identifier for tracing/debugging.
+        """
+        steer_content = self._normalize_content_parts(content)
+        steer_id = str(uuid.uuid4())[:8]
+        should_start_new_loop = False
+        with self._steer_lock:
+            if self.has_active_tool_calls:
+                self._pending_steers.append(
+                    PendingSteer(
+                        id=steer_id,
+                        content=steer_content,
+                        merge_mode=merge_mode,
+                    )
+                )
+            else:
+                self._pending_turns.append(
+                    PendingTurn(
+                        id=steer_id,
+                        content=steer_content,
+                    )
+                )
+                with self._session_lock:
+                    should_start_new_loop = not self._session_active
+
+        if should_start_new_loop:
+            self._ensure_pending_turn_loop()
+        return steer_id
+
+    def _normalize_content_parts(
+        self,
+        content: str | list[ContentPart],
+    ) -> list[ContentPart]:
+        """Normalize content input into a list of ContentPart."""
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        return list(content)
+
+    def _serialize_content_parts(self, content: list[ContentPart]) -> str:
+        """Serialize content parts into readable plain text."""
+        chunks: list[str] = []
+        for part in content:
+            part_type = part.get("type")
+            if part_type == "text":
+                chunks.append(part.get("text", ""))
+            elif part_type == "reasoning":
+                chunks.append(part.get("reasoning") or "")
+            elif part_type == "tool_result":
+                nested_content = part.get("content", [])
+                if isinstance(nested_content, str):
+                    chunks.append(nested_content)
+                else:
+                    nested_text = self._serialize_content_parts(list(nested_content))
+                    if nested_text:
+                        chunks.append(nested_text)
+            else:
+                chunks.append(str(part))
+        return "\n".join(chunk for chunk in chunks if chunk.strip())
+
+    async def _drain_pending_turns_to_context(
+        self,
+        run_id: str,
+        event_bus: EventBus | None,
+    ) -> bool:
+        """Move queued pending turns into the conversation context."""
+        with self._steer_lock:
+            pending_turns = self._pending_turns[:]
+            self._pending_turns.clear()
+
+        if not pending_turns:
+            return False
+
+        for pending in pending_turns:
+            self._context.add_user_message(pending.content)
+            await self._emit_event(
+                AgentMessageAddedEvent.create(
+                    run_id=run_id,
+                    role="user",
+                    content=pending.content,
+                ),
+                event_bus,
+            )
+        return True
+
+    def _clear_autonomous_run_task(self, task: asyncio.Task[AgentRunResult]) -> None:
+        """Drop the autonomous run task reference after completion."""
+        with self._session_lock:
+            if self._autonomous_run_task is task:
+                self._autonomous_run_task = None
+
+    async def _run_pending_turns(self) -> AgentRunResult:
+        """Execute queued turns using the agent's current configuration."""
+        return await self._arun_internal(message=None)
+
+    def _ensure_pending_turn_loop(self) -> None:
+        """Start a new loop to process queued pending turns when idle."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self._run_pending_turns())
+            return
+
+        with self._session_lock:
+            if self._session_active:
+                return
+            if self._autonomous_run_task is not None and not self._autonomous_run_task.done():
+                return
+            task = loop.create_task(self._run_pending_turns())
+            task.add_done_callback(self._clear_autonomous_run_task)
+            self._autonomous_run_task = task
+
+    def _add_tool_result_with_pending_steer(
+        self,
+        tool_call_id: str,
+        content: str | list[ContentPart],
+        *,
+        is_error: bool = False,
+    ) -> None:
+        """Add a tool result and consume one pending steer instruction if present."""
+        tool_result_content = self._normalize_content_parts(content)
+
+        with self._steer_lock:
+            pending_steer = self._pending_steers.pop(0) if self._pending_steers else None
+
+            if pending_steer is None:
+                self._context.add_tool_result(
+                    tool_call_id=tool_call_id,
+                    content=tool_result_content,
+                    is_error=is_error,
+                )
+                return
+
+            if pending_steer.merge_mode == SteerPartMergeMode.APPEND_TO_TOOL_RESULT:
+                merged_content = tool_result_content + list(pending_steer.content)
+                self._context.add_tool_result(
+                    tool_call_id=tool_call_id,
+                    content=merged_content,
+                    is_error=is_error,
+                )
+                return
+
+            steer_text = self._serialize_content_parts(pending_steer.content)
+            tool_result_text = self._serialize_content_parts(tool_result_content)
+            sections = [
+                f"[system] 用户发送了新的消息：{steer_text}",
+                "[tool result] 另外，工具返回结果为：",
+                tool_result_text,
+            ]
+            if is_error:
+                sections.insert(2, "[tool result status] 该工具结果为错误结果。")
+            combined_text = "\n".join(section for section in sections if section)
+            self._context.add_user_message([{"type": "text", "text": combined_text}])
 
     async def _invoke_session_hook(self, hook_type: str, ctx: HookContext) -> HookResult | None:
         """Invoke before/after_session and before/after_conversation hooks: (agent, ctx)."""
@@ -395,61 +609,53 @@ class HawiAgent:
     def run(
         self,
         message: str | list[ContentPart] | None = None,
-        *,
-        model: Model | None = None,
-        model_error_policy: Optional[ModelErrorPolicyConfig] = None,
-        event_bus: EventBus | None = None,
-        streaming: bool | None = None,
     ) -> AgentRunResult:
         """Execute agent with a message (synchronous).
 
         Args:
-            message: User message (str, content parts, or None to use existing context)
-            model: Override model for this run
-            model_error_policy: Override failure policy for this run
-            event_bus: Optional event bus for publishing events (defaults to self.event_bus)
-            streaming: Whether to use streaming mode (defaults to self._streaming)
+            message: User message (str or content parts)
 
         Returns:
             AgentRunResult containing the execution result
         """
-        # Run async execution in sync context
-        return asyncio.run(self.arun(
-            message=message,
-            model=model,
-            model_error_policy=model_error_policy,
-            event_bus=event_bus,
-            streaming=streaming,
-        ))
+        return asyncio.run(self.arun(message))
 
     async def arun(
         self,
         message: str | list[ContentPart] | None = None,
+    ) -> AgentRunResult:
+        """Execute agent asynchronously.
+
+        Args:
+            message: User message (str or content parts)
+
+        Returns:
+            AgentRunResult containing the execution result
+        """
+        return await self._arun_internal(message=message)
+
+    async def _arun_internal(
+        self,
+        message: str | list[ContentPart] | None,
         *,
         model: Model | None = None,
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
         streaming: bool | None = None,
     ) -> AgentRunResult:
-        """Execute agent asynchronously.
-
-        Args:
-            message: User message (str, content parts, or None to use existing context)
-            model: Override model for this run
-            model_error_policy: Override failure policy for this run
-            event_bus: Optional event bus for publishing events (defaults to self.event_bus)
-            streaming: Whether to use streaming mode (defaults to self._streaming)
-
-        Returns:
-            AgentRunResult containing the execution result
-        """
-        # Normalize parameters
+        """Internal async run entry that supports runtime overrides."""
         m = model or self._default_model
         policy = model_error_policy or self._model_error_policy
         effective_event_bus = event_bus or self._event_bus
         effective_streaming = streaming if streaming is not None else self._streaming
 
-        return await self._execute(message, m, policy, effective_event_bus, effective_streaming)
+        with self._session_lock:
+            self._session_active = True
+        try:
+            return await self._execute(message, m, policy, effective_event_bus, effective_streaming)
+        finally:
+            with self._session_lock:
+                self._session_active = False
 
     @property
     def event_bus(self) -> EventBus:
@@ -594,6 +800,9 @@ class HawiAgent:
                 state.should_stop = True
 
         try:
+            if message is None:
+                await self._drain_pending_turns_to_context(run_id, event_bus)
+
             while not state.should_stop:
                 m = model  # reset per-iteration model (replace_model only affects one call)
 
@@ -633,7 +842,12 @@ class HawiAgent:
                             ),
                             event_bus,
                         )
-                        return await self.arun(model=model, event_bus=event_bus, streaming=streaming)
+                        return await self._arun_internal(
+                            message=None,
+                            model=model,
+                            event_bus=event_bus,
+                            streaming=streaming,
+                        )
 
                 # Model stream start
                 request_id = f"{run_id}-{state.iteration}"
@@ -815,7 +1029,12 @@ class HawiAgent:
                             ),
                             event_bus,
                         )
-                        return await self.arun(model=model, event_bus=event_bus, streaming=streaming)
+                        return await self._arun_internal(
+                            message=None,
+                            model=model,
+                            event_bus=event_bus,
+                            streaming=streaming,
+                        )
 
                 # Add assistant message to context
                 # tool_calls are now included in content as ToolCallPart items
@@ -833,6 +1052,8 @@ class HawiAgent:
 
                 # Check if tool calls need to be executed
                 if not tool_calls:
+                    if await self._drain_pending_turns_to_context(run_id, event_bus):
+                        continue
                     # No tool calls, we're done
                     duration_ms = (time.time() - start_time) * 1000
                     await self._emit_event(
@@ -1274,7 +1495,7 @@ class HawiAgent:
                     result_content = f"Output before error:\n{output_str}\n\n{result_content}"
             else:
                 result_content = output_str
-            self._context.add_tool_result(
+            self._add_tool_result_with_pending_steer(
                 tool_call_id=tool_call_id,
                 content=result_content,
                 is_error=not result.success,
@@ -1363,7 +1584,7 @@ class HawiAgent:
                     result_content = f"Output before error:\n{output_str}\n\n{result_content}"
             else:
                 result_content = output_str
-            self._context.add_tool_result(
+            self._add_tool_result_with_pending_steer(
                 tool_call_id=pending.tool_call_id,
                 content=result_content,
                 is_error=not result.success,
