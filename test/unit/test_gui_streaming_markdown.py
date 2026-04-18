@@ -74,3 +74,10 @@ def test_paragraph_to_list_does_not_emit_extra_visual_blank_line() -> None:
     assert "<p>普通文本</p>" in html
     assert "<p>普通文本<br/></p>" not in html
     assert "</p><ul>" in html
+
+
+def test_ordered_list_does_not_preview_duplicate_marker() -> None:
+    html = _render_html("1. 外貌特征\n2. 社交达人\n", 1)
+    assert "<p>1.</p>" not in html
+    assert "<p>2.</p>" not in html
+    assert '<ol start="1"><li>外貌特征</li><li>社交达人</li></ol>' in html

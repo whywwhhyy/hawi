@@ -220,6 +220,30 @@ class TestModelConfigOverride:
         assert config is not None
         assert config.properties["temperature"] == 0.9
 
+    def test_get_model_config_with_steer_merge_mode_override(self):
+        """Test that steer merge mode override is applied to model config."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "test-provider",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"api_key": "test"},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "test-provider/gpt-4",
+            {
+                "steer_merge_mode": "user_message_template",
+            },
+            quiet=True,
+        )
+
+        config = registry.get_model_config("test-provider/gpt-4")
+        assert config is not None
+        assert config.steer_merge_mode == "user_message_template"
+
     def test_unregister_model_config_override_removes_config(self):
         """Test unregistering a model config override."""
         registry = ModelRegistry()
@@ -293,6 +317,54 @@ class TestCreateModel:
         model = registry.create_model("openai/gpt-4", model_id="gpt-3.5")
         assert model.model_id == "gpt-3.5"
 
+    def test_create_model_applies_steer_merge_mode_to_instance(self):
+        """Test creating model applies steer merge mode without polluting params."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"model_id": "gpt-4", "api_key": "test-key"},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "openai/gpt-4",
+            {
+                "steer_merge_mode": "user_message_template",
+            },
+            quiet=True,
+        )
+
+        model = registry.create_model("openai/gpt-4")
+
+        assert isinstance(model, OpenAIModel)
+        assert model.get_configured_steer_merge_mode() == "user_message_template"
+        assert "steer_merge_mode" not in model.params
+
+    def test_create_model_accepts_steer_merge_mode_override_kwarg(self):
+        """Test create_model() can override steer merge mode directly."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"model_id": "gpt-4", "api_key": "test-key"},
+            quiet=True,
+        )
+
+        model = registry.create_model(
+            "openai/gpt-4",
+            steer_merge_mode="user_message_template",
+        )
+
+        assert isinstance(model, OpenAIModel)
+        assert model.get_configured_steer_merge_mode() == "user_message_template"
+        assert "steer_merge_mode" not in model.params
+
 
 class TestConfigLoading:
     """Tests for YAML configuration loading."""
@@ -346,6 +418,32 @@ model_configs:
         config = registry.get_model_config("my-provider/gpt-4")
         assert config is not None
         assert config.properties["temperature"] == 0.9
+
+    def test_load_config_with_model_steer_merge_mode(self, tmp_path):
+        """Test loading config with top-level steer merge mode."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: my-provider
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: test-key
+
+model_configs:
+  my-provider/gpt-4:
+    steer_merge_mode: user_message_template
+""")
+
+        registry.load_config(config_file, quiet=True)
+
+        config = registry.get_model_config("my-provider/gpt-4")
+        assert config is not None
+        assert config.steer_merge_mode == "user_message_template"
 
     def test_load_nonexistent_file_is_noop(self, tmp_path):
         """Test loading non-existent file does nothing."""

@@ -441,6 +441,8 @@ def serialize_content(content: list[ContentPart]) -> str:
             texts.append(part["text"])
         elif part["type"] == "image":
             texts.append(f"[Image: {part['source']['url']}]")
+        elif part["type"] == "steer":
+            texts.append(serialize_content(part.get("content", [])))
         else:
             texts.append(str(part))
     return "\n".join(texts) if texts else ""

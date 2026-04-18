@@ -40,8 +40,10 @@ from .protocol import (
     CmdClearQueue,
     CmdEnqueue,
     CmdInterrupt,
+    CmdSetSystemPrompt,
     CmdStop,
     CmdSwitchModel,
+    DEFAULT_SYSTEM_PROMPT,
     PluginConfigs,
     QueueKind,
     UiAgentInterrupt,
@@ -512,6 +514,7 @@ class HawiGuiApp(QMainWindow):
     def __init__(self, model_name: str):
         super().__init__()
         self.model_name = model_name
+        self._system_prompt_text = DEFAULT_SYSTEM_PROMPT
         self.ui_queue: queue.Queue = queue.Queue()
         self.cmd_queue: queue.Queue = queue.Queue()
         self._sched_thread: SchedulerThread | None = None
@@ -667,6 +670,24 @@ class HawiGuiApp(QMainWindow):
         self.chat_view.verticalScrollBar().valueChanged.connect(self._on_chat_scroll)
         root.addWidget(self.chat_view, stretch=1)
 
+        system_prompt_row = QHBoxLayout()
+        system_prompt_row.setContentsMargins(0, 0, 0, 0)
+        system_prompt_row.setSpacing(6)
+        system_prompt_row.addWidget(QLabel("System Prompt:"))
+        self._system_prompt_box = QTextEdit(self)
+        self._system_prompt_box.setAcceptRichText(False)
+        self._system_prompt_box.setPlaceholderText("输入系统提示词")
+        self._system_prompt_box.setPlainText(self._system_prompt_text)
+        self._system_prompt_box.setFixedHeight(64)
+        system_prompt_row.addWidget(self._system_prompt_box, stretch=1)
+        self._apply_system_prompt_btn = QPushButton("应用")
+        self._apply_system_prompt_btn.clicked.connect(self._apply_system_prompt)
+        self._apply_system_prompt_btn.setMinimumWidth(96)
+        self._apply_system_prompt_btn.setAutoDefault(False)
+        self._apply_system_prompt_btn.setDefault(False)
+        system_prompt_row.addWidget(self._apply_system_prompt_btn)
+        root.addLayout(system_prompt_row)
+
         # Bottom controls
         priority_row = QHBoxLayout()
         priority_row.addWidget(QLabel("优先级:"))
@@ -762,6 +783,7 @@ class HawiGuiApp(QMainWindow):
             ui_queue=self.ui_queue,
             cmd_queue=self.cmd_queue,
             model_name=self.model_name,
+            system_prompt=self._system_prompt_text,
             selected_plugins=list(self._selected_plugins),
             plugin_configs={k: dict(v) for k, v in self._plugin_configs.items()},
         )
@@ -988,8 +1010,9 @@ body {
 }
 .md-content ul,
 .md-content ol {
-  margin: 0 0 8px 20px;
+  margin: 0 0 8px 0;
   padding: 0;
+  -qt-list-indent: 1;
 }
 .md-content p + ul,
 .md-content p + ol {
@@ -1286,6 +1309,14 @@ body {
             return
         queue_kind = self._selected_queue()
         self.cmd_queue.put(CmdEnqueue(content=text, queue=queue_kind))
+
+    def _apply_system_prompt(self):
+        prompt = self._system_prompt_box.toPlainText().strip() or DEFAULT_SYSTEM_PROMPT
+        if prompt != self._system_prompt_box.toPlainText():
+            self._system_prompt_box.setPlainText(prompt)
+        self._system_prompt_text = prompt
+        self.cmd_queue.put(CmdSetSystemPrompt(system_prompt=prompt))
+        self._append_system("System prompt 已更新，将在后续轮次生效")
 
     def _focus_input_box(self):
         self.input_box.setFocus(Qt.FocusReason.ShortcutFocusReason)

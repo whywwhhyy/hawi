@@ -146,6 +146,7 @@ MarkdownOp = (
 
 
 _LIST_RE = re.compile(r"^(?P<indent>\s*)(?:(?P<unordered>[-+*])|(?P<ordered>\d+)\.)\s+(?P<text>.*)$")
+_POTENTIAL_ORDERED_LIST_RE = re.compile(r"^\d+\.?$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _FENCE_RE = re.compile(r"^\s*(?P<marker>`{3,}|~{3,})\s*(?P<lang>\S*)\s*$")
 _THEMATIC_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
@@ -248,7 +249,10 @@ class StreamingMarkdownOpParser:
             return False
         if stripped.startswith(("#", ">", "-", "+", "|", "`", "~")):
             return False
-        if re.match(r"^\\d+\\.", stripped):
+        # Suppress preview for incomplete ordered-list markers like "1" / "1.".
+        # Once previewed, those characters cannot be retracted when the line later
+        # resolves to an ordered list item.
+        if _POTENTIAL_ORDERED_LIST_RE.match(stripped):
             return False
         if _FENCE_RE.match(stripped):
             return False

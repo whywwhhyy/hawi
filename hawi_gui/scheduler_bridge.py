@@ -24,8 +24,10 @@ from .protocol import (
     CmdClearQueue,
     CmdEnqueue,
     CmdInterrupt,
+    CmdSetSystemPrompt,
     CmdStop,
     CmdSwitchModel,
+    DEFAULT_SYSTEM_PROMPT,
     PluginConfigs,
     QueueKind,
     UiAgentInterrupt,
@@ -64,6 +66,7 @@ class SchedulerThread(threading.Thread):
         ui_queue: "queue.Queue",
         cmd_queue: "queue.Queue",
         model_name: str,
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         selected_plugins: list[str] | None = None,
         plugin_configs: PluginConfigs | None = None,
     ):
@@ -71,6 +74,7 @@ class SchedulerThread(threading.Thread):
         self.ui_queue = ui_queue
         self.cmd_queue = cmd_queue
         self.model_name = model_name
+        self.system_prompt = system_prompt
         self.loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
         self._scheduler: HawiScheduler | None = None
@@ -194,7 +198,7 @@ class SchedulerThread(threading.Thread):
         agent = HawiAgent(
             model=model,
             plugins=plugins,
-            system_prompt="You are a helpful AI assistant.",
+            system_prompt=self.system_prompt,
             max_iterations=None,
             streaming=True,
         )
@@ -256,6 +260,14 @@ class SchedulerThread(threading.Thread):
         self.model_name = model_name
         self._selected_plugins = list(selected_plugins)
         self._plugin_configs = {name: dict(cfg) for name, cfg in plugin_configs.items()}
+        if self._scheduler is not None and self._scheduler.agent.context.system_prompt:
+            text_parts = [
+                str(part.get("text", ""))
+                for part in self._scheduler.agent.context.system_prompt
+                if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            if text_parts:
+                self.system_prompt = "\n".join(text_parts)
 
         if emit_ready:
             self._send_ui(
@@ -323,6 +335,11 @@ class SchedulerThread(threading.Thread):
             elif isinstance(cmd, CmdClearContext):
                 if self._scheduler:
                     self._scheduler.agent.context.clear()
+
+            elif isinstance(cmd, CmdSetSystemPrompt):
+                self.system_prompt = cmd.system_prompt
+                if self._scheduler:
+                    self._scheduler.agent.context.set_system_prompt(cmd.system_prompt)
 
             elif isinstance(cmd, CmdClearQueue):
                 if self._scheduler:

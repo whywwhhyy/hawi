@@ -291,6 +291,44 @@ class TestHawiSchedulerBasic:
             merge_mode=SteerPartMergeMode.USER_MESSAGE_TEMPLATE,
         )
 
+    def test_scheduler_resolves_new_steer_merge_mode_from_string(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        scheduler._executor._state = SchedulerState.RUNNING
+        mock_agent.has_active_tool_calls = True
+
+        msg_id = scheduler.enqueue(
+            "new steer",
+            "high_prio",
+            metadata={
+                "steer_merge_mode": (
+                    "tool_result_assistant_template_and_user_message"
+                ),
+            },
+        )
+
+        assert msg_id == "steer-1234"
+        mock_agent.steer.assert_called_once_with(
+            "new steer",
+            merge_mode=(
+                SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
+            ),
+        )
+
+    def test_scheduler_defaults_steer_merge_mode_to_assistant_template(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        scheduler._executor._state = SchedulerState.RUNNING
+        mock_agent.has_active_tool_calls = True
+
+        msg_id = scheduler.enqueue("new steer", "high_prio")
+
+        assert msg_id == "steer-1234"
+        mock_agent.steer.assert_called_once_with(
+            "new steer",
+            merge_mode=(
+                SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
+            ),
+        )
+
     def test_scheduler_enqueue_urgent(self, mock_agent):
         scheduler = HawiScheduler(mock_agent)
         msg_id = scheduler.enqueue("test message", "urgent")

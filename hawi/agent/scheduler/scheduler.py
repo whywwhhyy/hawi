@@ -346,7 +346,7 @@ class HawiScheduler:
     ) -> SteerPartMergeMode:
         """Resolve the steer merge mode from queue metadata."""
         if metadata is None:
-            return SteerPartMergeMode.APPEND_TO_TOOL_RESULT
+            return SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
 
         raw_mode = metadata.get("steer_merge_mode")
         if isinstance(raw_mode, SteerPartMergeMode):
@@ -355,8 +355,8 @@ class HawiScheduler:
             try:
                 return SteerPartMergeMode(raw_mode)
             except ValueError:
-                logger.warning("Unknown steer merge mode '%s', falling back to append.", raw_mode)
-        return SteerPartMergeMode.APPEND_TO_TOOL_RESULT
+                logger.warning("Unknown steer merge mode '%s', falling back to default.", raw_mode)
+        return SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
 
     def _build_content_preview(self, content: str | list[ContentPart]) -> str:
         """Build a short content preview without creating a queued message."""

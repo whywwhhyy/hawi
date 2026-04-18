@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 QueueKind = Literal["normal", "high_prio", "urgent"]
 PluginConfigs = dict[str, dict[str, Any]]
+DEFAULT_SYSTEM_PROMPT = "你是Hawi，一个通用agent"
 
 # ─── UI → Scheduler ──────────────────────────────────────────────────────────
 
@@ -58,6 +59,12 @@ class CmdApplyPlugins:
     """
     selected_plugins: list[str]
     plugin_configs: PluginConfigs
+
+
+@dataclass
+class CmdSetSystemPrompt:
+    """Update the agent system prompt for subsequent runs."""
+    system_prompt: str
 
 
 # ─── Scheduler → UI ──────────────────────────────────────────────────────────

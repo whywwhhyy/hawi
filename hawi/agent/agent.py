@@ -107,27 +107,22 @@ class _ExecutionState:
 
 
 class SteerPartMergeMode(str, Enum):
-    """How steer content should be merged with the next tool result."""
+    """Preferred steer lowering strategy for the related model."""
 
     APPEND_TO_TOOL_RESULT = "append_to_tool_result"
     USER_MESSAGE_TEMPLATE = "user_message_template"
-
+    TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE = (
+        "tool_result_assistant_template_and_user_message"
+    )
 
 @dataclass
-class PendingSteer:
-    """Queued steer content to be applied to the next tool result."""
+class PendingInput:
+    """Queued user input awaiting materialization into context messages."""
 
     id: str
     content: list[ContentPart]
-    merge_mode: SteerPartMergeMode
-
-
-@dataclass
-class PendingTurn:
-    """Queued user message that should drive the next agent turn."""
-
-    id: str
-    content: list[ContentPart]
+    candidate_tool_call_ids: tuple[str, ...]
+    preferred_merge_mode: SteerPartMergeMode | None = None
 
 
 class HawiAgent:
@@ -233,8 +228,7 @@ class HawiAgent:
         self._current_tool_calls: list[ToolCallPart] = []
         self._interrupted_tool_call_ids: list[str] = []
         self._steer_lock = threading.RLock()
-        self._pending_steers: list[PendingSteer] = []
-        self._pending_turns: list[PendingTurn] = []
+        self._pending_inputs: list[PendingInput] = []
         self._session_lock = threading.RLock()
         self._session_active = False
         self._autonomous_run_task: asyncio.Task[AgentRunResult] | None = None
@@ -375,8 +369,7 @@ class HawiAgent:
         self._interrupted_tool_call_ids.clear()
         self._current_tool_calls.clear()
         with self._steer_lock:
-            self._pending_steers.clear()
-            self._pending_turns.clear()
+            self._pending_inputs.clear()
 
     def _check_interrupt(self) -> bool:
         """Check if an interrupt has been requested.
@@ -395,13 +388,16 @@ class HawiAgent:
         self,
         content: str | list[ContentPart],
         *,
-        merge_mode: SteerPartMergeMode = SteerPartMergeMode.APPEND_TO_TOOL_RESULT,
+        merge_mode: SteerPartMergeMode = (
+            SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
+        ),
     ) -> str:
-        """Queue steer content to be merged into the next tool result.
+        """Queue steer content for later materialization.
 
         Args:
-            content: Steering message to merge with the next tool result.
-            merge_mode: Strategy for combining steer content with the tool result.
+            content: Steering message content.
+            merge_mode: Preferred lowering strategy when this input is consumed
+                during a tool-result path.
 
         Returns:
             A steer identifier for tracing/debugging.
@@ -410,23 +406,23 @@ class HawiAgent:
         steer_id = str(uuid.uuid4())[:8]
         should_start_new_loop = False
         with self._steer_lock:
+            candidate_tool_call_ids = tuple(
+                tc.get("id", "")
+                for tc in self._current_tool_calls
+                if tc.get("id")
+            )
+            self._pending_inputs.append(
+                PendingInput(
+                    id=steer_id,
+                    content=steer_content,
+                    candidate_tool_call_ids=candidate_tool_call_ids,
+                    preferred_merge_mode=merge_mode,
+                )
+            )
             if self.has_active_tool_calls:
-                self._pending_steers.append(
-                    PendingSteer(
-                        id=steer_id,
-                        content=steer_content,
-                        merge_mode=merge_mode,
-                    )
-                )
-            else:
-                self._pending_turns.append(
-                    PendingTurn(
-                        id=steer_id,
-                        content=steer_content,
-                    )
-                )
-                with self._session_lock:
-                    should_start_new_loop = not self._session_active
+                return steer_id
+            with self._session_lock:
+                should_start_new_loop = not self._session_active
 
         if should_start_new_loop:
             self._ensure_pending_turn_loop()
@@ -450,6 +446,10 @@ class HawiAgent:
                 chunks.append(part.get("text", ""))
             elif part_type == "reasoning":
                 chunks.append(part.get("reasoning") or "")
+            elif part_type == "steer":
+                nested_text = self._serialize_content_parts(list(part.get("content", [])))
+                if nested_text:
+                    chunks.append(nested_text)
             elif part_type == "tool_result":
                 nested_content = part.get("content", [])
                 if isinstance(nested_content, str):
@@ -462,20 +462,20 @@ class HawiAgent:
                 chunks.append(str(part))
         return "\n".join(chunk for chunk in chunks if chunk.strip())
 
-    async def _drain_pending_turns_to_context(
+    async def _drain_pending_inputs_to_context(
         self,
         run_id: str,
         event_bus: EventBus | None,
     ) -> bool:
-        """Move queued pending turns into the conversation context."""
+        """Move queued pending inputs into the conversation as plain user messages."""
         with self._steer_lock:
-            pending_turns = self._pending_turns[:]
-            self._pending_turns.clear()
+            pending_inputs = self._pending_inputs[:]
+            self._pending_inputs.clear()
 
-        if not pending_turns:
+        if not pending_inputs:
             return False
 
-        for pending in pending_turns:
+        for pending in pending_inputs:
             self._context.add_user_message(pending.content)
             await self._emit_event(
                 AgentMessageAddedEvent.create(
@@ -521,40 +521,35 @@ class HawiAgent:
         *,
         is_error: bool = False,
     ) -> None:
-        """Add a tool result and consume one pending steer instruction if present."""
+        """Add a tool result and materialize one matching pending input as steer."""
         tool_result_content = self._normalize_content_parts(content)
+        self._context.add_tool_result(
+            tool_call_id=tool_call_id,
+            content=tool_result_content,
+            is_error=is_error,
+        )
 
         with self._steer_lock:
-            pending_steer = self._pending_steers.pop(0) if self._pending_steers else None
+            pending_input = None
+            for index, item in enumerate(self._pending_inputs):
+                if tool_call_id in item.candidate_tool_call_ids:
+                    pending_input = self._pending_inputs.pop(index)
+                    break
 
-            if pending_steer is None:
-                self._context.add_tool_result(
-                    tool_call_id=tool_call_id,
-                    content=tool_result_content,
-                    is_error=is_error,
-                )
-                return
+        if pending_input is None:
+            return
 
-            if pending_steer.merge_mode == SteerPartMergeMode.APPEND_TO_TOOL_RESULT:
-                merged_content = tool_result_content + list(pending_steer.content)
-                self._context.add_tool_result(
-                    tool_call_id=tool_call_id,
-                    content=merged_content,
-                    is_error=is_error,
-                )
-                return
-
-            steer_text = self._serialize_content_parts(pending_steer.content)
-            tool_result_text = self._serialize_content_parts(tool_result_content)
-            sections = [
-                f"[system] 用户发送了新的消息：{steer_text}",
-                "[tool result] 另外，工具返回结果为：",
-                tool_result_text,
-            ]
-            if is_error:
-                sections.insert(2, "[tool result status] 该工具结果为错误结果。")
-            combined_text = "\n".join(section for section in sections if section)
-            self._context.add_user_message([{"type": "text", "text": combined_text}])
+        steer_part: ContentPart = {
+            "type": "steer",
+            "content": list(pending_input.content),
+            "tool_call_id": tool_call_id,
+            "preferred_merge_mode": (
+                pending_input.preferred_merge_mode.value
+                if pending_input.preferred_merge_mode is not None
+                else None
+            ),
+        }
+        self._context.add_user_message([steer_part])
 
     async def _invoke_session_hook(self, hook_type: str, ctx: HookContext) -> HookResult | None:
         """Invoke before/after_session and before/after_conversation hooks: (agent, ctx)."""
@@ -801,7 +796,7 @@ class HawiAgent:
 
         try:
             if message is None:
-                await self._drain_pending_turns_to_context(run_id, event_bus)
+                await self._drain_pending_inputs_to_context(run_id, event_bus)
 
             while not state.should_stop:
                 m = model  # reset per-iteration model (replace_model only affects one call)
@@ -1052,7 +1047,7 @@ class HawiAgent:
 
                 # Check if tool calls need to be executed
                 if not tool_calls:
-                    if await self._drain_pending_turns_to_context(run_id, event_bus):
+                    if await self._drain_pending_inputs_to_context(run_id, event_bus):
                         continue
                     # No tool calls, we're done
                     duration_ms = (time.time() - start_time) * 1000

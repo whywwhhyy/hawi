@@ -20,7 +20,7 @@ model_configs: 模型特定配置
   provider_name/model_id: 配置项
     field1: value1
     field2: value2
-    ...
+    steer_merge_mode: tool_result_assistant_template_and_user_message
 """
 
 from __future__ import annotations
@@ -44,6 +44,8 @@ __all__ = [
     "load_config",
     "list_models",
     "list_providers",
+    "ModelConfig",
+    "ModelOverrideConfig",
     "CircularDependencyError",
     "UnknownModelError",
     "UnknownTemplateError",
@@ -81,10 +83,12 @@ class ModelOverrideConfig(BaseModel):
     provider: str
     model_id: str
     properties: dict[str,Any]
+    steer_merge_mode: str | None = None
 
 class ModelConfig(BaseModel):
     adapter: str
     properties: dict[str, Any]
+    steer_merge_mode: str | None = None
 
 class ModelRegistry:
     """Model Registry 单例类
@@ -293,11 +297,29 @@ class ModelRegistry:
         if name in self._model_config_overrides and not quiet:
             print(f"[ModelRegistry] Model '{name}' overridden")
 
+        normalized_properties, steer_merge_mode = self._normalize_model_override(properties)
+
         self._model_config_overrides[name] = ModelOverrideConfig(
             provider=provider,
             model_id=model_id,
-            properties=properties,
+            properties=normalized_properties,
+            steer_merge_mode=steer_merge_mode,
         )
+
+    def _normalize_model_override(
+        self,
+        override: dict[str, Any],
+    ) -> tuple[dict[str, Any], str | None]:
+        """Split a model override into provider params and steer config."""
+        if "properties" not in override and "steer_merge_mode" not in override:
+            return dict(override), None
+
+        properties = dict(override.get("properties") or {})
+        steer_merge_mode = override.get("steer_merge_mode")
+        for key, value in override.items():
+            if key not in {"properties", "steer_merge_mode"}:
+                properties[key] = value
+        return properties, steer_merge_mode
 
     def unregister_model_config_override(self, name: str) -> bool:
         """注销 Model"""
@@ -346,10 +368,17 @@ class ModelRegistry:
         else:
             return None
     
+        steer_merge_mode = None
         if name in self._model_config_overrides:
-            properties.update(self._model_config_overrides[name].properties)
-        
-        return ModelConfig(adapter=adapter, properties=properties)
+            override = self._model_config_overrides[name]
+            properties.update(override.properties)
+            steer_merge_mode = override.steer_merge_mode
+
+        return ModelConfig(
+            adapter=adapter,
+            properties=properties,
+            steer_merge_mode=steer_merge_mode,
+        )
 
     # ========================================================================
     # 模型创建
@@ -385,11 +414,16 @@ class ModelRegistry:
         provider_name, model_id = name.split('/', 1)
         
         # Apply overrides (model_id from config name takes precedence)
+        override_steer_merge_mode = overrides.pop("steer_merge_mode", None)
         properties = dict(model_config.properties)
         properties['model_id'] = model_id
         properties.update(overrides)
         
-        return adapter_class(**properties)
+        model = adapter_class(**properties)
+        model.configure_steer_merge_mode(
+            override_steer_merge_mode or model_config.steer_merge_mode
+        )
+        return model
     # ========================================================================
     # 配置加载
     # ========================================================================
@@ -478,6 +512,7 @@ class ModelRegistry:
         model_configs:
           provider_name/model_id:
             key: value
+            steer_merge_mode: tool_result_assistant_template_and_user_message
         """
         try:
             import yaml

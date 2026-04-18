@@ -36,6 +36,7 @@ ContentPartType = Literal[
     "audio",
     "video",
     "file",
+    "steer",
     "tool_call",
     "tool_result",
     "reasoning",
@@ -43,6 +44,12 @@ ContentPartType = Literal[
     "refusal",
     "guard_content",
     "citation",
+]
+
+SteerMergeMode = Literal[
+    "append_to_tool_result",
+    "user_message_template",
+    "tool_result_assistant_template_and_user_message",
 ]
 
 
@@ -109,6 +116,19 @@ class ToolResultPart(TypedDict):
     tool_call_id: str  # 对应 ToolCallPart.id
     content: str | list["ContentPart"]  # 结果内容（支持多模态）
     is_error: bool | None  # 是否错误（Anthropic 支持）
+
+
+class SteerPart(TypedDict, total=False):
+    """Steering 内容。
+
+    Hawi 内部消息 IR，用于表示工具执行期间插入的用户转向消息。
+    在发送给具体模型前，需要被 lowering 为普通消息序列。
+    """
+
+    type: Required[Literal["steer"]]
+    content: list["ContentPart"]
+    tool_call_id: str | None
+    preferred_merge_mode: SteerMergeMode | None
 
 
 class ReasoningPart(TypedDict, total=False):
@@ -332,7 +352,7 @@ class CitationPart(TypedDict):
 # ContentPart 联合类型
 ContentPart: TypeAlias = (
     TextPart | ImagePart | DocumentPart | AudioPart | VideoPart | FilePart |
-    ToolCallPart | ToolResultPart | ReasoningPart | CacheControlPart | 
+    SteerPart | ToolCallPart | ToolResultPart | ReasoningPart | CacheControlPart |
     RefusalPart | GuardContentPart | CitationPart
 )
 
@@ -551,6 +571,17 @@ def downgrade_audio_content(content: Sequence[ContentPart]) -> list[ContentPart]
         if part["type"] == "audio":
             # 将音频降级为文本
             result.append(convert_audio_part_to_text(part))
+        elif part["type"] == "steer":
+            steer_part = cast(SteerPart, part)
+            new_part: SteerPart = {
+                "type": "steer",
+                "content": downgrade_audio_content(steer_part.get("content", [])),
+            }
+            if "tool_call_id" in steer_part:
+                new_part["tool_call_id"] = steer_part.get("tool_call_id")
+            if "preferred_merge_mode" in steer_part:
+                new_part["preferred_merge_mode"] = steer_part.get("preferred_merge_mode")
+            result.append(new_part)
         elif part["type"] == "tool_result":
             # 递归处理 tool_result 中的内容
             tool_part = cast(ToolResultPart, part)
@@ -662,4 +693,3 @@ class MessageResponse(BaseModel):
     stop_reason: str | None = None
     usage: TokenUsage | None = None
     reasoning_content: str | None = None  # DeepSeek/Kimi 思考内容
-

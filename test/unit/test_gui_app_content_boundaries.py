@@ -9,7 +9,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from hawi_gui.app import HawiGuiApp
-from hawi_gui.protocol import UiRunStart, UiTextDelta, UiToolCallStart, UiToolCallStop, UiToolResult
+from hawi_gui.protocol import (
+    CmdSetSystemPrompt,
+    DEFAULT_SYSTEM_PROMPT,
+    UiRunStart,
+    UiTextDelta,
+    UiToolCallStart,
+    UiToolCallStop,
+    UiToolResult,
+)
 
 
 _APP = QApplication.instance() or QApplication([])
@@ -69,5 +77,42 @@ def test_tool_before_text_does_not_create_empty_agent_placeholder() -> None:
 
         assert [node.kind for node in gui._chat_nodes] == ["user", "tool", "agent"]
         assert "最终回答" in gui._chat_nodes[2].html
+    finally:
+        gui.close()
+
+
+def test_chat_style_uses_compact_qt_list_indent() -> None:
+    gui = HawiGuiApp("dummy/model")
+
+    try:
+        style = gui._chat_style_block()
+        assert ".md-content ul," in style
+        assert ".md-content ol {" in style
+        assert "margin: 0 0 8px 0;" in style
+        assert "-qt-list-indent: 1;" in style
+    finally:
+        gui.close()
+
+
+def test_system_prompt_box_uses_default_text() -> None:
+    gui = HawiGuiApp("dummy/model")
+
+    try:
+        assert gui._system_prompt_box.toPlainText() == DEFAULT_SYSTEM_PROMPT
+    finally:
+        gui.close()
+
+
+def test_apply_system_prompt_enqueues_update_command() -> None:
+    gui = HawiGuiApp("dummy/model")
+
+    try:
+        gui._system_prompt_box.setPlainText("新的 system prompt")
+        gui._apply_system_prompt()
+
+        cmd = gui.cmd_queue.get_nowait()
+        assert isinstance(cmd, CmdSetSystemPrompt)
+        assert cmd.system_prompt == "新的 system prompt"
+        assert gui._system_prompt_text == "新的 system prompt"
     finally:
         gui.close()

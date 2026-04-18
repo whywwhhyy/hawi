@@ -464,6 +464,18 @@ class AgentContext:
                 lines.append(f"```\n{content_str}\n```")
             else:
                 lines.append(f"```\n{content}\n```")
+        elif part_type == "steer":
+            tool_call_id = part.get("tool_call_id")
+            if tool_call_id:
+                lines.append(f"**Steer** (tool_call_id: `{tool_call_id}`):")
+            else:
+                lines.append("**Steer**:")
+            steer_lines: list[str] = []
+            for sub_part in part.get("content", []):
+                steer_lines.extend(self._format_content_part(sub_part))
+            if steer_lines:
+                steer_text = "\n".join(steer_lines)
+                lines.append(f"```\n{steer_text}\n```")
         elif part_type == "reasoning":
             reasoning = part.get("reasoning", "")
             if reasoning:

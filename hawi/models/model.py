@@ -7,9 +7,10 @@ Hawi Agent Model 基类
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Iterator, List, Literal, overload
+from typing import Any, AsyncGenerator, Iterator, List, Literal, cast, overload
 
 from hawi.models.message import (
     ContentPart,
@@ -17,14 +18,22 @@ from hawi.models.message import (
     MessageRequest,
     MessageResponse,
     DeltaPart,
+    SteerMergeMode,
+    SteerPart,
     TextPart,
     ToolCallPart,
     ToolDefinition,
     ToolChoice,
+    ToolResultPart,
 )
 from hawi.errors import ModelError
 
 __all__ = ["Model", "DelegateModel", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
+
+STEER_ASSISTANT_ACK_TEXT = (
+    "The user is sending a new steering message, I'll reply to it and "
+    "continue the ongoing task with it"
+)
 
 # 类型别名：提供商特定的请求/响应格式
 # 这些类型是 Any 因为不同 LLM 提供商的 API 格式差异很大
@@ -105,6 +114,7 @@ class Model(ABC):
         # _async_only=True 表示此模型仅用于异步调用（从对象池获取的共享实例）
         # 此时同步调用 invoke/stream 会被阻止，以避免阻塞事件循环
         self._async_only: bool = False
+        self._configured_steer_merge_mode: SteerMergeMode | None = None
 
     def reset(self) -> None:
         """重置模型状态。
@@ -318,9 +328,10 @@ class Model(ABC):
 
         params = self._get_params()
         merged = {**params, **override_params}
+        lowered_messages = self.lower_messages(messages)
 
         return MessageRequest(
-            messages=messages,
+            messages=lowered_messages,
             system=system,
             tools=tools,
             tool_choice=tool_choice,
@@ -340,7 +351,242 @@ class Model(ABC):
 
     def prepare_request(self, request: MessageRequest) -> ProviderRequest:
         """将通用请求转换为提供商特定格式"""
+        lowered_messages = self.lower_messages(request.messages)
+        if lowered_messages != request.messages:
+            request = request.model_copy(update={"messages": lowered_messages})
         return self._prepare_request_impl(request)
+
+    def configure_steer_merge_mode(self, merge_mode: str | None) -> None:
+        """Attach configured steer merge mode to this model instance."""
+        if merge_mode in {
+            "append_to_tool_result",
+            "user_message_template",
+            "tool_result_assistant_template_and_user_message",
+        }:
+            self._configured_steer_merge_mode = cast(SteerMergeMode, merge_mode)
+        else:
+            self._configured_steer_merge_mode = None
+
+    def get_default_steer_merge_mode(self) -> SteerMergeMode:
+        """Get the default steer lowering strategy for this model."""
+        return "tool_result_assistant_template_and_user_message"
+
+    def get_configured_steer_merge_mode(self) -> SteerMergeMode | None:
+        """Get steer merge mode configured for this model instance."""
+        return getattr(self, "_configured_steer_merge_mode", None)
+
+    def lower_messages(self, messages: list[Message]) -> list[Message]:
+        """Lower Hawi IR messages into provider-ready messages."""
+        lowered: list[Message] = []
+        for message in messages:
+            steer_part = self._extract_steer_part(message)
+            if steer_part is None:
+                lowered.append(deepcopy(message))
+                continue
+            self._lower_steer_message(lowered, message, steer_part)
+        return lowered
+
+    def _extract_steer_part(self, message: Message) -> SteerPart | None:
+        """Extract the SteerPart from a message if it is a steer message."""
+        if message.get("role") != "user":
+            return None
+        content = message.get("content", [])
+        if len(content) != 1:
+            return None
+        part = content[0]
+        if isinstance(part, dict) and part.get("type") == "steer":
+            return cast(SteerPart, part)
+        return None
+
+    def _lower_steer_message(
+        self,
+        lowered: list[Message],
+        original_message: Message,
+        steer_part: SteerPart,
+    ) -> None:
+        """Lower one steer message according to the model's strategy."""
+        steer_content = deepcopy(steer_part.get("content", []))
+        plain_user_message = self._build_plain_user_message(
+            original_message,
+            steer_content,
+        )
+        tool_index = self._find_related_tool_message_index(
+            lowered,
+            steer_part.get("tool_call_id"),
+        )
+        if tool_index is None:
+            lowered.append(plain_user_message)
+            return
+
+        merge_mode = self._resolve_steer_merge_mode(steer_part)
+        if merge_mode == "append_to_tool_result":
+            lowered[tool_index] = self._append_steer_to_tool_message(
+                lowered[tool_index],
+                steer_part.get("tool_call_id"),
+                steer_content,
+            )
+            return
+
+        if merge_mode == "user_message_template":
+            tool_message = lowered.pop(tool_index)
+            combined_text = self._build_user_message_template_text(
+                tool_message,
+                steer_content,
+                steer_part.get("tool_call_id"),
+            )
+            lowered.append({
+                "role": "user",
+                "content": [{"type": "text", "text": combined_text}],
+                "name": original_message.get("name"),
+                "metadata": original_message.get("metadata"),
+            })
+            return
+
+        if merge_mode == "tool_result_assistant_template_and_user_message":
+            lowered.append({
+                "role": "assistant",
+                "content": [{"type": "text", "text": STEER_ASSISTANT_ACK_TEXT}],
+                "name": None,
+                "metadata": None,
+            })
+            lowered.append(plain_user_message)
+            return
+
+        lowered.append(plain_user_message)
+
+    def _resolve_steer_merge_mode(self, steer_part: SteerPart) -> SteerMergeMode:
+        """Resolve the effective steer merge mode for one steer message."""
+        preferred = steer_part.get("preferred_merge_mode")
+        if preferred in {
+            "append_to_tool_result",
+            "user_message_template",
+            "tool_result_assistant_template_and_user_message",
+        }:
+            return preferred
+        configured = self.get_configured_steer_merge_mode()
+        if configured is not None:
+            return configured
+        return self.get_default_steer_merge_mode()
+
+    def _build_plain_user_message(
+        self,
+        original_message: Message,
+        steer_content: list[ContentPart],
+    ) -> Message:
+        """Convert a steer message into a plain user message."""
+        return {
+            "role": "user",
+            "content": steer_content,
+            "name": original_message.get("name"),
+            "metadata": original_message.get("metadata"),
+        }
+
+    def _find_related_tool_message_index(
+        self,
+        messages: list[Message],
+        tool_call_id: str | None,
+    ) -> int | None:
+        """Find the most recent related tool message for the steer message."""
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.get("role") != "tool":
+                continue
+            tool_part = self._extract_tool_result_part(message, tool_call_id)
+            if tool_part is not None:
+                return index
+        return None
+
+    def _extract_tool_result_part(
+        self,
+        message: Message,
+        tool_call_id: str | None,
+    ) -> ToolResultPart | None:
+        """Extract the related tool result part from a tool message."""
+        for part in message.get("content", []):
+            if not isinstance(part, dict) or part.get("type") != "tool_result":
+                continue
+            tool_part = cast(ToolResultPart, part)
+            if tool_call_id is None or tool_part.get("tool_call_id") == tool_call_id:
+                return tool_part
+        return None
+
+    def _append_steer_to_tool_message(
+        self,
+        message: Message,
+        tool_call_id: str | None,
+        steer_content: list[ContentPart],
+    ) -> Message:
+        """Append steer content to the related tool result message."""
+        updated_message = deepcopy(message)
+        for part in updated_message.get("content", []):
+            if not isinstance(part, dict) or part.get("type") != "tool_result":
+                continue
+            tool_part = cast(ToolResultPart, part)
+            if tool_call_id is not None and tool_part.get("tool_call_id") != tool_call_id:
+                continue
+            nested_content = tool_part.get("content", [])
+            if isinstance(nested_content, str):
+                new_content: list[ContentPart] = [{"type": "text", "text": nested_content}]
+            else:
+                new_content = list(nested_content)
+            tool_part["content"] = new_content + steer_content
+            break
+        return updated_message
+
+    def _build_user_message_template_text(
+        self,
+        tool_message: Message,
+        steer_content: list[ContentPart],
+        tool_call_id: str | None,
+    ) -> str:
+        """Build the legacy combined user-message template text."""
+        tool_part = self._extract_tool_result_part(tool_message, tool_call_id)
+        tool_result_text = ""
+        is_error = False
+        if tool_part is not None:
+            is_error = bool(tool_part.get("is_error"))
+            nested_content = tool_part.get("content", [])
+            if isinstance(nested_content, str):
+                tool_result_text = nested_content
+            else:
+                tool_result_text = self._serialize_content_parts(list(nested_content))
+
+        steer_text = self._serialize_content_parts(steer_content)
+        sections = [
+            f"[system] 用户发送了新的消息：{steer_text}",
+            "[tool result] 另外，工具返回结果为：",
+            tool_result_text,
+        ]
+        if is_error:
+            sections.insert(2, "[tool result status] 该工具结果为错误结果。")
+        return "\n".join(section for section in sections if section)
+
+    def _serialize_content_parts(self, content: list[ContentPart]) -> str:
+        """Serialize content parts into readable plain text."""
+        chunks: list[str] = []
+        for part in content:
+            part_type = part.get("type")
+            if part_type == "text":
+                chunks.append(part.get("text", ""))
+            elif part_type == "reasoning":
+                chunks.append(part.get("reasoning") or "")
+            elif part_type == "steer":
+                nested_text = self._serialize_content_parts(
+                    list(cast(SteerPart, part).get("content", []))
+                )
+                if nested_text:
+                    chunks.append(nested_text)
+            elif part_type == "tool_result":
+                nested_content = part.get("content", [])
+                if isinstance(nested_content, str):
+                    chunks.append(nested_content)
+                else:
+                    nested_text = self._serialize_content_parts(list(nested_content))
+                    if nested_text:
+                        chunks.append(nested_text)
+            else:
+                chunks.append(str(part))
+        return "\n".join(chunk for chunk in chunks if chunk.strip())
 
     def parse_response(self, response: ProviderResponse) -> MessageResponse:
         """将提供商响应转换为通用格式"""
