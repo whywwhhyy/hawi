@@ -201,6 +201,10 @@ button:disabled {
   font-size: 12px;
 }
 
+.bubble-head.collapsible-head {
+  cursor: pointer;
+}
+
 .bubble-head span {
   display: inline-flex;
   align-items: center;
@@ -224,6 +228,18 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-actions {
+  flex-shrink: 0;
+}
+
+.bubble.tool.collapsed .bubble-head {
+  border-bottom: 0;
+}
+
+.tool-toggle {
+  margin-left: 2px;
 }
 
 .thinking-toggle {

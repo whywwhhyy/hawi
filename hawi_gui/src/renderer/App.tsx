@@ -426,6 +426,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
   const [collapsed, setCollapsed] = useState(() => node.complete === true);
   const autoCollapsedRef = useRef(node.complete === true);
   const html = renderMarkdown(node.content);
+  const toggleCollapsed = () => setCollapsed((value) => !value);
 
   useEffect(() => {
     if (node.complete === true && !autoCollapsedRef.current) {
@@ -436,13 +437,16 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
 
   return (
     <article className={`bubble thinking ${collapsed ? "collapsed" : ""}`}>
-      <div className="bubble-head">
+      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
         <span><Brain size={15} /> Thinking</span>
         <button
           className="thinking-toggle"
           title={collapsed ? "展开思考内容" : "折叠思考内容"}
           aria-expanded={!collapsed}
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleCollapsed();
+          }}
         >
           {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
         </button>
@@ -456,30 +460,59 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
 
 const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   const tool = node.tool!;
+  const completed = tool.status !== "running";
+  const [collapsed, setCollapsed] = useState(() => completed);
+  const autoCollapsedRef = useRef(completed);
   const hasStructuredArguments = tool.arguments !== undefined;
+  const toggleCollapsed = () => setCollapsed((value) => !value);
+
+  useEffect(() => {
+    if (completed && !autoCollapsedRef.current) {
+      setCollapsed(true);
+      autoCollapsedRef.current = true;
+    }
+  }, [completed]);
+
   return (
-    <article className={`bubble tool ${tool.status}`}>
-      <div className="bubble-head">
+    <article className={`bubble tool ${tool.status} ${collapsed ? "collapsed" : ""}`}>
+      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
         <span className="tool-title">
           <span className="tool-name"><Wrench size={15} /> {tool.name}</span>
           {tool.description && <span className="tool-description">{tool.description}</span>}
         </span>
-        <strong>{tool.status}</strong>
+        <span className="tool-actions">
+          <strong>{tool.status}</strong>
+          <button
+            className="thinking-toggle tool-toggle"
+            title={collapsed ? "展开工具调用" : "折叠工具调用"}
+            aria-expanded={!collapsed}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCollapsed();
+            }}
+          >
+            {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        </span>
       </div>
-      <details open>
-        <summary>
-          Arguments
-          {tool.argsState !== "complete" && <span className="detail-state">receiving</span>}
-        </summary>
-        {hasStructuredArguments
-          ? <ToolArguments value={tool.arguments} />
-          : <div className="tool-hint">{tool.argsState === "complete" ? "No arguments." : "Receiving arguments..."}</div>}
-      </details>
-      {(tool.resultPreview || tool.status === "fail") && (
-        <details open>
-          <summary>Result {tool.durationMs ? `· ${tool.durationMs.toFixed(0)}ms` : ""}</summary>
-          <pre>{tool.resultPreview || "Tool failed without an error message."}</pre>
-        </details>
+      {!collapsed && (
+        <>
+          <details open>
+            <summary>
+              Arguments
+              {tool.argsState !== "complete" && <span className="detail-state">receiving</span>}
+            </summary>
+            {hasStructuredArguments
+              ? <ToolArguments value={tool.arguments} />
+              : <div className="tool-hint">{tool.argsState === "complete" ? "No arguments." : "Receiving arguments..."}</div>}
+          </details>
+          {(tool.resultPreview || tool.status === "fail") && (
+            <details open>
+              <summary>Result {tool.durationMs ? `· ${tool.durationMs.toFixed(0)}ms` : ""}</summary>
+              <pre>{tool.resultPreview || "Tool failed without an error message."}</pre>
+            </details>
+          )}
+        </>
       )}
     </article>
   );
