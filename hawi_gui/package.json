@@ -1,5 +1,5 @@
 {
-  "name": "hawi-node-gui",
+  "name": "hawi-gui",
   "version": "0.1.0",
   "private": true,
   "description": "Electron GUI for Hawi core-cli",

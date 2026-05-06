@@ -211,22 +211,16 @@ PlainPrinter           # 纯文本逐行输出
 
 ### GUI 模块
 
-```python
-# 主应用
-HawiGuiApp             # GUI 主应用类
-python -m hawi_gui     # 命令行启动
+```bash
+# 命令行启动
+./hawi_gui/start.sh
+```
 
-# 核心组件
-ChatView               # 聊天视图（流式输出、工具调用显示）
-InputArea              # 输入区域（优先级切换、发送）
-StatusBarFrame         # 状态栏（调度器/Agent状态、队列长度）
-ModelSelectionDialog   # 模型选择对话框
-
-# 通信协议
-SchedulerThread        # 调度器桥接线程
-CmdEnqueue             # 消息入队命令
-UiTextDelta            # 流式文本更新
-UiToolCall/UiToolResult # 工具调用/结果展示
+```text
+hawi_gui/src/main      # Electron 主进程，启动 hawi-core
+hawi_gui/src/preload   # IPC preload bridge
+hawi_gui/src/renderer  # React 聊天界面
+hawi_gui/src/shared    # GUI/Core 协议类型
 ```
 
 ## 扩展点

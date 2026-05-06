@@ -6,7 +6,7 @@ import path from "node:path";
 import { parseNdjsonChunk, type CoreCommandType, type CoreFrame, type GuiMetadata, type InspectPayload, type PersistedConfig } from "../shared/protocol";
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const nodeGuiRoot = path.join(repoRoot, "hawi_node_gui");
+const guiRoot = path.join(repoRoot, "hawi_gui");
 const configPath = path.join(repoRoot, ".hawi", "node_gui.json");
 const backendLogPath = path.join(repoRoot, ".hawi", "hawi-core.log");
 const uvCommand = process.platform === "win32" ? "uv.cmd" : "uv";
@@ -25,7 +25,7 @@ function createWindow(): void {
     title: "Hawi",
     backgroundColor: "#f7f8f8",
     webPreferences: {
-      preload: path.join(repoRoot, "hawi_node_gui", "dist-electron", "preload", "preload.js"),
+      preload: path.join(guiRoot, "dist-electron", "preload", "preload.js"),
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -35,7 +35,7 @@ function createWindow(): void {
     mainWindow = null;
   });
 
-  mainWindow.loadFile(path.join(nodeGuiRoot, "dist", "index.html"));
+  mainWindow.loadFile(path.join(guiRoot, "dist", "index.html"));
 }
 
 app.whenReady().then(() => {
@@ -123,7 +123,7 @@ class CoreProcess {
     }
     this.stop();
     mkdirSync(path.dirname(backendLogPath), { recursive: true });
-    const pluginConfigPath = path.join(tmpdir(), `hawi-node-gui-plugins-${process.pid}.json`);
+    const pluginConfigPath = path.join(tmpdir(), `hawi-gui-plugins-${process.pid}.json`);
     writeFileSync(pluginConfigPath, JSON.stringify(nextConfig.pluginConfigs, null, 2), "utf-8");
 
     const args = [

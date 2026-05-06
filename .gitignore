@@ -216,11 +216,11 @@ apikey.yaml
 
 # Node / Electron GUI
 node_modules/
-hawi_node_gui/node_modules/
-hawi_node_gui/dist/
-hawi_node_gui/dist-electron/
-hawi_node_gui/coverage/
-hawi_node_gui/.vite/
+hawi_gui/node_modules/
+hawi_gui/dist/
+hawi_gui/dist-electron/
+hawi_gui/coverage/
+hawi_gui/.vite/
 
 # Agents
 .claude/

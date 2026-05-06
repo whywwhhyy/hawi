@@ -7,6 +7,7 @@ import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./
 import { createInitialState, reduceCoreEvent, type ChatNode } from "./state";
 
 const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true });
+const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 
 const queueLabels: Record<QueueKind, string> = {
   normal: "普通",
@@ -51,8 +52,10 @@ export default function App() {
 
   useEffect(() => {
     const element = chatRef.current;
-    if (!element || !followTailRef.current || selectingChatRef.current || hasChatSelection()) return;
+    if (!element || selectingChatRef.current || hasChatSelection()) return;
+    if (!followTailRef.current && !isNearChatBottom(element)) return;
     element.scrollTo({ top: element.scrollHeight });
+    followTailRef.current = true;
   }, [state.nodes]);
 
   useEffect(() => {
@@ -75,7 +78,7 @@ export default function App() {
   function updateFollowTail() {
     const element = chatRef.current;
     if (!element) return;
-    followTailRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+    followTailRef.current = isNearChatBottom(element);
   }
 
   function hasChatSelection() {
@@ -626,10 +629,16 @@ function isConversationNode(node: ChatNode): boolean {
     || node.kind === "divider";
 }
 
-function thinkingExcerpt(value: string, maxChars = 120): string {
+export function thinkingExcerpt(value: string, maxChars = 120): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return "";
-  return `${Array.from(normalized).slice(0, maxChars).join("")}...`;
+  const chars = Array.from(normalized);
+  if (chars.length <= maxChars) return normalized;
+  return `${chars.slice(0, maxChars).join("")}...`;
+}
+
+export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight < AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
 function escapeText(value: string): string {

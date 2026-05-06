@@ -197,19 +197,16 @@ if __name__ == "__main__":
 
 ## 使用图形界面
 
-Hawi 提供了基于 tkinter 的图形界面，支持流式对话、工具调用可视化、优先级队列和模型切换。
+Hawi 提供了基于 Electron 的图形界面，支持流式对话、工具调用可视化、优先级队列和模型切换。
 
 ### 启动 GUI
 
 ```bash
-# 直接启动（会弹出模型选择对话框）
-python -m hawi_gui
+# 一键启动（首次会自动安装 GUI 依赖，并弹出模型选择对话框）
+./hawi_gui/start.sh
 
 # 指定模型工厂启动
-python -m hawi_gui kimi-k2-5
-
-# 或使用 uv
-uv run python -m hawi_gui
+./hawi_gui/start.sh kimi-k2-5
 ```
 
 ### GUI 功能

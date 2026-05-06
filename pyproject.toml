@@ -45,7 +45,6 @@ filterwarnings = [
 ]
 
 [project.scripts]
-hawi_gui = "hawi_gui.__main__:main"
 hawi-core = "hawi_core_cli.__main__:main"
 
 [build-system]
