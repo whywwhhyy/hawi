@@ -451,9 +451,14 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
           {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
         </button>
       </div>
-      {collapsed
-        ? <div className="thinking-summary">{thinkingExcerpt(node.content)}</div>
-        : <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />}
+      <div className={`collapsible-body thinking-body ${collapsed ? "is-collapsed" : ""}`} aria-hidden={collapsed}>
+        <div className="collapsible-body-inner">
+          <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+        </div>
+      </div>
+      <div className={`thinking-summary ${collapsed ? "is-visible" : ""}`} aria-hidden={!collapsed}>
+        {thinkingExcerpt(node.content)}
+      </div>
     </article>
   );
 });
@@ -495,8 +500,8 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           </button>
         </span>
       </div>
-      {!collapsed && (
-        <>
+      <div className={`collapsible-body tool-body ${collapsed ? "is-collapsed" : ""}`} aria-hidden={collapsed}>
+        <div className="collapsible-body-inner">
           <details open>
             <summary>
               Arguments
@@ -512,8 +517,8 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
               <pre>{tool.resultPreview || "Tool failed without an error message."}</pre>
             </details>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </article>
   );
 });

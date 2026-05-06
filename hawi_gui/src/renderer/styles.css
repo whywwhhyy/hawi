@@ -154,6 +154,7 @@ button:disabled {
   border-radius: 8px;
   background: #fbfcfc;
   user-select: text;
+  transition: background-color 180ms ease, border-color 180ms ease;
 }
 
 .bubble.user {
@@ -199,6 +200,7 @@ button:disabled {
   border-bottom: 1px solid #e1e5e6;
   color: #3a474d;
   font-size: 12px;
+  transition: border-bottom-color 160ms ease;
 }
 
 .bubble-head.collapsible-head {
@@ -235,7 +237,7 @@ button:disabled {
 }
 
 .bubble.tool.collapsed .bubble-head {
-  border-bottom: 0;
+  border-bottom-color: transparent;
 }
 
 .tool-toggle {
@@ -260,19 +262,84 @@ button:disabled {
   background: rgba(255, 255, 255, 0.68);
 }
 
+.collapsible-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    grid-template-rows 190ms ease,
+    opacity 140ms ease,
+    transform 190ms ease,
+    visibility 0s linear 0s;
+}
+
+.collapsible-body.is-collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+  visibility: hidden;
+  transition:
+    grid-template-rows 190ms ease,
+    opacity 120ms ease,
+    transform 190ms ease,
+    visibility 0s linear 190ms;
+}
+
+.collapsible-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .thinking-summary {
-  padding: 9px 12px 10px;
+  max-height: 0;
+  padding: 0 12px;
   color: #7b858a;
   font-size: 12px;
   line-height: 1.45;
   user-select: text;
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-4px);
+  overflow: hidden;
   overflow-wrap: anywhere;
+  transition:
+    max-height 190ms ease,
+    padding 190ms ease,
+    opacity 140ms ease,
+    transform 190ms ease,
+    visibility 0s linear 190ms;
+}
+
+.thinking-summary.is-visible {
+  max-height: 140px;
+  padding: 9px 12px 10px;
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    max-height 190ms ease,
+    padding 190ms ease,
+    opacity 140ms ease,
+    transform 190ms ease,
+    visibility 0s linear 0s;
 }
 
 .markdown {
   padding: 10px 12px;
   line-height: 1.48;
   user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble,
+  .bubble-head,
+  .collapsible-body,
+  .collapsible-body.is-collapsed,
+  .thinking-summary,
+  .thinking-summary.is-visible {
+    transition: none;
+  }
 }
 
 .markdown p {
