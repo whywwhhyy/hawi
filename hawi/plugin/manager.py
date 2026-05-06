@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import copy
 import warnings
-from typing import TYPE_CHECKING, cast, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, cast, Callable, TypeVar
 
-from hawi.tool.types import AgentTool
+from hawi.tool.types import (
+    AgentTool,
+    ToolParameterInjection,
+    ToolParameterInjectionHandler,
+    ToolParameterInjectionPredicate,
+)
 from hawi.plugin.types import HookReturnType
 from hawi.models.message import ToolDefinition
 
@@ -81,6 +87,7 @@ class PluginManager:
         # Dynamic management (tools + hooks)
         self._dynamic = DynamicPlugin()
         self._masked_names: set[str] = set()
+        self._parameter_injections: list[ToolParameterInjection] = []
 
         # Caches
         self._tools_cache: list[AgentTool] | None = None
@@ -140,12 +147,148 @@ class PluginManager:
                 {
                     "type": "function",
                     "name": t.name,
-                    "description": t.description,
-                    "schema": t.parameters_schema,
+                    "description": self.get_tool_description(t),
+                    "schema": self.get_parameters_schema(t),
                 }
                 for t in tools
             ]
         return self._tool_defs_cache
+
+    def get_tool_description(self, tool: AgentTool) -> str:
+        """Return a tool description augmented with injected parameter docs."""
+        description = tool.description
+        injections = self.get_tool_parameter_injections(tool)
+        if not injections:
+            return description
+
+        lines = [
+            "",
+            "Injected framework parameters (Hawi consumes these before invoking the real tool):",
+        ]
+        for injection in injections:
+            schema = injection.schema
+            schema_type = schema.get("type")
+            type_label = str(schema_type) if schema_type else "any"
+            required = ", required" if injection.required else ""
+            parameter_description = schema.get("description")
+            if parameter_description:
+                lines.append(
+                    f"- {injection.name} ({type_label}{required}): {parameter_description}"
+                )
+            else:
+                lines.append(f"- {injection.name} ({type_label}{required})")
+        suffix = "\n".join(lines)
+        if not description.strip():
+            return suffix.lstrip()
+        return description.rstrip() + suffix
+
+    def get_parameters_schema(self, tool: AgentTool) -> dict[str, Any]:
+        """Return a tool schema augmented with registered injected parameters."""
+        schema = copy.deepcopy(tool.parameters_schema or {})
+        injections = self.get_tool_parameter_injections(tool)
+        if not injections:
+            return schema
+
+        if not schema:
+            schema = {"type": "object"}
+        if schema.get("type", "object") != "object":
+            raise ValueError(
+                f"Cannot inject parameters into non-object schema for tool '{tool.name}'"
+            )
+
+        properties = schema.setdefault("properties", {})
+        if not isinstance(properties, dict):
+            raise ValueError(
+                f"Tool '{tool.name}' parameters_schema.properties must be a dict"
+            )
+
+        required = schema.get("required")
+        if required is None:
+            required_list: list[str] = []
+        elif isinstance(required, list):
+            required_list = list(required)
+        else:
+            required_list = list(required)
+
+        for injection in injections:
+            if injection.name in properties:
+                raise ValueError(
+                    f"Injected tool parameter '{injection.name}' conflicts with "
+                    f"an existing parameter on tool '{tool.name}'"
+                )
+            properties[injection.name] = injection.schema_copy()
+            if injection.required and injection.name not in required_list:
+                required_list.append(injection.name)
+
+        if required_list:
+            schema["required"] = required_list
+        else:
+            schema.pop("required", None)
+        return schema
+
+    # --- Tool Parameter Injection ---
+    def add_tool_parameter_injection(
+        self,
+        injection: ToolParameterInjection | None = None,
+        *,
+        name: str | None = None,
+        schema: dict[str, Any] | None = None,
+        required: bool = False,
+        handler: ToolParameterInjectionHandler | None = None,
+        applies_to: ToolParameterInjectionPredicate | None = None,
+    ) -> ToolParameterInjection:
+        """Register a framework-level parameter for matching tool schemas.
+
+        The parameter is exposed to the model, then stripped before the actual
+        tool implementation is invoked.
+        """
+        if injection is None:
+            if name is None or schema is None:
+                raise ValueError(
+                    "Provide either a ToolParameterInjection or both name and schema"
+                )
+            injection = ToolParameterInjection(
+                name=name,
+                schema=schema,
+                required=required,
+                handler=handler,
+                applies_to=applies_to,
+            )
+
+        if any(existing.name == injection.name for existing in self._parameter_injections):
+            raise ValueError(
+                f"Injected tool parameter '{injection.name}' is already registered"
+            )
+
+        self._parameter_injections.append(injection)
+        self._invalidate_cache()
+        return injection
+
+    def remove_tool_parameter_injection(self, name: str) -> bool:
+        """Remove a registered injected parameter by name."""
+        original_count = len(self._parameter_injections)
+        self._parameter_injections = [
+            injection
+            for injection in self._parameter_injections
+            if injection.name != name
+        ]
+        removed = len(self._parameter_injections) != original_count
+        if removed:
+            self._invalidate_cache()
+        return removed
+
+    def get_tool_parameter_injections(
+        self,
+        tool: AgentTool | None = None,
+    ) -> list[ToolParameterInjection]:
+        """Return registered injected parameters, optionally filtered for a tool."""
+        if tool is None:
+            return list(self._parameter_injections)
+        return [
+            injection
+            for injection in self._parameter_injections
+            if injection.applies_to_tool(tool)
+        ]
 
     # --- Dynamic Tool Management ---
     def add_tool(self, tool: AgentTool) -> None:
@@ -255,5 +398,8 @@ class PluginManager:
 
         # 5. Copy mask state
         new_manager._masked_names = self._masked_names.copy()
+
+        # 6. Copy injected parameter definitions (immutable dataclasses)
+        new_manager._parameter_injections = self._parameter_injections.copy()
 
         return new_manager

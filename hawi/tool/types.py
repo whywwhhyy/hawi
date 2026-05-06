@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, TypeAlias, Union
+
+if TYPE_CHECKING:
+    from hawi.agent import HawiAgent
 
 # Type for tool output values - basic JSON-serializable types (including None)
 ToolOutput: TypeAlias = Union[bool, str, int, float, list, dict, None]
@@ -194,3 +198,69 @@ class AgentTool(ABC):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name='{self.name}')"
+
+
+@dataclass(frozen=True)
+class ToolParameterInjectionContext:
+    """Runtime context passed to injected tool-parameter handlers.
+
+    Injected parameters are visible to the model but are consumed by Hawi before
+    the underlying tool is invoked. Handlers can use this context for framework
+    concerns such as audit metadata, permission prompts, or tracing.
+    """
+
+    agent: "HawiAgent"
+    tool: AgentTool
+    tool_name: str
+    tool_call_id: str
+    run_id: str
+    iteration: int
+    arguments: dict[str, Any]
+    injected_arguments: dict[str, Any]
+
+
+ToolParameterInjectionHandler: TypeAlias = Callable[
+    [ToolParameterInjectionContext, Any],
+    ToolResult | None | Awaitable[ToolResult | None],
+]
+ToolParameterInjectionPredicate: TypeAlias = Callable[[AgentTool], bool]
+
+
+@dataclass(frozen=True)
+class ToolParameterInjection:
+    """A framework-level parameter injected into tool schemas.
+
+    The parameter is added to matching tool definitions sent to the model. When
+    a tool call is executed, Hawi validates and removes the parameter before
+    calling the real tool, so the tool implementation does not need to accept it.
+    """
+
+    name: str
+    schema: dict[str, Any]
+    required: bool = False
+    handler: ToolParameterInjectionHandler | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    applies_to: ToolParameterInjectionPredicate | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("Injected tool parameter name cannot be empty")
+        if not isinstance(self.schema, dict):
+            raise TypeError("Injected tool parameter schema must be a dict")
+
+    def applies_to_tool(self, tool: AgentTool) -> bool:
+        """Return whether this injected parameter should be added to a tool."""
+        if self.applies_to is None:
+            return True
+        return self.applies_to(tool)
+
+    def schema_copy(self) -> dict[str, Any]:
+        """Return a defensive copy of the JSON schema fragment."""
+        return copy.deepcopy(self.schema)

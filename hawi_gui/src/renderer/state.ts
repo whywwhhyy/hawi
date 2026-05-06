@@ -1,5 +1,7 @@
 import type { CoreFrame, QueueKind } from "../shared/protocol";
 
+const TOOL_CALL_DESCRIPTION_PARAMETER = "tool_call_description";
+
 export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider";
 
 export interface ChatNode {
@@ -15,6 +17,7 @@ export interface ToolState {
   runId: string;
   toolCallId: string;
   name: string;
+  description?: string;
   status: "running" | "success" | "fail";
   argsRaw: string;
   argsState: "pending" | "streaming" | "complete";
@@ -128,6 +131,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         runId,
         toolCallId,
         name: String(payload.tool_name ?? "pending"),
+        description: optionalString(payload.tool_call_description),
         status: "running",
         argsRaw: "",
         argsState: "pending",
@@ -160,23 +164,30 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           ? String(payload.delta ?? "")
           : tool.argsRaw + String(payload.delta ?? "");
         const parsed = parseToolArguments(argsRaw);
+        const argumentInfo = parsed.ok ? splitToolArguments(parsed.value) : undefined;
         return {
           ...tool,
           argsRaw,
           argsState: argsRaw ? "streaming" : tool.argsState,
-          arguments: parsed.ok ? parsed.value : tool.arguments
+          description: argumentInfo?.description ?? tool.description,
+          arguments: argumentInfo ? argumentInfo.arguments : tool.arguments
         };
       });
 
     case "tool.call_stop":
       return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => {
         const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
+        const argumentInfo = hasArguments ? splitToolArguments(payload.arguments) : undefined;
+        const description = optionalString(payload.tool_call_description)
+          ?? argumentInfo?.description
+          ?? tool.description;
         return {
           ...tool,
           name: String(payload.tool_name ?? tool.name),
+          description,
           argsState: "complete",
-          arguments: hasArguments ? payload.arguments : tool.arguments,
-          argsRaw: hasArguments ? JSON.stringify(payload.arguments, null, 2) : tool.argsRaw
+          arguments: argumentInfo ? argumentInfo.arguments : tool.arguments,
+          argsRaw: argumentInfo ? JSON.stringify(argumentInfo.arguments, null, 2) : tool.argsRaw
         };
       });
 
@@ -187,6 +198,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           ...tool,
           status: payload.success === false ? "fail" : "success",
           name: String(payload.tool_name || tool.name),
+          description: optionalString(payload.tool_call_description) ?? tool.description,
           resultPreview: payload.is_part === true
             ? truncate(tool.resultPreview + text)
             : truncate(text || tool.resultPreview),
@@ -330,6 +342,7 @@ function updateToolResult(
     runId,
     toolCallId,
     name: String(payload.tool_name || "unknown"),
+    description: optionalString(payload.tool_call_description),
     status: "running",
     argsRaw: "",
     argsState: "complete",
@@ -440,6 +453,26 @@ function formatToolValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function splitToolArguments(value: unknown): { arguments: unknown; description?: string } {
+  if (!isRecord(value) || !(TOOL_CALL_DESCRIPTION_PARAMETER in value)) {
+    return { arguments: value };
+  }
+  const description = optionalString(value[TOOL_CALL_DESCRIPTION_PARAMETER]);
+  const visible = { ...value };
+  delete visible[TOOL_CALL_DESCRIPTION_PARAMETER];
+  return { arguments: visible, description };
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const text = String(value).trim();
+  return text ? text : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseToolArguments(value: string): { ok: true; value: unknown } | { ok: false } {

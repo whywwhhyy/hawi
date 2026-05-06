@@ -154,6 +154,55 @@ class DangerousTool(AgentTool):
         return ToolResult(success=True, output={"stdout": result.stdout})
 ```
 
+### 框架级工具参数注入
+
+当框架需要统一向所有工具暴露额外参数，但不希望每个工具实现都感知这些参数时，可以注册 `ToolParameterInjection`。这些参数会出现在发送给模型的工具 schema 中；工具执行前，Hawi 会校验并剥离它们，再调用真实工具。
+
+典型场景是给需要人工审批的工具统一增加一段“申请许可说明”：
+
+```python
+from hawi.tool import ToolParameterInjection, ToolParameterInjectionContext
+
+def remember_reason(ctx: ToolParameterInjectionContext, value: str):
+    # 可在这里记录审计元数据、写日志、触发外部审批流等。
+    print(f"{ctx.tool_name} asks approval because: {value}")
+
+agent.plugins.add_tool_parameter_injection(
+    ToolParameterInjection(
+        name="approval_reason",
+        schema={
+            "type": "string",
+            "description": "说明为什么需要执行这个工具，供人工审批参考。",
+            "minLength": 1,
+        },
+        required=True,
+        handler=remember_reason,
+        applies_to=lambda tool: bool(getattr(tool, "audit", False)),
+    )
+)
+```
+
+如果工具调用参数是：
+
+```json
+{
+  "command": "deploy",
+  "approval_reason": "需要发布刚完成的修复。"
+}
+```
+
+真实工具只会收到：
+
+```json
+{
+  "command": "deploy"
+}
+```
+
+对于 `audit=True` 的工具，待审批记录会保留原始参数，因此审批人仍能看到 `approval_reason`；批准执行时 Hawi 会再次剥离注入参数，保证工具签名不需要变化。
+
+这和 `AgentTool.context` 不同：`context` 是模型不可见、运行时由 Hawi 填入的隐藏参数；`ToolParameterInjection` 是模型可见、运行时由 Hawi 消费掉的框架参数。
+
 ### 带超时的工具
 
 ```python

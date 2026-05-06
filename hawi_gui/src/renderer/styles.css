@@ -207,6 +207,25 @@ button:disabled {
   gap: 6px;
 }
 
+.bubble-head .tool-title {
+  min-width: 0;
+  flex: 1;
+  gap: 8px;
+}
+
+.tool-name {
+  flex-shrink: 0;
+}
+
+.tool-description {
+  min-width: 0;
+  color: #7d898e;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .thinking-toggle {
   display: inline-flex;
   align-items: center;

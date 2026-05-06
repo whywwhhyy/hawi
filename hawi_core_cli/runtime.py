@@ -6,6 +6,8 @@ import asyncio
 import inspect
 import logging
 import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -13,6 +15,7 @@ from hawi.agent import HawiAgent, HawiScheduler
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.events import Event
 from hawi.models import model_registry
+from hawi.tool import ToolParameterInjection
 
 from .event_mapper import SemanticEventMapper
 from .protocol import (
@@ -45,6 +48,83 @@ KNOWN_PLUGINS = {
     PLUGIN_MCP,
 }
 
+_EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class ExtraToolParameter:
+    """CLI-provided framework parameter to inject into every tool schema."""
+
+    name: str
+    type_name: str
+    description: str
+    schema: dict[str, Any]
+
+
+def parse_extra_tool_parameter(raw: str) -> ExtraToolParameter:
+    """Parse one ``--extra-tool-parameter name:type:description`` value."""
+    parts = raw.split(":", 2)
+    if len(parts) != 3:
+        raise ValueError(
+            "--extra-tool-parameter must use <name>:<type>:<description> format"
+        )
+    name, type_name, description = (part.strip() for part in parts)
+    if not name or not type_name or not description:
+        raise ValueError(
+            "--extra-tool-parameter must use <name>:<type>:<description> format"
+        )
+    if not _EXTRA_PARAMETER_NAME_RE.match(name):
+        raise ValueError(
+            "--extra-tool-parameter name must start with a letter or underscore "
+            "and contain only letters, numbers, and underscores"
+        )
+    schema = _extra_tool_parameter_schema(type_name)
+    return ExtraToolParameter(
+        name=name,
+        type_name=type_name.lower(),
+        description=description,
+        schema=schema,
+    )
+
+
+def parse_extra_tool_parameters(raw_values: list[str]) -> list[ExtraToolParameter]:
+    """Parse stacked ``--extra-tool-parameter`` values and reject duplicates."""
+    parameters = [parse_extra_tool_parameter(value) for value in raw_values]
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for parameter in parameters:
+        if parameter.name in seen:
+            duplicates.add(parameter.name)
+        seen.add(parameter.name)
+    if duplicates:
+        raise ValueError(
+            "Duplicate --extra-tool-parameter name(s): "
+            + ", ".join(sorted(duplicates))
+        )
+    return parameters
+
+
+def _extra_tool_parameter_schema(type_name: str) -> dict[str, Any]:
+    normalized = type_name.lower()
+    type_map: dict[str, dict[str, Any]] = {
+        "str": {"type": "string"},
+        "string": {"type": "string"},
+        "int": {"type": "integer"},
+        "integer": {"type": "integer"},
+        "float": {"type": "number"},
+        "number": {"type": "number"},
+        "bool": {"type": "boolean"},
+        "boolean": {"type": "boolean"},
+        "object": {"type": "object"},
+        "array": {"type": "array"},
+    }
+    if normalized not in type_map:
+        raise ValueError(
+            "Unsupported --extra-tool-parameter type "
+            f"'{type_name}'. Supported types: str, int, float, bool, object, array"
+        )
+    return dict(type_map[normalized])
+
 
 class RuntimeClient(Protocol):
     """Minimal client interface used by CoreRuntime."""
@@ -69,6 +149,7 @@ class CoreRuntime:
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         selected_plugins: list[str] | None = None,
         plugin_configs: dict[str, dict[str, Any]] | None = None,
+        extra_tool_parameters: list[ExtraToolParameter] | None = None,
         token: str | None = None,
         status_interval: float = 0.3,
         broadcast_queue_size: int = 1000,
@@ -79,6 +160,7 @@ class CoreRuntime:
         self._plugin_configs = {
             name: dict(cfg) for name, cfg in (plugin_configs or {}).items()
         }
+        self._extra_tool_parameters = list(extra_tool_parameters or [])
         self._token = token
         self._status_interval = status_interval
 
@@ -488,6 +570,7 @@ class CoreRuntime:
             max_iterations=None,
             streaming=True,
         )
+        self._apply_extra_tool_parameters(agent)
         if context_to_restore is not None:
             agent.set_context(context_to_restore.copy())
             agent.context.tool_call_context = ToolCallContext(agent)
@@ -496,6 +579,26 @@ class CoreRuntime:
         agent.event_bus.subscribe(self._on_hawi_event)
         scheduler_task = asyncio.create_task(scheduler.run_forever(poll_interval=0.1))
         return scheduler, scheduler_task, plugins
+
+    def _apply_extra_tool_parameters(self, agent: HawiAgent) -> None:
+        for parameter in self._extra_tool_parameters:
+            agent.plugins.add_tool_parameter_injection(
+                ToolParameterInjection(
+                    name=parameter.name,
+                    schema=self._extra_tool_parameter_json_schema(parameter),
+                    required=True,
+                )
+            )
+        if self._extra_tool_parameters:
+            defs = agent.plugins.get_tool_definitions()
+            agent.context.tool_definitions = defs if defs else None
+
+    @staticmethod
+    def _extra_tool_parameter_json_schema(parameter: ExtraToolParameter) -> dict[str, Any]:
+        return {
+            **parameter.schema,
+            "description": parameter.description,
+        }
 
     async def _stop_scheduler(
         self,

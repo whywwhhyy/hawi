@@ -460,7 +460,10 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   return (
     <article className={`bubble tool ${tool.status}`}>
       <div className="bubble-head">
-        <span><Wrench size={15} /> {tool.name}</span>
+        <span className="tool-title">
+          <span className="tool-name"><Wrench size={15} /> {tool.name}</span>
+          {tool.description && <span className="tool-description">{tool.description}</span>}
+        </span>
         <strong>{tool.status}</strong>
       </div>
       <details open>

@@ -33,7 +33,7 @@ from hawi.models.message import MessageResponse
 from hawi.plugin import HawiPlugin
 from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
-from hawi.tool.types import AgentTool, ToolResult
+from hawi.tool.types import AgentTool, ToolParameterInjectionContext, ToolResult
 
 from hawi.errors import (
     AgentErrorType,
@@ -104,6 +104,15 @@ class _ExecutionState:
     error: HawiError | str | None = None
     should_stop: bool = False
     run_id: str = ""
+
+
+@dataclass
+class _PreparedToolArguments:
+    """Arguments split into tool-visible and framework-visible parts."""
+
+    tool_arguments: dict[str, Any]
+    injected_arguments: dict[str, Any] = field(default_factory=dict)
+    short_circuit_result: ToolResult | None = None
 
 
 class SteerPartMergeMode(str, Enum):
@@ -1421,6 +1430,104 @@ class HawiAgent:
 
         return parts
 
+    async def _prepare_tool_arguments(
+        self,
+        tool: AgentTool,
+        arguments: dict[str, Any],
+        *,
+        tool_call_id: str,
+        state: _ExecutionState,
+        run_injection_handlers: bool,
+    ) -> _PreparedToolArguments:
+        """Validate and strip framework-injected parameters before tool calls."""
+        tool_arguments = dict(arguments)
+        injections = self._plugin_manager.get_tool_parameter_injections(tool)
+        if not injections:
+            return _PreparedToolArguments(tool_arguments=tool_arguments)
+
+        from hawi.tool._utils import validate_parameters
+
+        injected_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                injection.name: injection.schema_copy()
+                for injection in injections
+            },
+        }
+        required = [injection.name for injection in injections if injection.required]
+        if required:
+            injected_schema["required"] = required
+
+        is_valid, errors = validate_parameters(arguments, injected_schema)
+        if not is_valid:
+            return _PreparedToolArguments(
+                tool_arguments=tool_arguments,
+                short_circuit_result=ToolResult(
+                    success=False,
+                    error=f"Injected parameter validation failed: {'; '.join(errors)}",
+                ),
+            )
+
+        injected_arguments: dict[str, Any] = {}
+        for injection in injections:
+            if injection.name in tool_arguments:
+                injected_arguments[injection.name] = tool_arguments.pop(injection.name)
+
+        prepared = _PreparedToolArguments(
+            tool_arguments=tool_arguments,
+            injected_arguments=injected_arguments,
+        )
+        if not run_injection_handlers:
+            return prepared
+
+        handler_context = ToolParameterInjectionContext(
+            agent=self,
+            tool=tool,
+            tool_name=tool.name,
+            tool_call_id=tool_call_id,
+            run_id=state.run_id,
+            iteration=state.iteration,
+            arguments=dict(arguments),
+            injected_arguments=dict(injected_arguments),
+        )
+
+        for injection in injections:
+            if injection.name not in injected_arguments or injection.handler is None:
+                continue
+            try:
+                handler_result = injection.handler(
+                    handler_context,
+                    injected_arguments[injection.name],
+                )
+                if inspect.isawaitable(handler_result):
+                    handler_result = await handler_result
+            except Exception as e:
+                prepared.short_circuit_result = ToolResult(
+                    success=False,
+                    error=(
+                        "Injected parameter handler failed: "
+                        f"{type(e).__name__}: {e}"
+                    ),
+                )
+                break
+            if isinstance(handler_result, ToolResult):
+                prepared.short_circuit_result = handler_result
+                break
+
+        return prepared
+
+    def _inject_tool_runtime_context(
+        self,
+        tool: AgentTool,
+        tool_arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Inject Hawi's runtime tool-call context into tool-visible arguments."""
+        prepared = dict(tool_arguments)
+        context_param = getattr(tool, "context", None)
+        if context_param and self._context.tool_call_context:
+            prepared[context_param] = self._context.tool_call_context
+        return prepared
+
     async def _execute_tool(
         self,
         tool_call: ToolCallPart,
@@ -1435,6 +1542,7 @@ class HawiAgent:
 
         # Find tool early so hook context can include the tool object
         tool = self._plugin_manager.get_tool(tool_name)
+        audit_pending = False
 
         # before_tool_calling hook
         _before_ctx = HookContext(
@@ -1449,78 +1557,91 @@ class HawiAgent:
         elif tool is None:
             err = ToolNotFoundError(f"Tool '{tool_name}' not found")
             result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
-        elif getattr(tool, "audit", False):
-            # Audit mode: cache the tool call and return pending status
-            self._context._add_pending_tool_call(tool_call_id, tool_name, arguments)
-            result = ToolResult(
-                success=True,
-                output=f"[AUDIT PENDING] Tool '{tool_name}' has been submitted for review. "
-                       f"Use review_pending_tools() to check status and approve/reject."
-            )
         else:
-            # Prepare arguments with context injection if needed
-            tool_arguments = dict(arguments)
-            context_param = getattr(tool, "context", None)
-            if context_param and self._context.tool_call_context:
-                tool_arguments[context_param] = self._context.tool_call_context
+            prepared = await self._prepare_tool_arguments(
+                tool,
+                arguments,
+                tool_call_id=tool_call_id,
+                state=state,
+                run_injection_handlers=True,
+            )
+            if prepared.short_circuit_result is not None:
+                result = prepared.short_circuit_result
+            elif getattr(tool, "audit", False):
+                # Audit mode: cache the raw tool call for review. Injected
+                # parameters stay visible to the reviewer but are stripped on
+                # approval before the real tool runs.
+                self._context._add_pending_tool_call(tool_call_id, tool_name, arguments)
+                audit_pending = True
+                result = ToolResult(
+                    success=True,
+                    output=f"[AUDIT PENDING] Tool '{tool_name}' has been submitted for review. "
+                           f"Use review_pending_tools() to check status and approve/reject."
+                )
+            else:
+                # Prepare arguments with runtime context injection if needed
+                tool_arguments = self._inject_tool_runtime_context(
+                    tool,
+                    prepared.tool_arguments,
+                )
 
-            try:
-                # Validate parameters before execution
-                is_valid, errors = tool.validate_parameters(tool_arguments)
-                if not is_valid:
-                    result = ToolResult(
-                        success=False,
-                        error=f"Parameter validation failed: {'; '.join(errors)}"
-                    )
-                else:
-                    # Call arun and check if result is async generator
-                    raw_result = await tool.arun(**tool_arguments)
+                try:
+                    # Validate parameters before execution
+                    is_valid, errors = tool.validate_parameters(tool_arguments)
+                    if not is_valid:
+                        result = ToolResult(
+                            success=False,
+                            error=f"Parameter validation failed: {'; '.join(errors)}"
+                        )
+                    else:
+                        # Call arun and check if result is async generator
+                        raw_result = await tool.arun(**tool_arguments)
 
-                    # Check if result is async generator (async tool streaming)
-                    if inspect.isasyncgen(raw_result):
-                        # Async generator: stream results part by part
-                        parts: list[str] = []
-                        # Type cast to AsyncGenerator for iteration
-                        from typing import cast
-                        async_gen = cast(AsyncGenerator[Any, None], raw_result)
-                        async for part in async_gen:
-                            parts.append(str(part))
-                            # Emit partial result event
+                        # Check if result is async generator (async tool streaming)
+                        if inspect.isasyncgen(raw_result):
+                            # Async generator: stream results part by part
+                            parts: list[str] = []
+                            # Type cast to AsyncGenerator for iteration
+                            from typing import cast
+                            async_gen = cast(AsyncGenerator[Any, None], raw_result)
+                            async for part in async_gen:
+                                parts.append(str(part))
+                                # Emit partial result event
+                                await self._emit_event(
+                                    AgentToolResultPartEvent.create(
+                                        run_id=state.run_id,
+                                        tool_call_id=tool_call_id,
+                                        part=str(part),
+                                        part_index=len(parts) - 1,
+                                        is_final=False,
+                                    ),
+                                    self._event_bus,
+                                )
+                            # Final part event
                             await self._emit_event(
                                 AgentToolResultPartEvent.create(
                                     run_id=state.run_id,
                                     tool_call_id=tool_call_id,
-                                    part=str(part),
-                                    part_index=len(parts) - 1,
-                                    is_final=False,
+                                    part="",
+                                    part_index=len(parts),
+                                    is_final=True,
                                 ),
                                 self._event_bus,
                             )
-                        # Final part event
-                        await self._emit_event(
-                            AgentToolResultPartEvent.create(
-                                run_id=state.run_id,
-                                tool_call_id=tool_call_id,
-                                part="",
-                                part_index=len(parts),
-                                is_final=True,
-                            ),
-                            self._event_bus,
-                        )
-                        # Combine all parts as final result
-                        full_output = "".join(parts)
-                        result = ToolResult(success=True, output=full_output)
-                    else:
-                        # Normal result: wrap in ToolResult
-                        if isinstance(raw_result, ToolResult):
-                            result = raw_result
+                            # Combine all parts as final result
+                            full_output = "".join(parts)
+                            result = ToolResult(success=True, output=full_output)
                         else:
-                            result = ToolResult(success=True, output=raw_result)
-            except Exception as e:
-                # 包装为 ToolExecutionError，保留原始异常
-                err = ToolExecutionError(f"Tool '{tool_name}' execution failed: {e}", details={"original": e})
-                # All errors return to model as string (per design requirement)
-                result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
+                            # Normal result: wrap in ToolResult
+                            if isinstance(raw_result, ToolResult):
+                                result = raw_result
+                            else:
+                                result = ToolResult(success=True, output=raw_result)
+                except Exception as e:
+                    # 包装为 ToolExecutionError，保留原始异常
+                    err = ToolExecutionError(f"Tool '{tool_name}' execution failed: {e}", details={"original": e})
+                    # All errors return to model as string (per design requirement)
+                    result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
 
         duration_ms = (time.time() - start_time) * 1000
 
@@ -1537,7 +1658,7 @@ class HawiAgent:
         )
 
         # Add tool result to context (unless audit pending - will be added after approval)
-        if not (tool and getattr(tool, "audit", False)):
+        if not audit_pending:
             # Build result content: include both output and error
             output_str = result.output if isinstance(result.output, str) else str(result.output) if result.output else ""
             if not result.success and result.error:
@@ -1607,16 +1728,26 @@ class HawiAgent:
                     error=f"Tool '{pending.tool_name}' not found during approval execution"
                 )
             else:
-                # Prepare arguments with context injection if needed
-                tool_arguments = dict(pending.arguments)
-                context_param = getattr(tool, "context", None)
-                if context_param and self._context.tool_call_context:
-                    tool_arguments[context_param] = self._context.tool_call_context
+                prepared = await self._prepare_tool_arguments(
+                    tool,
+                    pending.arguments,
+                    tool_call_id=pending.tool_call_id,
+                    state=_ExecutionState(run_id="audit", iteration=0),
+                    run_injection_handlers=False,
+                )
+                if prepared.short_circuit_result is not None:
+                    result = prepared.short_circuit_result
+                else:
+                    # Prepare arguments with runtime context injection if needed
+                    tool_arguments = self._inject_tool_runtime_context(
+                        tool,
+                        prepared.tool_arguments,
+                    )
 
-                try:
-                    result = await tool.ainvoke(tool_arguments)
-                except Exception as e:
-                    result = ToolResult(success=False, error=f"{type(e).__name__}: {e}")
+                    try:
+                        result = await tool.ainvoke(tool_arguments)
+                    except Exception as e:
+                        result = ToolResult(success=False, error=f"{type(e).__name__}: {e}")
 
             # Create record
             record = ToolCallRecord(

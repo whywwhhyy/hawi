@@ -4,12 +4,15 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from hawi_core_cli.protocol import VERSION, make_ack, make_frame
-from hawi_core_cli.runtime import CoreRuntime
+from hawi_core_cli.runtime import CoreRuntime, parse_extra_tool_parameter, parse_extra_tool_parameters
 from hawi_core_cli.transports import QueuedJsonClient, run_tcp, run_websocket
+from hawi.agent import HawiAgent
+from hawi.tool import AgentTool, ToolResult
 
 
 @dataclass(eq=False)
@@ -80,6 +83,27 @@ class DummyScheduler:
     def clear_queue(self, queue: str) -> int:
         self.cleared_queue = queue
         return 2
+
+
+class SimpleTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "simple_tool"
+
+    @property
+    def description(self) -> str:
+        return "A simple test tool"
+
+    @property
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        }
+
+    def run(self, value: str) -> ToolResult:  # type: ignore[override]
+        return ToolResult(True, value)
 
 
 @pytest.mark.asyncio
@@ -164,6 +188,50 @@ async def test_enqueue_command_returns_message_id() -> None:
     assert client.sent[-1]["type"] == "ack"
     assert client.sent[-1]["payload"]["message_id"] == "msg-123"
     assert scheduler.enqueued == [("hi", "high_prio", {"queue_kind": "high_prio"})]
+
+
+def test_parse_extra_tool_parameter() -> None:
+    parameter = parse_extra_tool_parameter("tool_call_description:str:Describe the call")
+
+    assert parameter.name == "tool_call_description"
+    assert parameter.description == "Describe the call"
+    assert parameter.schema == {"type": "string"}
+
+
+def test_parse_extra_tool_parameter_allows_colons_in_description() -> None:
+    parameter = parse_extra_tool_parameter("note:str:Reason: use the fast path")
+
+    assert parameter.name == "note"
+    assert parameter.description == "Reason: use the fast path"
+
+
+def test_parse_extra_tool_parameters_rejects_duplicates() -> None:
+    with pytest.raises(ValueError, match="Duplicate"):
+        parse_extra_tool_parameters(["note:str:first", "note:int:second"])
+
+
+def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
+    runtime = CoreRuntime(
+        model_name="test-model",
+        extra_tool_parameters=[
+            parse_extra_tool_parameter("tool_call_description:str:Describe the call"),
+            parse_extra_tool_parameter("priority:int:Priority from 1 to 5"),
+        ],
+    )
+    agent = HawiAgent(model=MagicMock())
+    agent.plugins.add_tool(SimpleTool())
+
+    runtime._apply_extra_tool_parameters(agent)
+    schema = agent.plugins.get_tool_definitions()[0]["schema"]
+    description = agent.plugins.get_tool_definitions()[0]["description"]
+
+    assert schema["properties"]["tool_call_description"]["type"] == "string"
+    assert schema["properties"]["tool_call_description"]["description"] == "Describe the call"
+    assert schema["properties"]["priority"]["type"] == "integer"
+    assert schema["required"] == ["value", "tool_call_description", "priority"]
+    assert "Injected framework parameters" in description
+    assert "- tool_call_description (string, required): Describe the call" in description
+    assert "- priority (integer, required): Priority from 1 to 5" in description
 
 
 class CapturingQueuedClient(QueuedJsonClient):

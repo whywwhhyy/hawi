@@ -111,6 +111,32 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.argsState).toBe("complete");
   });
 
+  it("extracts tool call descriptions from injected arguments", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-desc", tool_call_id: "tc-desc", tool_name: "read" }));
+    state = reduceCoreEvent(state, frame("tool.call_delta", {
+      tool_call_id: "tc-desc",
+      delta: "{\"path\":\"notes.md\",\"tool_call_description\":\"Read design notes\"}",
+      is_streaming: false
+    }));
+
+    expect(state.nodes[0].tool?.description).toBe("Read design notes");
+    expect(state.nodes[0].tool?.arguments).toEqual({ path: "notes.md" });
+
+    state = reduceCoreEvent(state, frame("tool.call_stop", {
+      tool_call_id: "tc-desc",
+      tool_name: "read",
+      arguments: {
+        path: "notes.md",
+        tool_call_description: "Read final notes"
+      }
+    }));
+
+    expect(state.nodes[0].tool?.description).toBe("Read final notes");
+    expect(state.nodes[0].tool?.arguments).toEqual({ path: "notes.md" });
+    expect(state.nodes[0].tool?.argsRaw).not.toContain("tool_call_description");
+  });
+
   it("shows failed tool error messages", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-fail", tool_call_id: "tc-fail", tool_name: "calc" }));

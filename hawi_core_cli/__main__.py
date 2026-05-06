@@ -17,6 +17,7 @@ from .runtime import (
     DEFAULT_SYSTEM_PROMPT,
     CoreRuntime,
     load_model_configs,
+    parse_extra_tool_parameters,
     token_from_arg_or_env,
 )
 from .inspect import build_inspect_payload
@@ -82,6 +83,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--plugins",
         default="",
         help="Comma-separated plugin keys to enable at startup",
+    )
+    parser.add_argument(
+        "--extra-tool-parameter",
+        action="append",
+        default=[],
+        metavar="NAME:TYPE:DESCRIPTION",
+        help=(
+            "Framework-level tool parameter to expose to every tool schema and "
+            "strip before tool execution. Injected parameters are required in "
+            "tool call schemas. May be passed more than once. "
+            "Supported types: str, int, float, bool, object, array."
+        ),
     )
     parser.add_argument(
         "--plugin-config",
@@ -158,11 +171,13 @@ async def async_main(args: argparse.Namespace) -> None:
 
     selected_plugins = parse_plugins(args.plugins)
     plugin_configs = load_plugin_config(args.plugin_config)
+    extra_tool_parameters = parse_extra_tool_parameters(args.extra_tool_parameter)
     runtime = CoreRuntime(
         model_name=args.model,
         system_prompt=args.system_prompt,
         selected_plugins=selected_plugins,
         plugin_configs=plugin_configs,
+        extra_tool_parameters=extra_tool_parameters,
         token=token_from_arg_or_env(args.token),
         status_interval=args.status_interval,
     )
