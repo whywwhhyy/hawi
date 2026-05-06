@@ -6,11 +6,13 @@ from hawi.events import (
     AgentMessageAddedEvent,
     AgentRunStartEvent,
     AgentRunStopEvent,
+    AgentToolCallEvent,
     AgentToolResultEvent,
     ModelContentBlockDeltaEvent,
     ModelMetadataEvent,
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStartEvent,
+    ModelToolCallBlockStopEvent,
     SchedulerDequeueEvent,
     SchedulerInterruptEvent,
 )
@@ -131,6 +133,66 @@ def test_mapper_includes_tool_error_output() -> None:
     assert frames[0]["payload"]["success"] is False
     assert frames[0]["payload"]["output"] == "Parameter validation failed"
     assert frames[0]["payload"]["error"] == "Parameter validation failed"
+
+
+def test_mapper_reconciles_pending_tool_call_id() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-pending-tool"))
+
+    start = mapper.map(
+        ModelToolCallBlockStartEvent.create("req-pending", 0, "", "WebPlugin__fetch")
+    )
+    display_id = start[0]["payload"]["tool_call_id"]
+    assert display_id.startswith("pending:req-pending:0")
+    assert start[0]["payload"]["actual_tool_call_id"] == ""
+
+    delta = mapper.map(
+        ModelToolCallBlockDeltaEvent.create(
+            "req-pending",
+            0,
+            "",
+            '{"url":"https://this-domain-does-not-exist-123456789.com"}',
+        )
+    )
+    assert delta[0]["payload"]["tool_call_id"] == display_id
+
+    stop = mapper.map(
+        ModelToolCallBlockStopEvent.create(
+            "req-pending",
+            0,
+            "tc-real",
+            "WebPlugin__fetch",
+            {"url": "https://this-domain-does-not-exist-123456789.com"},
+        )
+    )
+    assert stop[0]["payload"]["tool_call_id"] == display_id
+    assert stop[0]["payload"]["actual_tool_call_id"] == "tc-real"
+
+    mapper.map(
+        AgentToolCallEvent.create(
+            "run-pending-tool",
+            "WebPlugin__fetch",
+            {"url": "https://this-domain-does-not-exist-123456789.com"},
+            "tc-real",
+        )
+    )
+    result = mapper.map(
+        AgentToolResultEvent.create(
+            "run-pending-tool",
+            "tc-real",
+            False,
+            "",
+            3.0,
+            ToolResult(success=False, error="抓取失败: DNS lookup failed"),
+        )
+    )
+
+    assert result[0]["type"] == "tool.result"
+    assert result[0]["payload"]["tool_call_id"] == display_id
+    assert result[0]["payload"]["actual_tool_call_id"] == "tc-real"
+    assert result[0]["payload"]["tool_name"] == "WebPlugin__fetch"
+    assert result[0]["payload"]["success"] is False
+    assert result[0]["payload"]["error"] == "抓取失败: DNS lookup failed"
 
 
 def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:

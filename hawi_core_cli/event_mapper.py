@@ -18,7 +18,8 @@ class SemanticEventMapper:
         self._current_queue_kind = "normal"
         self._run_queue: dict[str, str] = {}
         self._active_tool_calls: dict[str, dict[str, Any]] = {}
-        self._tool_call_id_by_block: dict[int, str] = {}
+        self._tool_call_display_id_by_block: dict[tuple[str, int], str] = {}
+        self._display_id_by_actual_tool_call_id: dict[str, str] = {}
 
     def map(self, event: Event) -> list[dict[str, Any]]:
         """Return zero or more semantic protocol events for one Hawi event."""
@@ -158,41 +159,53 @@ class SemanticEventMapper:
             ]
 
         if etype == "model.tool_call_block_start":
-            tool_call_id = str(getattr(event, "tool_call_id", ""))
+            actual_tool_call_id = str(getattr(event, "tool_call_id", ""))
+            request_id = str(getattr(event, "request_id", ""))
             block_index = int(getattr(event, "block_index", 0) or 0)
-            if tool_call_id:
-                self._tool_call_id_by_block[block_index] = tool_call_id
+            display_tool_call_id = actual_tool_call_id or self._pending_tool_call_id(
+                request_id,
+                block_index,
+            )
+            self._tool_call_display_id_by_block[(request_id, block_index)] = display_tool_call_id
+            if actual_tool_call_id:
+                self._display_id_by_actual_tool_call_id[actual_tool_call_id] = display_tool_call_id
             tool_name = str(getattr(event, "tool_name", ""))
-            self._active_tool_calls[tool_call_id] = {
+            self._active_tool_calls[display_tool_call_id] = {
                 "tool_name": tool_name,
                 "arguments": {},
                 "run_id": self._active_run_id or "",
+                "actual_tool_call_id": actual_tool_call_id,
             }
             return [
                 make_frame(
                     "tool.call_start",
                     {
                         "run_id": self._active_run_id or "",
-                        "tool_call_id": tool_call_id,
+                        "tool_call_id": display_tool_call_id,
+                        "actual_tool_call_id": actual_tool_call_id,
                         "tool_name": tool_name,
                     },
                 )
             ]
 
         if etype == "model.tool_call_block_delta":
+            request_id = str(getattr(event, "request_id", ""))
             block_index = int(getattr(event, "block_index", 0) or 0)
-            tool_call_id = str(
-                getattr(event, "tool_call_id", "")
-                or self._tool_call_id_by_block.get(block_index, "")
+            actual_tool_call_id = str(getattr(event, "tool_call_id", ""))
+            display_tool_call_id = self._display_tool_call_id(
+                actual_tool_call_id=actual_tool_call_id,
+                request_id=request_id,
+                block_index=block_index,
             )
-            if not tool_call_id:
+            if not display_tool_call_id:
                 return []
             return [
                 make_frame(
                     "tool.call_delta",
                     {
                         "run_id": self._active_run_id or "",
-                        "tool_call_id": tool_call_id,
+                        "tool_call_id": display_tool_call_id,
+                        "actual_tool_call_id": actual_tool_call_id,
                         "delta": getattr(event, "arguments_delta", ""),
                         "is_streaming": getattr(event, "is_streaming", True),
                     },
@@ -200,26 +213,36 @@ class SemanticEventMapper:
             ]
 
         if etype == "model.tool_call_block_stop":
+            request_id = str(getattr(event, "request_id", ""))
             block_index = int(getattr(event, "block_index", 0) or 0)
-            tool_call_id = str(
-                getattr(event, "tool_call_id", "")
-                or self._tool_call_id_by_block.get(block_index, "")
+            actual_tool_call_id = str(getattr(event, "tool_call_id", ""))
+            display_tool_call_id = self._display_tool_call_id(
+                actual_tool_call_id=actual_tool_call_id,
+                request_id=request_id,
+                block_index=block_index,
             )
-            if not tool_call_id:
+            if not display_tool_call_id:
                 return []
             tool_name = str(getattr(event, "tool_name", ""))
             arguments = to_json_safe(getattr(event, "arguments", {}))
-            self._tool_call_id_by_block[block_index] = tool_call_id
+            self._tool_call_display_id_by_block[(request_id, block_index)] = display_tool_call_id
             self._active_tool_calls.setdefault(
-                tool_call_id,
+                display_tool_call_id,
                 {"run_id": self._active_run_id or ""},
-            ).update({"tool_name": tool_name, "arguments": arguments})
+            ).update(
+                {
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                    "actual_tool_call_id": actual_tool_call_id,
+                }
+            )
             return [
                 make_frame(
                     "tool.call_stop",
                     {
                         "run_id": self._active_run_id or "",
-                        "tool_call_id": tool_call_id,
+                        "tool_call_id": display_tool_call_id,
+                        "actual_tool_call_id": actual_tool_call_id,
                         "tool_name": tool_name,
                         "arguments": arguments,
                     },
@@ -227,24 +250,42 @@ class SemanticEventMapper:
             ]
 
         if etype == "agent.tool_call":
-            tool_call_id = str(getattr(event, "tool_call_id", ""))
+            actual_tool_call_id = str(getattr(event, "tool_call_id", ""))
+            display_tool_call_id = (
+                self._display_id_by_actual_tool_call_id.get(actual_tool_call_id)
+                or actual_tool_call_id
+            )
             self._active_tool_calls.setdefault(
-                tool_call_id,
+                display_tool_call_id,
                 {
                     "run_id": getattr(event, "run_id", self._active_run_id or ""),
                     "tool_name": getattr(event, "tool_name", ""),
                     "arguments": to_json_safe(getattr(event, "arguments", {})),
+                    "actual_tool_call_id": actual_tool_call_id,
                 },
+            ).update(
+                {
+                    "run_id": getattr(event, "run_id", self._active_run_id or ""),
+                    "tool_name": getattr(event, "tool_name", ""),
+                    "arguments": to_json_safe(getattr(event, "arguments", {})),
+                    "actual_tool_call_id": actual_tool_call_id,
+                }
             )
             return []
 
         if etype == "agent.tool_result_part":
+            actual_tool_call_id = str(getattr(event, "tool_call_id", ""))
+            display_tool_call_id = (
+                self._display_id_by_actual_tool_call_id.get(actual_tool_call_id)
+                or actual_tool_call_id
+            )
             return [
                 make_frame(
                     "tool.result",
                     {
                         "run_id": getattr(event, "run_id", self._active_run_id or ""),
-                        "tool_call_id": getattr(event, "tool_call_id", ""),
+                        "tool_call_id": display_tool_call_id,
+                        "actual_tool_call_id": actual_tool_call_id,
                         "part": getattr(event, "part", ""),
                         "part_index": getattr(event, "part_index", 0),
                         "is_final": getattr(event, "is_final", False),
@@ -254,8 +295,12 @@ class SemanticEventMapper:
             ]
 
         if etype == "agent.tool_result":
-            tool_call_id = str(getattr(event, "tool_call_id", ""))
-            call_info = self._active_tool_calls.pop(tool_call_id, {})
+            actual_tool_call_id = str(getattr(event, "tool_call_id", ""))
+            display_tool_call_id = (
+                self._display_id_by_actual_tool_call_id.get(actual_tool_call_id)
+                or actual_tool_call_id
+            )
+            call_info = self._active_tool_calls.pop(display_tool_call_id, {})
             result = getattr(event, "result", None)
             output = None
             error = ""
@@ -269,7 +314,8 @@ class SemanticEventMapper:
                     "tool.result",
                     {
                         "run_id": call_info.get("run_id", getattr(event, "run_id", "")),
-                        "tool_call_id": tool_call_id,
+                        "tool_call_id": display_tool_call_id,
+                        "actual_tool_call_id": actual_tool_call_id,
                         "tool_name": call_info.get("tool_name", ""),
                         "success": getattr(event, "success", False),
                         "output": to_json_safe(output),
@@ -296,7 +342,8 @@ class SemanticEventMapper:
             self._run_queue.pop(run_id, None)
             if self._active_run_id == run_id:
                 self._active_run_id = None
-            self._tool_call_id_by_block.clear()
+            self._tool_call_display_id_by_block.clear()
+            self._display_id_by_actual_tool_call_id.clear()
             return [
                 make_frame(
                     "run.stop",
@@ -354,6 +401,29 @@ class SemanticEventMapper:
             "type": getattr(error, "error_type", "unknown"),
             "class": error.__class__.__name__,
         }
+
+    @staticmethod
+    def _pending_tool_call_id(request_id: str, block_index: int) -> str:
+        request_part = request_id or "unknown-request"
+        return f"pending:{request_part}:{block_index}"
+
+    def _display_tool_call_id(
+        self,
+        *,
+        actual_tool_call_id: str,
+        request_id: str,
+        block_index: int,
+    ) -> str:
+        if actual_tool_call_id and actual_tool_call_id in self._display_id_by_actual_tool_call_id:
+            return self._display_id_by_actual_tool_call_id[actual_tool_call_id]
+        block_key = (request_id, block_index)
+        display_tool_call_id = self._tool_call_display_id_by_block.get(block_key, "")
+        if not display_tool_call_id and actual_tool_call_id:
+            display_tool_call_id = actual_tool_call_id
+            self._tool_call_display_id_by_block[block_key] = display_tool_call_id
+        if actual_tool_call_id and display_tool_call_id:
+            self._display_id_by_actual_tool_call_id[actual_tool_call_id] = display_tool_call_id
+        return display_tool_call_id
 
     @staticmethod
     def _debug_message(event: Event) -> str:

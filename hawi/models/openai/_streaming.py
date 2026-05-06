@@ -33,11 +33,10 @@ class StreamProcessor:
         # 当前块状态
         self._current_block_type: str | None = None
         self._current_block_index: int = 0
-        self._tool_call_state: dict[str, Any] | None = None
+        self._tool_call_states: dict[int, dict[str, Any]] = {}
         # 累积内容
         self._text_buffer: str = ""
         self._thinking_buffer: str = ""
-        self._tool_arguments_buffer: str = ""
         # 存储每个块的完整内容
         self._block_contents: dict[int, dict[str, Any]] = {}
         # 存储 usage 数据，在 finish 时一起发送
@@ -119,7 +118,7 @@ class StreamProcessor:
                 if self._current_block_type == "text":
                     yield from self._close_text_block()
                 elif self._current_block_type == "tool_use":
-                    yield from self._close_tool_block()
+                    yield from self._close_tool_blocks()
 
                 self._current_block_type = "reasoning"
                 yield {
@@ -152,7 +151,7 @@ class StreamProcessor:
                 if self._current_block_type == "reasoning":
                     yield from self._close_thinking_block()
                 elif self._current_block_type == "tool_use":
-                    yield from self._close_tool_block()
+                    yield from self._close_tool_blocks()
 
                 self._current_block_type = "text"
                 yield {
@@ -180,40 +179,52 @@ class StreamProcessor:
         tool_calls = delta.get("tool_calls")
         if tool_calls:
             for tc in tool_calls:
-                # 如果是新的 tool_use 块，发送 start
+                func = tc.get("function", {})
+
+                # 如果是新的 tool_use 序列，先结束之前的非工具块。
                 if self._current_block_type != "tool_use":
-                    # 先结束之前的块
                     if self._current_block_type == "text":
                         yield from self._close_text_block()
                     elif self._current_block_type == "reasoning":
                         yield from self._close_thinking_block()
 
                     self._current_block_type = "tool_use"
-                    # 初始化 tool call 状态
-                    self._tool_call_state = {
+
+                provider_index = self._tool_provider_index(tc)
+                state = self._tool_call_states.get(provider_index)
+                if state is None:
+                    block_index = self._current_block_index
+                    self._current_block_index += 1
+                    state = {
                         "id": tc.get("id", ""),
-                        "name": tc.get("function", {}).get("name", ""),
+                        "name": func.get("name", ""),
+                        "arguments": "",
+                        "block_index": block_index,
                     }
-                    self._tool_arguments_buffer = ""
+                    self._tool_call_states[provider_index] = state
 
                     yield {
                         "type": "tool_call_delta",
-                        "index": self._current_block_index,
-                        "id": self._tool_call_state["id"] or None,
-                        "name": self._tool_call_state["name"] or None,
+                        "index": block_index,
+                        "id": state["id"] or None,
+                        "name": state["name"] or None,
                         "arguments_delta": "",
                         "is_start": True,
                         "is_end": False,
                     }
+                else:
+                    if tc.get("id"):
+                        state["id"] = tc["id"]
+                    if func.get("name"):
+                        state["name"] = func["name"]
 
                 # 累积参数
-                func = tc.get("function", {})
                 if func.get("arguments"):
                     args_delta = func["arguments"]
-                    self._tool_arguments_buffer += args_delta
+                    state["arguments"] += args_delta
                     yield {
                         "type": "tool_call_delta",
-                        "index": self._current_block_index,
+                        "index": state["block_index"],
                         "id": None,
                         "name": None,
                         "arguments_delta": args_delta,
@@ -221,20 +232,20 @@ class StreamProcessor:
                         "is_end": False,
                     }
 
-                # 更新 ID 和 name（如果这是第一个 chunk）
-                assert self._tool_call_state is not None, "_tool_call_state must be set when processing tool_calls"
+                # 更新 ID 和 name（有些 OpenAI-compatible 服务会晚到）
                 if tc.get("id"):
-                    self._tool_call_state["id"] = tc["id"]
+                    state["id"] = tc["id"]
                 if func.get("name"):
-                    self._tool_call_state["name"] = func["name"]
+                    state["name"] = func["name"]
 
                 # 存储工具调用信息
-                if self._current_block_index not in self._block_contents:
-                    self._block_contents[self._current_block_index] = {}
-                self._block_contents[self._current_block_index].update({
-                    "id": self._tool_call_state["id"],
-                    "name": self._tool_call_state["name"],
-                    "arguments": self._tool_arguments_buffer,
+                block_index = state["block_index"]
+                if block_index not in self._block_contents:
+                    self._block_contents[block_index] = {}
+                self._block_contents[block_index].update({
+                    "id": state["id"],
+                    "name": state["name"],
+                    "arguments": state["arguments"],
                 })
 
         # 处理完成
@@ -248,7 +259,7 @@ class StreamProcessor:
             elif self._current_block_type == "reasoning":
                 yield from self._close_thinking_block()
             elif self._current_block_type == "tool_use":
-                yield from self._close_tool_block()
+                yield from self._close_tool_blocks()
 
             yield {
                 "type": "finish",
@@ -285,22 +296,34 @@ class StreamProcessor:
             self._current_block_index += 1
             self._current_block_type = None
 
-    def _close_tool_block(self) -> Iterator[DeltaPart]:
-        """关闭 tool_use 块"""
-        if self._current_block_type == "tool_use" and self._tool_call_state:
-            yield {
-                "type": "tool_call_delta",
-                "index": self._current_block_index,
-                "id": self._tool_call_state.get("id") or None,
-                "name": self._tool_call_state.get("name") or None,
-                "arguments_delta": "",
-                "is_start": False,
-                "is_end": True,
-            }
-            self._tool_arguments_buffer = ""
-            self._tool_call_state = None
-            self._current_block_index += 1
+    def _close_tool_blocks(self) -> Iterator[DeltaPart]:
+        """关闭当前 tool_use 序列中的所有工具块"""
+        if self._current_block_type == "tool_use" and self._tool_call_states:
+            states = sorted(
+                self._tool_call_states.values(),
+                key=lambda state: int(state["block_index"]),
+            )
+            for state in states:
+                yield {
+                    "type": "tool_call_delta",
+                    "index": state["block_index"],
+                    "id": state.get("id") or None,
+                    "name": state.get("name") or None,
+                    "arguments_delta": "",
+                    "is_start": False,
+                    "is_end": True,
+                }
+            self._tool_call_states.clear()
             self._current_block_type = None
+
+    @staticmethod
+    def _tool_provider_index(tool_call_delta: dict[str, Any]) -> int:
+        """Return the provider's tool-call index, defaulting to the first call."""
+        raw_index = tool_call_delta.get("index", 0)
+        try:
+            return int(raw_index)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _map_stop_reason(reason: str) -> str:

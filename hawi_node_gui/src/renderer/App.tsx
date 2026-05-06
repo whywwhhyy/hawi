@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import MarkdownIt from "markdown-it";
-import { Bot, Brain, Check, Plug, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Bot, Brain, Check, ChevronDown, ChevronRight, Plug, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
@@ -70,6 +70,7 @@ export default function App() {
 
   const showDebug = config?.showDebug ?? true;
   const selectedModel = config?.modelName || "-";
+  const systemPromptLocked = state.nodes.some(isConversationNode);
 
   function updateFollowTail() {
     const element = chatRef.current;
@@ -189,6 +190,24 @@ export default function App() {
         </button>
       </header>
 
+      <section className={`prompt-row ${systemPromptLocked ? "locked" : ""}`}>
+        <label>System Prompt:</label>
+        <textarea
+          value={config.systemPrompt}
+          disabled={systemPromptLocked}
+          title={systemPromptLocked ? "清空消息后可编辑" : "System Prompt"}
+          onChange={(event) => setConfig({ ...config, systemPrompt: event.target.value })}
+        />
+        <button
+          className="tool-button"
+          title="应用系统提示"
+          disabled={systemPromptLocked}
+          onClick={applySystemPrompt}
+        >
+          <Check size={17} /> 应用
+        </button>
+      </section>
+
       <main
         className="chat-panel"
         ref={chatRef}
@@ -203,17 +222,6 @@ export default function App() {
             <ChatBubble node={node} key={node.id} />
           ))}
       </main>
-
-      <section className="prompt-row">
-        <label>System Prompt:</label>
-        <textarea
-          value={config.systemPrompt}
-          onChange={(event) => setConfig({ ...config, systemPrompt: event.target.value })}
-        />
-        <button className="tool-button" title="应用系统提示" onClick={applySystemPrompt}>
-          <Check size={17} /> 应用
-        </button>
-      </section>
 
       <section className="control-row">
         <span className="label">优先级:</span>
@@ -318,20 +326,55 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   if (node.kind === "tool" && node.tool) {
     return <ToolBubble node={node} />;
   }
-  const html = node.kind === "agent" || node.kind === "thinking" ? markdown.render(node.content) : escapeText(node.content);
+  if (node.kind === "thinking") {
+    return <ThinkingBubble node={node} />;
+  }
+  const html = node.kind === "agent" ? markdown.render(node.content) : escapeText(node.content);
   return (
     <article className={`bubble ${node.kind}`}>
       <div className="bubble-head">
         <span>{node.kind === "user" ? queueLabels[node.queue ?? "normal"] : labelForKind(node.kind)}</span>
-        {node.kind === "thinking" && <Brain size={15} />}
       </div>
       <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
     </article>
   );
 });
 
+const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }) {
+  const [collapsed, setCollapsed] = useState(() => node.complete === true);
+  const autoCollapsedRef = useRef(node.complete === true);
+  const html = markdown.render(node.content);
+
+  useEffect(() => {
+    if (node.complete === true && !autoCollapsedRef.current) {
+      setCollapsed(true);
+      autoCollapsedRef.current = true;
+    }
+  }, [node.complete]);
+
+  return (
+    <article className={`bubble thinking ${collapsed ? "collapsed" : ""}`}>
+      <div className="bubble-head">
+        <span><Brain size={15} /> Thinking</span>
+        <button
+          className="thinking-toggle"
+          title={collapsed ? "展开思考内容" : "折叠思考内容"}
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+        </button>
+      </div>
+      {collapsed
+        ? <div className="thinking-summary">{thinkingExcerpt(node.content)}</div>
+        : <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />}
+    </article>
+  );
+});
+
 const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   const tool = node.tool!;
+  const hasStructuredArguments = tool.arguments !== undefined;
   return (
     <article className={`bubble tool ${tool.status}`}>
       <div className="bubble-head">
@@ -339,8 +382,13 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
         <strong>{tool.status}</strong>
       </div>
       <details open>
-        <summary>Arguments</summary>
-        <pre>{tool.arguments ? JSON.stringify(tool.arguments, null, 2) : tool.argsRaw || "{}"}</pre>
+        <summary>
+          Arguments
+          {tool.argsState !== "complete" && <span className="detail-state">receiving</span>}
+        </summary>
+        {hasStructuredArguments
+          ? <JsonTree value={tool.arguments} />
+          : <div className="tool-hint">{tool.argsState === "complete" ? "No arguments." : "Receiving arguments..."}</div>}
       </details>
       {(tool.resultPreview || tool.status === "fail") && (
         <details open>
@@ -351,6 +399,64 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
     </article>
   );
 });
+
+function JsonTree({ value }: { value: unknown }) {
+  return (
+    <div className="json-tree">
+      {renderJsonValue(value)}
+    </div>
+  );
+}
+
+function renderJsonValue(value: unknown): ReactNode {
+  if (Array.isArray(value)) {
+    return <JsonBranch label={`Array(${value.length})`} emptyLabel="[]" entries={value.map((item, index) => [String(index), item])} />;
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    return <JsonBranch label={`Object(${entries.length})`} emptyLabel="{}" entries={entries} />;
+  }
+  return <JsonPrimitive value={value} />;
+}
+
+function JsonBranch({ label, emptyLabel, entries }: { label: string; emptyLabel: string; entries: [string, unknown][] }) {
+  if (entries.length === 0) {
+    return <span className="json-empty">{emptyLabel}</span>;
+  }
+  return (
+    <details className="json-branch" open>
+      <summary>{label}</summary>
+      <div className="json-children">
+        {entries.map(([key, value]) => (
+          <div className="json-row" key={key}>
+            <span className="json-key">{key}</span>
+            <div className="json-value">{renderJsonValue(value)}</div>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function JsonPrimitive({ value }: { value: unknown }) {
+  if (value === null) {
+    return <span className="json-primitive null">null</span>;
+  }
+  if (typeof value === "string") {
+    return <span className="json-primitive string">{value === "" ? "\"\"" : value}</span>;
+  }
+  if (typeof value === "number") {
+    return <span className="json-primitive number">{String(value)}</span>;
+  }
+  if (typeof value === "boolean") {
+    return <span className="json-primitive boolean">{String(value)}</span>;
+  }
+  return <span className="json-primitive unknown">{String(value)}</span>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
 
 function ModelDialog({ models, current, onClose, onSelect }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void }) {
   const [filter, setFilter] = useState("");
@@ -505,6 +611,20 @@ function labelForKind(kind: string): string {
   if (kind === "debug") return "Debug";
   if (kind === "error") return "Error";
   return kind;
+}
+
+function isConversationNode(node: ChatNode): boolean {
+  return node.kind === "user"
+    || node.kind === "agent"
+    || node.kind === "thinking"
+    || node.kind === "tool"
+    || node.kind === "divider";
+}
+
+function thinkingExcerpt(value: string, maxChars = 120): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return `${Array.from(normalized).slice(0, maxChars).join("")}...`;
 }
 
 function escapeText(value: string): string {

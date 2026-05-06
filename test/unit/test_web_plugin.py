@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch
-from hawi_plugins.web.fetch import Fetcher
+from hawi_plugins.web.fetch import Fetcher, FetchResult
 
 
 def test_web_plugin_instance():
@@ -91,3 +91,25 @@ def test_fetcher_http_error():
     # This should handle 404 gracefully
     result = fetcher.fetch("https://httpbin.org/status/404")
     assert result.success is False
+
+
+def test_web_plugin_returns_failed_tool_result_when_fetcher_fails():
+    from hawi_plugins.web.plugin import WebPlugin
+
+    plugin = WebPlugin()
+    failed = FetchResult(
+        content="Request failed: DNS lookup failed",
+        truncated=False,
+        total_length=0,
+        content_type="text/plain",
+        source="error",
+        success=False,
+    )
+
+    with patch.object(plugin._fetcher, "fetch", return_value=failed):
+        result = plugin.fetch("https://this-domain-does-not-exist-123456789.com")
+
+    assert result.success is False
+    assert result.error == "Request failed: DNS lookup failed"
+    assert "[WebFetch] 来源: error" in result.output
+    assert "Request failed: DNS lookup failed" in result.output

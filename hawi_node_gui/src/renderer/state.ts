@@ -6,6 +6,7 @@ export interface ChatNode {
   id: string;
   kind: ChatKind;
   content: string;
+  complete?: boolean;
   queue?: QueueKind;
   tool?: ToolState;
 }
@@ -16,6 +17,7 @@ export interface ToolState {
   name: string;
   status: "running" | "success" | "fail";
   argsRaw: string;
+  argsState: "pending" | "streaming" | "complete";
   arguments?: unknown;
   resultPreview: string;
   durationMs?: number;
@@ -93,7 +95,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
       if (!runId) return state;
       const delta = String(payload.delta ?? "");
-      return appendRunDelta(state, runId, "agent", delta);
+      return appendRunDelta(completeThinkingForRun(state, runId), runId, "agent", delta);
     }
 
     case "run.thinking_delta": {
@@ -104,10 +106,11 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "run.stop": {
       const runId = String(payload.run_id ?? "");
-      const nextRuns = { ...state.runs };
+      const completedState = completeThinkingForRun(state, runId);
+      const nextRuns = { ...completedState.runs };
       delete nextRuns[runId];
       return {
-        ...appendNode(state, {
+        ...appendNode(completedState, {
           id: nodeId("divider", `${runId}-${Date.now()}`),
           kind: "divider",
           content: formatRunStop(payload)
@@ -119,6 +122,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "tool.call_start": {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
+      const completedState = completeThinkingForRun(state, runId);
       const toolCallId = String(payload.tool_call_id ?? "");
       const tool: ToolState = {
         runId,
@@ -126,6 +130,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         name: String(payload.tool_name ?? "pending"),
         status: "running",
         argsRaw: "",
+        argsState: "pending",
         resultPreview: ""
       };
       const node: ChatNode = {
@@ -135,35 +140,49 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         tool
       };
       const runs = {
-        ...state.runs,
-        [runId]: { ...(state.runs[runId] ?? {}), agentNodeId: undefined }
+        ...completedState.runs,
+        [runId]: {
+          ...(completedState.runs[runId] ?? {}),
+          agentNodeId: undefined,
+          thinkingNodeId: undefined
+        }
       };
       return {
-        ...appendNode(state, node),
+        ...appendNode(completedState, node),
         runs,
-        toolNodeByCallId: { ...state.toolNodeByCallId, [toolCallId]: node.id }
+        toolNodeByCallId: { ...completedState.toolNodeByCallId, [toolCallId]: node.id }
       };
     }
 
     case "tool.call_delta":
-      return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => ({
-        ...tool,
-        argsRaw: payload.is_streaming === false
+      return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => {
+        const argsRaw = payload.is_streaming === false
           ? String(payload.delta ?? "")
-          : tool.argsRaw + String(payload.delta ?? "")
-      }));
+          : tool.argsRaw + String(payload.delta ?? "");
+        const parsed = tryParseJson(argsRaw);
+        return {
+          ...tool,
+          argsRaw,
+          argsState: argsRaw ? "streaming" : tool.argsState,
+          arguments: parsed.ok ? parsed.value : tool.arguments
+        };
+      });
 
     case "tool.call_stop":
-      return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => ({
-        ...tool,
-        name: String(payload.tool_name ?? tool.name),
-        arguments: payload.arguments,
-        argsRaw: JSON.stringify(payload.arguments ?? {}, null, 2)
-      }));
+      return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => {
+        const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
+        return {
+          ...tool,
+          name: String(payload.tool_name ?? tool.name),
+          argsState: "complete",
+          arguments: hasArguments ? payload.arguments : tool.arguments,
+          argsRaw: hasArguments ? JSON.stringify(payload.arguments, null, 2) : tool.argsRaw
+        };
+      });
 
     case "tool.result":
-      return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => {
-        const text = String((payload.success === false ? payload.error : undefined) ?? payload.output ?? payload.part ?? "");
+      return updateToolResult(state, String(payload.tool_call_id ?? ""), payload, (tool) => {
+        const text = formatToolResultText(payload);
         return {
           ...tool,
           status: payload.success === false ? "fail" : "success",
@@ -244,15 +263,35 @@ function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinkin
   const key = kind === "agent" ? "agentNodeId" : "thinkingNodeId";
   const existingId = run[key];
   if (existingId) {
-    return updateNode(state, existingId, (node) => ({ ...node, content: node.content + delta }));
+    return updateNode(state, existingId, (node) => ({ ...node, content: node.content + delta, complete: false }));
   }
   const id = nodeId(kind, `${runId}-${state.nodes.length}`);
-  const next = appendNode(state, { id, kind, content: delta });
+  const next = appendNode(state, { id, kind, content: delta, complete: false });
   return {
     ...next,
     runs: {
       ...next.runs,
       [runId]: { ...(next.runs[runId] ?? {}), [key]: id }
+    }
+  };
+}
+
+function completeThinkingForRun(state: AppState, runId: string): AppState {
+  const thinkingNodeId = state.runs[runId]?.thinkingNodeId;
+  if (!thinkingNodeId) {
+    return state;
+  }
+  const updated = updateNode(state, thinkingNodeId, (node) => (
+    node.kind === "thinking" ? { ...node, complete: true } : node
+  ));
+  return {
+    ...updated,
+    runs: {
+      ...updated.runs,
+      [runId]: {
+        ...(updated.runs[runId] ?? {}),
+        thinkingNodeId: undefined
+      }
     }
   };
 }
@@ -266,6 +305,45 @@ function updateTool(state: AppState, toolCallId: string, updater: (tool: ToolSta
     if (!node.tool) return node;
     return { ...node, tool: updater(node.tool) };
   });
+}
+
+function updateToolResult(
+  state: AppState,
+  toolCallId: string,
+  payload: Record<string, unknown>,
+  updater: (tool: ToolState) => ToolState,
+): AppState {
+  const nodeIdForTool = state.toolNodeByCallId[toolCallId];
+  if (nodeIdForTool) {
+    const updated = updateNode(state, nodeIdForTool, (node) => {
+      if (!node.tool) return node;
+      return { ...node, tool: updater({ ...node.tool, toolCallId: toolCallId || node.tool.toolCallId }) };
+    });
+    return toolCallId
+      ? { ...updated, toolNodeByCallId: { ...updated.toolNodeByCallId, [toolCallId]: nodeIdForTool } }
+      : updated;
+  }
+
+  const nodeIdForNewTool = nodeId("tool", toolCallId || `${Date.now()}-${state.nodes.length}`);
+  const runId = String(payload.run_id ?? state.activeRunId ?? "");
+  const tool: ToolState = {
+    runId,
+    toolCallId,
+    name: String(payload.tool_name || "unknown"),
+    status: "running",
+    argsRaw: "",
+    argsState: "complete",
+    resultPreview: ""
+  };
+  const next = appendNode(state, {
+    id: nodeIdForNewTool,
+    kind: "tool",
+    content: "",
+    tool: updater(tool)
+  });
+  return toolCallId
+    ? { ...next, toolNodeByCallId: { ...next.toolNodeByCallId, [toolCallId]: nodeIdForNewTool } }
+    : next;
 }
 
 function updateNode(state: AppState, id: string, updater: (node: ChatNode) => ChatNode): AppState {
@@ -334,4 +412,42 @@ function formatRunStop(payload: Record<string, unknown>): string {
 function truncate(value: string, max = 1200): string {
   if (value.length <= max) return value;
   return `${value.slice(0, max)}...`;
+}
+
+function formatToolResultText(payload: Record<string, unknown>): string {
+  if (payload.is_part === true) {
+    return formatToolValue(payload.part);
+  }
+  const output = formatToolValue(payload.output).trim();
+  if (payload.success !== false) {
+    return output || formatToolValue(payload.part).trim();
+  }
+  const error = formatToolValue(payload.error).trim();
+  if (error && output && output !== error) {
+    return `Error: ${error}\n\nOutput:\n${output}`;
+  }
+  if (error) {
+    return `Error: ${error}`;
+  }
+  return output;
+}
+
+function formatToolValue(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function tryParseJson(value: string): { ok: true; value: unknown } | { ok: false } {
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: false };
+  try {
+    return { ok: true, value: JSON.parse(trimmed) as unknown };
+  } catch {
+    return { ok: false };
+  }
 }

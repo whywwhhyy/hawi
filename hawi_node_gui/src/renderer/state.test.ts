@@ -31,14 +31,72 @@ describe("core event reducer", () => {
     expect(state.nodes[2].content).toBe("done");
   });
 
+  it("splits thinking content around tool calls", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-thinking", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.thinking_delta", { run_id: "run-thinking", delta: "before tool" }));
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-thinking", tool_call_id: "tc-thinking", tool_name: "calc" }));
+    state = reduceCoreEvent(state, frame("tool.result", { run_id: "run-thinking", tool_call_id: "tc-thinking", tool_name: "calc", success: true, output: "4" }));
+    state = reduceCoreEvent(state, frame("run.thinking_delta", { run_id: "run-thinking", delta: "after tool" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "tool", "thinking"]);
+    expect(state.nodes[1].content).toBe("before tool");
+    expect(state.nodes[1].complete).toBe(true);
+    expect(state.nodes[3].content).toBe("after tool");
+    expect(state.nodes[3].complete).toBe(false);
+  });
+
+  it("marks thinking complete when answer text starts", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-text-after-thinking", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.thinking_delta", { run_id: "run-text-after-thinking", delta: "thinking" }));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-text-after-thinking", delta: "answer" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent"]);
+    expect(state.nodes[1].complete).toBe(true);
+  });
+
+  it("marks thinking complete when run stops", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-stop-thinking", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.thinking_delta", { run_id: "run-stop-thinking", delta: "thinking" }));
+    state = reduceCoreEvent(state, frame("run.stop", { run_id: "run-stop-thinking", stop_reason: "end_turn" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "divider"]);
+    expect(state.nodes[1].complete).toBe(true);
+  });
+
   it("replaces full tool argument snapshots instead of appending them", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-args", tool_call_id: "tc-args", tool_name: "calc" }));
     state = reduceCoreEvent(state, frame("tool.call_delta", { tool_call_id: "tc-args", delta: "{\"expression\":", is_streaming: true }));
+    expect(state.nodes[0].tool?.arguments).toBeUndefined();
     state = reduceCoreEvent(state, frame("tool.call_delta", { tool_call_id: "tc-args", delta: "\"1+1\"}", is_streaming: true }));
+    expect(state.nodes[0].tool?.arguments).toEqual({ expression: "1+1" });
     state = reduceCoreEvent(state, frame("tool.call_delta", { tool_call_id: "tc-args", delta: "{\"expression\":\"1+1\"}", is_streaming: false }));
 
     expect(state.nodes[0].tool?.argsRaw).toBe("{\"expression\":\"1+1\"}");
+    expect(state.nodes[0].tool?.arguments).toEqual({ expression: "1+1" });
+    expect(state.nodes[0].tool?.argsState).toBe("streaming");
+  });
+
+  it("keeps the last parsed tool arguments while receiving incomplete JSON", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-stream", tool_call_id: "tc-stream", tool_name: "read" }));
+    state = reduceCoreEvent(state, frame("tool.call_delta", { tool_call_id: "tc-stream", delta: "{\"path\":\"a.txt\"}", is_streaming: false }));
+    state = reduceCoreEvent(state, frame("tool.call_delta", { tool_call_id: "tc-stream", delta: "{\"path\":\"a.txt\",\"limit\":", is_streaming: false }));
+
+    expect(state.nodes[0].tool?.argsRaw).toBe("{\"path\":\"a.txt\",\"limit\":");
+    expect(state.nodes[0].tool?.arguments).toEqual({ path: "a.txt" });
+  });
+
+  it("marks tool arguments complete on call stop", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-stop", tool_call_id: "tc-stop", tool_name: "read" }));
+    state = reduceCoreEvent(state, frame("tool.call_stop", { tool_call_id: "tc-stop", tool_name: "read", arguments: { path: "a.txt", limit: 5 } }));
+
+    expect(state.nodes[0].tool?.arguments).toEqual({ path: "a.txt", limit: 5 });
+    expect(state.nodes[0].tool?.argsState).toBe("complete");
   });
 
   it("shows failed tool error messages", () => {
@@ -47,7 +105,88 @@ describe("core event reducer", () => {
     state = reduceCoreEvent(state, frame("tool.result", { tool_call_id: "tc-fail", tool_name: "calc", success: false, error: "Parameter validation failed" }));
 
     expect(state.nodes[0].tool?.status).toBe("fail");
-    expect(state.nodes[0].tool?.resultPreview).toBe("Parameter validation failed");
+    expect(state.nodes[0].tool?.resultPreview).toBe("Error: Parameter validation failed");
+  });
+
+  it("shows failed tool output when error is empty", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-output-fail", tool_call_id: "tc-output-fail", tool_name: "shell" }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      tool_call_id: "tc-output-fail",
+      tool_name: "shell",
+      success: false,
+      output: "Exit code: 7\n\nStderr:\noops",
+      error: ""
+    }));
+
+    expect(state.nodes[0].tool?.status).toBe("fail");
+    expect(state.nodes[0].tool?.resultPreview).toContain("Exit code: 7");
+    expect(state.nodes[0].tool?.resultPreview).toContain("oops");
+  });
+
+  it("shows both failed tool error and output when both are present", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-error-output", tool_call_id: "tc-error-output", tool_name: "shell" }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      tool_call_id: "tc-error-output",
+      tool_name: "shell",
+      success: false,
+      output: "Exit code: 7\n\nStdout:\nbefore\n\nStderr:\noops",
+      error: "Command exited with status 7"
+    }));
+
+    expect(state.nodes[0].tool?.resultPreview).toContain("Error: Command exited with status 7");
+    expect(state.nodes[0].tool?.resultPreview).toContain("Output:");
+    expect(state.nodes[0].tool?.resultPreview).toContain("before");
+    expect(state.nodes[0].tool?.resultPreview).toContain("oops");
+  });
+
+  it("keeps unmatched tool results separate instead of guessing by name", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-pending-id", tool_call_id: "pending:req:0", tool_name: "WebPlugin__fetch" }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-pending-id",
+      tool_call_id: "tc-real",
+      tool_name: "WebPlugin__fetch",
+      success: false,
+      error: "抓取失败: DNS lookup failed"
+    }));
+
+    expect(state.nodes).toHaveLength(2);
+    expect(state.nodes[0].tool?.toolCallId).toBe("pending:req:0");
+    expect(state.nodes[0].tool?.status).toBe("running");
+    expect(state.nodes[1].tool?.toolCallId).toBe("tc-real");
+    expect(state.nodes[1].tool?.status).toBe("fail");
+    expect(state.nodes[1].tool?.resultPreview).toContain("DNS lookup failed");
+  });
+
+  it("creates a visible failed tool node for orphan tool results", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-orphan",
+      tool_call_id: "tc-orphan",
+      tool_name: "WebPlugin__fetch",
+      success: false,
+      error: "抓取失败"
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["tool"]);
+    expect(state.nodes[0].tool?.status).toBe("fail");
+    expect(state.nodes[0].tool?.resultPreview).toContain("抓取失败");
+  });
+
+  it("formats object tool outputs as JSON", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-json", tool_call_id: "tc-json", tool_name: "search" }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      tool_call_id: "tc-json",
+      tool_name: "search",
+      success: true,
+      output: { results: [{ title: "hello" }] }
+    }));
+
+    expect(state.nodes[0].tool?.resultPreview).toContain('"results"');
+    expect(state.nodes[0].tool?.resultPreview).toContain('"title": "hello"');
   });
 
   it("updates status, metadata, retry, and error nodes", () => {

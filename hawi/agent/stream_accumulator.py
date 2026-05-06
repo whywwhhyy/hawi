@@ -64,6 +64,7 @@ class StreamBlockAccumulator:
     # 排序/校验状态
     _pending: dict[int, list[DeltaPart]] = field(default_factory=dict, repr=False)
     _finished_indices: set[int] = field(default_factory=set, repr=False)
+    _tool_accumulators: dict[int, dict[str, Any]] = field(default_factory=dict, repr=False)
 
     @classmethod
     def create_text_handler(cls) -> StreamBlockAccumulator:
@@ -121,6 +122,26 @@ class StreamBlockAccumulator:
                 acc["name"] = chunk_name
             if chunk_args:
                 acc["arguments"] += chunk_args
+
+    @staticmethod
+    def _add_tool_delta(acc: dict[str, Any], chunk: DeltaPart) -> None:
+        chunk_id = chunk.get("id")
+        chunk_name = chunk.get("name")
+        chunk_args = chunk.get("arguments_delta")
+        if chunk_id:
+            acc["id"] = chunk_id
+        if chunk_name:
+            acc["name"] = chunk_name
+        if chunk_args:
+            acc["arguments"] += chunk_args
+
+    def _build_tool_part(self, acc: dict[str, Any]) -> ToolCallPart:
+        return ToolCallPart(
+            type="tool_call",
+            id=acc["id"],
+            name=acc["name"],
+            arguments=self._parse_tool_arguments(acc["arguments"]),
+        )
 
     def _build_part(self) -> ContentPart:
         """从累积器构建 ContentPart"""
@@ -266,6 +287,93 @@ class StreamBlockAccumulator:
 
         return part, events
 
+    def _process_tool_chunk(
+        self,
+        chunk: DeltaPart,
+        request_id: str,
+        is_streaming: bool,
+    ) -> tuple[ContentPart | None, list[Event]]:
+        idx = chunk.get("index", 0)
+        events: list[Event] = []
+
+        if chunk.get("is_start"):
+            if idx in self._tool_accumulators:
+                raise ValueError(
+                    f"Block index {idx} already started "
+                    f"(block_type={self.block_type})"
+                )
+            acc = {"id": "", "name": "", "arguments": ""}
+            self._tool_accumulators[idx] = acc
+            events.append(ModelToolCallBlockStartEvent.create(
+                request_id=request_id,
+                block_index=idx,
+                tool_call_id=chunk.get("id") or "",
+                tool_name=chunk.get("name") or "",
+            ))
+        else:
+            acc = self._tool_accumulators[idx]
+
+        acc = self._tool_accumulators[idx]
+        events.append(ModelToolCallBlockDeltaEvent.create(
+            request_id=request_id,
+            block_index=idx,
+            tool_call_id=chunk.get("id") or "",
+            arguments_delta=chunk.get("arguments_delta", ""),
+            is_streaming=is_streaming,
+        ))
+        self._add_tool_delta(acc, chunk)
+
+        part: ContentPart | None = None
+        if chunk.get("is_end"):
+            part = self._build_tool_part(acc)
+            events.append(ModelToolCallBlockStopEvent.create(
+                request_id=request_id,
+                block_index=idx,
+                tool_call_id=acc.get("id") or "",
+                tool_name=acc.get("name") or "",
+                arguments=self._parse_tool_arguments(acc.get("arguments", "")),
+            ))
+            del self._tool_accumulators[idx]
+            self._finished_indices.add(idx)
+            if not acc.get("name"):
+                part = None
+
+        return part, events
+
+    def _handle_tool_chunk(
+        self,
+        chunk: DeltaPart,
+        request_id: str,
+        is_streaming: bool,
+    ) -> list[tuple[ContentPart | None, list[Event]]]:
+        idx = chunk.get("index", 0)
+
+        if chunk.get("is_start") and idx in self._finished_indices:
+            raise ValueError(
+                f"Block index {idx} already completed "
+                f"(block_type={self.block_type})"
+            )
+
+        if idx in self._finished_indices:
+            return []
+
+        if not chunk.get("is_start") and idx not in self._tool_accumulators:
+            self._pending.setdefault(idx, []).append(chunk)
+            return []
+
+        results = [self._process_tool_chunk(chunk, request_id, is_streaming)]
+
+        if chunk.get("is_start") and idx in self._pending:
+            pending_chunks = self._pending.pop(idx)
+            for pending_chunk in pending_chunks:
+                if idx in self._finished_indices:
+                    break
+                results.append(
+                    self._process_tool_chunk(pending_chunk, request_id, is_streaming)
+                )
+
+        return results
+
     def handle(
         self,
         chunk: DeltaPart,
@@ -293,6 +401,9 @@ class StreamBlockAccumulator:
             ValueError: 收到已完成块的重复 chunk（idx 校验失败）
         """
         idx = chunk.get("index", 0)
+
+        if self.block_type == "tool_use":
+            return self._handle_tool_chunk(chunk, request_id, is_streaming)
 
         # 校验：同一 idx 不能被 start 两次（协议错误）
         # 注意：只在 is_start 时检查，迟到的 delta/end 应静默丢弃而非报错——

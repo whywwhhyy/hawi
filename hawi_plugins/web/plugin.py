@@ -100,6 +100,13 @@ class WebPlugin(HawiPlugin):
             if result.truncated:
                 content += f"\n\n... (内容已截断，共 {result.total_length} 字符，使用 start_index={start_index + max_length} 继续读取)"
 
+            if not result.success:
+                return ToolResult(
+                    output=header + content,
+                    error=content or "抓取失败",
+                    success=False,
+                )
+
             return ToolResult(
                 output=header + content,
                 success=True,

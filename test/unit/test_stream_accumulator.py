@@ -116,6 +116,25 @@ class TestBasicLifecycle:
         assert p["name"] == "search"
         assert p["arguments"] == {"q": "python"}
 
+    def test_interleaved_tool_blocks_processed_independently(self):
+        acc = StreamBlockAccumulator.create_tool_handler()
+
+        r1 = acc.handle(tool_chunk(0, tool_id="tc1", name="search", is_start=True), REQUEST_ID)
+        r2 = acc.handle(tool_chunk(1, tool_id="tc2", name="read", is_start=True), REQUEST_ID)
+        r3 = acc.handle(tool_chunk(0, args='{"q": "py'), REQUEST_ID)
+        r4 = acc.handle(tool_chunk(1, args='{"path": "a.'), REQUEST_ID)
+        r5 = acc.handle(tool_chunk(0, args='thon"}', is_end=True), REQUEST_ID)
+        r6 = acc.handle(tool_chunk(1, args='txt"}', is_end=True), REQUEST_ID)
+
+        assert all_event_types(r1 + r2).count("model.tool_call_block_start") == 2
+
+        completed = parts(r3 + r4 + r5 + r6)
+        assert len(completed) == 2
+        assert completed[0]["id"] == "tc1"
+        assert completed[0]["arguments"] == {"q": "python"}
+        assert completed[1]["id"] == "tc2"
+        assert completed[1]["arguments"] == {"path": "a.txt"}
+
     def test_reasoning_block_returns_reasoning_part(self):
         acc = StreamBlockAccumulator.create_thinking_handler()
 
@@ -317,16 +336,17 @@ class TestSorting:
         # Block 0 starts
         acc.handle(tool_chunk(0, tool_id="t0", name="foo", is_start=True), REQUEST_ID)
 
-        # Block 1 starts and ends while block 0 is still open
+        # Block 1 starts and ends while block 0 is still open; tool_use blocks
+        # are independent because model providers can emit parallel tool calls.
         acc.handle(tool_chunk(1, tool_id="t1", name="bar", is_start=True), REQUEST_ID)
-        acc.handle(tool_chunk(1, args='{"x":1}', is_end=True), REQUEST_ID)
+        results1 = acc.handle(tool_chunk(1, args='{"x":1}', is_end=True), REQUEST_ID)
 
-        # Block 0 ends — should also return flushed block 1
-        results = acc.handle(tool_chunk(0, args='{"y":2}', is_end=True), REQUEST_ID)
-        completed = parts(results)
+        # Block 0 ends separately.
+        results0 = acc.handle(tool_chunk(0, args='{"y":2}', is_end=True), REQUEST_ID)
+        completed = parts(results1 + results0)
 
         assert len(completed) == 2
-        assert completed[0]["name"] == "foo"
-        assert completed[0]["arguments"] == {"y": 2}
-        assert completed[1]["name"] == "bar"
-        assert completed[1]["arguments"] == {"x": 1}
+        assert completed[0]["name"] == "bar"
+        assert completed[0]["arguments"] == {"x": 1}
+        assert completed[1]["name"] == "foo"
+        assert completed[1]["arguments"] == {"y": 2}
