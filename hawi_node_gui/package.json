@@ -1,0 +1,30 @@
+{
+  "name": "hawi-node-gui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron GUI for Hawi core-cli",
+  "main": "dist-electron/main/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.node.json && vite build",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^39.2.7",
+    "lucide-react": "^0.561.0",
+    "markdown-it": "^14.1.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "vite": "^7.2.7"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.10.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

@@ -1,19 +1,18 @@
-"""Entry point for `python -m hawi_gui` and `uv run hawi_gui`."""
+"""Launcher for the Node/Electron Hawi GUI."""
 
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 import sys
-import warnings
 from pathlib import Path
-
-warnings.filterwarnings("ignore", message="PydanticSerializationUnexpectedValue.*")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="hawi_gui",
-        description="Hawi GUI (PyQt6)",
+        description="Hawi GUI (Electron, powered by hawi-core)",
     )
     parser.add_argument(
         "model_name",
@@ -21,49 +20,47 @@ def main() -> None:
         default="",
         help="Model factory name (optional; shows selection dialog if omitted)",
     )
+    parser.add_argument(
+        "--no-install",
+        action="store_true",
+        help="Do not run npm install when node_modules is missing",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Use the Node GUI dev script",
+    )
     args = parser.parse_args()
 
-    try:
-        from PyQt6.QtWidgets import QApplication, QDialog
-    except ImportError:
-        print("PyQt6 is not installed. Install with: uv sync --extra gui")
+    repo_root = Path(__file__).resolve().parents[1]
+    node_gui_dir = repo_root / "hawi_node_gui"
+    if not node_gui_dir.exists():
+        print(f"Node GUI project not found: {node_gui_dir}", file=sys.stderr)
         sys.exit(1)
 
-    from hawi.models import model_registry
-    from hawi_gui.app import HawiGuiApp, ModelSwitchDialog
-
-    # Load model configs
-    for cfg in [
-        Path.home() / ".hawi" / "models.yaml",
-        Path.cwd() / ".hawi" / "models.yaml",
-        Path.cwd() / "models.yaml",
-    ]:
-        if cfg.exists():
-            model_registry.load_config(cfg, quiet=True)
-
-    available = model_registry.list_models()
-    if not available:
-        print("No model factories found. Please configure ~/.hawi/models.yaml")
+    npm = shutil.which("npm")
+    if npm is None:
+        print("npm is required to launch the Hawi Electron GUI.", file=sys.stderr)
         sys.exit(1)
 
-    app = QApplication(sys.argv)
-    model_name = args.model_name if args.model_name in available else ""
-    if not model_name:
-        dlg = ModelSwitchDialog(
-            models=available,
-            current_model=available[0],
-            parent=None,
+    node_modules = node_gui_dir / "node_modules"
+    if not node_modules.exists() and not args.no_install:
+        install = subprocess.run([npm, "install"], cwd=node_gui_dir)
+        if install.returncode != 0:
+            sys.exit(install.returncode)
+    elif not node_modules.exists():
+        print(
+            "node_modules is missing. Run `npm --prefix hawi_node_gui install` first.",
+            file=sys.stderr,
         )
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            sys.exit(0)
-        selected = str(dlg.selected_model or "").strip()
-        if not selected:
-            sys.exit(0)
-        model_name = selected
+        sys.exit(1)
 
-    window = HawiGuiApp(model_name=model_name)
-    window.run()
-    sys.exit(app.exec())
+    script = "dev" if args.dev else "start"
+    cmd = [npm, "run", script, "--"]
+    if args.model_name:
+        cmd.extend(["--model", args.model_name])
+    result = subprocess.run(cmd, cwd=node_gui_dir)
+    sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
