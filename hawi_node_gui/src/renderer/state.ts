@@ -159,7 +159,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         const argsRaw = payload.is_streaming === false
           ? String(payload.delta ?? "")
           : tool.argsRaw + String(payload.delta ?? "");
-        const parsed = tryParseJson(argsRaw);
+        const parsed = parseToolArguments(argsRaw);
         return {
           ...tool,
           argsRaw,
@@ -442,12 +442,91 @@ function formatToolValue(value: unknown): string {
   }
 }
 
-function tryParseJson(value: string): { ok: true; value: unknown } | { ok: false } {
+function parseToolArguments(value: string): { ok: true; value: unknown } | { ok: false } {
   const trimmed = value.trim();
   if (!trimmed) return { ok: false };
+  const parsed = tryParseJson(trimmed);
+  if (parsed.ok) return parsed;
+
+  const closedCandidate = closePartialTopLevelObject(trimmed);
+  if (closedCandidate) {
+    const closed = tryParseJson(closedCandidate);
+    if (closed.ok) return closed;
+  }
+
+  const commaIndex = lastTopLevelComma(trimmed);
+  if (commaIndex > 0) {
+    const prefix = `${trimmed.slice(0, commaIndex)}}`;
+    const prefixParsed = tryParseJson(prefix);
+    if (prefixParsed.ok) return prefixParsed;
+  }
+
+  return { ok: false };
+}
+
+function tryParseJson(value: string): { ok: true; value: unknown } | { ok: false } {
   try {
-    return { ok: true, value: JSON.parse(trimmed) as unknown };
+    return { ok: true, value: JSON.parse(value) as unknown };
   } catch {
     return { ok: false };
   }
+}
+
+function closePartialTopLevelObject(value: string): string | undefined {
+  if (!value.startsWith("{") || value.endsWith("}")) return undefined;
+  if (endsInsideString(value) || value.trimEnd().endsWith(",")) return undefined;
+  return `${value}}`;
+}
+
+function lastTopLevelComma(value: string): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let lastComma = -1;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+    } else if (char === "{" || char === "[") {
+      depth += 1;
+    } else if (char === "}" || char === "]") {
+      depth = Math.max(0, depth - 1);
+    } else if (char === "," && depth === 1) {
+      lastComma = index;
+    }
+  }
+
+  return lastComma;
+}
+
+function endsInsideString(value: string): boolean {
+  let inString = false;
+  let escaped = false;
+  for (const char of value) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+    }
+  }
+  return inString;
 }

@@ -387,7 +387,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           {tool.argsState !== "complete" && <span className="detail-state">receiving</span>}
         </summary>
         {hasStructuredArguments
-          ? <JsonTree value={tool.arguments} />
+          ? <ToolArguments value={tool.arguments} />
           : <div className="tool-hint">{tool.argsState === "complete" ? "No arguments." : "Receiving arguments..."}</div>}
       </details>
       {(tool.resultPreview || tool.status === "fail") && (
@@ -400,58 +400,63 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   );
 });
 
-function JsonTree({ value }: { value: unknown }) {
+function ToolArguments({ value }: { value: unknown }) {
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    if (entries.length === 0) {
+      return <div className="tool-hint">No arguments.</div>;
+    }
+    return (
+      <div className="argument-list">
+        {entries.map(([key, item]) => (
+          <ArgumentRow key={key} name={key} value={item} />
+        ))}
+      </div>
+    );
+  }
   return (
-    <div className="json-tree">
-      {renderJsonValue(value)}
+    <div className="argument-list">
+      <ArgumentRow name="value" value={value} />
     </div>
   );
 }
 
-function renderJsonValue(value: unknown): ReactNode {
-  if (Array.isArray(value)) {
-    return <JsonBranch label={`Array(${value.length})`} emptyLabel="[]" entries={value.map((item, index) => [String(index), item])} />;
-  }
-  if (isRecord(value)) {
-    const entries = Object.entries(value);
-    return <JsonBranch label={`Object(${entries.length})`} emptyLabel="{}" entries={entries} />;
-  }
-  return <JsonPrimitive value={value} />;
-}
-
-function JsonBranch({ label, emptyLabel, entries }: { label: string; emptyLabel: string; entries: [string, unknown][] }) {
-  if (entries.length === 0) {
-    return <span className="json-empty">{emptyLabel}</span>;
-  }
+function ArgumentRow({ name, value }: { name: string; value: unknown }) {
+  const multiline = isMultilineArgumentValue(value);
   return (
-    <details className="json-branch" open>
-      <summary>{label}</summary>
-      <div className="json-children">
-        {entries.map(([key, value]) => (
-          <div className="json-row" key={key}>
-            <span className="json-key">{key}</span>
-            <div className="json-value">{renderJsonValue(value)}</div>
-          </div>
-        ))}
+    <div className={`argument-row ${multiline ? "multiline" : ""}`}>
+      <div className="argument-name"><strong>{name}</strong>:</div>
+      <div className="argument-value">
+        {renderArgumentValue(value)}
       </div>
-    </details>
+    </div>
   );
 }
 
-function JsonPrimitive({ value }: { value: unknown }) {
+function renderArgumentValue(value: unknown): ReactNode {
   if (value === null) {
-    return <span className="json-primitive null">null</span>;
+    return <span className="argument-primitive null">null</span>;
   }
   if (typeof value === "string") {
-    return <span className="json-primitive string">{value === "" ? "\"\"" : value}</span>;
+    return <span className="argument-primitive string">{value === "" ? "\"\"" : value}</span>;
   }
   if (typeof value === "number") {
-    return <span className="json-primitive number">{String(value)}</span>;
+    return <span className="argument-primitive number">{String(value)}</span>;
   }
   if (typeof value === "boolean") {
-    return <span className="json-primitive boolean">{String(value)}</span>;
+    return <span className="argument-primitive boolean">{String(value)}</span>;
   }
-  return <span className="json-primitive unknown">{String(value)}</span>;
+  if (Array.isArray(value) || isRecord(value)) {
+    return <pre className="argument-code">{JSON.stringify(value, null, 2)}</pre>;
+  }
+  return <span className="argument-primitive unknown">{String(value)}</span>;
+}
+
+function isMultilineArgumentValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.includes("\n");
+  }
+  return Array.isArray(value) || isRecord(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

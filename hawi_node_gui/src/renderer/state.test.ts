@@ -90,6 +90,18 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.arguments).toEqual({ path: "a.txt" });
   });
 
+  it("parses complete top-level arguments before the whole object closes", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-partial-object", tool_call_id: "tc-partial-object", tool_name: "fetch" }));
+    state = reduceCoreEvent(state, frame("tool.call_delta", {
+      tool_call_id: "tc-partial-object",
+      delta: "{\"url\":\"https://example.com\"",
+      is_streaming: false
+    }));
+
+    expect(state.nodes[0].tool?.arguments).toEqual({ url: "https://example.com" });
+  });
+
   it("marks tool arguments complete on call stop", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-stop", tool_call_id: "tc-stop", tool_name: "read" }));

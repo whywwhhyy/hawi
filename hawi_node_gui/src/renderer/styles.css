@@ -280,6 +280,76 @@ button:disabled {
   font-size: 12px;
 }
 
+.argument-list {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid #dce3e6;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #263238;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.argument-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px;
+  padding: 3px 0;
+}
+
+.argument-row.multiline {
+  display: block;
+  padding: 5px 0;
+}
+
+.argument-row.multiline .argument-value {
+  margin-top: 4px;
+}
+
+.argument-name {
+  min-width: 0;
+  color: #334047;
+  overflow-wrap: anywhere;
+}
+
+.argument-value,
+.argument-primitive {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.argument-primitive.string {
+  color: #176b5d;
+}
+
+.argument-primitive.number {
+  color: #1d5790;
+}
+
+.argument-primitive.boolean {
+  color: #8a3f7f;
+}
+
+.argument-primitive.null,
+.argument-primitive.unknown {
+  color: #7d898e;
+}
+
+.argument-code {
+  margin: 0;
+  padding: 8px;
+  border-radius: 5px;
+  background: #f4f7f8;
+  color: #263238;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
 .json-tree {
   margin-top: 8px;
   padding: 9px 10px;

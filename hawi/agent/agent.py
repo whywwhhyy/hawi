@@ -227,6 +227,7 @@ class HawiAgent:
         self._cancel_event = asyncio.Event()
         self._current_tool_calls: list[ToolCallPart] = []
         self._interrupted_tool_call_ids: list[str] = []
+        self._last_interrupt_reason: str | None = None
         self._steer_lock = threading.RLock()
         self._pending_inputs: list[PendingInput] = []
         self._session_lock = threading.RLock()
@@ -348,6 +349,7 @@ class HawiAgent:
         """
         self.on_interrupt(reason)
         self._cancel_event.set()
+        self._last_interrupt_reason = reason
         interrupted_ids = [tc.get("id", "") for tc in self._current_tool_calls]
         self._interrupted_tool_call_ids.extend(interrupted_ids)
         return interrupted_ids
@@ -378,6 +380,35 @@ class HawiAgent:
             True if interrupted, False otherwise
         """
         return self._cancel_event.is_set()
+
+    def _interrupt_tool_result_content(self, reason: str) -> str:
+        return f"Tool call interrupted before completion (reason: {reason})."
+
+    async def _recover_unanswered_tool_calls(
+        self,
+        *,
+        run_id: str | None,
+        event_bus: EventBus | None,
+        reason: str,
+        emit_events: bool,
+    ) -> None:
+        content = self._interrupt_tool_result_content(reason)
+        recovered = self._context.add_missing_tool_results(content)
+        self._last_interrupt_reason = None
+        if not emit_events or not run_id:
+            return
+        for item in recovered:
+            await self._emit_event(
+                AgentToolResultEvent.create(
+                    run_id=run_id,
+                    tool_call_id=item.tool_call_id,
+                    success=False,
+                    result_preview=content,
+                    duration_ms=0.0,
+                    result_obj=ToolResult(success=False, error=content),
+                ),
+                event_bus,
+            )
 
     @property
     def has_active_tool_calls(self) -> bool:
@@ -746,6 +777,14 @@ class HawiAgent:
         state.run_id = run_id
         start_time = time.time()
 
+        if self._last_interrupt_reason:
+            await self._recover_unanswered_tool_calls(
+                run_id=None,
+                event_bus=None,
+                reason=self._last_interrupt_reason,
+                emit_events=False,
+            )
+
         # Clear any previous interrupt state for fresh execution
         self.clear_interrupt_state()
 
@@ -1106,6 +1145,24 @@ class HawiAgent:
 
                 # Continue loop for next iteration
 
+        except asyncio.CancelledError:
+            reason = self._last_interrupt_reason or "cancelled"
+            await self._recover_unanswered_tool_calls(
+                run_id=run_id,
+                event_bus=event_bus,
+                reason=reason,
+                emit_events=True,
+            )
+            await self._emit_event(
+                AgentRunStopEvent.create(
+                    run_id=run_id,
+                    stop_reason="interrupted",
+                    duration_ms=(time.time() - start_time) * 1000,
+                    usage=cumulative_usage,
+                ),
+                event_bus,
+            )
+            raise
         except AgentError as e:
             # AgentError 已经被包装过了，发送 error event 然后重新抛出
             await self._emit_event(

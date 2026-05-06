@@ -56,6 +56,15 @@ class ToolCallContext:
 
 
 @dataclass
+class RecoveredToolResult:
+    """Synthetic tool result inserted to keep provider message history valid."""
+
+    tool_call_id: str
+    tool_name: str
+    content: str
+
+
+@dataclass
 class AgentContext:
     """Conversation context for agent execution.
 
@@ -234,6 +243,58 @@ class AgentContext:
             "metadata": None,
         })
 
+    def add_missing_tool_results(self, content: str) -> list[RecoveredToolResult]:
+        """Insert error tool results for assistant tool calls with no response.
+
+        OpenAI-compatible providers require every assistant message containing
+        tool_calls to be followed by tool messages for each tool_call_id before
+        any later user/assistant message. If an execution is cancelled during a
+        tool call, the assistant tool_call may already be in history while its
+        tool result is missing. This repairs that history in place.
+        """
+        recovered: list[RecoveredToolResult] = []
+        index = 0
+
+        while index < len(self.messages):
+            message = self.messages[index]
+            if message["role"] != "assistant":
+                index += 1
+                continue
+
+            tool_calls = self._tool_call_parts(message)
+            if not tool_calls:
+                index += 1
+                continue
+
+            insert_at = index + 1
+            responded_ids: set[str] = set()
+            while insert_at < len(self.messages) and self.messages[insert_at]["role"] == "tool":
+                responded_ids.update(self._tool_result_ids(self.messages[insert_at]))
+                insert_at += 1
+
+            for tool_call in tool_calls:
+                tool_call_id = tool_call.get("id") or ""
+                if not tool_call_id or tool_call_id in responded_ids:
+                    continue
+                tool_name = tool_call.get("name") or ""
+                self.messages.insert(
+                    insert_at,
+                    self._make_tool_result_message(tool_call_id, content, is_error=True),
+                )
+                insert_at += 1
+                responded_ids.add(tool_call_id)
+                recovered.append(
+                    RecoveredToolResult(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        content=content,
+                    )
+                )
+
+            index = insert_at
+
+        return recovered
+
     def truncate(self, keep_last: int) -> None:
         """Keep only the last N messages.
 
@@ -255,6 +316,45 @@ class AgentContext:
             self.messages.append(message)
         else:
             self.messages.insert(position, message)
+
+    @staticmethod
+    def _make_tool_result_message(
+        tool_call_id: str,
+        content: str,
+        *,
+        is_error: bool,
+    ) -> Message:
+        return {
+            "role": "tool",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_call_id": tool_call_id,
+                    "content": [{"type": "text", "text": content}],
+                    "is_error": is_error,
+                }
+            ],
+            "name": None,
+            "metadata": None,
+        }
+
+    @staticmethod
+    def _tool_call_parts(message: Message) -> list[ToolCallPart]:
+        return [
+            part
+            for part in message["content"]
+            if isinstance(part, dict) and part.get("type") == "tool_call"
+        ]
+
+    @staticmethod
+    def _tool_result_ids(message: Message) -> set[str]:
+        return {
+            str(part.get("tool_call_id") or "")
+            for part in message["content"]
+            if isinstance(part, dict)
+            and part.get("type") == "tool_result"
+            and part.get("tool_call_id")
+        }
 
     def collapse(self, start: int, end: int, summary: str) -> None:
         """Collapse a range of messages into a summary.
