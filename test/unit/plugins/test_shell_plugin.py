@@ -43,16 +43,20 @@ class TestShellPlugin:
         assert "before" in result.output
         assert "oops" in result.output
 
-    def test_run_shell_timeout_returns_command_id_and_partial_output(self, plugin):
-        """Long-running commands should stay controllable after timeout."""
+    def test_run_shell_notify_timeout_returns_command_id_and_partial_output(self, plugin):
+        """Long-running commands should stay controllable after notify_timeout."""
         result = plugin.run_shell(
             "python -c \"import time; print('started', flush=True); time.sleep(2); print('finished', flush=True)\"",
-            timeout=0.1,
+            notify_timeout=0.1,
         )
 
         assert result.success is True
         assert "Status: running" in result.output
         assert "Shell command id:" in result.output
+        assert "Notify wait elapsed: 0.1s" in result.output
+        assert "No exit code is available yet" in result.output
+        assert "Foreground wait elapsed" not in result.output
+        assert "Timeout reached" not in result.output
         assert "started" in result.output
         command_id = _extract_command_id(result.output)
 
@@ -70,7 +74,7 @@ class TestShellPlugin:
         """Status should return the final output once a background command exits."""
         result = plugin.run_shell(
             "python -c \"import time; print('started', flush=True); time.sleep(0.2); print('finished', flush=True)\"",
-            timeout=0.05,
+            notify_timeout=0.05,
         )
         command_id = _extract_command_id(result.output)
 
@@ -87,11 +91,64 @@ class TestShellPlugin:
         assert "Exit code: 0" in final.output
         assert "finished" in final.output
 
+    def test_shell_control_notify_timeout_waits_for_completion(self, plugin):
+        result = plugin.run_shell(
+            "python -c \"import time; print('started', flush=True); time.sleep(0.15); print('finished', flush=True)\"",
+            notify_timeout=0.05,
+        )
+        command_id = _extract_command_id(result.output)
+
+        final = plugin.shell_control(command_id, "status", notify_timeout=0.5)
+
+        assert final.success is True
+        assert "Status: completed" in final.output
+        assert "Exit code: 0" in final.output
+        assert "finished" in final.output
+
+    def test_shell_control_notify_timeout_returns_running_snapshot(self, plugin):
+        result = plugin.run_shell(
+            "python -c \"import time; print('started', flush=True); time.sleep(2)\"",
+            notify_timeout=0.05,
+        )
+        command_id = _extract_command_id(result.output)
+
+        status = plugin.shell_control(command_id, "status", notify_timeout=0.1)
+
+        assert status.success is True
+        assert "Status: running" in status.output
+        assert "Notify wait elapsed: 0.1s" in status.output
+        assert "started" in status.output
+
+        plugin.shell_control(command_id, "cancel")
+
     def test_shell_control_unknown_id(self, plugin):
         result = plugin.shell_control("shell-missing", "status")
 
         assert result.success is False
         assert result.error == "Unknown shell command id: shell-missing"
+
+    def test_run_shell_description_explains_notify_timeout(self, plugin):
+        run_shell_tool = next(tool for tool in plugin.tools if tool.name.endswith("__run_shell"))
+
+        assert "notify_timeout" in run_shell_tool.description
+        assert "前台等待命令完成并通知 agent 的秒数" in run_shell_tool.description
+        assert "不会杀掉命令" in run_shell_tool.description
+        assert "shell_control" in run_shell_tool.description
+
+    def test_run_shell_schema_uses_notify_timeout_parameter(self, plugin):
+        run_shell_tool = next(tool for tool in plugin.tools if tool.name.endswith("__run_shell"))
+        properties = run_shell_tool.parameters_schema["properties"]
+
+        assert "notify_timeout" in properties
+        assert "timeout" not in properties
+
+    def test_shell_control_schema_uses_notify_timeout_parameter(self, plugin):
+        shell_control_tool = next(tool for tool in plugin.tools if tool.name.endswith("__shell_control"))
+        properties = shell_control_tool.parameters_schema["properties"]
+
+        assert "notify_timeout" in properties
+        assert properties["notify_timeout"]["default"] == 0.0
+        assert "timeout" not in properties
 
 
 def _extract_command_id(output: str) -> str:

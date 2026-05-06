@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isNearChatBottom, thinkingExcerpt } from "./App";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import App, { isNearChatBottom, renderMarkdown, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
+
+describe("App", () => {
+  it("renders the boot screen without crashing", () => {
+    expect(renderToString(createElement(App))).toContain("Loading Hawi metadata");
+  });
+});
 
 describe("thinkingExcerpt", () => {
   it("does not add an ellipsis when the summary is the full content", () => {
@@ -18,5 +26,56 @@ describe("isNearChatBottom", () => {
 
   it("does not allow auto scroll when the chat is 5px or more from the bottom", () => {
     expect(isNearChatBottom({ scrollHeight: 1000, scrollTop: 595, clientHeight: 400 })).toBe(false);
+  });
+});
+
+describe("renderMarkdown", () => {
+  it("renders fenced code blocks with syntax highlighting classes", () => {
+    const html = renderMarkdown("```ts\nconst answer = 42;\n```");
+
+    expect(html).toContain("class=\"code-block\"");
+    expect(html).toContain("class=\"hljs language-typescript\"");
+    expect(html).toContain("hljs-keyword");
+  });
+
+  it("escapes unknown language code blocks", () => {
+    const html = renderMarkdown("```unknown\n<script>\n```");
+
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+  });
+});
+
+describe("shouldSubmitInputFromKeyEvent", () => {
+  it("submits plain Enter", () => {
+    expect(shouldSubmitInputFromKeyEvent({
+      key: "Enter",
+      shiftKey: false,
+      nativeEvent: {}
+    }, false)).toBe(true);
+  });
+
+  it("does not submit Shift+Enter", () => {
+    expect(shouldSubmitInputFromKeyEvent({
+      key: "Enter",
+      shiftKey: true,
+      nativeEvent: {}
+    }, false)).toBe(false);
+  });
+
+  it("does not submit Enter while an IME composition is active", () => {
+    expect(shouldSubmitInputFromKeyEvent({
+      key: "Enter",
+      shiftKey: false,
+      nativeEvent: { isComposing: true }
+    }, false)).toBe(false);
+  });
+
+  it("does not submit Enter for IME key events reported as keyCode 229", () => {
+    expect(shouldSubmitInputFromKeyEvent({
+      key: "Enter",
+      shiftKey: false,
+      nativeEvent: { keyCode: 229 }
+    }, false)).toBe(false);
   });
 });

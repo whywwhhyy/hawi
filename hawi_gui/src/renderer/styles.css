@@ -248,14 +248,118 @@ button:disabled {
   margin-bottom: 0;
 }
 
+.markdown :not(pre) > code {
+  padding: 1px 4px;
+  border: 1px solid #dfe4e7;
+  border-radius: 4px;
+  background: #f2f4f5;
+  color: #334047;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+
 .markdown pre,
 .bubble pre {
   overflow: auto;
   margin: 8px 0 0 0;
-  padding: 10px;
+  padding: 10px 12px;
+  border: 1px solid #dbe1e4;
   border-radius: 6px;
-  background: #101820;
-  color: #edf5f2;
+  background: #f5f6f7;
+  color: #263238;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.markdown pre.code-block {
+  padding: 0;
+}
+
+.markdown pre code,
+.bubble pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: pre;
+}
+
+.markdown pre.code-block code {
+  padding: 10px 12px;
+}
+
+.hljs {
+  background: transparent;
+  color: #263238;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #6f7d84;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: #9f2f45;
+}
+
+.hljs-string,
+.hljs-doctag,
+.hljs-regexp {
+  color: #176b5d;
+}
+
+.hljs-number,
+.hljs-literal {
+  color: #1f5f9c;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-selector-id {
+  color: #6b4aa0;
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-name,
+.hljs-selector-class {
+  color: #8a5a14;
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-class .hljs-title {
+  color: #26687a;
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: #1d6f78;
+}
+
+.hljs-meta,
+.hljs-deletion {
+  color: #8f2e26;
+}
+
+.hljs-addition {
+  color: #176b5d;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
 }
 
 .bubble details {
@@ -477,7 +581,11 @@ button:disabled {
 }
 
 .prompt-row textarea {
-  height: 64px;
+  min-height: calc(1.4em + 20px);
+  max-height: calc(4.2em + 20px);
+  line-height: 1.4;
+  resize: none;
+  overflow-y: hidden;
 }
 
 .prompt-row.locked {

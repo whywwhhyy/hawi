@@ -1,13 +1,53 @@
 import { memo, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import MarkdownIt from "markdown-it";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import markdownLanguage from "highlight.js/lib/languages/markdown";
+import python from "highlight.js/lib/languages/python";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
 import { Bot, Brain, Check, ChevronDown, ChevronRight, Plug, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type ChatNode } from "./state";
 
-const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true });
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("markdown", markdownLanguage);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("yaml", yaml);
+
+const LANGUAGE_ALIASES: Record<string, string> = {
+  html: "xml",
+  js: "javascript",
+  jsx: "javascript",
+  md: "markdown",
+  py: "python",
+  sh: "bash",
+  shell: "bash",
+  ts: "typescript",
+  tsx: "typescript",
+  yml: "yaml",
+  zsh: "bash"
+};
+
+const markdown = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+  highlight: highlightCode
+});
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
+const SYSTEM_PROMPT_MAX_ROWS = 3;
 
 const queueLabels: Record<QueueKind, string> = {
   normal: "普通",
@@ -24,8 +64,11 @@ export default function App() {
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const followTailRef = useRef(true);
   const selectingChatRef = useRef(false);
+  const inputComposingRef = useRef(false);
+  const inputCompositionEndTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     window.hawi.getMetadata().then((meta) => {
@@ -71,9 +114,19 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => () => {
+    if (inputCompositionEndTimerRef.current !== null) {
+      window.clearTimeout(inputCompositionEndTimerRef.current);
+    }
+  }, []);
+
   const showDebug = config?.showDebug ?? true;
   const selectedModel = config?.modelName || "-";
   const systemPromptLocked = state.nodes.some(isConversationNode);
+
+  useEffect(() => {
+    resizeTextareaToRows(systemPromptRef.current, SYSTEM_PROMPT_MAX_ROWS);
+  }, [config?.systemPrompt, systemPromptLocked]);
 
   function updateFollowTail() {
     const element = chatRef.current;
@@ -125,6 +178,24 @@ export default function App() {
     }
     setInput("");
     await sendCommand("enqueue", { content: text, queue, metadata: {} });
+  }
+
+  function startInputComposition() {
+    if (inputCompositionEndTimerRef.current !== null) {
+      window.clearTimeout(inputCompositionEndTimerRef.current);
+      inputCompositionEndTimerRef.current = null;
+    }
+    inputComposingRef.current = true;
+  }
+
+  function endInputComposition() {
+    if (inputCompositionEndTimerRef.current !== null) {
+      window.clearTimeout(inputCompositionEndTimerRef.current);
+    }
+    inputCompositionEndTimerRef.current = window.setTimeout(() => {
+      inputComposingRef.current = false;
+      inputCompositionEndTimerRef.current = null;
+    }, 0);
   }
 
   async function runSlashCommand(text: string) {
@@ -196,10 +267,15 @@ export default function App() {
       <section className={`prompt-row ${systemPromptLocked ? "locked" : ""}`}>
         <label>System Prompt:</label>
         <textarea
+          ref={systemPromptRef}
+          rows={1}
           value={config.systemPrompt}
           disabled={systemPromptLocked}
           title={systemPromptLocked ? "清空消息后可编辑" : "System Prompt"}
-          onChange={(event) => setConfig({ ...config, systemPrompt: event.target.value })}
+          onChange={(event) => {
+            resizeTextareaToRows(event.currentTarget, SYSTEM_PROMPT_MAX_ROWS);
+            setConfig({ ...config, systemPrompt: event.target.value });
+          }}
         />
         <button
           className="tool-button"
@@ -262,10 +338,13 @@ export default function App() {
           value={input}
           placeholder="输入消息"
           onChange={(event) => setInput(event.target.value)}
+          onCompositionStart={startInputComposition}
+          onCompositionEnd={endInputComposition}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (shouldSubmitInputFromKeyEvent(event, inputComposingRef.current)) {
               event.preventDefault();
               void submitInput();
+              return;
             }
             if (event.key === "Tab" && event.shiftKey) {
               event.preventDefault();
@@ -332,7 +411,7 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   if (node.kind === "thinking") {
     return <ThinkingBubble node={node} />;
   }
-  const html = node.kind === "agent" ? markdown.render(node.content) : escapeText(node.content);
+  const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
   return (
     <article className={`bubble ${node.kind}`}>
       <div className="bubble-head">
@@ -346,7 +425,7 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
 const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }) {
   const [collapsed, setCollapsed] = useState(() => node.complete === true);
   const autoCollapsedRef = useRef(node.complete === true);
-  const html = markdown.render(node.content);
+  const html = renderMarkdown(node.content);
 
   useEffect(() => {
     if (node.complete === true && !autoCollapsedRef.current) {
@@ -639,6 +718,86 @@ export function thinkingExcerpt(value: string, maxChars = 120): string {
 
 export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight < AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: number) {
+  if (!textarea) return;
+
+  textarea.style.height = "auto";
+
+  const style = window.getComputedStyle(textarea);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 20;
+  const padding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+  const border = Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth);
+  const maxHeight = lineHeight * maxRows + padding + border;
+  const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+type InputKeyEvent = {
+  key: string;
+  shiftKey: boolean;
+  nativeEvent: {
+    isComposing?: boolean;
+    keyCode?: number;
+    which?: number;
+  };
+};
+
+export function shouldSubmitInputFromKeyEvent(event: InputKeyEvent, inputComposing: boolean): boolean {
+  if (event.key !== "Enter" || event.shiftKey) return false;
+  return !isInputComposing(event, inputComposing);
+}
+
+function isInputComposing(event: InputKeyEvent, inputComposing: boolean): boolean {
+  return inputComposing
+    || event.nativeEvent.isComposing === true
+    || event.nativeEvent.keyCode === 229
+    || event.nativeEvent.which === 229;
+}
+
+export function renderMarkdown(value: string): string {
+  return markdown.render(value);
+}
+
+function highlightCode(value: string, language: string): string {
+  const normalizedLanguage = normalizeHighlightLanguage(language);
+  if (normalizedLanguage) {
+    const result = hljs.highlight(value, { language: normalizedLanguage, ignoreIllegals: true });
+    return codeBlock(result.value, normalizedLanguage);
+  }
+  return codeBlock(escapeHtml(value));
+}
+
+function normalizeHighlightLanguage(language: string): string | null {
+  const candidate = language.trim().toLowerCase();
+  if (!candidate) return null;
+  const normalized = LANGUAGE_ALIASES[candidate] ?? candidate;
+  return hljs.getLanguage(normalized) ? normalized : null;
+}
+
+function codeBlock(value: string, language?: string): string {
+  const languageClass = language ? ` language-${escapeHtmlAttribute(language)}` : "";
+  return `<pre class="code-block"><code class="hljs${languageClass}">${value}</code></pre>`;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, "");
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&": return "&amp;";
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      case "\"": return "&quot;";
+      case "'": return "&#039;";
+      default: return char;
+    }
+  });
 }
 
 function escapeText(value: string): string {
