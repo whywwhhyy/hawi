@@ -20,6 +20,7 @@ dependencies = [
     "strands-agents>=1.24.0",
     # "strands-agents-tools>=0.2.19",
     "textual>=8.1.1",
+    "websockets>=15.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,7 @@ filterwarnings = [
 
 [project.scripts]
 hawi_gui = "hawi_gui.__main__:main"
+hawi-core = "hawi_core_cli.__main__:main"
 
 [build-system]
 requires = ["setuptools>=61"]

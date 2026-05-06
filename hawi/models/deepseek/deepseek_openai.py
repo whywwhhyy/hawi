@@ -100,9 +100,9 @@ class DeepSeekOpenAIModel(OpenAIModel):
             model_id: 模型标识符，默认为 "deepseek-chat"
             api_key: API 密钥
             base_url: API 基础 URL，默认为 "https://api.deepseek.com"
-            include_reasoning_in_context: 是否在请求中包含 reasoning_content
-                - True: 在 tool calling 场景下需要回传 reasoning_content
-                - False: 不发送 reasoning_content（普通对话场景，避免 400 错误，默认）
+            include_reasoning_in_context: 是否在非工具调用的 assistant 历史中也包含
+                reasoning_content。工具调用 assistant 消息会始终回传 reasoning_content，
+                这是 DeepSeek thinking mode 的协议要求。
             **params: 其他参数，如 temperature, max_tokens 等
         """
         super().__init__(
@@ -217,40 +217,46 @@ class DeepSeekOpenAIModel(OpenAIModel):
                 if isinstance(content, list):
                     result["content"] = self._serialize_content_to_string(content)
 
-            # DeepSeek Reasoner 模型在 tool calling 场景下需要回传 reasoning_content
-            # 参考: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
-            # 但普通对话场景不应发送 reasoning_content，否则 API 会返回 400 错误
-            if (self.model_id == "deepseek-reasoner" and
-                self.include_reasoning_in_context and
-                result.get("role") == "assistant"):
-                # 从消息内容中提取 reasoning_content (来自 ReasoningPart)
-                has_reasoning_content = False
-                for part in message.get("content", []):
-                    if part.get("type") == "reasoning":
-                        result["reasoning_content"] = part.get("reasoning") or ""
-                        has_reasoning_content = True
-                        break
-
-                # 如果消息元数据中有 reasoning_content，也提取出来
-                metadata = message.get("metadata")
-                if (
-                    not has_reasoning_content
-                    and metadata
-                    and "reasoning_content" in metadata
-                ):
-                    result["reasoning_content"] = metadata["reasoning_content"] or ""
-                    has_reasoning_content = True
-
-                # 如果历史 tool call 消息完全没有 reasoning_content，保留旧的兜底；
-                # 但 adaptive thinking 返回的空 reasoning_content 是有效信号，不能覆盖。
-                # 从 result (OpenAI格式) 或原始 message content (ToolCallPart) 中检查 tool_calls
-                has_tool_calls = result.get("tool_calls") or any(
-                    part.get("type") == "tool_call" for part in message.get("content", [])
-                )
-                if not has_reasoning_content and has_tool_calls:
-                    result["reasoning_content"] = "Using tool to solve the problem..."
+            if result.get("role") == "assistant":
+                self._apply_reasoning_content(result, message)
 
         return results
+
+    def _apply_reasoning_content(
+        self,
+        result: dict[str, Any],
+        message: dict[str, Any],
+    ) -> None:
+        """Attach DeepSeek reasoning_content when the request protocol requires it."""
+        reasoning, has_reasoning = self._extract_request_reasoning(message)
+        has_tool_calls = bool(result.get("tool_calls"))
+
+        # DeepSeek thinking mode requires assistant messages that contain
+        # tool_calls to be passed back with reasoning_content. Adaptive thinking
+        # may intentionally emit no reasoning, and the valid value is then "".
+        if has_tool_calls:
+            result["reasoning_content"] = reasoning if has_reasoning else ""
+            return
+
+        # Keep the opt-in legacy behavior for callers that explicitly want to
+        # preserve reasoning on ordinary assistant turns.
+        if self.include_reasoning_in_context and has_reasoning:
+            result["reasoning_content"] = reasoning
+
+    def _extract_request_reasoning(
+        self,
+        message: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Extract reasoning_content from Hawi message content or metadata."""
+        for part in message.get("content", []):
+            if part.get("type") == "reasoning":
+                return part.get("reasoning") or "", True
+
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict) and "reasoning_content" in metadata:
+            return str(metadata.get("reasoning_content") or ""), True
+
+        return "", False
 
     def _sanitize_openai_content(self, content: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sanitized: list[dict[str, Any]] = []

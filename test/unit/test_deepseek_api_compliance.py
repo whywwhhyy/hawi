@@ -19,13 +19,13 @@ from hawi.models.deepseek._adaptive_reasoning import with_empty_reasoning_delta_
 class TestReasoningContentCompliance:
     """测试 reasoning_content 处理符合 API 规范"""
 
-    def test_reasoning_content_not_sent_in_request(self):
+    def test_reasoning_content_not_sent_in_plain_request(self):
         """
-        测试: 请求中不应包含 reasoning_content 字段
+        测试: 没有工具调用的普通请求不应包含 reasoning_content 字段
 
         DeepSeek API 文档说明:
-        - 如果请求消息中包含 reasoning_content 字段，API 会返回 400 错误
-        - reasoning_content 只能从响应中读取，不能发送到 API
+        - 普通 assistant 历史不需要回传 reasoning_content
+        - thinking mode 的 assistant tool_call 历史必须回传 reasoning_content
         """
         model = DeepSeekOpenAIModel(
             model_id="deepseek-reasoner",
@@ -50,7 +50,7 @@ class TestReasoningContentCompliance:
         # 检查 messages 中不包含 reasoning_content
         for msg in req.get("messages", []):
             assert "reasoning_content" not in msg, \
-                f"请求消息不应包含 reasoning_content 字段，否则 API 会返回 400 错误: {msg}"
+                f"普通请求消息不应包含 reasoning_content 字段: {msg}"
 
     def test_reasoning_content_extraction_from_response(self):
         """
@@ -199,6 +199,68 @@ class TestReasoningContentCompliance:
 
         assert tool_call_messages
         assert tool_call_messages[0].get("reasoning_content") == ""
+
+    def test_tool_request_without_reasoning_gets_empty_reasoning_content(self):
+        """
+        测试: assistant tool_call 历史没有 reasoning part 时，也回传空字符串
+
+        DeepSeek adaptive thinking 可能没有输出 reasoning，但 thinking mode
+        要求后续请求把 reasoning_content 字段传回去。
+        """
+        model = DeepSeekOpenAIModel(
+            model_id="deepseek-v4-pro",
+            api_key="test-key",
+        )
+
+        message: Message = {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_call",
+                    "id": "call_123",
+                    "name": "calculate",
+                    "arguments": {"expression": "1+1"},
+                },
+            ],
+            "name": None,
+            "metadata": None,
+        }
+
+        results = model._convert_message_to_openai(message)
+
+        assert len(results) == 1
+        assert results[0]["tool_calls"]
+        assert results[0]["reasoning_content"] == ""
+
+    def test_tool_request_preserves_reasoning_content_by_default(self):
+        """
+        测试: assistant tool_call 历史会回传真实 reasoning_content
+        """
+        model = DeepSeekOpenAIModel(
+            model_id="deepseek-v4-pro",
+            api_key="test-key",
+        )
+
+        message: Message = {
+            "role": "assistant",
+            "content": [
+                {"type": "reasoning", "reasoning": "Need a calculation.", "signature": None},
+                {
+                    "type": "tool_call",
+                    "id": "call_123",
+                    "name": "calculate",
+                    "arguments": {"expression": "1+1"},
+                },
+            ],
+            "name": None,
+            "metadata": None,
+        }
+
+        results = model._convert_message_to_openai(message)
+        tool_call_messages = [m for m in results if m.get("tool_calls")]
+
+        assert tool_call_messages
+        assert tool_call_messages[0]["reasoning_content"] == "Need a calculation."
 
 
 class TestAdaptiveReasoningStream:
