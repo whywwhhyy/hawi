@@ -1,12 +1,15 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { spawn, spawnSync, ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseNdjsonChunk, type CoreCommandType, type CoreFrame, type GuiMetadata, type InspectPayload, type PersistedConfig } from "../shared/protocol";
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const guiRoot = path.join(repoRoot, "hawi_gui");
+const appIndexPath = path.join(guiRoot, "dist", "index.html");
+const appIndexUrl = pathToFileURL(appIndexPath);
 const configPath = path.join(repoRoot, ".hawi", "node_gui.json");
 const backendLogPath = path.join(repoRoot, ".hawi", "hawi-core.log");
 const uvCommand = process.platform === "win32" ? "uv.cmd" : "uv";
@@ -17,7 +20,7 @@ let config: PersistedConfig | null = null;
 let core: CoreProcess | null = null;
 
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1160,
     height: 780,
     minWidth: 920,
@@ -30,12 +33,15 @@ function createWindow(): void {
       nodeIntegration: false
     }
   });
+  mainWindow = window;
 
-  mainWindow.on("closed", () => {
+  installNavigationGuards(window);
+
+  window.on("closed", () => {
     mainWindow = null;
   });
 
-  mainWindow.loadFile(path.join(guiRoot, "dist", "index.html"));
+  window.loadFile(appIndexPath);
 }
 
 app.whenReady().then(() => {
@@ -98,6 +104,45 @@ function registerIpc(): void {
     }
     return core.sendCommand(type, payload);
   });
+}
+
+function installNavigationGuards(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrl(url);
+    return { action: "deny" };
+  });
+
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isAppDocumentUrl(url)) {
+      return;
+    }
+    event.preventDefault();
+    openExternalUrl(url);
+  });
+}
+
+function openExternalUrl(url: string): void {
+  if (isOpenableExternalUrl(url)) {
+    void shell.openExternal(url);
+  }
+}
+
+function isOpenableExternalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
+  } catch {
+    return false;
+  }
+}
+
+function isAppDocumentUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "file:" && parsed.pathname === appIndexUrl.pathname;
+  } catch {
+    return false;
+  }
 }
 
 function getReady(): { inspect: InspectPayload; config: PersistedConfig } {

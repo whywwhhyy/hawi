@@ -44,6 +44,14 @@ describe("renderMarkdown", () => {
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
   });
+
+  it("renders links for external opening instead of current-window navigation", () => {
+    const html = renderMarkdown("https://example.com");
+
+    expect(html).toContain("href=\"https://example.com\"");
+    expect(html).toContain("target=\"_blank\"");
+    expect(html).toContain("rel=\"noopener noreferrer\"");
+  });
 });
 
 describe("shouldSubmitInputFromKeyEvent", () => {

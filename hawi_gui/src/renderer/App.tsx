@@ -46,6 +46,13 @@ const markdown = new MarkdownIt({
   breaks: true,
   highlight: highlightCode
 });
+const defaultLinkOpen = markdown.renderer.rules.link_open
+  ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  tokens[idx].attrSet("target", "_blank");
+  tokens[idx].attrSet("rel", "noopener noreferrer");
+  return defaultLinkOpen(tokens, idx, options, env, self);
+};
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const SYSTEM_PROMPT_MAX_ROWS = 3;
 
