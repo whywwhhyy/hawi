@@ -17,13 +17,21 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 import httpx
 
 from hawi.models.openai import OpenAIModel
-from hawi.models import MessageResponse
+from hawi.models import DeltaPart, MessageRequest, MessageResponse
 from hawi.models import BalanceInfo
+from ._adaptive_reasoning import (
+    awith_empty_reasoning_delta_if_missing,
+    ensure_reasoning_part,
+    is_reasoning_model,
+    should_ensure_reasoning_part,
+    with_empty_reasoning_delta_if_missing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,23 +224,30 @@ class DeepSeekOpenAIModel(OpenAIModel):
                 self.include_reasoning_in_context and
                 result.get("role") == "assistant"):
                 # 从消息内容中提取 reasoning_content (来自 ReasoningPart)
+                has_reasoning_content = False
                 for part in message.get("content", []):
                     if part.get("type") == "reasoning":
-                        result["reasoning_content"] = part.get("reasoning", "")
+                        result["reasoning_content"] = part.get("reasoning") or ""
+                        has_reasoning_content = True
                         break
 
                 # 如果消息元数据中有 reasoning_content，也提取出来
                 metadata = message.get("metadata")
-                if not result.get("reasoning_content") and metadata and metadata.get("reasoning_content"):
-                    result["reasoning_content"] = metadata["reasoning_content"]
+                if (
+                    not has_reasoning_content
+                    and metadata
+                    and "reasoning_content" in metadata
+                ):
+                    result["reasoning_content"] = metadata["reasoning_content"] or ""
+                    has_reasoning_content = True
 
-                # DeepSeek Reasoner API 要求 tool call 消息必须有非空的 reasoning_content
-                # 如果没有 reasoning_content 但有 tool_calls，添加一个默认的
+                # 如果历史 tool call 消息完全没有 reasoning_content，保留旧的兜底；
+                # 但 adaptive thinking 返回的空 reasoning_content 是有效信号，不能覆盖。
                 # 从 result (OpenAI格式) 或原始 message content (ToolCallPart) 中检查 tool_calls
                 has_tool_calls = result.get("tool_calls") or any(
                     part.get("type") == "tool_call" for part in message.get("content", [])
                 )
-                if not result.get("reasoning_content") and has_tool_calls:
+                if not has_reasoning_content and has_tool_calls:
                     result["reasoning_content"] = "Using tool to solve the problem..."
 
         return results
@@ -278,23 +293,55 @@ class DeepSeekOpenAIModel(OpenAIModel):
         choices = response.get("choices", [])
         if choices:
             message = choices[0].get("message", {})
-            reasoning = message.get("reasoning_content")
-            if reasoning:
-                msg_response.reasoning_content = reasoning
-                # 将 reasoning_content 添加到 content 列表作为 ReasoningPart
-                # 这样 HawiAgent 可以正确处理并显示它
-                from hawi.models.message import ReasoningPart
-                reasoning_part: ReasoningPart = {
-                    "type": "reasoning",
-                    "reasoning": reasoning,
-                    "signature": None,
-                }
-                # content 是 Iterable，需要转换为 list 才能插入
-                content_list = list(msg_response.content)
-                content_list.insert(0, reasoning_part)
-                msg_response.content = content_list
+            reasoning, server_reasoning_present = self._extract_response_reasoning(message)
+            if should_ensure_reasoning_part(
+                self.model_id,
+                server_reasoning_present=server_reasoning_present,
+            ):
+                ensure_reasoning_part(msg_response, reasoning)
 
         return msg_response
+
+    def _extract_response_reasoning(
+        self,
+        message: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Extract DeepSeek reasoning from OpenAI-compatible response message."""
+        if "reasoning_content" in message:
+            return message.get("reasoning_content") or "", True
+
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") in {"reasoning", "thinking"}:
+                    return (
+                        block.get("reasoning")
+                        or block.get("thinking")
+                        or "",
+                        True,
+                    )
+
+        return "", False
+
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
+        """同步流式调用，适配 DeepSeek adaptive thinking 的空 reasoning 块。"""
+        yield from with_empty_reasoning_delta_if_missing(
+            super()._stream_impl(request),
+            enabled=is_reasoning_model(self.model_id),
+        )
+
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步流式调用，适配 DeepSeek adaptive thinking 的空 reasoning 块。"""
+        async for part in awith_empty_reasoning_delta_if_missing(
+            super()._astream_impl(request),
+            enabled=is_reasoning_model(self.model_id),
+        ):
+            yield part
 
     def get_balance(self) -> list[BalanceInfo]:
         """

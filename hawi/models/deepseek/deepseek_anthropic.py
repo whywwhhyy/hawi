@@ -14,10 +14,18 @@ DeepSeek Anthropic API 兼容模型
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 from hawi.models.anthropic import AnthropicModel
-from hawi.models.message import MessageRequest, MessageResponse
+from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
+from ._adaptive_reasoning import (
+    awith_empty_reasoning_delta_if_missing,
+    ensure_reasoning_part,
+    is_reasoning_model,
+    should_ensure_reasoning_part,
+    with_empty_reasoning_delta_if_missing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,16 +209,54 @@ class DeepSeekAnthropicModel(AnthropicModel):
         """解析响应，提取 reasoning_content"""
         msg_response = super()._parse_response_impl(response)
 
-        # 从原始响应中提取 reasoning_content (DeepSeek Reasoner)
-        content = response.get("content", [])
-        for block in content:
-            if block.get("type") == "thinking":
-                # Anthropic format uses 'thinking' block
-                msg_response.reasoning_content = block.get("thinking", "")
-                break
-
-        # Also check for direct reasoning_content field (DeepSeek specific)
-        if not msg_response.reasoning_content:
-            msg_response.reasoning_content = response.get("reasoning_content")
+        reasoning, server_reasoning_present = self._extract_response_reasoning(response)
+        if should_ensure_reasoning_part(
+            self.model_id,
+            server_reasoning_present=server_reasoning_present,
+        ):
+            ensure_reasoning_part(msg_response, reasoning)
 
         return msg_response
+
+    def _extract_response_reasoning(
+        self,
+        response: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Extract DeepSeek reasoning from Anthropic-compatible response."""
+        content = response.get("content", [])
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type in {"thinking", "reasoning"}:
+                return (
+                    block.get("thinking")
+                    or block.get("reasoning")
+                    or "",
+                    True,
+                )
+            if block_type == "redacted_thinking":
+                return "[Redacted thinking block]", True
+
+        if "reasoning_content" in response:
+            return response.get("reasoning_content") or "", True
+
+        return "", False
+
+    def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
+        """同步流式调用，适配 DeepSeek adaptive thinking 的空 reasoning 块。"""
+        yield from with_empty_reasoning_delta_if_missing(
+            super()._stream_impl(request),
+            enabled=is_reasoning_model(self.model_id),
+        )
+
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncGenerator[DeltaPart, None]:
+        """异步流式调用，适配 DeepSeek adaptive thinking 的空 reasoning 块。"""
+        async for part in awith_empty_reasoning_delta_if_missing(
+            super()._astream_impl(request),
+            enabled=is_reasoning_model(self.model_id),
+        ):
+            yield part

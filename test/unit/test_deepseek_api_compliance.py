@@ -13,6 +13,7 @@ from unittest.mock import patch
 from hawi.models.message import MessageRequest, Message
 from hawi.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
 from hawi.models.deepseek.deepseek_anthropic import DeepSeekAnthropicModel
+from hawi.models.deepseek._adaptive_reasoning import with_empty_reasoning_delta_if_missing
 
 
 class TestReasoningContentCompliance:
@@ -85,6 +86,169 @@ class TestReasoningContentCompliance:
         reasoning_parts = [p for p in result.content if p.get("type") == "reasoning"]
         assert len(reasoning_parts) == 1
         assert reasoning_parts[0].get("reasoning") == "Step 1: Analyze the problem..."
+
+    def test_reasoner_adds_empty_reasoning_part_when_missing(self):
+        """
+        测试: Reasoner 未返回 reasoning_content 时，也补空 reasoning part
+
+        DeepSeek adaptive thinking 可能决定不输出思考内容，但 Hawi 内部
+        仍需要稳定的 reasoning block 结构。
+        """
+        model = DeepSeekOpenAIModel(
+            model_id="deepseek-reasoner",
+            api_key="test-key",
+        )
+
+        response = {
+            "id": "test-response-id",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                },
+                "finish_reason": "stop"
+            }],
+        }
+
+        result = model._parse_response_impl(response)
+
+        content = list(result.content)
+        assert content[0]["type"] == "reasoning"
+        assert content[0].get("reasoning") == ""
+        assert result.reasoning_content == ""
+
+    def test_empty_reasoning_content_is_preserved(self):
+        """
+        测试: 服务端返回空 reasoning_content 时，保留为空字符串的 reasoning part
+        """
+        model = DeepSeekOpenAIModel(
+            model_id="deepseek-chat",
+            api_key="test-key",
+        )
+
+        response = {
+            "id": "test-response-id",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Quick answer.",
+                    "reasoning_content": "",
+                },
+                "finish_reason": "stop"
+            }],
+        }
+
+        result = model._parse_response_impl(response)
+
+        content = list(result.content)
+        assert content[0]["type"] == "reasoning"
+        assert content[0].get("reasoning") == ""
+        assert result.reasoning_content == ""
+
+    def test_chat_without_reasoning_marker_does_not_add_reasoning_part(self):
+        """
+        测试: 普通 DeepSeek chat 响应没有 reasoning 标记时，不额外改变结构
+        """
+        model = DeepSeekOpenAIModel(
+            model_id="deepseek-chat",
+            api_key="test-key",
+        )
+
+        response = {
+            "id": "test-response-id",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello.",
+                },
+                "finish_reason": "stop"
+            }],
+        }
+
+        result = model._parse_response_impl(response)
+
+        assert list(result.content)[0]["type"] == "text"
+
+    def test_empty_reasoning_part_not_replaced_in_tool_request(self):
+        """
+        测试: 已存在的空 reasoning part 不会被工具调用默认文本覆盖
+        """
+        model = DeepSeekOpenAIModel(
+            model_id="deepseek-reasoner",
+            api_key="test-key",
+            include_reasoning_in_context=True,
+        )
+
+        message: Message = {
+            "role": "assistant",
+            "content": [
+                {"type": "reasoning", "reasoning": "", "signature": None},
+                {
+                    "type": "tool_call",
+                    "id": "call_123",
+                    "name": "calculate",
+                    "arguments": {"expression": "1+1"},
+                },
+            ],
+            "name": None,
+            "metadata": None,
+        }
+
+        results = model._convert_message_to_openai(message)
+        tool_call_messages = [m for m in results if m.get("tool_calls")]
+
+        assert tool_call_messages
+        assert tool_call_messages[0].get("reasoning_content") == ""
+
+
+class TestAdaptiveReasoningStream:
+    """测试 DeepSeek adaptive thinking 流式 reasoning 补齐"""
+
+    def test_stream_prepends_empty_reasoning_when_missing(self):
+        events = list(with_empty_reasoning_delta_if_missing(iter([
+            {
+                "type": "text_delta",
+                "index": 0,
+                "delta": "",
+                "is_start": True,
+                "is_end": False,
+            },
+            {
+                "type": "finish",
+                "stop_reason": "end_turn",
+                "usage": None,
+            },
+        ]), enabled=True))
+
+        assert events[0]["type"] == "reasoning_delta"
+        assert events[0]["index"] == 0
+        assert events[0]["delta"] == ""
+        assert events[0]["is_start"] is True
+        assert events[0]["is_end"] is True
+        assert events[1]["type"] == "text_delta"
+        assert events[1]["index"] == 1
+
+    def test_stream_does_not_prepend_when_reasoning_present(self):
+        events = list(with_empty_reasoning_delta_if_missing(iter([
+            {
+                "type": "reasoning_delta",
+                "index": 0,
+                "delta": "",
+                "is_start": True,
+                "is_end": False,
+            },
+            {
+                "type": "text_delta",
+                "index": 1,
+                "delta": "",
+                "is_start": True,
+                "is_end": False,
+            },
+        ]), enabled=True))
+
+        assert events[0]["type"] == "reasoning_delta"
+        assert events[1]["type"] == "text_delta"
+        assert events[1]["index"] == 1
 
 
 class TestReasonerParameterHandling:
@@ -276,6 +440,55 @@ class TestDeepSeekOpenAIAPILimits:
 
 class TestDeepSeekAnthropicAPILimits:
     """测试 DeepSeek Anthropic 格式 API 限制"""
+
+    def test_reasoner_adds_empty_reasoning_part_when_missing(self):
+        """
+        测试: Anthropic 兼容端点未返回 thinking block 时，也补空 reasoning part
+        """
+        model = DeepSeekAnthropicModel(
+            model_id="deepseek-reasoner",
+            api_key="test-key",
+        )
+
+        response = {
+            "id": "msg_123",
+            "content": [
+                {"type": "text", "text": "The answer is 42."},
+            ],
+            "stop_reason": "end_turn",
+        }
+
+        result = model._parse_response_impl(response)
+
+        content = list(result.content)
+        assert content[0]["type"] == "reasoning"
+        assert content[0].get("reasoning") == ""
+        assert result.reasoning_content == ""
+
+    def test_empty_thinking_block_is_preserved_as_reasoning(self):
+        """
+        测试: Anthropic 兼容端点返回空 thinking block 时，保留空 reasoning part
+        """
+        model = DeepSeekAnthropicModel(
+            model_id="deepseek-chat",
+            api_key="test-key",
+        )
+
+        response = {
+            "id": "msg_123",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": None},
+                {"type": "text", "text": "Quick answer."},
+            ],
+            "stop_reason": "end_turn",
+        }
+
+        result = model._parse_response_impl(response)
+
+        content = list(result.content)
+        assert content[0]["type"] == "reasoning"
+        assert content[0].get("reasoning") == ""
+        assert result.reasoning_content == ""
 
     def test_top_k_removed(self):
         """

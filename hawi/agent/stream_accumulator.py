@@ -151,6 +151,10 @@ class StreamBlockAccumulator:
         """检查累积器是否为空"""
         if self._accumulator is None:
             return True
+        if self.block_type == "reasoning":
+            # DeepSeek adaptive thinking can intentionally produce an empty
+            # reasoning block; keep it as part of the assistant message.
+            return False
         if self.block_type in ("text", "reasoning"):
             return not "".join(self._accumulator).strip()
         elif self.block_type == "tool_use":

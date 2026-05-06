@@ -126,6 +126,17 @@ class TestBasicLifecycle:
         assert len(completed) == 1
         assert completed[0]["type"] == "reasoning"
 
+    def test_empty_reasoning_block_returns_reasoning_part(self):
+        acc = StreamBlockAccumulator.create_thinking_handler()
+
+        r1 = acc.handle(thinking_chunk(0, "", is_start=True), REQUEST_ID)
+        r2 = acc.handle(thinking_chunk(0, "", is_end=True), REQUEST_ID)
+
+        completed = parts(r1 + r2)
+        assert len(completed) == 1
+        assert completed[0]["type"] == "reasoning"
+        assert completed[0].get("reasoning") == ""
+
     def test_empty_text_block_returns_none(self):
         acc = StreamBlockAccumulator.create_text_handler()
 
