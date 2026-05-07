@@ -831,6 +831,7 @@ class HawiAgent:
 
         # Track cumulative usage across all model calls (for multi-turn conversations)
         cumulative_usage: TokenUsage | None = None
+        post_conversation_reinvoke_message: str | list[ContentPart] | None = None
 
         # Add user message if provided
         if message is not None:
@@ -1259,10 +1260,26 @@ class HawiAgent:
                 error=state.error if isinstance(state.error, Exception) else None,
             )
             # after_conversation hook
-            await self._invoke_session_hook("after_conversation", _final_ctx)
+            _hr = await self._invoke_session_hook("after_conversation", _final_ctx)
+            if (
+                _hr is not None
+                and _hr.action == "reinvoke"
+                and _hr.message is not None
+                and state.error is None
+            ):
+                post_conversation_reinvoke_message = _hr.message
 
             # after_session hook
             await self._invoke_session_hook("after_session", _final_ctx)
+
+        if post_conversation_reinvoke_message is not None:
+            self._context.add_user_message(post_conversation_reinvoke_message)
+            return await self._arun_internal(
+                message=None,
+                model=model,
+                event_bus=event_bus,
+                streaming=streaming,
+            )
 
         # Build and return result
         duration_ms = (time.time() - start_time) * 1000

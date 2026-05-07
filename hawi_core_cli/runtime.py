@@ -38,6 +38,7 @@ PLUGIN_WEB = "web"
 PLUGIN_SKILLS = "skills"
 PLUGIN_PYTHON_INTERPRETER = "python_interpreter"
 PLUGIN_MCP = "mcp"
+PLUGIN_PLAN = "plan"
 
 KNOWN_PLUGINS = {
     PLUGIN_FILESYSTEM,
@@ -46,6 +47,7 @@ KNOWN_PLUGINS = {
     PLUGIN_SKILLS,
     PLUGIN_PYTHON_INTERPRETER,
     PLUGIN_MCP,
+    PLUGIN_PLAN,
 }
 
 PLUGIN_LABELS = {
@@ -55,6 +57,7 @@ PLUGIN_LABELS = {
     PLUGIN_SKILLS: "SkillsPlugin",
     PLUGIN_PYTHON_INTERPRETER: "PythonInterpreterPlugin",
     PLUGIN_MCP: "MCPPlugin",
+    PLUGIN_PLAN: "PlanPlugin",
 }
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -670,6 +673,10 @@ class CoreRuntime:
                     raise ValueError("MCP plugin requires 'config_path'.")
                 plugin = MCPPlugin(config_path=config_path)
                 await plugin.connect()
+            elif plugin_key == PLUGIN_PLAN:
+                from hawi_plugins.plan_plugin import PlanPlugin
+
+                plugin = PlanPlugin()
             else:
                 raise ValueError(f"Unknown plugin key: {plugin_key}")
             if hasattr(plugin, "bind_plugin_identity"):

@@ -365,7 +365,12 @@ class TestReinvokeAppendsMessage:
 # ===========================================================================
 
 import asyncio as _asyncio
-from hawi.plugin.decorators import before_tool_calling, after_session, before_session
+from hawi.plugin.decorators import (
+    after_conversation,
+    after_session,
+    before_session,
+    before_tool_calling,
+)
 from hawi.tool.types import ToolResult
 
 
@@ -564,3 +569,43 @@ class TestSessionHookSignaturePreservation:
         assert isinstance(after[0][1][1], HookContext), (
             f"after_session args[1] should be HookContext, got {type(after[0][1][1])}"
         )
+
+
+class TestAfterConversationReinvoke:
+    @pytest.mark.asyncio
+    async def test_after_conversation_reinvoke_redrives_agent(self):
+        requests = []
+        reinvoked = False
+
+        class CountingModel(MockModel):
+            async def _astream_impl(self, request):
+                requests.append(request)
+                yield {"type": "text_delta", "index": 0, "delta": "hello"}
+                yield {
+                    "type": "finish",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+
+        class ReinvokePlugin(HawiPlugin):
+            @after_conversation
+            def hook(self, agent, ctx):
+                nonlocal reinvoked
+                if not reinvoked:
+                    reinvoked = True
+                    return HookResult.reinvoke("continue from plan reminder")
+                return None
+
+        agent = HawiAgent(model=CountingModel(), plugins=[ReinvokePlugin()])
+        await agent.arun("start")
+
+        assert len(requests) == 2
+        messages = agent.context.messages
+        user_texts = [
+            part["text"]
+            for message in messages
+            if message["role"] == "user"
+            for part in message["content"]
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        assert user_texts == ["start", "continue from plan reminder"]

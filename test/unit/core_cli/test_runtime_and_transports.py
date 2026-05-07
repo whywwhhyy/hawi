@@ -254,6 +254,17 @@ def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
     assert "- priority (integer, required): Priority from 1 to 5" in description
 
 
+@pytest.mark.asyncio
+async def test_runtime_can_create_plan_plugin() -> None:
+    runtime = CoreRuntime(model_name="test-model")
+
+    plugins = await runtime._create_plugins(["plan"], {})
+
+    assert len(plugins) == 1
+    assert plugins[0].plugin_id == "plan"
+    assert plugins[0].plugin_name == "PlanPlugin"
+
+
 class CapturingQueuedClient(QueuedJsonClient):
     def __init__(self) -> None:
         super().__init__(queue_max=1, client_id="capture")

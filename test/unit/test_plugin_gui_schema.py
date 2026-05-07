@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hawi_plugins.filesystem_plugin import FileSystemPlugin
 from hawi_plugins.mcp_plugin import MCPPlugin
+from hawi_plugins.plan_plugin import PlanPlugin
 from hawi_plugins.python_interpreter import PythonInterpreterPlugin
 from hawi_plugins.shell_plugin import ShellPlugin
 from hawi_plugins.skills_plugin import SkillsPlugin
@@ -16,6 +17,7 @@ def test_plugins_expose_gui_schema_and_defaults():
         SkillsPlugin,
         PythonInterpreterPlugin,
         MCPPlugin,
+        PlanPlugin,
     ]
     for plugin_cls in plugin_classes:
         schema = plugin_cls.gui_config_schema()

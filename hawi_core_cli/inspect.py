@@ -11,6 +11,7 @@ from .runtime import (
     DEFAULT_SYSTEM_PROMPT,
     PLUGIN_FILESYSTEM,
     PLUGIN_MCP,
+    PLUGIN_PLAN,
     PLUGIN_PYTHON_INTERPRETER,
     PLUGIN_SHELL,
     PLUGIN_SKILLS,
@@ -42,6 +43,7 @@ def build_inspect_payload() -> dict[str, Any]:
 def _plugin_entries() -> list[tuple[str, str, type]]:
     from hawi_plugins.filesystem_plugin import FileSystemPlugin
     from hawi_plugins.mcp_plugin import MCPPlugin
+    from hawi_plugins.plan_plugin import PlanPlugin
     from hawi_plugins.python_interpreter import PythonInterpreterPlugin
     from hawi_plugins.shell_plugin import ShellPlugin
     from hawi_plugins.skills_plugin import SkillsPlugin
@@ -54,4 +56,5 @@ def _plugin_entries() -> list[tuple[str, str, type]]:
         (PLUGIN_SKILLS, "SkillsPlugin", SkillsPlugin),
         (PLUGIN_PYTHON_INTERPRETER, "PythonInterpreterPlugin", PythonInterpreterPlugin),
         (PLUGIN_MCP, "MCPPlugin", MCPPlugin),
+        (PLUGIN_PLAN, "PlanPlugin", PlanPlugin),
     ]
