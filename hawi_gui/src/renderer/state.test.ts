@@ -111,6 +111,28 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.argsState).toBe("complete");
   });
 
+  it("keeps discovered tools pending until execution starts", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-pending-tool",
+      tool_call_id: "tc-pending",
+      tool_name: "read",
+      status: "pending"
+    }));
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-pending-tool",
+      tool_call_id: "tc-pending",
+      tool_name: "read",
+      status: "running",
+      arguments: { path: "a.txt" }
+    }));
+
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0].tool?.status).toBe("running");
+    expect(state.nodes[0].tool?.arguments).toEqual({ path: "a.txt" });
+    expect(state.nodes[0].tool?.argsState).toBe("complete");
+  });
+
   it("extracts tool call descriptions from injected arguments", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-desc", tool_call_id: "tc-desc", tool_name: "read" }));

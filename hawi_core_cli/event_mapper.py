@@ -195,6 +195,7 @@ class SemanticEventMapper:
                         "tool_call_id": display_tool_call_id,
                         "actual_tool_call_id": actual_tool_call_id,
                         "tool_name": tool_name,
+                        "status": "pending",
                         "tool_call_description": "",
                     },
                 )
@@ -293,7 +294,24 @@ class SemanticEventMapper:
                     ),
                 }
             )
-            return []
+            call_info = self._active_tool_calls.get(display_tool_call_id, {})
+            return [
+                make_frame(
+                    "tool.call_start",
+                    {
+                        "run_id": call_info.get("run_id", getattr(event, "run_id", "")),
+                        "tool_call_id": display_tool_call_id,
+                        "actual_tool_call_id": actual_tool_call_id,
+                        "tool_name": call_info.get("tool_name", ""),
+                        "status": "running",
+                        "tool_call_description": call_info.get(
+                            "tool_call_description",
+                            "",
+                        ),
+                        "arguments": call_info.get("arguments", {}),
+                    },
+                )
+            ]
 
         if etype == "agent.tool_result_part":
             actual_tool_call_id = str(getattr(event, "tool_call_id", ""))

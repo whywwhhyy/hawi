@@ -78,6 +78,15 @@ def test_mapper_emits_tool_events_and_result() -> None:
     )
     assert start[0]["type"] == "tool.call_start"
     assert start[0]["payload"]["tool_name"] == "calc"
+    assert start[0]["payload"]["status"] == "pending"
+
+    running = mapper.map(
+        AgentToolCallEvent.create("run-3", "calc", {"expression": "2+2"}, "tc-1")
+    )
+    assert running[0]["type"] == "tool.call_start"
+    assert running[0]["payload"]["tool_call_id"] == "tc-1"
+    assert running[0]["payload"]["status"] == "running"
+    assert running[0]["payload"]["arguments"] == {"expression": "2+2"}
 
     result = mapper.map(
         AgentToolResultEvent.create(
@@ -180,6 +189,7 @@ def test_mapper_reconciles_pending_tool_call_id() -> None:
     display_id = start[0]["payload"]["tool_call_id"]
     assert display_id.startswith("pending:req-pending:0")
     assert start[0]["payload"]["actual_tool_call_id"] == ""
+    assert start[0]["payload"]["status"] == "pending"
 
     delta = mapper.map(
         ModelToolCallBlockDeltaEvent.create(
@@ -203,7 +213,7 @@ def test_mapper_reconciles_pending_tool_call_id() -> None:
     assert stop[0]["payload"]["tool_call_id"] == display_id
     assert stop[0]["payload"]["actual_tool_call_id"] == "tc-real"
 
-    mapper.map(
+    running = mapper.map(
         AgentToolCallEvent.create(
             "run-pending-tool",
             "WebPlugin__fetch",
@@ -211,6 +221,8 @@ def test_mapper_reconciles_pending_tool_call_id() -> None:
             "tc-real",
         )
     )
+    assert running[0]["payload"]["tool_call_id"] == display_id
+    assert running[0]["payload"]["status"] == "running"
     result = mapper.map(
         AgentToolResultEvent.create(
             "run-pending-tool",

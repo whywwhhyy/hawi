@@ -395,6 +395,11 @@ button:disabled {
   border-color: #cdd7df;
 }
 
+.bubble.tool.pending {
+  background: #f8faf9;
+  border-color: #d9e0e2;
+}
+
 .bubble.tool.success {
   border-color: #b8d7c9;
 }
@@ -448,6 +453,10 @@ button:disabled {
 
 .tool-actions {
   flex-shrink: 0;
+}
+
+.bubble.tool.pending .tool-actions strong {
+  color: #6b7780;
 }
 
 .bubble.tool.success .tool-actions strong {

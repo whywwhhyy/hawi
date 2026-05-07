@@ -1,6 +1,8 @@
 import type { CoreFrame, PluginArtifactPayload, QueueKind } from "../shared/protocol";
 
 const TOOL_CALL_DESCRIPTION_PARAMETER = "tool_call_description";
+const MAX_DEBUG_LINES = 200;
+const MAX_RESULT_PREVIEW_LENGTH = 1200;
 
 export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider";
 
@@ -18,7 +20,7 @@ export interface ToolState {
   toolCallId: string;
   name: string;
   description?: string;
-  status: "running" | "success" | "fail";
+  status: "pending" | "running" | "success" | "fail";
   argsRaw: string;
   argsState: "pending" | "streaming" | "complete";
   arguments?: unknown;
@@ -205,14 +207,42 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
       const completedState = completeThinkingForRun(state, runId);
       const toolCallId = String(payload.tool_call_id ?? "");
+      const status = normalizeToolStatus(payload.status, "running");
+      const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
+      const argumentInfo = hasArguments ? splitToolArguments(payload.arguments) : undefined;
+      const existingNodeId = completedState.toolNodeByCallId[toolCallId];
+      if (existingNodeId) {
+        return updateNode(completedState, existingNodeId, (node) => {
+          if (!node.tool) return node;
+          const description = optionalString(payload.tool_call_description)
+            ?? argumentInfo?.description
+            ?? node.tool.description;
+          return {
+            ...node,
+            tool: {
+              ...node.tool,
+              runId,
+              name: String(payload.tool_name || node.tool.name),
+              description,
+              status,
+              argsState: argumentInfo ? "complete" : node.tool.argsState,
+              arguments: argumentInfo ? argumentInfo.arguments : node.tool.arguments,
+              argsRaw: argumentInfo
+                ? JSON.stringify(argumentInfo.arguments, null, 2)
+                : node.tool.argsRaw
+            }
+          };
+        });
+      }
       const tool: ToolState = {
         runId,
         toolCallId,
         name: String(payload.tool_name ?? "pending"),
         description: optionalString(payload.tool_call_description),
-        status: "running",
+        status,
         argsRaw: "",
-        argsState: "pending",
+        argsState: argumentInfo ? "complete" : "pending",
+        arguments: argumentInfo?.arguments,
         resultPreview: ""
       };
       const node: ChatNode = {
@@ -311,7 +341,10 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           kind: "debug",
           content: String(payload.message ?? "")
         }),
-        debugLines: [...state.debugLines.slice(-199), String(payload.message ?? "")]
+        debugLines: [
+          ...state.debugLines.slice(-(MAX_DEBUG_LINES - 1)),
+          String(payload.message ?? ""),
+        ]
       };
 
     case "error":
@@ -756,6 +789,12 @@ function normalizeProgress(value: unknown): number | undefined {
   return Math.min(1, Math.max(0, normalized));
 }
 
+function normalizeToolStatus(value: unknown, fallback: ToolState["status"]): ToolState["status"] {
+  return value === "pending" || value === "running" || value === "success" || value === "fail"
+    ? value
+    : fallback;
+}
+
 function nodeId(kind: string, id: string): string {
   return `${kind}-${id}`;
 }
@@ -786,7 +825,7 @@ function formatRunStop(payload: Record<string, unknown>): string {
   return `${reason} · ${(durationMs / 1000).toFixed(1)}s`;
 }
 
-function truncate(value: string, max = 1200): string {
+function truncate(value: string, max = MAX_RESULT_PREVIEW_LENGTH): string {
   if (value.length <= max) return value;
   return `${value.slice(0, max)}...`;
 }

@@ -559,7 +559,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
 
 const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   const tool = node.tool!;
-  const completed = tool.status !== "running";
+  const completed = tool.status === "success" || tool.status === "fail";
   const [collapsed, setCollapsed] = useState(() => completed);
   const autoCollapsedRef = useRef(completed);
   const hasStructuredArguments = tool.arguments !== undefined;

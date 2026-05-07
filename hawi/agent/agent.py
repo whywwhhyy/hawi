@@ -1020,16 +1020,6 @@ class HawiAgent:
                                 content_parts.append(part)
                                 if part["type"] == "tool_call":
                                     tool_calls.append(part)
-                                    # For tool calls, also send AgentToolCallEvent
-                                    await self._emit_event(
-                                        AgentToolCallEvent.create(
-                                            run_id=run_id,
-                                            tool_name=part["name"],
-                                            arguments=part["arguments"],
-                                            tool_call_id=part["id"],
-                                        ),
-                                        event_bus,
-                                    )
                 finally:
                     # Ensure the model stream generator is properly closed
                     await model_stream_gen.aclose()
@@ -1155,6 +1145,7 @@ class HawiAgent:
                         record = await self._execute_tool(
                             tc,
                             state,
+                            event_bus=event_bus,
                             materialize_pending_steer=False,
                         )
                         state.tool_calls.append(record)
@@ -1591,6 +1582,7 @@ class HawiAgent:
         tool_call: ToolCallPart,
         state: _ExecutionState,
         *,
+        event_bus: EventBus | None = None,
         materialize_pending_steer: bool = True,
     ) -> ToolCallRecord:
         """Execute a single tool call."""
@@ -1599,6 +1591,16 @@ class HawiAgent:
         tool_call_id = tool_call["id"]
 
         start_time = time.time()
+
+        await self._emit_event(
+            AgentToolCallEvent.create(
+                run_id=state.run_id,
+                tool_name=tool_name,
+                arguments=arguments,
+                tool_call_id=tool_call_id,
+            ),
+            event_bus,
+        )
 
         # Find tool early so hook context can include the tool object
         tool = self._plugin_manager.get_tool(tool_name)
