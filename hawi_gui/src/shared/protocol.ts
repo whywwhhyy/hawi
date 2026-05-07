@@ -2,6 +2,16 @@ export const VERSION = "hawi.core.v1";
 
 export type QueueKind = "normal" | "high_prio" | "urgent";
 
+export interface QueueMessageSnapshot {
+  id: string;
+  queue: QueueKind;
+  content_preview: string;
+  created_at?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export type QueueMessagesSnapshot = Record<QueueKind, QueueMessageSnapshot[]>;
+
 export type CoreCommandType =
   | "hello"
   | "enqueue"

@@ -24,7 +24,7 @@ from hawi.events.scheduler_events import (
 )
 from hawi.models.message import ContentPart
 
-from .queue import QueueType, QueuedMessage, MessageQueueManager
+from .queue import QueueMessageSnapshot, QueueType, QueuedMessage, MessageQueueManager
 from .interceptor import EventMode, EventInterceptor
 from .executor import AgentExecutor, SchedulerState, ErrorAction
 
@@ -268,6 +268,10 @@ class HawiScheduler:
             Dictionary with queue lengths
         """
         return self._queue_manager.get_queue_lengths()
+
+    def get_queue_messages(self) -> dict[str, list[QueueMessageSnapshot]]:
+        """Get current queued message previews grouped by queue kind."""
+        return self._queue_manager.get_queue_messages()
 
     # Event handling
 

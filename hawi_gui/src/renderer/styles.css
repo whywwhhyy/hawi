@@ -86,7 +86,10 @@ button:disabled {
 }
 
 .priority-status {
+  border: 0;
   border-right: 1px solid #d7dcdd;
+  background: transparent;
+  color: inherit;
 }
 
 .priority-status span {
@@ -95,6 +98,11 @@ button:disabled {
 
 .priority-status strong {
   color: #286352;
+}
+
+.priority-status:hover,
+.priority-status.active {
+  background: #edf7f3;
 }
 
 .context-status {
@@ -192,6 +200,10 @@ button:disabled {
   gap: 6px;
 }
 
+.workspace-row.with-queue-sidebar {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px) minmax(300px, 360px);
+}
+
 .chat-panel {
   min-height: 0;
   overflow: auto;
@@ -200,6 +212,118 @@ button:disabled {
   border: 1px solid #d7dcdd;
   background: #ffffff;
   user-select: text;
+}
+
+.queue-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #d7dcdd;
+  background: #ffffff;
+}
+
+.queue-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid #dfe4e5;
+  color: #3a474d;
+  font-size: 12px;
+}
+
+.queue-sidebar-head div {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.queue-sidebar-head strong {
+  color: #176b5d;
+}
+
+.queue-group {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 9px 10px;
+  border-bottom: 1px solid #edf1f2;
+}
+
+.queue-group:last-child {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 0;
+}
+
+.queue-group header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: #4b585e;
+  font-size: 12px;
+}
+
+.queue-group header strong {
+  color: #176b5d;
+}
+
+.queue-merge-note,
+.queue-empty {
+  color: #7d898e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.queue-merge-note {
+  margin: -2px 0 6px;
+}
+
+.queue-message-list {
+  display: grid;
+  gap: 7px;
+  max-height: 100%;
+  overflow: auto;
+}
+
+.queue-message {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #dfe5e7;
+  border-radius: 6px;
+  background: #f8faf9;
+}
+
+.queue-message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #7a878c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+
+.queue-message-meta span,
+.queue-message-meta time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-message p {
+  margin: 5px 0 0;
+  color: #263238;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .plugin-preview {

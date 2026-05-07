@@ -27,6 +27,17 @@ describe("renderPriorityStatusText", () => {
   it("shows empty interruption and merge states", () => {
     expect(renderPriorityStatusText({ urgent: 0, high_prio: 0, normal: 0 })).toBe("打断 无 · 合并 0 · 队列 0");
   });
+
+  it("counts pending high priority previews as a merged slot", () => {
+    expect(renderPriorityStatusText(
+      { urgent: 0, high_prio: 0, normal: 2 },
+      {
+        urgent: [],
+        high_prio: [{ id: "steer-1", queue: "high_prio", contentPreview: "steer" }],
+        normal: []
+      }
+    )).toBe("打断 无 · 合并 1 · 队列 2");
+  });
 });
 
 describe("isNearChatBottom", () => {

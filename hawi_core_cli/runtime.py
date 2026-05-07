@@ -745,13 +745,36 @@ class CoreRuntime:
                 "scheduler_state": "STOPPED",
                 "agent_state": "STOPPED",
                 "queue_lengths": {"normal": 0, "high_prio": 0, "urgent": 0},
+                "queue_messages": {"normal": [], "high_prio": [], "urgent": []},
                 "model_name": self.model_name,
             }
+        queue_messages_getter = getattr(self._scheduler, "get_queue_messages", None)
+        queue_messages = (
+            queue_messages_getter()
+            if callable(queue_messages_getter)
+            else {"normal": [], "high_prio": [], "urgent": []}
+        )
+        pending_input_getter = getattr(
+            self._scheduler.agent,
+            "get_pending_input_messages",
+            None,
+        )
+        if callable(pending_input_getter):
+            pending_inputs = pending_input_getter()
+            if pending_inputs:
+                queue_messages = {
+                    **queue_messages,
+                    "high_prio": [
+                        *queue_messages.get("high_prio", []),
+                        *pending_inputs,
+                    ],
+                }
         payload = {
             "ready": True,
             "scheduler_state": self._scheduler.state.name,
             "agent_state": self._scheduler._executor.state.name,
             "queue_lengths": self._scheduler.get_queue_lengths(),
+            "queue_messages": queue_messages,
             "model_name": self.model_name,
         }
         context_usage = self._agent_context_usage()

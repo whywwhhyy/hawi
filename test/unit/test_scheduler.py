@@ -141,6 +141,21 @@ class TestMessageQueueManager:
         lengths = qm.get_queue_lengths()
         assert lengths == {"normal": 2, "high_prio": 1, "urgent": 1}
 
+    def test_get_queue_messages(self):
+        qm = MessageQueueManager()
+        normal = qm.enqueue_normal("normal message", {"source": "test"})
+        high = qm.enqueue_high_prio("high message")
+        urgent = qm.enqueue_urgent("urgent message")
+
+        messages = qm.get_queue_messages()
+
+        assert messages["normal"][0]["id"] == normal.id
+        assert messages["normal"][0]["queue"] == "normal"
+        assert messages["normal"][0]["content_preview"] == "normal message"
+        assert messages["normal"][0]["metadata"] == {"source": "test"}
+        assert messages["high_prio"][0]["id"] == high.id
+        assert messages["urgent"][0]["id"] == urgent.id
+
     def test_remove_message_by_id(self):
         qm = MessageQueueManager()
         msg = qm.enqueue_normal("to remove")

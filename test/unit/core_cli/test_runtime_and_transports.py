@@ -69,6 +69,21 @@ class DummyScheduler:
     def get_queue_lengths(self) -> dict[str, int]:
         return {"normal": 0, "high_prio": 0, "urgent": 0}
 
+    def get_queue_messages(self) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "normal": [
+                {
+                    "id": "msg-1",
+                    "queue": "normal",
+                    "content_preview": "queued",
+                    "created_at": 123.0,
+                    "metadata": {},
+                }
+            ],
+            "high_prio": [],
+            "urgent": [],
+        }
+
     def enqueue(self, content: Any, queue: str, metadata: dict[str, Any]) -> str:
         self.enqueued.append((content, queue, metadata))
         return "msg-123"
@@ -188,6 +203,26 @@ async def test_enqueue_command_returns_message_id() -> None:
     assert client.sent[-1]["type"] == "ack"
     assert client.sent[-1]["payload"]["message_id"] == "msg-123"
     assert scheduler.enqueued == [("hi", "high_prio", {"queue_kind": "high_prio"})]
+
+
+def test_status_payload_includes_queue_messages() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    scheduler = DummyScheduler()
+    scheduler.agent.get_pending_input_messages = lambda: [  # type: ignore[attr-defined]
+        {
+            "id": "steer-1",
+            "queue": "high_prio",
+            "content_preview": "pending steer",
+            "created_at": 124.0,
+            "metadata": {},
+        }
+    ]
+    runtime._scheduler = scheduler  # type: ignore[assignment]
+
+    payload = runtime._status_payload()
+
+    assert payload["queue_messages"]["normal"][0]["content_preview"] == "queued"
+    assert payload["queue_messages"]["high_prio"][0]["content_preview"] == "pending steer"
 
 
 def test_parse_extra_tool_parameter() -> None:

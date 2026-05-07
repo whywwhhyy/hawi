@@ -14,7 +14,7 @@ import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, FileText, Plug,
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ToolProgressState } from "./state";
+import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type QueueMessageState, type ToolProgressState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -65,10 +65,20 @@ const queueLabels: Record<QueueKind, string> = {
   urgent: "紧急打断"
 };
 
-export function renderPriorityStatusText(queueLengths: Record<QueueKind, number>): string {
+export function renderPriorityStatusText(
+  queueLengths: Record<QueueKind, number>,
+  queueMessages?: Record<QueueKind, QueueMessageState[]>
+): string {
   const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
-  const highMergedCount = queueLengths.high_prio > 0 ? 1 : 0;
+  const highMergedCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
   return `打断 ${urgentStatus} · 合并 ${highMergedCount} · 队列 ${queueLengths.normal}`;
+}
+
+function hasHighPriorityWork(
+  queueLengths: Record<QueueKind, number>,
+  queueMessages?: Record<QueueKind, QueueMessageState[]>
+): boolean {
+  return queueLengths.high_prio > 0 || (queueMessages?.high_prio.length ?? 0) > 0;
 }
 
 export default function App() {
@@ -79,6 +89,7 @@ export default function App() {
   const [queue, setQueue] = useState<QueueKind>("high_prio");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
+  const [queueSidebarOpen, setQueueSidebarOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -340,7 +351,12 @@ export default function App() {
         <div className="status-strip">
           <StatusCell label="Scheduler" value={state.schedulerState} />
           <StatusCell label="Agent" value={state.agentState} />
-          <PriorityStatusCell queueLengths={state.queueLengths} />
+          <PriorityStatusCell
+            queueLengths={state.queueLengths}
+            queueMessages={state.queueMessages}
+            open={queueSidebarOpen}
+            onToggle={() => setQueueSidebarOpen((value) => !value)}
+          />
           <ContextUsageCell usage={state.contextUsage} />
         </div>
         <button className="tool-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
@@ -374,7 +390,7 @@ export default function App() {
         </button>
       </section>
 
-      <section className="workspace-row">
+      <section className={`workspace-row ${queueSidebarOpen ? "with-queue-sidebar" : ""}`}>
         <main
           className="chat-panel"
           ref={chatRef}
@@ -392,6 +408,13 @@ export default function App() {
               <ChatBubble node={node} key={node.id} />
             ))}
         </main>
+        {queueSidebarOpen && (
+          <QueueSidebar
+            queueLengths={state.queueLengths}
+            queueMessages={state.queueMessages}
+            onClose={() => setQueueSidebarOpen(false)}
+          />
+        )}
         <PluginPreviewPanel
           artifacts={state.artifacts}
           artifactOrder={state.artifactOrder}
@@ -498,20 +521,33 @@ function StatusCell({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PriorityStatusCell({ queueLengths }: { queueLengths: Record<QueueKind, number> }) {
+function PriorityStatusCell({
+  queueLengths,
+  queueMessages,
+  open,
+  onToggle
+}: {
+  queueLengths: Record<QueueKind, number>;
+  queueMessages: Record<QueueKind, QueueMessageState[]>;
+  open: boolean;
+  onToggle: () => void;
+}) {
   const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
-  const highMergedCount = queueLengths.high_prio > 0 ? 1 : 0;
+  const highMergedCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
 
   return (
-    <div
-      className="priority-status"
+    <button
+      type="button"
+      className={`priority-status ${open ? "active" : ""}`}
       title="紧急消息直接打断当前运行；高优消息合并为一次 steer；普通消息进入队列。"
-      aria-label={renderPriorityStatusText(queueLengths)}
+      aria-label={renderPriorityStatusText(queueLengths, queueMessages)}
+      aria-pressed={open}
+      onClick={onToggle}
     >
       <span>打断 <strong>{urgentStatus}</strong></span>
       <span>合并 <strong>{highMergedCount}</strong></span>
       <span>队列 <strong>{queueLengths.normal}</strong></span>
-    </div>
+    </button>
   );
 }
 
@@ -530,6 +566,92 @@ function ContextUsageCell({ usage }: { usage?: ContextUsageState }) {
       </div>
       <small>{used}/{max} · {source}</small>
     </div>
+  );
+}
+
+function QueueSidebar({
+  queueLengths,
+  queueMessages,
+  onClose
+}: {
+  queueLengths: Record<QueueKind, number>;
+  queueMessages: Record<QueueKind, QueueMessageState[]>;
+  onClose: () => void;
+}) {
+  const total = queueLengths.urgent + (hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0) + queueLengths.normal;
+  return (
+    <aside className="queue-sidebar">
+      <header className="queue-sidebar-head">
+        <div>
+          <span>待处理消息</span>
+          <strong>{total}</strong>
+        </div>
+        <button className="icon-button" title="隐藏队列侧栏" onClick={onClose}>
+          <X size={16} />
+        </button>
+      </header>
+      <QueueMessageGroup
+        kind="urgent"
+        length={queueLengths.urgent}
+        messages={queueMessages.urgent}
+      />
+      <QueueMessageGroup
+        kind="high_prio"
+        length={Math.max(queueLengths.high_prio, queueMessages.high_prio.length)}
+        messages={queueMessages.high_prio}
+      />
+      <QueueMessageGroup
+        kind="normal"
+        length={queueLengths.normal}
+        messages={queueMessages.normal}
+      />
+    </aside>
+  );
+}
+
+function QueueMessageGroup({
+  kind,
+  length,
+  messages
+}: {
+  kind: QueueKind;
+  length: number;
+  messages: QueueMessageState[];
+}) {
+  const displayCount = kind === "high_prio" ? (length > 0 ? 1 : 0) : length;
+  const mergeNote = kind === "high_prio" && messages.length > 1
+    ? `已合并 ${messages.length} 条`
+    : "";
+  return (
+    <section className="queue-group">
+      <header>
+        <span>{queueLabels[kind]}</span>
+        <strong>{displayCount}</strong>
+      </header>
+      {mergeNote && <div className="queue-merge-note">{mergeNote}</div>}
+      {messages.length === 0 ? (
+        <div className="queue-empty">{displayCount > 0 ? "暂无消息预览" : "空"}</div>
+      ) : (
+        <div className="queue-message-list">
+          {messages.map((message) => (
+            <QueueMessageItem message={message} key={`${kind}-${message.id}`} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function QueueMessageItem({ message }: { message: QueueMessageState }) {
+  const timestamp = formatQueueTimestamp(message.createdAt);
+  return (
+    <article className="queue-message">
+      <div className="queue-message-meta">
+        <span>{message.id}</span>
+        {timestamp && <time>{timestamp}</time>}
+      </div>
+      <p>{message.contentPreview || "空消息"}</p>
+    </article>
   );
 }
 
@@ -1087,6 +1209,18 @@ function compactNumber(value: number): string {
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (Math.abs(value) >= 10_000) return `${Math.round(value / 1000)}k`;
   return `${Math.round(value)}`;
+}
+
+function formatQueueTimestamp(value?: number): string | null {
+  if (value === undefined || !Number.isFinite(value)) return null;
+  const millis = value < 10_000_000_000 ? value * 1000 : value;
+  const date = new Date(millis);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 }
 
 export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">): boolean {

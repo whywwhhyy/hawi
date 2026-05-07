@@ -88,6 +88,14 @@ export interface ContextUsageState {
   source?: "estimate" | "provider_usage";
 }
 
+export interface QueueMessageState {
+  id: string;
+  queue: QueueKind;
+  contentPreview: string;
+  createdAt?: number;
+  metadata?: Record<string, unknown>;
+}
+
 interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
@@ -101,6 +109,7 @@ export interface AppState {
   schedulerState: string;
   agentState: string;
   queueLengths: Record<QueueKind, number>;
+  queueMessages: Record<QueueKind, QueueMessageState[]>;
   metadataLines: string[];
   contextUsage?: ContextUsageState;
   debugLines: string[];
@@ -121,6 +130,7 @@ export function createInitialState(): AppState {
     schedulerState: "IDLE",
     agentState: "IDLE",
     queueLengths: { normal: 0, high_prio: 0, urgent: 0 },
+    queueMessages: { normal: [], high_prio: [], urgent: [] },
     metadataLines: [],
     contextUsage: undefined,
     debugLines: [],
@@ -398,6 +408,10 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
   const schedulerState = String(payload.scheduler_state ?? state.schedulerState);
   const agentState = String(payload.agent_state ?? state.agentState);
   const queueLengths = normalizeQueueLengths(payload.queue_lengths, state.queueLengths);
+  const queueMessages = normalizeQueueMessages(
+    payload.queue_messages,
+    trimQueueMessages(state.queueMessages, queueLengths)
+  );
   const contextUsage = chooseContextUsage(
     state.contextUsage,
     parseStatusContextUsage(payload.context_usage)
@@ -406,6 +420,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     schedulerState === state.schedulerState
     && agentState === state.agentState
     && sameQueueLengths(queueLengths, state.queueLengths)
+    && sameQueueMessages(queueMessages, state.queueMessages)
     && sameContextUsage(contextUsage, state.contextUsage)
   ) {
     return state;
@@ -415,6 +430,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     schedulerState,
     agentState,
     queueLengths,
+    queueMessages,
     contextUsage
   };
 }
@@ -918,8 +934,66 @@ function normalizeQueueLengths(value: unknown, fallback: Record<QueueKind, numbe
   };
 }
 
+function normalizeQueueMessages(
+  value: unknown,
+  fallback: Record<QueueKind, QueueMessageState[]> = { normal: [], high_prio: [], urgent: [] }
+): Record<QueueKind, QueueMessageState[]> {
+  if (!isRecord(value)) return fallback;
+  return {
+    normal: normalizeQueueMessageList(value.normal, "normal"),
+    high_prio: normalizeQueueMessageList(value.high_prio, "high_prio"),
+    urgent: normalizeQueueMessageList(value.urgent, "urgent")
+  };
+}
+
+function normalizeQueueMessageList(value: unknown, queue: QueueKind): QueueMessageState[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item, index) => {
+      const id = optionalString(item.id) ?? `${queue}-${index}`;
+      return {
+        id,
+        queue: normalizeQueue(item.queue ?? queue),
+        contentPreview: optionalString(item.content_preview)
+          ?? optionalString(item.contentPreview)
+          ?? "",
+        createdAt: optionalNumber(item.created_at ?? item.createdAt),
+        metadata: isRecord(item.metadata) ? item.metadata : undefined
+      };
+    });
+}
+
+function trimQueueMessages(
+  messages: Record<QueueKind, QueueMessageState[]>,
+  lengths: Record<QueueKind, number>
+): Record<QueueKind, QueueMessageState[]> {
+  return {
+    normal: messages.normal.slice(0, Math.max(0, lengths.normal)),
+    high_prio: messages.high_prio.slice(0, Math.max(0, lengths.high_prio)),
+    urgent: messages.urgent.slice(0, Math.max(0, lengths.urgent))
+  };
+}
+
 function sameQueueLengths(left: Record<QueueKind, number>, right: Record<QueueKind, number>): boolean {
   return left.normal === right.normal && left.high_prio === right.high_prio && left.urgent === right.urgent;
+}
+
+function sameQueueMessages(left: Record<QueueKind, QueueMessageState[]>, right: Record<QueueKind, QueueMessageState[]>): boolean {
+  return sameQueueMessageList(left.normal, right.normal)
+    && sameQueueMessageList(left.high_prio, right.high_prio)
+    && sameQueueMessageList(left.urgent, right.urgent);
+}
+
+function sameQueueMessageList(left: QueueMessageState[], right: QueueMessageState[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index];
+    return item.id === other.id
+      && item.queue === other.queue
+      && item.contentPreview === other.contentPreview
+      && item.createdAt === other.createdAt;
+  });
 }
 
 function formatRunStop(payload: Record<string, unknown>): string {

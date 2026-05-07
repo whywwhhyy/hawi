@@ -12,6 +12,8 @@ from typing import Any, Callable
 from hawi.events import EventBus
 from hawi.models.message import ContentPart
 
+QueueMessageSnapshot = dict[str, Any]
+
 
 class QueueType(Enum):
     """Queue type enumeration with priority semantics."""
@@ -159,6 +161,33 @@ class MessageQueueManager:
             "urgent": 1 if self._pending_urgent else 0,
             "high_prio": len(self._high_prio_queue),
             "normal": len(self._normal_queue),
+        }
+
+    def get_queue_messages(self) -> dict[str, list[QueueMessageSnapshot]]:
+        return {
+            "urgent": (
+                [self._message_snapshot(self._pending_urgent)]
+                if self._pending_urgent
+                else []
+            ),
+            "high_prio": [
+                self._message_snapshot(msg)
+                for msg in self._high_prio_queue
+            ],
+            "normal": [
+                self._message_snapshot(msg)
+                for msg in self._normal_queue
+            ],
+        }
+
+    @staticmethod
+    def _message_snapshot(msg: QueuedMessage) -> QueueMessageSnapshot:
+        return {
+            "id": msg.id,
+            "queue": msg.queue_type.name.lower(),
+            "content_preview": msg.get_content_preview(240),
+            "created_at": msg.created_at,
+            "metadata": dict(msg.metadata),
         }
 
     def remove_message(self, message_id: str) -> bool:

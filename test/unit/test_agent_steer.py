@@ -53,6 +53,24 @@ class TestHawiAgentSteer:
             "text": "Please also consider the user's new message.",
         }]
 
+    def test_pending_input_messages_expose_high_priority_previews(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._current_tool_calls.append({"id": "call_1", "name": "tool", "arguments": {}})
+
+        steer_id = agent.steer("new high priority steer")
+
+        messages = agent.get_pending_input_messages()
+        assert len(messages) == 1
+        message = messages[0]
+        assert message["id"] == steer_id
+        assert message["queue"] == "high_prio"
+        assert message["content_preview"] == "new high priority steer"
+        assert message["created_at"] > 0
+        assert message["metadata"] == {
+            "candidate_tool_call_ids": ["call_1"],
+            "merge_mode": "tool_result_assistant_template_and_user_message",
+        }
+
     def test_user_message_template_lowering_combines_tool_and_steer(self):
         agent = HawiAgent(model=MagicMock())
         agent._current_tool_calls.append({"id": "call_2", "name": "tool", "arguments": {}})

@@ -251,7 +251,16 @@ describe("core event reducer", () => {
 
   it("updates status, metadata, retry, and error nodes", () => {
     let state = createInitialState();
-    state = reduceCoreEvent(state, frame("core.status", { scheduler_state: "RUNNING", agent_state: "RUNNING", queue_lengths: { urgent: 1, high_prio: 2, normal: 3 } }));
+    state = reduceCoreEvent(state, frame("core.status", {
+      scheduler_state: "RUNNING",
+      agent_state: "RUNNING",
+      queue_lengths: { urgent: 1, high_prio: 2, normal: 3 },
+      queue_messages: {
+        urgent: [{ id: "u1", queue: "urgent", content_preview: "stop now", created_at: 100 }],
+        high_prio: [{ id: "h1", queue: "high_prio", content_preview: "merge this", created_at: 101 }],
+        normal: [{ id: "n1", queue: "normal", content_preview: "first", created_at: 102 }]
+      }
+    }));
     state = reduceCoreEvent(state, frame("model.metadata", {
       input_tokens: 2,
       output_tokens: 3,
@@ -269,6 +278,9 @@ describe("core event reducer", () => {
 
     expect(state.schedulerState).toBe("RUNNING");
     expect(state.queueLengths).toEqual({ urgent: 1, high_prio: 2, normal: 3 });
+    expect(state.queueMessages.urgent[0].contentPreview).toBe("stop now");
+    expect(state.queueMessages.high_prio[0].contentPreview).toBe("merge this");
+    expect(state.queueMessages.normal[0].contentPreview).toBe("first");
     expect(state.metadataLines[0]).toContain("total=7");
     expect(state.metadataLines[0]).toContain("cache_read=1");
     expect(state.metadataLines[0]).toContain("reasoning=2");

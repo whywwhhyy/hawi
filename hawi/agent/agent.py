@@ -168,6 +168,7 @@ class PendingInput:
     id: str
     content: list[ContentPart]
     candidate_tool_call_ids: tuple[str, ...]
+    created_at: float
     preferred_merge_mode: SteerPartMergeMode | None = None
 
 
@@ -559,6 +560,7 @@ class HawiAgent:
                     id=steer_id,
                     content=steer_content,
                     candidate_tool_call_ids=candidate_tool_call_ids,
+                    created_at=time.time(),
                     preferred_merge_mode=merge_mode,
                 )
             )
@@ -571,6 +573,31 @@ class HawiAgent:
             self._ensure_pending_turn_loop()
         return steer_id
 
+    def get_pending_input_messages(self) -> list[dict[str, Any]]:
+        """Return read-only previews of pending steer inputs for observability."""
+        with self._steer_lock:
+            pending_inputs = list(self._pending_inputs)
+        return [
+            {
+                "id": pending.id,
+                "queue": "high_prio",
+                "content_preview": self._truncate_preview(
+                    self._serialize_content_parts(pending.content),
+                    240,
+                ),
+                "created_at": pending.created_at,
+                "metadata": {
+                    "candidate_tool_call_ids": list(pending.candidate_tool_call_ids),
+                    "merge_mode": (
+                        pending.preferred_merge_mode.value
+                        if pending.preferred_merge_mode is not None
+                        else None
+                    ),
+                },
+            }
+            for pending in pending_inputs
+        ]
+
     def _normalize_content_parts(
         self,
         content: str | list[ContentPart],
@@ -579,6 +606,12 @@ class HawiAgent:
         if isinstance(content, str):
             return [{"type": "text", "text": content}]
         return list(content)
+
+    @staticmethod
+    def _truncate_preview(text: str, max_length: int) -> str:
+        if len(text) <= max_length:
+            return text
+        return text[: max_length - 3] + "..."
 
     def _serialize_content_parts(self, content: list[ContentPart]) -> str:
         """Serialize content parts into readable plain text."""
