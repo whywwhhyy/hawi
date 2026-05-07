@@ -43,6 +43,67 @@ def test_add_plan_item_rejects_unknown_parent() -> None:
     assert "Unknown parent" in result.error
 
 
+def test_add_plan_item_can_create_entire_plan_tree() -> None:
+    plugin = PlanPlugin()
+
+    result = plugin.add_plan_item(
+        items=[
+            {
+                "content": "Implement feature",
+                "children": [
+                    {"content": "Update backend"},
+                    {
+                        "content": "Update GUI",
+                        "children": [{"content": "Add preview state"}],
+                    },
+                ],
+            },
+            {"content": "Run tests"},
+        ]
+    )
+
+    assert result.success is True
+    output = result.output
+    assert isinstance(output, dict)
+    assert [item["id"] for item in output["items"]] == ["P1", "P2", "P3", "P4", "P5"]
+    assert output["pending_count"] == 5
+    tree = output["tree"]
+    assert tree[0]["content"] == "Implement feature"
+    assert tree[0]["children"][0]["parent_id"] == "P1"
+    assert tree[0]["children"][1]["children"][0]["content"] == "Add preview state"
+    assert tree[1]["content"] == "Run tests"
+
+
+def test_add_plan_item_tool_accepts_tree_items_argument() -> None:
+    plugin = PlanPlugin()
+    add_tool = next(tool for tool in plugin.tools if tool.name == "add_plan_item")
+
+    result = add_tool.invoke(
+        {"items": [{"content": "Root", "children": [{"content": "Child"}]}]}
+    )
+
+    assert result.success is True
+    assert isinstance(result.output, dict)
+    assert result.output["pending_count"] == 2
+
+
+def test_add_plan_item_tree_rejects_invalid_nodes_without_partial_insert() -> None:
+    plugin = PlanPlugin()
+
+    result = plugin.add_plan_item(
+        items=[
+            {"content": "Valid"},
+            {"content": "", "children": [{"content": "Would be partial"}]},
+        ]
+    )
+
+    assert result.success is False
+    assert "items[1].content" in result.error
+    listed = plugin.list_plan_items()
+    assert isinstance(listed.output, dict)
+    assert listed.output["flat_items"] == []
+
+
 def test_plan_update_emits_plugin_events_for_gui() -> None:
     bus = EventBus()
     received: list[Event] = []
@@ -145,5 +206,7 @@ def test_plan_prompt_injection_is_idempotent() -> None:
     ]
     assert len(plan_prompts) == 1
     assert "parent_id" in plan_prompts[0]["text"]
+    assert "whole plan tree" in plan_prompts[0]["text"]
+    assert "items=[{content, children}]" in plan_prompts[0]["text"]
     assert "not a request to create a plan file" in plan_prompts[0]["text"]
     assert "Do not create, edit, or store plan.md" in plan_prompts[0]["text"]

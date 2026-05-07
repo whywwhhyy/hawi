@@ -90,8 +90,10 @@ class PlanPlugin(HawiPlugin):
             "or a risk of losing track of unfinished work.\n"
             "\n"
             "Available plan tools:\n"
-            "- add_plan_item: add one concrete task item before or during multi-step work.\n"
-            "  Pass parent_id to create a child item under an existing plan item.\n"
+            "- add_plan_item: add one concrete task item, or create a whole plan tree "
+            "in one call by passing items=[{content, children}].\n"
+            "  Pass parent_id to create a single child item or attach batch root items "
+            "under an existing plan item.\n"
             "- complete_plan_item: mark a plan item complete as soon as it is actually done. "
             "Pass item_id='all' only when every open item is complete.\n"
             "- list_plan_items: inspect the current plan state.\n"
@@ -151,26 +153,62 @@ class PlanPlugin(HawiPlugin):
 
     @tool(
         name="add_plan_item",
-        description="Add one concrete task item to the current plan.",
+        description="Add one concrete task item or a tree of task items to the current plan.",
         parameters_schema={
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "Concrete task to add to the plan.",
+                    "description": "Concrete task to add as a single plan item.",
                 },
                 "parent_id": {
                     "type": "string",
                     "description": "Optional parent plan item id for nested plan items.",
                 },
+                "items": {
+                    "type": "array",
+                    "description": (
+                        "Optional tree of plan items for creating an entire plan in one call. "
+                        "Each item has content and optional children."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Concrete task for this plan item.",
+                            },
+                            "children": {
+                                "type": "array",
+                                "description": "Optional child plan items.",
+                                "items": {"type": "object"},
+                            },
+                        },
+                        "required": ["content"],
+                    },
+                },
             },
-            "required": ["content"],
         },
     )
-    def add_plan_item(self, content: str, parent_id: str | None = None) -> ToolResult:
-        content = content.strip()
-        if not content:
-            return ToolResult(success=False, error="Plan item content cannot be empty.")
+    def add_plan_item(
+        self,
+        content: str | None = None,
+        parent_id: str | None = None,
+        items: list[dict[str, Any]] | None = None,
+    ) -> ToolResult:
+        has_content = isinstance(content, str) and bool(content.strip())
+        has_items = items is not None
+        if has_content and has_items:
+            return ToolResult(
+                success=False,
+                error="Provide either content for a single item or items for a plan tree, not both.",
+            )
+        if not has_content and not has_items:
+            return ToolResult(
+                success=False,
+                error="Provide content for a single item or items for a plan tree.",
+            )
+
         normalized_parent_id = (
             parent_id.strip()
             if isinstance(parent_id, str) and parent_id.strip()
@@ -185,14 +223,34 @@ class PlanPlugin(HawiPlugin):
                 error=f"Unknown parent plan item id: {normalized_parent_id}",
             )
 
-        item = PlanItem(
-            id=f"P{self._next_item_number}",
-            content=content,
+        now = time.time()
+        if has_items:
+            created, error = self._add_plan_item_tree(
+                items or [],
+                parent_id=normalized_parent_id,
+                created_at=now,
+            )
+            if error:
+                return ToolResult(success=False, error=error)
+            self._notification_cancelled = False
+            self._cancel_reason = ""
+            self._sync_artifact(status="active")
+            for item in created:
+                self._emit_plan_item_update("added", item)
+            return ToolResult(
+                success=True,
+                output={
+                    "items": [item.to_dict() for item in created],
+                    "tree": self._tree_items(),
+                    "pending_count": len(self._incomplete_items()),
+                },
+            )
+
+        item = self._create_plan_item(
+            content=content.strip() if isinstance(content, str) else "",
             parent_id=normalized_parent_id,
-            created_at=time.time(),
+            created_at=now,
         )
-        self._next_item_number += 1
-        self._items.append(item)
         self._notification_cancelled = False
         self._cancel_reason = ""
         self._sync_artifact(status="active")
@@ -334,6 +392,76 @@ class PlanPlugin(HawiPlugin):
             },
         )
         return ToolResult(success=True, output=self._state_dict())
+
+    def _create_plan_item(
+        self,
+        *,
+        content: str,
+        parent_id: str | None,
+        created_at: float,
+    ) -> PlanItem:
+        item = PlanItem(
+            id=f"P{self._next_item_number}",
+            content=content,
+            parent_id=parent_id,
+            created_at=created_at,
+        )
+        self._next_item_number += 1
+        self._items.append(item)
+        return item
+
+    def _add_plan_item_tree(
+        self,
+        nodes: list[dict[str, Any]],
+        *,
+        parent_id: str | None,
+        created_at: float,
+    ) -> tuple[list[PlanItem], str]:
+        validation_error = self._validate_plan_item_nodes(nodes, path="items")
+        if validation_error:
+            return [], validation_error
+
+        created: list[PlanItem] = []
+
+        def add_nodes(current_nodes: list[dict[str, Any]], current_parent_id: str | None) -> None:
+            for node in current_nodes:
+                item = self._create_plan_item(
+                    content=str(node["content"]).strip(),
+                    parent_id=current_parent_id,
+                    created_at=created_at,
+                )
+                created.append(item)
+                children = node.get("children") or []
+                add_nodes(children, item.id)
+
+        add_nodes(nodes, parent_id)
+        return created, ""
+
+    def _validate_plan_item_nodes(self, nodes: Any, *, path: str) -> str:
+        if not isinstance(nodes, list):
+            return f"{path} must be a list of plan item objects."
+        if path == "items" and not nodes:
+            return "items must contain at least one plan item."
+
+        for index, node in enumerate(nodes):
+            item_path = f"{path}[{index}]"
+            if not isinstance(node, dict):
+                return f"{item_path} must be an object."
+            content = node.get("content")
+            if not isinstance(content, str) or not content.strip():
+                return f"{item_path}.content must be a non-empty string."
+            children = node.get("children", [])
+            if children is None:
+                continue
+            if not isinstance(children, list):
+                return f"{item_path}.children must be a list when provided."
+            child_error = self._validate_plan_item_nodes(
+                children,
+                path=f"{item_path}.children",
+            )
+            if child_error:
+                return child_error
+        return ""
 
     def _state_dict(self) -> dict[str, Any]:
         incomplete = self._incomplete_items()
