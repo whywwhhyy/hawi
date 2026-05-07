@@ -41,6 +41,7 @@ PLUGIN_SKILLS = "skills"
 PLUGIN_PYTHON_INTERPRETER = "python_interpreter"
 PLUGIN_MCP = "mcp"
 PLUGIN_PLAN = "plan"
+PLUGIN_WORKFLOW = "workflow"
 
 KNOWN_PLUGINS = {
     PLUGIN_FILESYSTEM,
@@ -50,6 +51,7 @@ KNOWN_PLUGINS = {
     PLUGIN_PYTHON_INTERPRETER,
     PLUGIN_MCP,
     PLUGIN_PLAN,
+    PLUGIN_WORKFLOW,
 }
 
 PLUGIN_LABELS = {
@@ -60,6 +62,7 @@ PLUGIN_LABELS = {
     PLUGIN_PYTHON_INTERPRETER: "PythonInterpreterPlugin",
     PLUGIN_MCP: "MCPPlugin",
     PLUGIN_PLAN: "PlanPlugin",
+    PLUGIN_WORKFLOW: "WorkflowPlugin",
 }
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -691,6 +694,10 @@ class CoreRuntime:
                 from hawi_plugins.plan_plugin import PlanPlugin
 
                 plugin = PlanPlugin()
+            elif plugin_key == PLUGIN_WORKFLOW:
+                from hawi_plugins.workflow_plugin import WorkflowPlugin
+
+                plugin = WorkflowPlugin()
             else:
                 raise ValueError(f"Unknown plugin key: {plugin_key}")
             if hasattr(plugin, "bind_plugin_identity"):

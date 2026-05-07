@@ -24,6 +24,7 @@ def test_inspect_payload_contains_models_and_plugin_catalog() -> None:
         "python_interpreter",
         "mcp",
         "plan",
+        "workflow",
     }
     assert all("schema" in item and "defaults" in item for item in catalog)
 

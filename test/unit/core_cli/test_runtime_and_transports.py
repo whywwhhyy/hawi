@@ -305,6 +305,17 @@ async def test_runtime_can_create_plan_plugin() -> None:
     assert plugins[0].plugin_name == "PlanPlugin"
 
 
+@pytest.mark.asyncio
+async def test_runtime_can_create_workflow_plugin() -> None:
+    runtime = CoreRuntime(model_name="test-model")
+
+    plugins = await runtime._create_plugins(["workflow"], {})
+
+    assert len(plugins) == 1
+    assert plugins[0].plugin_id == "workflow"
+    assert plugins[0].plugin_name == "WorkflowPlugin"
+
+
 class CapturingQueuedClient(QueuedJsonClient):
     def __init__(self) -> None:
         super().__init__(queue_max=1, client_id="capture")

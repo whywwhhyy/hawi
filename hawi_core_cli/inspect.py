@@ -16,6 +16,7 @@ from .runtime import (
     PLUGIN_SHELL,
     PLUGIN_SKILLS,
     PLUGIN_WEB,
+    PLUGIN_WORKFLOW,
 )
 
 
@@ -48,6 +49,7 @@ def _plugin_entries() -> list[tuple[str, str, type]]:
     from hawi_plugins.shell_plugin import ShellPlugin
     from hawi_plugins.skills_plugin import SkillsPlugin
     from hawi_plugins.web import WebPlugin
+    from hawi_plugins.workflow_plugin import WorkflowPlugin
 
     return [
         (PLUGIN_FILESYSTEM, "FileSystemPlugin", FileSystemPlugin),
@@ -57,4 +59,5 @@ def _plugin_entries() -> list[tuple[str, str, type]]:
         (PLUGIN_PYTHON_INTERPRETER, "PythonInterpreterPlugin", PythonInterpreterPlugin),
         (PLUGIN_MCP, "MCPPlugin", MCPPlugin),
         (PLUGIN_PLAN, "PlanPlugin", PlanPlugin),
+        (PLUGIN_WORKFLOW, "WorkflowPlugin", WorkflowPlugin),
     ]
