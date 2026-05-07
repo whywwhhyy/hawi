@@ -172,9 +172,9 @@ def _convert_part_to_strands_block(part: ContentPart) -> dict[str, Any] | None:
                 }
             }
         }
-    elif p_type == "cache_control":
-        # Strands may not support cache_control, skip or convert
-        logger.debug("CacheControlPart skipped in strands conversion")
+    elif p_type in {"cache_point", "cache_control"}:
+        # Strands may not support explicit cache points, skip or convert
+        logger.debug("Cache point marker skipped in strands conversion")
         return None
     elif p_type == "video":
         part = cast(VideoPart, part)

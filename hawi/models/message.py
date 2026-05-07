@@ -4,9 +4,9 @@
 使用 TypedDict 实现 Tagged Union 设计，支持完整的类型检查。
 """
 
-from typing import Any, Sequence, Literal, Required, NotRequired, TypeAlias, TypedDict, cast
+from typing import Any, Mapping, Sequence, Literal, Required, NotRequired, TypeAlias, TypedDict, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 # =============================================================================
@@ -47,6 +47,7 @@ ContentPartType = Literal[
     "tool_call",
     "tool_result",
     "reasoning",
+    "cache_point",
     "cache_control",
     "refusal",
     "guard_content",
@@ -65,9 +66,24 @@ SteerMergeMode = Literal[
 DeltaPartType = Literal["text", "reasoning", "tool_use", "redacted_thinking"]
 
 
-class CacheControl(TypedDict):
-    """Prompt caching 控制（Anthropic 支持）"""
-    type: Literal["ephemeral"]
+CachePointTTL = Literal["5m", "1h"]
+
+
+class CachePoint(TypedDict, total=False):
+    """Provider-neutral prompt cache breakpoint.
+
+    Hawi IR uses cache points to describe where provider-side prompt caching
+    should write/read a stable prefix. Model adapters translate this into their
+    provider-specific request format (for example Anthropic ``cache_control``).
+    """
+
+    type: Required[Literal["ephemeral"]]
+    ttl: CachePointTTL
+
+
+# Backward-compatible Anthropic naming. Existing callers may still construct
+# ``cache_control`` parts; adapters normalize both names into CachePoint.
+CacheControl: TypeAlias = CachePoint
 
 
 class TextPart(TypedDict):
@@ -147,11 +163,31 @@ class ReasoningPart(TypedDict, total=False):
     redacted_content: bytes | None  # Anthropic 加密的安全推理内容
 
 
+class CachePointPart(TypedDict):
+    """
+    Provider-neutral prompt cache point marker.
+
+    The marker applies to the previous cacheable content Part. This matches
+    Anthropic's explicit-cache semantics where ``cache_control`` is placed on
+    the last block of the prefix to cache.
+
+    使用示例：
+        content = [
+            text_part("Long document content..."),
+            cache_point_part(),  # 标记前一个内容应用 caching
+        ]
+    """
+
+    type: Literal["cache_point"]
+    cache_point: CachePoint
+
+
 class CacheControlPart(TypedDict):
     """
-    Prompt caching 控制标记（Anthropic 支持）
+    Prompt caching 控制标记（兼容旧的 Anthropic 命名）
 
     设计说明：
+    - 新代码优先使用 CachePointPart / ``cache_point``
     - cache_control 作为独立 Part，而非嵌入到内容 Part 中
     - 这样内容 Part 可以保持严格的 TypedDict 定义（无 total=False）
     - 模型适配层在转换时负责将 CacheControlPart 与前一个内容 Part 粘合
@@ -165,6 +201,68 @@ class CacheControlPart(TypedDict):
 
     type: Literal["cache_control"]
     cache_control: CacheControl
+
+
+def normalize_cache_point(value: Any) -> CachePoint | None:
+    """Normalize user-facing cache point values into Hawi IR.
+
+    Accepted forms:
+    - ``True`` -> ``{"type": "ephemeral"}``
+    - ``False`` / ``None`` -> ``None``
+    - ``{"type": "ephemeral", "ttl": "1h"}``
+    """
+    if value is None or value is False:
+        return None
+    if value is True:
+        return {"type": "ephemeral"}
+    if not isinstance(value, Mapping):
+        raise TypeError("cache_point must be a dict, True, False, or None")
+
+    point_type = value.get("type", "ephemeral")
+    if point_type != "ephemeral":
+        raise ValueError("cache_point.type must be 'ephemeral'")
+
+    normalized: CachePoint = {"type": "ephemeral"}
+    ttl = value.get("ttl")
+    if ttl is not None:
+        if ttl not in ("5m", "1h"):
+            raise ValueError("cache_point.ttl must be '5m' or '1h'")
+        normalized["ttl"] = cast(CachePointTTL, ttl)
+    return normalized
+
+
+def cache_point_part(
+    cache_point: CachePoint | Mapping[str, Any] | bool | None = True,
+    *,
+    ttl: CachePointTTL | None = None,
+) -> CachePointPart:
+    """Create a provider-neutral cache point ContentPart."""
+    point_value: Any = cache_point
+    if ttl is not None:
+        point_value = dict(cache_point) if isinstance(cache_point, Mapping) else {"type": "ephemeral"}
+        point_value["ttl"] = ttl
+    normalized = normalize_cache_point(point_value) or {"type": "ephemeral"}
+    return {"type": "cache_point", "cache_point": normalized}
+
+
+def cache_control_part(
+    cache_control: CacheControl | Mapping[str, Any] | bool | None = True,
+    *,
+    ttl: CachePointTTL | None = None,
+) -> CacheControlPart:
+    """Create a backward-compatible Anthropic-style cache control part."""
+    point = cache_point_part(cache_control, ttl=ttl)["cache_point"]
+    return {"type": "cache_control", "cache_control": point}
+
+
+def get_content_cache_point(part: Mapping[str, Any]) -> CachePoint | None:
+    """Return the cache point represented by a ContentPart marker, if any."""
+    part_type = part.get("type")
+    if part_type == "cache_point":
+        return normalize_cache_point(part.get("cache_point"))
+    if part_type == "cache_control":
+        return normalize_cache_point(part.get("cache_control"))
+    return None
 
 
 # =============================================================================
@@ -359,8 +457,8 @@ class CitationPart(TypedDict):
 # ContentPart 联合类型
 ContentPart: TypeAlias = (
     TextPart | ImagePart | DocumentPart | AudioPart | VideoPart | FilePart |
-    SteerPart | ToolCallPart | ToolResultPart | ReasoningPart | CacheControlPart |
-    RefusalPart | GuardContentPart | CitationPart
+    SteerPart | ToolCallPart | ToolResultPart | ReasoningPart | CachePointPart |
+    CacheControlPart | RefusalPart | GuardContentPart | CitationPart
 )
 
 
@@ -648,6 +746,8 @@ class ToolDefinition(TypedDict):
     name: str
     description: str
     schema: dict[str, Any]  # JSON Schema
+    cache_point: NotRequired[CachePoint]
+    cache_control: NotRequired[CacheControl]  # Backward-compatible alias
 
 
 class ToolChoice(TypedDict):
@@ -662,6 +762,8 @@ class MessageRequest(BaseModel):
 
     messages: list[Message]
     system: list[ContentPart] | None = None  # 系统提示词（ContentPart 列表）
+    cache_point: CachePoint | None = None  # 顶层/自动 prompt cache point
+    cache_tool_definitions: CachePoint | None = None  # 缓存工具定义前缀
 
     # 工具定义
     tools: list[ToolDefinition] | None = None
@@ -690,6 +792,11 @@ class MessageRequest(BaseModel):
     thinking_type: Literal["auto", "enabled", "adaptive", "disabled"] | None = None
     thinking_effort: Literal["low", "medium", "high", "max"] | None = None
     output_config: dict[str, Any] | None = None
+
+    @field_validator("cache_point", "cache_tool_definitions", mode="before")
+    @classmethod
+    def _normalize_cache_point_field(cls, value: Any) -> CachePoint | None:
+        return normalize_cache_point(value)
 
 
 class MessageResponse(BaseModel):

@@ -17,8 +17,7 @@ from typing import Any, cast, Sequence
 import httpx
 
 from hawi.models.message import (
-    CacheControlPart,
-    CacheControl,
+    CachePoint,
     ContentPart,
     DocumentPart,
     DocumentSource,
@@ -29,8 +28,9 @@ from hawi.models.message import (
     TextPart,
     ToolCallPart,
     ToolResultPart,
+    get_content_cache_point,
 )
-from ._utils import SUPPORTED_IMAGE_TYPES, parse_data_uri
+from ._utils import SUPPORTED_IMAGE_TYPES, convert_cache_point, parse_data_uri
 
 logger = logging.getLogger(__name__)
 
@@ -47,28 +47,30 @@ class ContentConverter:
         """将 ContentPart 列表转换为 Anthropic 格式
 
         特殊处理：
-        - CacheControlPart 会被粘合到前一个内容 Part 上
+        - CachePointPart/CacheControlPart 会被粘合到前一个内容 Part 上
         """
         result: list[dict[str, Any]] = []
-        pending_cache_control: CacheControl | None = None
+        pending_cache_point: CachePoint | None = None
 
         for part in content:
-            # 处理 CacheControlPart：缓存并应用到下一个内容 Part
-            if part["type"] == "cache_control":
-                part = cast(CacheControlPart, part)
-                pending_cache_control = part["cache_control"]
+            # 处理 cache point：正常应用到前一个内容块；如果 marker 出现在
+            # 最前面，兼容旧写法并暂存到下一个内容块。
+            cache_point = get_content_cache_point(part)
+            if cache_point is not None:
+                if result:
+                    result[-1]["cache_control"] = convert_cache_point(cache_point)
+                else:
+                    pending_cache_point = cache_point
                 continue
 
             converted = self.convert_single_part(part)
             if converted:
-                # 应用待处理的 cache_control
-                if pending_cache_control:
-                    converted["cache_control"] = pending_cache_control
-                    pending_cache_control = None
+                # 应用最前面的兼容性 cache point
+                if pending_cache_point is not None:
+                    converted["cache_control"] = convert_cache_point(pending_cache_point)
+                    pending_cache_point = None
                 result.append(converted)
 
-        # 如果最后一个 part 是 cache_control（没有内容可以粘合），忽略它
-        # 或者可以选择报错，但通常这种情况是用户错误
         return result
 
     def convert_single_part(self, part: ContentPart) -> dict[str, Any] | None:
@@ -89,8 +91,8 @@ class ContentConverter:
             return self._convert_reasoning(cast(ReasoningPart, part))
         elif p_type == "guard_content":
             return self._convert_guard_content(cast(GuardContentPart, part))
-        elif p_type == "cache_control":
-            # CacheControlPart 在 convert_content 中处理，这里返回 None
+        elif p_type in {"cache_point", "cache_control"}:
+            # Cache point markers 在 convert_content 中处理，这里返回 None
             return None
 
         return None
@@ -131,8 +133,17 @@ class ContentConverter:
         """将 tool 消息转换为包含 tool_result 的 user 消息"""
         tool_call_id = message.get("tool_call_id")
         content_parts = []
+        pending_cache_point: CachePoint | None = None
 
         for part in message["content"]:
+            cache_point = get_content_cache_point(part)
+            if cache_point is not None:
+                if content_parts:
+                    content_parts[-1]["cache_control"] = convert_cache_point(cache_point)
+                else:
+                    pending_cache_point = cache_point
+                continue
+
             if part["type"] == "tool_result":
                 result_part = cast(ToolResultPart, part)
                 item: dict[str, Any] = {
@@ -144,16 +155,26 @@ class ContentConverter:
                 }
                 if result_part.get("is_error"):
                     item["is_error"] = True
+                if pending_cache_point is not None:
+                    item["cache_control"] = convert_cache_point(pending_cache_point)
+                    pending_cache_point = None
                 content_parts.append(item)
             elif tool_call_id:
                 converted = self.convert_content([part])
-                content_parts.append({
+                item = {
                     "type": "tool_result",
                     "tool_use_id": tool_call_id,
                     "content": converted,
-                })
+                }
+                if pending_cache_point is not None:
+                    item["cache_control"] = convert_cache_point(pending_cache_point)
+                    pending_cache_point = None
+                content_parts.append(item)
             else:
                 converted = self.convert_content([part])
+                if pending_cache_point is not None and converted:
+                    converted[0]["cache_control"] = convert_cache_point(pending_cache_point)
+                    pending_cache_point = None
                 content_parts.extend(converted)
 
         if not content_parts:
@@ -253,10 +274,19 @@ class ContentConverter:
                 "data": redacted.decode("utf-8", errors="replace"),
             }
 
+        signature = part.get("signature")
+        if not isinstance(signature, str) or not signature:
+            # Anthropic requires previous thinking blocks to carry the original
+            # signature string. Unsigned reasoning can come from other providers
+            # or older streaming accumulation; skip it rather than sending an
+            # invalid ``signature=None`` block.
+            logger.debug("Skipping Anthropic thinking block without a valid signature")
+            return None
+
         return {
             "type": "thinking",
             "thinking": part.get("reasoning") or "",
-            "signature": part.get("signature"),
+            "signature": signature,
         }
 
     def _convert_guard_content(self, part: GuardContentPart) -> dict[str, Any]:
@@ -289,24 +319,25 @@ class AsyncContentConverter(ContentConverter):
         """异步转换 ContentPart 列表
 
         特殊处理：
-        - CacheControlPart 会被粘合到前一个内容 Part 上
+        - CachePointPart/CacheControlPart 会被粘合到前一个内容 Part 上
         """
         result: list[dict[str, Any]] = []
-        pending_cache_control: CacheControl | None = None
+        pending_cache_point: CachePoint | None = None
 
         for part in content:
-            # 处理 CacheControlPart：缓存并应用到下一个内容 Part
-            if part["type"] == "cache_control":
-                part = cast(CacheControlPart, part)
-                pending_cache_control = part["cache_control"]
+            cache_point = get_content_cache_point(part)
+            if cache_point is not None:
+                if result:
+                    result[-1]["cache_control"] = convert_cache_point(cache_point)
+                else:
+                    pending_cache_point = cache_point
                 continue
 
             converted = await self.convert_single_part_async(part)
             if converted:
-                # 应用待处理的 cache_control
-                if pending_cache_control:
-                    converted["cache_control"] = pending_cache_control
-                    pending_cache_control = None
+                if pending_cache_point is not None:
+                    converted["cache_control"] = convert_cache_point(pending_cache_point)
+                    pending_cache_point = None
                 result.append(converted)
 
         return result

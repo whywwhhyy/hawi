@@ -27,6 +27,9 @@ from .message import (
     AudioSource,
     CacheControl,
     CacheControlPart,
+    CachePoint,
+    CachePointPart,
+    CachePointTTL,
     CitationCharLocation,
     CitationContentBlockLocation,
     CitationLocation,
@@ -67,6 +70,10 @@ from .message import (
     ToolResultPart,
     VideoPart,
     VideoSource,
+    cache_control_part,
+    cache_point_part,
+    get_content_cache_point,
+    normalize_cache_point,
 )
 from .usage import (
     merge_token_usage,

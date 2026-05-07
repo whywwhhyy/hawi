@@ -10,6 +10,7 @@ This test suite verifies the refactored system_prompt design:
 from hawi.models.message import MessageRequest, ContentPart
 from hawi.agent.context import AgentContext
 from hawi.agent import HawiAgent
+from hawi.models import Model
 from hawi.models.openai._converters import prepare_request as openai_prepare_request
 from hawi.models.anthropic._utils import convert_system_prompt
 
@@ -35,6 +36,17 @@ class TestSystemPromptTypes:
             system=None,
         )
         assert request.system is None
+
+    def test_message_request_normalizes_cache_point_booleans(self):
+        """MessageRequest cache settings should accept convenience booleans."""
+        request = MessageRequest(
+            messages=[],
+            cache_point=True,
+            cache_tool_definitions=False,
+        )
+
+        assert request.cache_point == {"type": "ephemeral"}
+        assert request.cache_tool_definitions is None
 
     def test_agent_context_default_system_prompt(self):
         """AgentContext should default system_prompt to None."""
@@ -76,6 +88,76 @@ class TestSystemPromptTypes:
         request = ctx.prepare_request()
         assert request.system == [{"type": "text", "text": "You are helpful."}]
         assert len(request.messages) == 1
+
+    def test_agent_context_prepare_request_with_cache_points(self):
+        """AgentContext should carry cache point settings into MessageRequest."""
+        ctx = AgentContext(
+            tool_definitions=[
+                {
+                    "type": "function",
+                    "name": "example",
+                    "description": "Example tool",
+                    "schema": {"type": "object", "properties": {}},
+                }
+            ]
+        )
+        ctx.set_cache_point(True)
+        ctx.set_tool_cache_point({"type": "ephemeral", "ttl": "1h"})
+
+        request = ctx.prepare_request()
+
+        assert request.cache_point == {"type": "ephemeral"}
+        assert request.cache_tool_definitions == {"type": "ephemeral", "ttl": "1h"}
+        assert request.tools is not None
+        assert request.tools[0]["cache_point"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_agent_context_auto_cache_static_prefix_marks_system_ir(self):
+        """AgentContext should manage automatic static-prefix cache points in Hawi IR."""
+        ctx = AgentContext(
+            system_prompt=[{"type": "text", "text": "You are helpful."}],
+            tool_definitions=[_tool_definition("example")],
+        )
+        ctx.set_static_prefix_cache_point(True)
+
+        request = ctx.prepare_request()
+
+        assert request.system == [
+            {"type": "text", "text": "You are helpful."},
+            {"type": "cache_point", "cache_point": {"type": "ephemeral"}},
+        ]
+        assert request.tools is not None
+        assert "cache_point" not in request.tools[0]
+        assert request.cache_point is None
+        assert request.cache_tool_definitions is None
+
+    def test_agent_context_auto_cache_static_prefix_marks_tools_without_system(self):
+        """AgentContext should fall back to tool definition cache metadata."""
+        ctx = AgentContext(tool_definitions=[_tool_definition("example")])
+        ctx.set_static_prefix_cache_point(True)
+
+        request = ctx.prepare_request()
+
+        assert request.system is None
+        assert request.tools is not None
+        assert request.tools[0]["cache_point"] == {"type": "ephemeral"}
+
+    def test_agent_context_auto_cache_static_prefix_preserves_explicit_markers(self):
+        """Automatic cache point management should not add duplicate markers."""
+        system: list[ContentPart] = [
+            {"type": "text", "text": "Large system prompt"},
+            {"type": "cache_point", "cache_point": {"type": "ephemeral"}},
+        ]
+        ctx = AgentContext(
+            system_prompt=system,
+            tool_definitions=[_tool_definition("example")],
+        )
+        ctx.set_static_prefix_cache_point(True)
+
+        request = ctx.prepare_request()
+
+        assert request.system == system
+        assert request.tools is not None
+        assert "cache_point" not in request.tools[0]
 
 
 class TestHawiAgentSystemPrompt:
@@ -129,6 +211,44 @@ class TestHawiAgentSystemPrompt:
 
         cloned = agent.clone()
         assert cloned.context.system_prompt == [{"type": "text", "text": "You are helpful."}]
+
+    def test_hawi_agent_preserves_system_cache_points_for_model_call(self):
+        """Agent model calls should not strip cache point markers from system IR."""
+        model = _CaptureSystemModel()
+        system: list[ContentPart] = [
+            {"type": "text", "text": "Large system prompt"},
+            {"type": "cache_point", "cache_point": {"type": "ephemeral"}},
+        ]
+        agent = HawiAgent(model=model, system_prompt=system)
+
+        agent.run("hi")
+
+        assert model.system_seen == system
+
+    def test_hawi_agent_enables_static_prefix_cache_point_by_default(self):
+        """HawiAgent should manage default static-prefix cache points before model calls."""
+        model = _CaptureSystemModel()
+        agent = HawiAgent(model=model, system_prompt="You are helpful.")
+
+        agent.run("hi")
+
+        assert model.system_seen == [
+            {"type": "text", "text": "You are helpful."},
+            {"type": "cache_point", "cache_point": {"type": "ephemeral"}},
+        ]
+
+    def test_hawi_agent_can_disable_static_prefix_cache_point(self):
+        """HawiAgent should allow disabling automatic static-prefix cache points."""
+        model = _CaptureSystemModel()
+        agent = HawiAgent(
+            model=model,
+            system_prompt="You are helpful.",
+            auto_cache_static_prefix=False,
+        )
+
+        agent.run("hi")
+
+        assert model.system_seen == [{"type": "text", "text": "You are helpful."}]
 
 
 class TestOpenAISystemPromptConversion:
@@ -300,7 +420,31 @@ class TestSystemPromptWithCacheControl:
         """Anthropic should support cache_control in system_prompt."""
         system: list[ContentPart] = [
             {"type": "text", "text": "Large document content..."},
+            {"type": "cache_point", "cache_point": {"type": "ephemeral"}},
+        ]
+
+        result = convert_system_prompt(system)
+
+        assert isinstance(result, list)
+        assert result[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_legacy_cache_control_in_system_prompt(self):
+        """Legacy cache_control marker should still work."""
+        system: list[ContentPart] = [
+            {"type": "text", "text": "Large document content..."},
             {"type": "cache_control", "cache_control": {"type": "ephemeral"}},
+        ]
+
+        result = convert_system_prompt(system)
+
+        assert isinstance(result, list)
+        assert result[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_leading_cache_point_attaches_to_next_system_block(self):
+        """Leading cache marker keeps compatibility with the old converter behavior."""
+        system: list[ContentPart] = [
+            {"type": "cache_point", "cache_point": {"type": "ephemeral"}},
+            {"type": "text", "text": "Large document content..."},
         ]
 
         result = convert_system_prompt(system)
@@ -324,3 +468,39 @@ class TestSystemPromptWithCacheControl:
         # Both blocks should have cache_control
         assert result[0].get("cache_control") == {"type": "ephemeral"}
         assert result[1].get("cache_control") == {"type": "ephemeral"}
+
+
+class _CaptureSystemModel(Model):
+    def __init__(self) -> None:
+        super().__init__()
+        self.system_seen = None
+
+    @property
+    def model_id(self) -> str:
+        return "capture"
+
+    async def ainvoke(self, messages, *, streaming=False, system=None, tools=None, tool_choice=None, **kwargs):
+        self.system_seen = system
+        yield {
+            "type": "finish",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+    def _prepare_request_impl(self, request):
+        return {}
+
+    def _parse_response_impl(self, response):
+        raise NotImplementedError
+
+    def _invoke_impl(self, request):
+        raise NotImplementedError
+
+
+def _tool_definition(name: str) -> dict:
+    return {
+        "type": "function",
+        "name": name,
+        "description": f"{name} description",
+        "schema": {"type": "object", "properties": {}},
+    }

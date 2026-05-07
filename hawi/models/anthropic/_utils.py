@@ -6,8 +6,11 @@ import logging
 from typing import Any,cast
 
 from hawi.models.message import (
+    CachePoint,
     ContentPart,
-    TextPart
+    TextPart,
+    get_content_cache_point,
+    normalize_cache_point,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,14 +82,25 @@ def convert_system_prompt(
 
     # 转换为 Anthropic system 块列表
     blocks: list[dict[str, Any]] = []
+    pending_cache_point: CachePoint | None = None
     for part in system:
-        if part.get("type") == "text":
-            blocks.append({"type": "text", "text": cast(TextPart, part)["text"]})
-        elif part.get("type") == "cache_control":
-            # cache_control 标记，附加到前一个块
+        cache_point = get_content_cache_point(part)
+        if cache_point is not None:
+            # Cache point 标记附加到前一个块；如果出现在最前面，则兼容旧的
+            # "marker before content" 写法，暂存后贴到下一个块。
             if blocks:
-                blocks[-1]["cache_control"] = {"type": "ephemeral"}
-        # Anthropic system 字段只支持文本和 cache_control，忽略其他类型
+                blocks[-1]["cache_control"] = convert_cache_point(cache_point)
+            else:
+                pending_cache_point = cache_point
+            continue
+
+        if part.get("type") == "text":
+            block = {"type": "text", "text": cast(TextPart, part)["text"]}
+            if pending_cache_point is not None:
+                block["cache_control"] = convert_cache_point(pending_cache_point)
+                pending_cache_point = None
+            blocks.append(block)
+        # Anthropic system 字段只支持文本和 cache point，忽略其他类型
 
     if not blocks:
         return None
@@ -96,3 +110,9 @@ def convert_system_prompt(
         return blocks[0]["text"]
 
     return blocks
+
+
+def convert_cache_point(cache_point: Any) -> dict[str, Any]:
+    """Translate Hawi CachePoint into Anthropic cache_control format."""
+    normalized = normalize_cache_point(cache_point) or {"type": "ephemeral"}
+    return dict(normalized)

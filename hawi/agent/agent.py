@@ -22,6 +22,7 @@ from typing import Any, Optional, Coroutine, Literal, Mapping, Callable, cast
 
 
 from hawi.models import (
+    CachePoint,
     Model,
     ContentPart,
     DeltaPart,
@@ -200,6 +201,9 @@ class HawiAgent:
         event_dump_file: str | None = None,
         streaming: bool = True,
         auto_compact: AutoCompactConfig | dict[str, Any] | bool | None = None,
+        cache_point: CachePoint | dict[str, Any] | bool | None = None,
+        cache_tool_definitions: CachePoint | dict[str, Any] | bool | None = None,
+        auto_cache_static_prefix: CachePoint | dict[str, Any] | bool | None = True,
     ):
         """Initialize HawiAgent.
 
@@ -220,6 +224,10 @@ class HawiAgent:
             streaming: Whether to use streaming mode by default (default: True)
             auto_compact: Automatic context compaction configuration. Pass
                 ``True`` to enable default threshold-based compaction.
+            cache_point: Provider-neutral top-level/automatic prompt cache point.
+            cache_tool_definitions: Cache the tool-definition prefix when supported.
+            auto_cache_static_prefix: Agent-managed cache point for the stable
+                tools/system prefix. Defaults to an ephemeral cache point.
 
         Note:
             Both `plugins` and `plugin_factories` can be used together.
@@ -265,6 +273,12 @@ class HawiAgent:
             system_prompt=system_prompt_parts,
             tool_definitions=defs if defs else None,
         )
+        if cache_point is not None:
+            self._context.set_cache_point(cache_point)
+        if cache_tool_definitions is not None:
+            self._context.set_tool_cache_point(cache_tool_definitions)
+        if auto_cache_static_prefix is not None:
+            self._context.set_static_prefix_cache_point(auto_cache_static_prefix)
 
         # Set up tool call context for runtime injection
         self._context.tool_call_context = ToolCallContext(agent=self)
@@ -1308,7 +1322,7 @@ class HawiAgent:
                         # Get or create handler for this chunk type
                         if chunk_type == "text_delta":
                             handler = text_handler
-                        elif chunk_type == "reasoning_delta":
+                        elif chunk_type in {"reasoning_delta", "signature_delta"}:
                             handler = thinking_handler
                         elif chunk_type == "tool_call_delta":
                             handler = tool_handler
@@ -1647,8 +1661,10 @@ class HawiAgent:
                 async for event in model.ainvoke(
                     messages=request.messages,
                     streaming=streaming,
-                    system=[part for part in (request.system or ()) if part['type'] == 'text'],
+                    system=request.system,
                     tools=request.tools,
+                    cache_point=request.cache_point,
+                    cache_tool_definitions=request.cache_tool_definitions,
                 ):
                     yield event
                 return

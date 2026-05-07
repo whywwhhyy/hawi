@@ -15,12 +15,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from hawi.models.message import (
+    CachePoint,
     ContentPart,
     Message,
     MessageRequest,
     ToolDefinition,
     ToolCallPart,
     ToolResultPart,
+    get_content_cache_point,
+    normalize_cache_point,
 )
 from hawi.tool.types import PendingToolCall
 
@@ -68,6 +71,8 @@ def estimate_text_tokens(text: str) -> int:
 def estimate_content_part_tokens(part: ContentPart) -> int:
     """Estimate token count for one Hawi content part."""
     part_type = part.get("type")
+    if part_type in {"cache_point", "cache_control"}:
+        return 0
     if part_type == "text":
         return estimate_text_tokens(str(part.get("text", "")))
     if part_type == "reasoning":
@@ -113,6 +118,37 @@ def estimate_message_tokens(message: Message) -> int:
     return 4 + estimate_text_tokens(str(message.get("role", ""))) + estimate_content_tokens(
         list(message.get("content", []))
     )
+
+
+def _content_has_cache_point(content: list[ContentPart] | None) -> bool:
+    if not content:
+        return False
+    return any(
+        isinstance(part, dict) and get_content_cache_point(part) is not None
+        for part in content
+    )
+
+
+def _messages_have_cache_point(messages: list[Message]) -> bool:
+    return any(
+        _content_has_cache_point(list(message.get("content", [])))
+        for message in messages
+    )
+
+
+def _tools_have_cache_point(tools: list[ToolDefinition] | None) -> bool:
+    if not tools:
+        return False
+    return any(tool.get("cache_point") or tool.get("cache_control") for tool in tools)
+
+
+def _append_cache_point_marker(
+    content: list[ContentPart],
+    cache_point: CachePoint,
+) -> list[ContentPart]:
+    result = deepcopy(content)
+    result.append({"type": "cache_point", "cache_point": deepcopy(cache_point)})
+    return result
 
 
 class ToolCallContext:
@@ -212,6 +248,9 @@ class AgentContext:
     messages: list[Message] = field(default_factory=list)
     tool_definitions: list[ToolDefinition] | None = None
     system_prompt: list[ContentPart] | None = None
+    cache_point: CachePoint | None = None
+    cache_tool_definitions: CachePoint | None = None
+    auto_cache_static_prefix: CachePoint | None = None
 
     # Historical compaction audit records. These are intentionally kept out of
     # model-visible context and only used for debugging/persistence.
@@ -289,6 +328,61 @@ class AgentContext:
         else:
             self.system_prompt = content
 
+    def set_cache_point(
+        self,
+        cache_point: CachePoint | dict[str, Any] | bool | None = True,
+        *,
+        ttl: Literal["5m", "1h"] | None = None,
+    ) -> None:
+        """Set a provider-neutral top-level/automatic prompt cache point."""
+        value: Any = cache_point
+        if ttl is not None:
+            value = dict(cache_point) if isinstance(cache_point, dict) else {"type": "ephemeral"}
+            value["ttl"] = ttl
+        self.cache_point = normalize_cache_point(value)
+
+    def clear_cache_point(self) -> None:
+        """Disable top-level/automatic prompt caching for this context."""
+        self.cache_point = None
+
+    def set_tool_cache_point(
+        self,
+        cache_point: CachePoint | dict[str, Any] | bool | None = True,
+        *,
+        ttl: Literal["5m", "1h"] | None = None,
+    ) -> None:
+        """Mark the tool-definition prefix as cacheable for providers that support it."""
+        value: Any = cache_point
+        if ttl is not None:
+            value = dict(cache_point) if isinstance(cache_point, dict) else {"type": "ephemeral"}
+            value["ttl"] = ttl
+        self.cache_tool_definitions = normalize_cache_point(value)
+
+    def clear_tool_cache_point(self) -> None:
+        """Disable tool-definition cache marking for this context."""
+        self.cache_tool_definitions = None
+
+    def set_static_prefix_cache_point(
+        self,
+        cache_point: CachePoint | dict[str, Any] | bool | None = True,
+        *,
+        ttl: Literal["5m", "1h"] | None = None,
+    ) -> None:
+        """Automatically mark the static tools/system prefix cacheable."""
+        value: Any = cache_point
+        if ttl is not None:
+            value = (
+                dict(cache_point)
+                if isinstance(cache_point, dict)
+                else {"type": "ephemeral"}
+            )
+            value["ttl"] = ttl
+        self.auto_cache_static_prefix = normalize_cache_point(value)
+
+    def clear_static_prefix_cache_point(self) -> None:
+        """Disable automatic static-prefix cache marking for this context."""
+        self.auto_cache_static_prefix = None
+
     def get_system_prompt(self) -> list[ContentPart] | None:
         """获取系统提示词。
 
@@ -303,11 +397,49 @@ class AgentContext:
         Returns:
             MessageRequest ready for model invocation
         """
+        tools = self._tool_definitions_for_request()
+        system = self._system_prompt_for_request(tools)
         return MessageRequest(
             messages=self.messages.copy(),
-            system=self.system_prompt,
-            tools=self.tool_definitions,
+            system=system,
+            cache_point=deepcopy(self.cache_point),
+            cache_tool_definitions=deepcopy(self.cache_tool_definitions),
+            tools=tools,
         )
+
+    def _system_prompt_for_request(
+        self,
+        tools: list[ToolDefinition] | None,
+    ) -> list[ContentPart] | None:
+        """Return system prompt with agent-managed cache metadata applied."""
+        system = deepcopy(self.system_prompt) if self.system_prompt else None
+        cache_point = self.auto_cache_static_prefix
+        if not cache_point:
+            return system
+        if self.cache_point or self.cache_tool_definitions:
+            return system
+        if _messages_have_cache_point(self.messages):
+            return system
+        if _content_has_cache_point(system) or _tools_have_cache_point(tools):
+            return system
+
+        if system:
+            return _append_cache_point_marker(system, cache_point)
+        if tools:
+            tools[-1]["cache_point"] = deepcopy(cache_point)
+        return system
+
+    def _tool_definitions_for_request(self) -> list[ToolDefinition] | None:
+        """Return tool definitions with context-level cache metadata applied."""
+        if not self.tool_definitions:
+            return None
+        tools = deepcopy(self.tool_definitions)
+        if self.cache_tool_definitions and not any(
+            tool.get("cache_point") or tool.get("cache_control")
+            for tool in tools
+        ):
+            tools[-1]["cache_point"] = deepcopy(self.cache_tool_definitions)
+        return tools
 
     def estimate_tokens(
         self,
@@ -632,6 +764,9 @@ class AgentContext:
             messages=deepcopy(self.messages),
             tool_definitions=deepcopy(self.tool_definitions) if self.tool_definitions else None,
             system_prompt=deepcopy(self.system_prompt),
+            cache_point=deepcopy(self.cache_point),
+            cache_tool_definitions=deepcopy(self.cache_tool_definitions),
+            auto_cache_static_prefix=deepcopy(self.auto_cache_static_prefix),
             compaction_records=deepcopy(self.compaction_records),
         )
         return copied
@@ -664,6 +799,9 @@ class AgentContext:
             "version": "1.0",
             "saved_at": datetime.now().isoformat(),
             "system_prompt": self.system_prompt,
+            "cache_point": self.cache_point,
+            "cache_tool_definitions": self.cache_tool_definitions,
+            "auto_cache_static_prefix": self.auto_cache_static_prefix,
             "messages": self.messages,
             "compaction_records": [
                 record.to_dict() for record in self.compaction_records
@@ -718,8 +856,8 @@ class AgentContext:
     def load(self, filepath: str | Path) -> None:
         """Load context state from a JSON file into this instance.
 
-        Restores messages and system_prompt from the file.
-        Tools and cache_tool_definitions remain unchanged.
+        Restores messages, system_prompt, and cache-point settings from the file.
+        Tool definitions remain unchanged.
 
         Args:
             filepath: Path to the JSON file
@@ -745,6 +883,13 @@ class AgentContext:
         # Restore state into this instance (preserve tools and cache setting)
         self.messages = data.get("messages", [])
         self.system_prompt = data.get("system_prompt")
+        self.cache_point = normalize_cache_point(data.get("cache_point"))
+        self.cache_tool_definitions = normalize_cache_point(
+            data.get("cache_tool_definitions")
+        )
+        self.auto_cache_static_prefix = normalize_cache_point(
+            data.get("auto_cache_static_prefix")
+        )
         self.compaction_records = [
             ContextCompactionRecord(
                 summary=record.get("summary", ""),
@@ -863,8 +1008,8 @@ class AgentContext:
         elif part_type == "citation":
             citations = part.get("citations", [])
             lines.append(f"*[Citations: {len(citations)} reference(s)]*")
-        elif part_type == "cache_control":
-            lines.append("*[Cache control marker]*")
+        elif part_type in {"cache_point", "cache_control"}:
+            lines.append("*[Cache point marker]*")
         else:
             lines.append(f"*[Content type: {part_type}]*")
 

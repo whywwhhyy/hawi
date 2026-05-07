@@ -42,7 +42,7 @@ from ._streaming import (
     stream_response_async,
     _AnthropicStreamHandler,
 )
-from ._utils import convert_system_prompt, map_stop_reason
+from ._utils import convert_cache_point, convert_system_prompt, map_stop_reason
 
 logger = logging.getLogger(__name__)
 
@@ -400,8 +400,38 @@ class AnthropicModel(Model):
         request: MessageRequest,
     ) -> dict[str, Any]:
         """构建 Anthropic API 请求"""
-        # max_output_tokens: 请求级 > 实例级 > 默认值
-        effective_max_tokens = request.max_output_tokens or self.max_output_tokens or 4096
+        # Thinking 模式。Opus 4.7 等新模型可通过配置使用 adaptive + output_config.effort。
+        # 优先级: 请求级 > 实例级
+        effective_thinking_budget = request.thinking_budget if request.thinking_budget is not None else self.thinking_budget
+        effective_thinking_type = request.thinking_type or self.thinking_type
+        effective_thinking_effort = request.thinking_effort or self.thinking_effort
+        output_config = dict(self.output_config or {})
+        if request.output_config:
+            output_config.update(request.output_config)
+
+        # max_output_tokens: 请求级 > 实例级 > 默认值。Anthropic requires
+        # manual thinking budgets to be strictly less than max_tokens, so the
+        # implicit default must grow when the configured thinking budget is
+        # larger than the plain text-output default.
+        configured_max_tokens = (
+            request.max_output_tokens
+            if request.max_output_tokens is not None
+            else self.max_output_tokens
+        )
+        max_tokens_was_explicit = configured_max_tokens is not None
+        effective_max_tokens = configured_max_tokens or 4096
+        manual_thinking_enabled = (
+            effective_thinking_type not in {"adaptive", "disabled"}
+            and bool(effective_thinking_budget)
+        )
+        if manual_thinking_enabled and effective_thinking_budget >= effective_max_tokens:
+            if max_tokens_was_explicit:
+                raise ValidationError(
+                    "Anthropic thinking_budget must be less than max_output_tokens "
+                    f"(got thinking_budget={effective_thinking_budget}, "
+                    f"max_output_tokens={effective_max_tokens})."
+                )
+            effective_max_tokens = effective_thinking_budget + 4096
 
         req: dict[str, Any] = {
             "model": self.model_id,
@@ -414,16 +444,33 @@ class AnthropicModel(Model):
         if system:
             req["system"] = system
 
+        # 顶层自动缓存。当前 Anthropic SDK 版本的 messages.create()
+        # 签名还没有 cache_control 参数，使用 extra_body 透传到请求 body。
+        if request.cache_point:
+            extra_body = dict(req.get("extra_body") or {})
+            extra_body["cache_control"] = convert_cache_point(request.cache_point)
+            req["extra_body"] = extra_body
+
         # 工具定义 (扁平格式: name, description, schema)
         if request.tools:
-            req["tools"] = [
-                {
+            tools: list[dict[str, Any]] = []
+            for t in request.tools:
+                tool_def = {
                     "name": t["name"],
                     "description": t["description"],
                     "input_schema": t["schema"],
                 }
-                for t in request.tools
-            ]
+                tool_cache_point = t.get("cache_point") or t.get("cache_control")
+                if tool_cache_point:
+                    tool_def["cache_control"] = convert_cache_point(tool_cache_point)
+                tools.append(tool_def)
+
+            if request.cache_tool_definitions and tools:
+                if not any("cache_control" in tool for tool in tools):
+                    tools[-1]["cache_control"] = convert_cache_point(
+                        request.cache_tool_definitions
+                    )
+            req["tools"] = tools
 
         # 工具选择
         if request.tool_choice:
@@ -435,15 +482,6 @@ class AnthropicModel(Model):
             if request.parallel_tool_calls is not None:
                 tool_choice["disable_parallel_tool_use"] = not request.parallel_tool_calls
             req["tool_choice"] = tool_choice
-
-        # Thinking 模式。Opus 4.7 等新模型可通过配置使用 adaptive + output_config.effort。
-        # 优先级: 请求级 > 实例级
-        effective_thinking_budget = request.thinking_budget if request.thinking_budget is not None else self.thinking_budget
-        effective_thinking_type = request.thinking_type or self.thinking_type
-        effective_thinking_effort = request.thinking_effort or self.thinking_effort
-        output_config = dict(self.output_config or {})
-        if request.output_config:
-            output_config.update(request.output_config)
 
         if effective_thinking_type == "adaptive":
             req["thinking"] = {"type": "adaptive"}
@@ -500,7 +538,7 @@ class AnthropicModel(Model):
                         arguments=block.get("input", {}),
                     )
                 )
-            elif block_type == "reasoning":
+            elif block_type in {"reasoning", "thinking"}:
                 parts.append(
                     ReasoningPart(
                         type="reasoning",

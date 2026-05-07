@@ -48,6 +48,17 @@ def prepare_request(
     """
     if converter is None:
         converter = convert_message_to_openai
+    params = {
+        key: value
+        for key, value in params.items()
+        if key
+        not in {
+            "cache_point",
+            "cache_control",
+            "cache_tool_definitions",
+            "tool_definitions_cache_point",
+        }
+    }
 
     # 转换消息（每个消息可能返回多条，需要扁平化）
     openai_messages_raw = []
@@ -371,6 +382,8 @@ def convert_content_to_openai(
                 "type": "text",
                 "text": f"[Video: {source.get('url', 'unknown')}]",
             })
+        elif part["type"] in {"cache_point", "cache_control"}:
+            continue
 
     return openai_content if openai_content else ""
 

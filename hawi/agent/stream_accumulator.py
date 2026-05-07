@@ -60,6 +60,7 @@ class StreamBlockAccumulator:
     # 当前块状态
     _current_block_index: int = field(default=-1, repr=False)
     _accumulator: Any = field(default=None, repr=False)
+    _signature_accumulator: list[str] | None = field(default=None, repr=False)
 
     # 排序/校验状态
     _pending: dict[int, list[DeltaPart]] = field(default_factory=dict, repr=False)
@@ -103,6 +104,13 @@ class StreamBlockAccumulator:
     def _add_delta(self, chunk: DeltaPart) -> None:
         """添加 delta 到累积器"""
         if self._accumulator is None:
+            return
+
+        if self.block_type == "reasoning" and chunk.get("type") == "signature_delta":
+            if self._signature_accumulator is not None:
+                delta = chunk.get("delta", "")
+                if delta:
+                    self._signature_accumulator.append(delta)
             return
 
         if self.block_type in ("text", "reasoning"):
@@ -152,10 +160,15 @@ class StreamBlockAccumulator:
             return TextPart(type="text", text="".join(self._accumulator))
         elif self.block_type == "reasoning":
             from hawi.models.message import ReasoningPart
+            signature = (
+                "".join(self._signature_accumulator)
+                if self._signature_accumulator
+                else None
+            )
             return ReasoningPart(
                 type="reasoning",
                 reasoning="".join(self._accumulator),
-                signature=None,
+                signature=signature,
                 redacted_content=None,
             )
         elif self.block_type == "tool_use":
@@ -218,6 +231,7 @@ class StreamBlockAccumulator:
         if chunk.get("is_start"):
             self._current_block_index = idx
             self._accumulator = self._create_accumulator()
+            self._signature_accumulator = [] if self.block_type == "reasoning" else None
 
             if self.block_type == "tool_use":
                 events.append(ModelToolCallBlockStartEvent.create(
@@ -281,6 +295,7 @@ class StreamBlockAccumulator:
             self._finished_indices.add(self._current_block_index)
             self._current_block_index = -1
             self._accumulator = None
+            self._signature_accumulator = None
 
             if is_empty:
                 part = None

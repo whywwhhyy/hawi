@@ -9,7 +9,12 @@ Tests cover:
 import pytest
 
 from hawi.agent.stream_accumulator import StreamBlockAccumulator
-from hawi.models.message import DeltaTextPart, DeltaThinkingPart, DeltaToolCallPart
+from hawi.models.message import (
+    DeltaSignaturePart,
+    DeltaTextPart,
+    DeltaThinkingPart,
+    DeltaToolCallPart,
+)
 
 REQUEST_ID = "req-test"
 
@@ -43,6 +48,22 @@ def thinking_chunk(
 ) -> DeltaThinkingPart:
     return DeltaThinkingPart(
         type="reasoning_delta",
+        index=idx,
+        delta=delta,
+        is_start=is_start,
+        is_end=is_end,
+    )
+
+
+def signature_chunk(
+    idx: int,
+    delta: str = "",
+    *,
+    is_start: bool = False,
+    is_end: bool = False,
+) -> DeltaSignaturePart:
+    return DeltaSignaturePart(
+        type="signature_delta",
         index=idx,
         delta=delta,
         is_start=is_start,
@@ -144,6 +165,20 @@ class TestBasicLifecycle:
         completed = parts(r1 + r2)
         assert len(completed) == 1
         assert completed[0]["type"] == "reasoning"
+
+    def test_reasoning_block_preserves_signature_delta(self):
+        acc = StreamBlockAccumulator.create_thinking_handler()
+
+        r1 = acc.handle(thinking_chunk(0, "Let me think", is_start=True), REQUEST_ID)
+        r2 = acc.handle(signature_chunk(0, "sig-"), REQUEST_ID)
+        r3 = acc.handle(signature_chunk(0, "part"), REQUEST_ID)
+        r4 = acc.handle(thinking_chunk(0, "...", is_end=True), REQUEST_ID)
+
+        completed = parts(r1 + r2 + r3 + r4)
+        assert len(completed) == 1
+        assert completed[0]["type"] == "reasoning"
+        assert completed[0]["reasoning"] == "Let me think..."
+        assert completed[0]["signature"] == "sig-part"
 
     def test_empty_reasoning_block_returns_reasoning_part(self):
         acc = StreamBlockAccumulator.create_thinking_handler()

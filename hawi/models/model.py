@@ -25,6 +25,7 @@ from hawi.models.message import (
     ToolDefinition,
     ToolChoice,
     ToolResultPart,
+    normalize_cache_point,
 )
 from hawi.errors import ModelError
 
@@ -329,10 +330,20 @@ class Model(ABC):
         params = self._get_params()
         merged = {**params, **override_params}
         lowered_messages = self.lower_messages(messages)
+        cache_point_value = (
+            merged["cache_point"] if "cache_point" in merged else merged.get("cache_control")
+        )
+        cache_tool_definitions_value = (
+            merged["cache_tool_definitions"]
+            if "cache_tool_definitions" in merged
+            else merged.get("tool_definitions_cache_point")
+        )
 
         return MessageRequest(
             messages=lowered_messages,
             system=system,
+            cache_point=normalize_cache_point(cache_point_value),
+            cache_tool_definitions=normalize_cache_point(cache_tool_definitions_value),
             tools=tools,
             tool_choice=tool_choice,
             parallel_tool_calls=merged.get("parallel_tool_calls"),
