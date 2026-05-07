@@ -832,7 +832,9 @@ function ModelDialog({ models, current, onClose, onSelect }: { models: string[];
   }, [models, filter]);
   return (
     <Modal title="切换模型" className="model-modal" onClose={onClose}>
-      <input className="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索模型" />
+      <div className="modal-toolbar">
+        <input className="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索模型" />
+      </div>
       <div className="model-grid">
         {grouped.map(([provider, entries]) => (
           <section className="model-provider" key={provider}>
@@ -872,7 +874,20 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
   }
 
   return (
-    <Modal title="插件配置" onClose={onClose}>
+    <Modal
+      title="插件配置"
+      className="plugin-modal"
+      onClose={onClose}
+      footer={
+        <>
+          {errors.length > 0 && <div className="form-errors">{errors.join("\n")}</div>}
+          <div className="modal-action-row">
+            <button className="tool-button" onClick={onClose}>取消</button>
+            <button className="primary-button" onClick={apply}>应用</button>
+          </div>
+        </>
+      }
+    >
       <div className="plugin-list">
         {catalog.map((item) => (
           <section className="plugin-item" key={item.key}>
@@ -910,11 +925,6 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
           </section>
         ))}
       </div>
-      {errors.length > 0 && <div className="form-errors">{errors.join("\n")}</div>}
-      <div className="modal-actions">
-        <button className="tool-button" onClick={onClose}>取消</button>
-        <button className="primary-button" onClick={apply}>应用</button>
-      </div>
     </Modal>
   );
 }
@@ -943,7 +953,7 @@ function SchemaField({ field, schema, disabled, value, onChange }: { field: stri
   );
 }
 
-function Modal({ title, children, className = "", onClose }: { title: string; children: ReactNode; className?: string; onClose: () => void }) {
+function Modal({ title, children, className = "", footer, onClose }: { title: string; children: ReactNode; className?: string; footer?: ReactNode; onClose: () => void }) {
   return (
     <div className="modal-backdrop">
       <section className={`modal ${className}`.trim()}>
@@ -951,7 +961,8 @@ function Modal({ title, children, className = "", onClose }: { title: string; ch
           <h2>{title}</h2>
           <button className="icon-button" onClick={onClose} title="关闭"><X size={18} /></button>
         </header>
-        {children}
+        <div className="modal-body">{children}</div>
+        {footer && <footer className="modal-actions">{footer}</footer>}
       </section>
     </div>
   );
