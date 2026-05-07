@@ -87,12 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--extra-tool-parameter",
         action="append",
+        nargs=3,
         default=[],
-        metavar="NAME:TYPE:DESCRIPTION",
+        metavar=("NAME", "TYPE", "DESCRIPTION"),
         help=(
             "Framework-level tool parameter to expose to every tool schema and "
             "strip before tool execution. Injected parameters are required in "
             "tool call schemas. May be passed more than once. "
+            "Use quotes around DESCRIPTION when it contains spaces. "
             "Supported types: str, int, float, bool, object, array."
         ),
     )

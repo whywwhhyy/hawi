@@ -191,7 +191,7 @@ async def test_enqueue_command_returns_message_id() -> None:
 
 
 def test_parse_extra_tool_parameter() -> None:
-    parameter = parse_extra_tool_parameter("tool_call_description:str:Describe the call")
+    parameter = parse_extra_tool_parameter(["tool_call_description", "str", "Describe the call"])
 
     assert parameter.name == "tool_call_description"
     assert parameter.description == "Describe the call"
@@ -199,23 +199,43 @@ def test_parse_extra_tool_parameter() -> None:
 
 
 def test_parse_extra_tool_parameter_allows_colons_in_description() -> None:
-    parameter = parse_extra_tool_parameter("note:str:Reason: use the fast path")
+    parameter = parse_extra_tool_parameter(["note", "str", "Reason: use the fast path"])
 
     assert parameter.name == "note"
     assert parameter.description == "Reason: use the fast path"
 
 
+def test_parser_accepts_space_separated_extra_tool_parameters() -> None:
+    from hawi_core_cli.__main__ import build_parser
+
+    args = build_parser().parse_args([
+        "--extra-tool-parameter",
+        "note",
+        "str",
+        "Reason: use the fast path",
+        "--extra-tool-parameter",
+        "priority",
+        "int",
+        "Priority from 1 to 5",
+    ])
+
+    assert args.extra_tool_parameter == [
+        ["note", "str", "Reason: use the fast path"],
+        ["priority", "int", "Priority from 1 to 5"],
+    ]
+
+
 def test_parse_extra_tool_parameters_rejects_duplicates() -> None:
     with pytest.raises(ValueError, match="Duplicate"):
-        parse_extra_tool_parameters(["note:str:first", "note:int:second"])
+        parse_extra_tool_parameters([["note", "str", "first"], ["note", "int", "second"]])
 
 
 def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
     runtime = CoreRuntime(
         model_name="test-model",
         extra_tool_parameters=[
-            parse_extra_tool_parameter("tool_call_description:str:Describe the call"),
-            parse_extra_tool_parameter("priority:int:Priority from 1 to 5"),
+            parse_extra_tool_parameter(["tool_call_description", "str", "Describe the call"]),
+            parse_extra_tool_parameter(["priority", "int", "Priority from 1 to 5"]),
         ],
     )
     agent = HawiAgent(model=MagicMock())

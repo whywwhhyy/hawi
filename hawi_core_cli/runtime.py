@@ -9,7 +9,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from hawi.agent import HawiAgent, HawiScheduler
 from hawi.agent.context import AgentContext, ToolCallContext
@@ -61,17 +61,16 @@ class ExtraToolParameter:
     schema: dict[str, Any]
 
 
-def parse_extra_tool_parameter(raw: str) -> ExtraToolParameter:
-    """Parse one ``--extra-tool-parameter name:type:description`` value."""
-    parts = raw.split(":", 2)
-    if len(parts) != 3:
+def parse_extra_tool_parameter(raw: Sequence[str]) -> ExtraToolParameter:
+    """Parse one ``--extra-tool-parameter name type description`` value."""
+    if isinstance(raw, str) or len(raw) != 3:
         raise ValueError(
-            "--extra-tool-parameter must use <name>:<type>:<description> format"
+            "--extra-tool-parameter must use <name> <type> <description> format"
         )
-    name, type_name, description = (part.strip() for part in parts)
+    name, type_name, description = (part.strip() for part in raw)
     if not name or not type_name or not description:
         raise ValueError(
-            "--extra-tool-parameter must use <name>:<type>:<description> format"
+            "--extra-tool-parameter must use <name> <type> <description> format"
         )
     if not _EXTRA_PARAMETER_NAME_RE.match(name):
         raise ValueError(
@@ -87,7 +86,7 @@ def parse_extra_tool_parameter(raw: str) -> ExtraToolParameter:
     )
 
 
-def parse_extra_tool_parameters(raw_values: list[str]) -> list[ExtraToolParameter]:
+def parse_extra_tool_parameters(raw_values: Sequence[Sequence[str]]) -> list[ExtraToolParameter]:
     """Parse stacked ``--extra-tool-parameter`` values and reject duplicates."""
     parameters = [parse_extra_tool_parameter(value) for value in raw_values]
     seen: set[str] = set()

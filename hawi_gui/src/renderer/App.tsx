@@ -55,6 +55,7 @@ markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 };
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const SYSTEM_PROMPT_MAX_ROWS = 3;
+const MESSAGE_INPUT_MAX_ROWS = 5;
 
 const queueLabels: Record<QueueKind, string> = {
   normal: "普通",
@@ -72,6 +73,7 @@ export default function App() {
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const followTailRef = useRef(true);
   const selectingChatRef = useRef(false);
   const inputComposingRef = useRef(false);
@@ -134,6 +136,10 @@ export default function App() {
   useEffect(() => {
     resizeTextareaToRows(systemPromptRef.current, SYSTEM_PROMPT_MAX_ROWS);
   }, [config?.systemPrompt, systemPromptLocked]);
+
+  useEffect(() => {
+    resizeTextareaToRows(inputRef.current, MESSAGE_INPUT_MAX_ROWS);
+  }, [input]);
 
   function updateFollowTail() {
     const element = chatRef.current;
@@ -342,9 +348,14 @@ export default function App() {
 
       <footer className="input-row">
         <textarea
+          ref={inputRef}
+          rows={1}
           value={input}
           placeholder="输入消息"
-          onChange={(event) => setInput(event.target.value)}
+          onChange={(event) => {
+            resizeTextareaToRows(event.currentTarget, MESSAGE_INPUT_MAX_ROWS);
+            setInput(event.target.value);
+          }}
           onCompositionStart={startInputComposition}
           onCompositionEnd={endInputComposition}
           onKeyDown={(event) => {
@@ -768,7 +779,7 @@ export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "sc
   return element.scrollHeight - element.scrollTop - element.clientHeight < AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
-function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: number) {
+function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: number, minRows = 1) {
   if (!textarea) return;
 
   textarea.style.height = "auto";
@@ -777,8 +788,9 @@ function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: num
   const lineHeight = Number.parseFloat(style.lineHeight) || 20;
   const padding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
   const border = Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth);
+  const minHeight = lineHeight * minRows + padding + border;
   const maxHeight = lineHeight * maxRows + padding + border;
-  const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+  const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
 
   textarea.style.height = `${nextHeight}px`;
   textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";

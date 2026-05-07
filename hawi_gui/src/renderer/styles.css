@@ -702,8 +702,11 @@ button:disabled {
 }
 
 .input-row textarea {
-  min-height: 54px;
-  max-height: 170px;
+  min-height: calc(1.4em + 20px);
+  max-height: calc(7em + 20px);
+  line-height: 1.4;
+  resize: none;
+  overflow-y: hidden;
 }
 
 .debug-toggle {

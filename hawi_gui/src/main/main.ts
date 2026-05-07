@@ -185,7 +185,9 @@ class CoreProcess {
       "--plugin-config",
       pluginConfigPath,
       "--extra-tool-parameter",
-      "tool_call_description:str:用一句话说明为什么要调用这个工具，显示在工具标题旁边。",
+      "tool_call_description",
+      "str",
+      "用一句话说明为什么要调用这个工具，显示在工具标题旁边。",
       "--log-file",
       backendLogPath
     ];
