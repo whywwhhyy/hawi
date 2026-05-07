@@ -27,6 +27,14 @@ class SemanticEventMapper:
         """Return zero or more semantic protocol events for one Hawi event."""
         etype = event.type
 
+        if etype.startswith("plugin."):
+            return [
+                make_frame(
+                    etype,
+                    self._plugin_payload(event),
+                )
+            ]
+
         if etype == "scheduler.enqueue":
             event = event  # type: ignore[assignment]
             return [
@@ -479,3 +487,23 @@ class SemanticEventMapper:
         if event.type == "model.content_metadata":
             return "Content metadata"
         return event.type
+
+    def _plugin_payload(self, event: Event) -> dict[str, Any]:
+        raw_payload = getattr(event, "payload", {})
+        payload = dict(raw_payload) if isinstance(raw_payload, dict) else {"data": raw_payload}
+        plugin_name = str(getattr(event, "plugin_name", "") or "")
+        plugin_id = str(getattr(event, "plugin_id", "") or plugin_name)
+        run_id = str(getattr(event, "run_id", "") or self._active_run_id or "")
+        tool_call_id = str(getattr(event, "tool_call_id", "") or "")
+        message_id = str(getattr(event, "message_id", "") or "")
+        payload.update(
+            {
+                "plugin_id": plugin_id,
+                "plugin_name": plugin_name,
+                "run_id": run_id,
+                "tool_call_id": tool_call_id,
+            }
+        )
+        if message_id:
+            payload["message_id"] = message_id
+        return to_json_safe(payload)

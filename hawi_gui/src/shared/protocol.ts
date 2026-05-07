@@ -23,6 +23,34 @@ export interface CoreFrame<TPayload = Record<string, unknown>> {
   payload: TPayload;
 }
 
+export type PluginEventType =
+  | "plugin.event"
+  | "plugin.message"
+  | "plugin.status"
+  | "plugin.tool_progress"
+  | "plugin.artifact.upsert"
+  | "plugin.artifact.delta"
+  | "plugin.artifact.remove"
+  | "plugin.artifact.clear";
+
+export interface PluginArtifactPayload {
+  id?: string;
+  artifact_id?: string;
+  type?: string;
+  artifact_type?: string;
+  title?: string;
+  content?: string;
+  data?: unknown;
+  mime_type?: string;
+  mimeType?: string;
+  language?: string;
+  uri?: string;
+  path?: string;
+  description?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface CoreCommand<TPayload = Record<string, unknown>> {
   version: typeof VERSION;
   type: CoreCommandType;

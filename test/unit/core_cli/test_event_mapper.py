@@ -13,6 +13,7 @@ from hawi.events import (
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockStopEvent,
+    PluginEvent,
     SchedulerDequeueEvent,
     SchedulerInterruptEvent,
 )
@@ -246,3 +247,42 @@ def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:
     interrupted = mapper.map(SchedulerInterruptEvent.create("user", ["tc-9"]))
     assert interrupted[0]["type"] == "scheduler.interrupt"
     assert interrupted[0]["payload"]["interrupted_tool_calls"] == ["tc-9"]
+
+
+def test_mapper_forwards_plugin_artifact_and_tool_progress_events() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-plugin"))
+
+    artifact = mapper.map(
+        PluginEvent.create(
+            "plugin.artifact.upsert",
+            plugin_id="plan",
+            plugin_name="PlanPlugin",
+            payload={
+                "artifact": {
+                    "id": "current",
+                    "type": "plan",
+                    "title": "Current Plan",
+                }
+            },
+        )
+    )
+
+    assert artifact[0]["type"] == "plugin.artifact.upsert"
+    assert artifact[0]["payload"]["plugin_id"] == "plan"
+    assert artifact[0]["payload"]["run_id"] == "run-plugin"
+    assert artifact[0]["payload"]["artifact"]["title"] == "Current Plan"
+
+    progress = mapper.map(
+        PluginEvent.create(
+            "plugin.tool_progress",
+            plugin_id="plan",
+            plugin_name="PlanPlugin",
+            tool_call_id="tc-plan",
+            payload={"progress": 0.8, "message": "Reviewing"},
+        )
+    )
+
+    assert progress[0]["type"] == "plugin.tool_progress"
+    assert progress[0]["payload"]["tool_call_id"] == "tc-plan"
+    assert progress[0]["payload"]["progress"] == 0.8

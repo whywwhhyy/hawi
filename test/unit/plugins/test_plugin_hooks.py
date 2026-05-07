@@ -10,6 +10,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 from hawi.plugin import HawiPlugin, HookContext, HookResult
+from hawi.events import EventBus
 from hawi.plugin.decorators import (
     before_session,
     after_session,
@@ -159,6 +160,25 @@ class TestConvenienceDecorators:
         assert "after_session" in hooks
         assert callable(hooks["before_session"])
         assert callable(hooks["after_session"])
+
+    def test_plugin_event_helpers_emit_with_runtime_context(self):
+        plugin = SimplePlugin()
+        plugin.bind_plugin_identity(plugin_id="simple", plugin_name="SimplePlugin")
+        bus = EventBus()
+        received = []
+        bus.subscribe_blocking(received.append)
+        plugin.bind_event_bus(bus)
+
+        with plugin.plugin_event_context(run_id="run-1", tool_call_id="tc-1"):
+            event = plugin.emit_tool_progress(progress=0.25, message="working")
+
+        assert event is not None
+        assert received[-1].type == "plugin.tool_progress"
+        assert received[-1].plugin_id == "simple"
+        assert received[-1].run_id == "run-1"
+        assert received[-1].tool_call_id == "tc-1"
+        assert received[-1].payload["message"] == "working"
+        bus.close()
 
     def test_decorator_preserves_method(self):
         """Test that decorated method still works as normal method."""

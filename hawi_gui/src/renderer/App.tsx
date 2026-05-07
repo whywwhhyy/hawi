@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -10,11 +10,11 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Bot, Brain, Check, ChevronDown, ChevronRight, Plug, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, FileText, Plug, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode } from "./state";
+import { createInitialState, reduceCoreEvent, type ChatNode, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ToolProgressState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -54,8 +54,10 @@ markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
+const AUTO_SCROLL_SETTLE_FRAMES = 2;
 const SYSTEM_PROMPT_MAX_ROWS = 3;
 const MESSAGE_INPUT_MAX_ROWS = 5;
+const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const queueLabels: Record<QueueKind, string> = {
   normal: "普通",
@@ -76,6 +78,9 @@ export default function App() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const followTailRef = useRef(true);
   const selectingChatRef = useRef(false);
+  const userScrollIntentRef = useRef(false);
+  const isAutoScrollingRef = useRef(false);
+  const autoScrollFrameRef = useRef<number | null>(null);
   const inputComposingRef = useRef(false);
   const inputCompositionEndTimerRef = useRef<number | null>(null);
 
@@ -102,12 +107,8 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const element = chatRef.current;
-    if (!element || selectingChatRef.current || hasChatSelection()) return;
-    if (!followTailRef.current && !isNearChatBottom(element)) return;
-    element.scrollTo({ top: element.scrollHeight });
-    followTailRef.current = true;
+  useBrowserLayoutEffect(() => {
+    keepChatTailVisible();
   }, [state.nodes]);
 
   useEffect(() => {
@@ -124,6 +125,7 @@ export default function App() {
   }, []);
 
   useEffect(() => () => {
+    cancelPendingAutoScroll();
     if (inputCompositionEndTimerRef.current !== null) {
       window.clearTimeout(inputCompositionEndTimerRef.current);
     }
@@ -144,7 +146,65 @@ export default function App() {
   function updateFollowTail() {
     const element = chatRef.current;
     if (!element) return;
-    followTailRef.current = isNearChatBottom(element);
+    followTailRef.current = resolveFollowTailOnScroll(
+      followTailRef.current,
+      isNearChatBottom(element),
+      userScrollIntentRef.current,
+      selectingChatRef.current,
+      isAutoScrollingRef.current
+    );
+    userScrollIntentRef.current = false;
+  }
+
+  function markChatUserScrollIntent() {
+    userScrollIntentRef.current = true;
+    isAutoScrollingRef.current = false;
+    cancelPendingAutoScroll();
+  }
+
+  function handleChatWheel(event: WheelEvent<HTMLElement>) {
+    markChatUserScrollIntent();
+    if (event.deltaY < 0) {
+      followTailRef.current = false;
+    }
+  }
+
+  function keepChatTailVisible(frame = 0) {
+    const element = chatRef.current;
+    if (!element || selectingChatRef.current || hasChatSelection()) return;
+    if (!followTailRef.current && !isNearChatBottom(element)) return;
+
+    followTailRef.current = true;
+    isAutoScrollingRef.current = true;
+    element.scrollTop = element.scrollHeight;
+
+    if (frame >= AUTO_SCROLL_SETTLE_FRAMES || typeof window.requestAnimationFrame !== "function") {
+      finishAutoScrolling();
+      return;
+    }
+    cancelPendingAutoScroll();
+    autoScrollFrameRef.current = window.requestAnimationFrame(() => {
+      autoScrollFrameRef.current = null;
+      keepChatTailVisible(frame + 1);
+    });
+  }
+
+  function finishAutoScrolling() {
+    if (typeof window.requestAnimationFrame !== "function") {
+      isAutoScrollingRef.current = false;
+      return;
+    }
+    cancelPendingAutoScroll();
+    autoScrollFrameRef.current = window.requestAnimationFrame(() => {
+      autoScrollFrameRef.current = null;
+      isAutoScrollingRef.current = false;
+    });
+  }
+
+  function cancelPendingAutoScroll() {
+    if (autoScrollFrameRef.current === null || typeof window.cancelAnimationFrame !== "function") return;
+    window.cancelAnimationFrame(autoScrollFrameRef.current);
+    autoScrollFrameRef.current = null;
   }
 
   function hasChatSelection() {
@@ -300,20 +360,36 @@ export default function App() {
         </button>
       </section>
 
-      <main
-        className="chat-panel"
-        ref={chatRef}
-        onScroll={updateFollowTail}
-        onMouseDown={() => {
-          selectingChatRef.current = true;
-        }}
-      >
-        {state.nodes
-          .filter((node) => showDebug || node.kind !== "debug")
-          .map((node) => (
-            <ChatBubble node={node} key={node.id} />
-          ))}
-      </main>
+      <section className="workspace-row">
+        <main
+          className="chat-panel"
+          ref={chatRef}
+          onScroll={updateFollowTail}
+          onWheel={handleChatWheel}
+          onTouchStart={markChatUserScrollIntent}
+          onMouseDown={() => {
+            selectingChatRef.current = true;
+            markChatUserScrollIntent();
+          }}
+        >
+          {state.nodes
+            .filter((node) => showDebug || node.kind !== "debug")
+            .map((node) => (
+              <ChatBubble node={node} key={node.id} />
+            ))}
+        </main>
+        <PluginPreviewPanel
+          artifacts={state.artifacts}
+          artifactOrder={state.artifactOrder}
+          selectedArtifactId={state.selectedArtifactId}
+          messages={state.pluginMessages}
+          statuses={state.pluginStatuses}
+          toolProgress={state.toolProgress}
+          onSelectArtifact={(artifactKey) => {
+            dispatch({ version: VERSION, type: "gui.select_artifact", payload: { artifact_key: artifactKey } });
+          }}
+        />
+      </section>
 
       <section className="control-row">
         <span className="label">优先级:</span>
@@ -520,6 +596,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
       </div>
       <div className={`collapsible-body tool-body ${collapsed ? "is-collapsed" : ""}`} aria-hidden={collapsed}>
         <div className="collapsible-body-inner">
+          {tool.progress && <ToolProgress progress={tool.progress} compact={false} />}
           <details open>
             <summary>
               Arguments
@@ -540,6 +617,25 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
     </article>
   );
 });
+
+function ToolProgress({ progress, compact }: { progress: ToolProgressState; compact: boolean }) {
+  const percent = progress.progress == null ? null : Math.round(progress.progress * 100);
+  const label = progress.label ?? progress.status ?? progress.pluginName;
+  return (
+    <div className={`tool-progress ${compact ? "compact" : ""}`}>
+      <div className="tool-progress-head">
+        <span>{label}</span>
+        {progress.message && <strong>{progress.message}</strong>}
+        {percent !== null && <em>{percent}%</em>}
+      </div>
+      {percent !== null && (
+        <div className="progress-track" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} role="progressbar">
+          <span style={{ width: `${percent}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ToolArguments({ value }: { value: unknown }) {
   if (isRecord(value)) {
@@ -602,6 +698,126 @@ function isMultilineArgumentValue(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function PluginPreviewPanel({
+  artifacts,
+  artifactOrder,
+  selectedArtifactId,
+  messages,
+  statuses,
+  toolProgress,
+  onSelectArtifact
+}: {
+  artifacts: Record<string, PluginArtifactState>;
+  artifactOrder: string[];
+  selectedArtifactId?: string;
+  messages: PluginMessageState[];
+  statuses: Record<string, PluginStatusState>;
+  toolProgress: Record<string, ToolProgressState>;
+  onSelectArtifact: (artifactKey: string) => void;
+}) {
+  const artifactList = artifactOrder.map((key) => artifacts[key]).filter(Boolean);
+  const selected = selectedArtifactId && artifacts[selectedArtifactId]
+    ? artifacts[selectedArtifactId]
+    : artifactList[0];
+  const statusList = Object.values(statuses).sort((a, b) => b.updatedAt - a.updatedAt);
+  const progressList = Object.values(toolProgress).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4);
+  const messageList = messages.slice(-5).reverse();
+
+  return (
+    <aside className="plugin-preview">
+      <header className="preview-head">
+        <span><FileText size={15} /> Artifacts</span>
+        <strong>{artifactList.length}</strong>
+      </header>
+      {artifactList.length > 0 ? (
+        <>
+          <div className="artifact-tabs">
+            {artifactList.map((artifact) => (
+              <button
+                key={artifact.key}
+                className={artifact.key === selected?.key ? "artifact-tab active" : "artifact-tab"}
+                title={artifact.title}
+                onClick={() => onSelectArtifact(artifact.key)}
+              >
+                <span>{artifact.title}</span>
+                <small>{artifact.artifactType}</small>
+              </button>
+            ))}
+          </div>
+          {selected && <ArtifactPreview artifact={selected} />}
+        </>
+      ) : (
+        <div className="preview-empty">No artifacts yet.</div>
+      )}
+
+      {(statusList.length > 0 || progressList.length > 0) && (
+        <section className="plugin-side-section">
+          <h3><Activity size={14} /> Progress</h3>
+          {progressList.map((item, index) => (
+            <ToolProgress progress={item} compact key={`${item.pluginId}-${item.updatedAt}-${index}`} />
+          ))}
+          {statusList.slice(0, 4).map((item) => (
+            <div className="plugin-status" key={item.pluginId}>
+              <div>
+                <strong>{item.label ?? item.pluginName}</strong>
+                <span>{item.message ?? item.status}</span>
+              </div>
+              {item.progress != null && <em>{Math.round(item.progress * 100)}%</em>}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {messageList.length > 0 && (
+        <section className="plugin-side-section">
+          <h3>Messages</h3>
+          {messageList.map((item) => (
+            <div className={`plugin-message ${item.level}`} key={item.id}>
+              <strong>{item.title ?? item.pluginName}</strong>
+              <span>{item.message}</span>
+            </div>
+          ))}
+        </section>
+      )}
+    </aside>
+  );
+}
+
+function ArtifactPreview({ artifact }: { artifact: PluginArtifactState }) {
+  const content = artifact.content ?? formatArtifactData(artifact.data);
+  const isMarkdown = artifact.language === "markdown" || artifact.mimeType === "text/markdown";
+  return (
+    <article className="artifact-preview">
+      <header>
+        <div>
+          <h2>{artifact.title}</h2>
+          <span>{artifact.pluginName} · {artifact.artifactType}{artifact.status ? ` · ${artifact.status}` : ""}</span>
+        </div>
+      </header>
+      {artifact.description && <p className="artifact-description">{artifact.description}</p>}
+      {artifact.path && <div className="artifact-ref">{artifact.path}</div>}
+      {artifact.uri && <div className="artifact-ref">{artifact.uri}</div>}
+      {content ? (
+        isMarkdown
+          ? <div className="markdown artifact-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
+          : <pre className="artifact-code">{content}</pre>
+      ) : (
+        <div className="preview-empty">Waiting for content.</div>
+      )}
+    </article>
+  );
+}
+
+function formatArtifactData(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function ModelDialog({ models, current, onClose, onSelect }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void }) {
@@ -777,6 +993,18 @@ export function thinkingExcerpt(value: string, maxChars = 120): string {
 
 export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight < AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+export function resolveFollowTailOnScroll(
+  currentFollowTail: boolean,
+  nearBottom: boolean,
+  userScrollIntent: boolean,
+  selectingChat: boolean,
+  isAutoScrolling: boolean,
+): boolean {
+  if (isAutoScrolling || nearBottom) return true;
+  if (userScrollIntent || selectingChat) return false;
+  return currentFollowTail;
 }
 
 function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: number, minRows = 1) {

@@ -137,6 +137,13 @@ button:disabled {
   color: #ffffff;
 }
 
+.workspace-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  min-height: 0;
+  gap: 6px;
+}
+
 .chat-panel {
   min-height: 0;
   overflow: auto;
@@ -145,6 +152,213 @@ button:disabled {
   border: 1px solid #d7dcdd;
   background: #ffffff;
   user-select: text;
+}
+
+.plugin-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #d7dcdd;
+  background: #ffffff;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid #dfe4e5;
+  color: #3a474d;
+  font-size: 12px;
+}
+
+.preview-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preview-head strong {
+  color: #176b5d;
+}
+
+.artifact-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px;
+  border-bottom: 1px solid #e2e7e8;
+}
+
+.artifact-tab {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 118px;
+  max-width: 176px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid #d7dedf;
+  border-radius: 6px;
+  background: #f8faf9;
+  color: #253139;
+}
+
+.artifact-tab.active {
+  border-color: #176b5d;
+  background: #edf7f3;
+}
+
+.artifact-tab span,
+.artifact-tab small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-tab small {
+  color: #7d898e;
+  font-size: 11px;
+}
+
+.artifact-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  border-bottom: 1px solid #e2e7e8;
+}
+
+.artifact-preview header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.artifact-preview h2 {
+  margin: 0 0 3px;
+  color: #253139;
+  font-size: 15px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.artifact-preview header span,
+.artifact-description,
+.artifact-ref {
+  color: #6f7a7f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.artifact-description {
+  margin: 0 0 8px;
+}
+
+.artifact-ref {
+  margin: 0 0 6px;
+  padding: 5px 7px;
+  border: 1px solid #dfe5e7;
+  border-radius: 5px;
+  background: #f5f7f7;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.artifact-content {
+  padding: 0;
+}
+
+.artifact-code {
+  margin: 0;
+  min-height: 80px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #dbe1e4;
+  border-radius: 6px;
+  background: #f5f6f7;
+  color: #263238;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.preview-empty {
+  padding: 14px 10px;
+  color: #7d898e;
+  font-size: 12px;
+}
+
+.plugin-side-section {
+  flex: 0 0 auto;
+  padding: 9px 10px;
+  border-top: 1px solid #eef1f2;
+}
+
+.plugin-side-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 8px;
+  color: #4b585e;
+  font-size: 12px;
+}
+
+.plugin-status,
+.plugin-message {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  padding: 6px 0;
+  color: #334047;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.plugin-status {
+  justify-content: space-between;
+}
+
+.plugin-status div,
+.plugin-message {
+  min-width: 0;
+}
+
+.plugin-status strong,
+.plugin-message strong {
+  display: block;
+  margin-bottom: 2px;
+  color: #253139;
+}
+
+.plugin-status span,
+.plugin-message span {
+  display: block;
+  min-width: 0;
+  color: #69767b;
+  overflow-wrap: anywhere;
+}
+
+.plugin-status em {
+  flex-shrink: 0;
+  color: #176b5d;
+  font-style: normal;
+}
+
+.plugin-message.warning strong {
+  color: #946000;
+}
+
+.plugin-message.error strong {
+  color: #9d3028;
 }
 
 .bubble {
@@ -492,6 +706,63 @@ button:disabled {
   margin-top: 8px;
   color: #7d898e;
   font-size: 12px;
+}
+
+.tool-progress {
+  margin: 8px 12px;
+  padding: 8px 9px;
+  border: 1px solid #d7e0e2;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.tool-progress.compact {
+  margin: 0 0 8px;
+  padding: 7px 8px;
+}
+
+.tool-progress-head {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  color: #56636a;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.tool-progress-head span,
+.tool-progress-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-progress-head strong {
+  color: #2f3b42;
+  font-weight: 500;
+}
+
+.tool-progress-head em {
+  color: #176b5d;
+  font-style: normal;
+}
+
+.progress-track {
+  height: 6px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5ebec;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #176b5d;
+  transition: width 160ms ease;
 }
 
 .argument-list {

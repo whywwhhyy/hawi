@@ -48,6 +48,15 @@ KNOWN_PLUGINS = {
     PLUGIN_MCP,
 }
 
+PLUGIN_LABELS = {
+    PLUGIN_FILESYSTEM: "FileSystemPlugin",
+    PLUGIN_SHELL: "ShellPlugin",
+    PLUGIN_WEB: "WebPlugin",
+    PLUGIN_SKILLS: "SkillsPlugin",
+    PLUGIN_PYTHON_INTERPRETER: "PythonInterpreterPlugin",
+    PLUGIN_MCP: "MCPPlugin",
+}
+
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -626,33 +635,32 @@ class CoreRuntime:
         plugins: list[Any] = []
         for plugin_key in selected_plugins:
             cfg = dict(plugin_configs.get(plugin_key, {}))
+            plugin: Any
             if plugin_key == PLUGIN_FILESYSTEM:
                 from hawi_plugins.filesystem_plugin import FileSystemPlugin
 
-                plugins.append(FileSystemPlugin())
+                plugin = FileSystemPlugin()
             elif plugin_key == PLUGIN_SHELL:
                 from hawi_plugins.shell_plugin import ShellPlugin
 
-                plugins.append(ShellPlugin())
+                plugin = ShellPlugin()
             elif plugin_key == PLUGIN_WEB:
                 from hawi_plugins.web import WebPlugin
 
-                plugins.append(WebPlugin())
+                plugin = WebPlugin()
             elif plugin_key == PLUGIN_SKILLS:
                 from hawi_plugins.skills_plugin import SkillsPlugin
 
                 skills_dir = str(cfg.get("skills_dir") or ".skills")
-                plugins.append(SkillsPlugin(skills_dir=skills_dir))
+                plugin = SkillsPlugin(skills_dir=skills_dir)
             elif plugin_key == PLUGIN_PYTHON_INTERPRETER:
                 from hawi_plugins.python_interpreter import PythonInterpreterPlugin
 
                 work_dir_raw = cfg.get("work_dir")
                 work_dir = str(work_dir_raw).strip() if isinstance(work_dir_raw, str) else None
-                plugins.append(
-                    PythonInterpreterPlugin(
-                        work_dir=work_dir or None,
-                        print_execution=bool(cfg.get("print_execution", False)),
-                    )
+                plugin = PythonInterpreterPlugin(
+                    work_dir=work_dir or None,
+                    print_execution=bool(cfg.get("print_execution", False)),
                 )
             elif plugin_key == PLUGIN_MCP:
                 from hawi_plugins.mcp_plugin import MCPPlugin
@@ -660,11 +668,16 @@ class CoreRuntime:
                 config_path = str(cfg.get("config_path") or "").strip()
                 if not config_path:
                     raise ValueError("MCP plugin requires 'config_path'.")
-                mcp = MCPPlugin(config_path=config_path)
-                await mcp.connect()
-                plugins.append(mcp)
+                plugin = MCPPlugin(config_path=config_path)
+                await plugin.connect()
             else:
                 raise ValueError(f"Unknown plugin key: {plugin_key}")
+            if hasattr(plugin, "bind_plugin_identity"):
+                plugin.bind_plugin_identity(
+                    plugin_id=plugin_key,
+                    plugin_name=PLUGIN_LABELS.get(plugin_key, plugin_key),
+                )
+            plugins.append(plugin)
         return plugins
 
     async def _close_plugins(self, plugins: list[Any]) -> None:

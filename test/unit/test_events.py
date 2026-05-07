@@ -26,6 +26,7 @@ from hawi.events import (
     AgentToolResultEvent,
     AgentMessageAddedEvent,
     AgentErrorEvent,
+    PluginEvent,
 )
 from hawi.agent.printers import RichPrinter
 from hawi.errors import AgentError, ModelError
@@ -194,6 +195,46 @@ class TestAgentEvents:
         )
         assert event.type == "agent.error"
         assert event.error.message == "API timeout"
+
+
+class TestPluginEvents:
+    """Tests for plugin-originated events."""
+
+    def test_plugin_artifact_event(self):
+        event = PluginEvent.create(
+            "plugin.artifact.upsert",
+            plugin_id="plan",
+            plugin_name="PlanPlugin",
+            run_id="run-1",
+            tool_call_id="tc-1",
+            payload={
+                "artifact": {
+                    "id": "current-plan",
+                    "type": "plan",
+                    "title": "Current Plan",
+                    "content": "- step one",
+                }
+            },
+        )
+
+        assert event.type == "plugin.artifact.upsert"
+        assert event.source == "plugin"
+        assert event.plugin_id == "plan"
+        assert event.run_id == "run-1"
+        assert event.payload["artifact"]["title"] == "Current Plan"
+
+    def test_plugin_tool_progress_event(self):
+        event = PluginEvent.create(
+            "plugin.tool_progress",
+            plugin_id="filesystem",
+            plugin_name="FileSystemPlugin",
+            tool_call_id="tc-1",
+            payload={"progress": 0.5, "message": "Writing files"},
+        )
+
+        assert event.type == "plugin.tool_progress"
+        assert event.tool_call_id == "tc-1"
+        assert event.payload["progress"] == 0.5
 
 
 class TestEventBus:

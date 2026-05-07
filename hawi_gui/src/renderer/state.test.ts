@@ -249,6 +249,46 @@ describe("core event reducer", () => {
     expect(state.nodes[0].content).toBe("stderr line");
   });
 
+  it("tracks plugin artifacts and streamed artifact deltas", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("plugin.artifact.upsert", {
+      plugin_id: "plan",
+      plugin_name: "PlanPlugin",
+      artifact: {
+        id: "current",
+        type: "plan",
+        title: "Current Plan",
+        content: "# Plan\n",
+        language: "markdown"
+      }
+    }));
+    state = reduceCoreEvent(state, frame("plugin.artifact.delta", {
+      plugin_id: "plan",
+      artifact_id: "current",
+      delta: "- Step one\n"
+    }));
+
+    expect(state.artifactOrder).toEqual(["plan:current"]);
+    expect(state.selectedArtifactId).toBe("plan:current");
+    expect(state.artifacts["plan:current"].content).toContain("- Step one");
+    expect(state.artifacts["plan:current"].artifactType).toBe("plan");
+  });
+
+  it("tracks plugin tool progress and attaches it to the matching tool", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-progress", tool_call_id: "tc-progress", tool_name: "write" }));
+    state = reduceCoreEvent(state, frame("plugin.tool_progress", {
+      plugin_id: "filesystem",
+      plugin_name: "FileSystemPlugin",
+      tool_call_id: "tc-progress",
+      progress: 25,
+      message: "Writing"
+    }));
+
+    expect(state.toolProgress["tc-progress"].progress).toBe(0.25);
+    expect(state.nodes[0].tool?.progress?.message).toBe("Writing");
+  });
+
   it("renders run stops as divider nodes", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("run.start", { run_id: "run-3", user_content: "hi", queue: "normal" }));

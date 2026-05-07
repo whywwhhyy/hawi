@@ -7,6 +7,7 @@ tool execution, and plugin hooks for agent workflows.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import os
@@ -212,6 +213,7 @@ class HawiAgent:
             plugins=plugins,
             plugin_factories=plugin_factories,
         )
+        self._plugin_manager.bind_event_bus(self._event_bus)
 
         # Convert system_prompt to list[ContentPart] if needed
         system_prompt_parts: list[ContentPart] | None = None
@@ -332,6 +334,7 @@ class HawiAgent:
             event_dump_file=self._dump_manager.dump_file if self._dump_manager else None,
         )
         new_agent._plugin_manager = self._plugin_manager.clone()
+        new_agent._plugin_manager.bind_event_bus(new_agent._event_bus)
         new_agent.set_context(self._context.copy())
         return new_agent
 
@@ -1635,48 +1638,60 @@ class HawiAgent:
                         )
                     else:
                         # Call arun and check if result is async generator
-                        raw_result = await tool.arun(**tool_arguments)
+                        owner = self._plugin_manager.get_tool_owner(tool_name)
+                        event_scope = (
+                            owner.plugin_event_context(
+                                run_id=state.run_id,
+                                tool_call_id=tool_call_id,
+                                tool_name=tool_name,
+                                iteration=state.iteration,
+                            )
+                            if owner is not None
+                            else contextlib.nullcontext()
+                        )
+                        with event_scope:
+                            raw_result = await tool.arun(**tool_arguments)
 
-                        # Check if result is async generator (async tool streaming)
-                        if inspect.isasyncgen(raw_result):
-                            # Async generator: stream results part by part
-                            parts: list[str] = []
-                            # Type cast to AsyncGenerator for iteration
-                            from typing import cast
-                            async_gen = cast(AsyncGenerator[Any, None], raw_result)
-                            async for part in async_gen:
-                                parts.append(str(part))
-                                # Emit partial result event
+                            # Check if result is async generator (async tool streaming)
+                            if inspect.isasyncgen(raw_result):
+                                # Async generator: stream results part by part
+                                parts: list[str] = []
+                                # Type cast to AsyncGenerator for iteration
+                                from typing import cast
+                                async_gen = cast(AsyncGenerator[Any, None], raw_result)
+                                async for part in async_gen:
+                                    parts.append(str(part))
+                                    # Emit partial result event
+                                    await self._emit_event(
+                                        AgentToolResultPartEvent.create(
+                                            run_id=state.run_id,
+                                            tool_call_id=tool_call_id,
+                                            part=str(part),
+                                            part_index=len(parts) - 1,
+                                            is_final=False,
+                                        ),
+                                        self._event_bus,
+                                    )
+                                # Final part event
                                 await self._emit_event(
                                     AgentToolResultPartEvent.create(
                                         run_id=state.run_id,
                                         tool_call_id=tool_call_id,
-                                        part=str(part),
-                                        part_index=len(parts) - 1,
-                                        is_final=False,
+                                        part="",
+                                        part_index=len(parts),
+                                        is_final=True,
                                     ),
                                     self._event_bus,
                                 )
-                            # Final part event
-                            await self._emit_event(
-                                AgentToolResultPartEvent.create(
-                                    run_id=state.run_id,
-                                    tool_call_id=tool_call_id,
-                                    part="",
-                                    part_index=len(parts),
-                                    is_final=True,
-                                ),
-                                self._event_bus,
-                            )
-                            # Combine all parts as final result
-                            full_output = "".join(parts)
-                            result = ToolResult(success=True, output=full_output)
-                        else:
-                            # Normal result: wrap in ToolResult
-                            if isinstance(raw_result, ToolResult):
-                                result = raw_result
+                                # Combine all parts as final result
+                                full_output = "".join(parts)
+                                result = ToolResult(success=True, output=full_output)
                             else:
-                                result = ToolResult(success=True, output=raw_result)
+                                # Normal result: wrap in ToolResult
+                                if isinstance(raw_result, ToolResult):
+                                    result = raw_result
+                                else:
+                                    result = ToolResult(success=True, output=raw_result)
                 except Exception as e:
                     # 包装为 ToolExecutionError，保留原始异常
                     err = ToolExecutionError(f"Tool '{tool_name}' execution failed: {e}", details={"original": e})

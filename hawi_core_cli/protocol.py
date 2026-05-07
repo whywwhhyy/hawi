@@ -42,6 +42,14 @@ EVENT_TYPES = {
     "agent.interrupt",
     "scheduler.interrupt",
     "debug.info",
+    "plugin.event",
+    "plugin.message",
+    "plugin.status",
+    "plugin.tool_progress",
+    "plugin.artifact.upsert",
+    "plugin.artifact.delta",
+    "plugin.artifact.remove",
+    "plugin.artifact.clear",
 }
 
 

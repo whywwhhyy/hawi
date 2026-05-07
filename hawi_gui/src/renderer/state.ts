@@ -1,4 +1,4 @@
-import type { CoreFrame, QueueKind } from "../shared/protocol";
+import type { CoreFrame, PluginArtifactPayload, QueueKind } from "../shared/protocol";
 
 const TOOL_CALL_DESCRIPTION_PARAMETER = "tool_call_description";
 
@@ -24,6 +24,59 @@ export interface ToolState {
   arguments?: unknown;
   resultPreview: string;
   durationMs?: number;
+  progress?: ToolProgressState;
+}
+
+export interface ToolProgressState {
+  pluginId: string;
+  pluginName: string;
+  progress?: number;
+  status?: string;
+  label?: string;
+  message?: string;
+  data?: unknown;
+  updatedAt: number;
+}
+
+export interface PluginArtifactState {
+  key: string;
+  id: string;
+  pluginId: string;
+  pluginName: string;
+  artifactType: string;
+  title: string;
+  content?: string;
+  data?: unknown;
+  mimeType?: string;
+  language?: string;
+  uri?: string;
+  path?: string;
+  description?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
+  updatedAt: number;
+}
+
+export interface PluginMessageState {
+  id: string;
+  pluginId: string;
+  pluginName: string;
+  level: "debug" | "info" | "warning" | "error";
+  title?: string;
+  message: string;
+  data?: unknown;
+  timestamp: number;
+}
+
+export interface PluginStatusState {
+  pluginId: string;
+  pluginName: string;
+  status: string;
+  label?: string;
+  message?: string;
+  progress?: number;
+  data?: unknown;
+  updatedAt: number;
 }
 
 interface RunState {
@@ -42,6 +95,12 @@ export interface AppState {
   metadataLines: string[];
   debugLines: string[];
   errors: string[];
+  artifacts: Record<string, PluginArtifactState>;
+  artifactOrder: string[];
+  selectedArtifactId?: string;
+  pluginMessages: PluginMessageState[];
+  pluginStatuses: Record<string, PluginStatusState>;
+  toolProgress: Record<string, ToolProgressState>;
 }
 
 export function createInitialState(): AppState {
@@ -54,7 +113,12 @@ export function createInitialState(): AppState {
     queueLengths: { normal: 0, high_prio: 0, urgent: 0 },
     metadataLines: [],
     debugLines: [],
-    errors: []
+    errors: [],
+    artifacts: {},
+    artifactOrder: [],
+    pluginMessages: [],
+    pluginStatuses: {},
+    toolProgress: {}
   };
 }
 
@@ -70,8 +134,22 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         activeRunId: undefined,
         metadataLines: [],
         debugLines: [],
-        errors: []
+        errors: [],
+        artifacts: {},
+        artifactOrder: [],
+        selectedArtifactId: undefined,
+        pluginMessages: [],
+        pluginStatuses: {},
+        toolProgress: {}
       };
+
+    case "gui.select_artifact": {
+      const artifactKey = String(payload.artifact_key ?? "");
+      if (!artifactKey || !state.artifacts[artifactKey]) {
+        return state;
+      }
+      return { ...state, selectedArtifactId: artifactKey };
+    }
 
     case "core.ready":
       return addSystem(state, `模型已就绪: ${String(payload.model_name ?? "")}`.trim());
@@ -246,6 +324,28 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         errors: [...state.errors, String(payload.message ?? "Unknown error")]
       };
 
+    case "plugin.message":
+    case "plugin.event":
+      return addPluginMessage(state, payload, frame);
+
+    case "plugin.status":
+      return updatePluginStatus(state, payload, frame);
+
+    case "plugin.tool_progress":
+      return updateToolProgress(state, payload, frame);
+
+    case "plugin.artifact.upsert":
+      return upsertPluginArtifact(state, payload, frame);
+
+    case "plugin.artifact.delta":
+      return appendPluginArtifactDelta(state, payload, frame);
+
+    case "plugin.artifact.remove":
+      return removePluginArtifact(state, payload);
+
+    case "plugin.artifact.clear":
+      return clearPluginArtifacts(state, payload);
+
     default:
       return state;
   }
@@ -390,6 +490,270 @@ function addMeta(state: AppState, content: string): AppState {
     }),
     metadataLines: [...state.metadataLines, content]
   };
+}
+
+function addPluginMessage(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {
+  const plugin = pluginInfo(payload);
+  const message = optionalString(payload.message)
+    ?? optionalString(payload.title)
+    ?? formatToolValue(payload.data).trim()
+    ?? "";
+  if (!message) {
+    return state;
+  }
+  const level = normalizePluginLevel(payload.level);
+  const item: PluginMessageState = {
+    id: String(payload.message_id ?? `${frame.type}-${frame.ts ?? Date.now()}-${state.pluginMessages.length}`),
+    pluginId: plugin.pluginId,
+    pluginName: plugin.pluginName,
+    level,
+    title: optionalString(payload.title),
+    message,
+    data: payload.data,
+    timestamp: frameTime(frame)
+  };
+  return {
+    ...state,
+    pluginMessages: [...state.pluginMessages.slice(-79), item]
+  };
+}
+
+function updatePluginStatus(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {
+  const plugin = pluginInfo(payload);
+  const status = optionalString(payload.status) ?? "active";
+  return {
+    ...state,
+    pluginStatuses: {
+      ...state.pluginStatuses,
+      [plugin.pluginId]: {
+        pluginId: plugin.pluginId,
+        pluginName: plugin.pluginName,
+        status,
+        label: optionalString(payload.label),
+        message: optionalString(payload.message),
+        progress: normalizeProgress(payload.progress),
+        data: payload.data,
+        updatedAt: frameTime(frame)
+      }
+    }
+  };
+}
+
+function updateToolProgress(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {
+  const plugin = pluginInfo(payload);
+  const toolCallId = String(payload.tool_call_id ?? "");
+  const progress: ToolProgressState = {
+    pluginId: plugin.pluginId,
+    pluginName: plugin.pluginName,
+    progress: normalizeProgress(payload.progress),
+    status: optionalString(payload.status),
+    label: optionalString(payload.label),
+    message: optionalString(payload.message),
+    data: payload.data,
+    updatedAt: frameTime(frame)
+  };
+  const progressKey = toolCallId || `${plugin.pluginId}:latest`;
+  const next = {
+    ...state,
+    toolProgress: {
+      ...state.toolProgress,
+      [progressKey]: progress
+    }
+  };
+  if (!toolCallId) {
+    return next;
+  }
+  return updateTool(next, toolCallId, (tool) => ({
+    ...tool,
+    progress
+  }));
+}
+
+function upsertPluginArtifact(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {
+  const artifactPayload = getArtifactPayload(payload);
+  if (!artifactPayload) {
+    return state;
+  }
+  const plugin = pluginInfo(payload);
+  const artifactId = String(artifactPayload.id ?? artifactPayload.artifact_id ?? "");
+  if (!artifactId) {
+    return state;
+  }
+  const key = artifactKey(plugin.pluginId, artifactId);
+  const existing = state.artifacts[key];
+  const nextArtifact: PluginArtifactState = {
+    ...existing,
+    key,
+    id: artifactId,
+    pluginId: plugin.pluginId,
+    pluginName: plugin.pluginName,
+    artifactType: String(artifactPayload.type ?? artifactPayload.artifact_type ?? existing?.artifactType ?? "artifact"),
+    title: String(artifactPayload.title ?? existing?.title ?? artifactId),
+    content: stringOrExisting(artifactPayload.content, existing?.content),
+    data: artifactPayload.data ?? existing?.data,
+    mimeType: optionalString(artifactPayload.mime_type ?? artifactPayload.mimeType) ?? existing?.mimeType,
+    language: optionalString(artifactPayload.language) ?? existing?.language,
+    uri: optionalString(artifactPayload.uri) ?? existing?.uri,
+    path: optionalString(artifactPayload.path) ?? existing?.path,
+    description: optionalString(artifactPayload.description) ?? existing?.description,
+    status: optionalString(artifactPayload.status) ?? existing?.status,
+    metadata: isRecord(artifactPayload.metadata) ? artifactPayload.metadata : existing?.metadata,
+    updatedAt: frameTime(frame)
+  };
+  const artifactOrder = existing ? state.artifactOrder : [...state.artifactOrder, key];
+  return {
+    ...state,
+    artifacts: {
+      ...state.artifacts,
+      [key]: nextArtifact
+    },
+    artifactOrder,
+    selectedArtifactId: state.selectedArtifactId ?? key
+  };
+}
+
+function appendPluginArtifactDelta(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {
+  const plugin = pluginInfo(payload);
+  const artifactId = String(payload.artifact_id ?? payload.id ?? "");
+  if (!artifactId) {
+    return state;
+  }
+  const key = artifactKey(plugin.pluginId, artifactId);
+  const existing = state.artifacts[key] ?? {
+    key,
+    id: artifactId,
+    pluginId: plugin.pluginId,
+    pluginName: plugin.pluginName,
+    artifactType: "artifact",
+    title: artifactId,
+    updatedAt: frameTime(frame)
+  };
+  const field = String(payload.field ?? "content");
+  const delta = String(payload.delta ?? "");
+  const nextArtifact: PluginArtifactState = {
+    ...existing,
+    updatedAt: frameTime(frame)
+  };
+  if (field === "content") {
+    nextArtifact.content = `${existing.content ?? ""}${delta}`;
+  } else if (field === "status") {
+    nextArtifact.status = `${existing.status ?? ""}${delta}`;
+  } else if (field === "description") {
+    nextArtifact.description = `${existing.description ?? ""}${delta}`;
+  } else {
+    nextArtifact.metadata = {
+      ...(existing.metadata ?? {}),
+      [field]: `${formatToolValue((existing.metadata ?? {})[field])}${delta}`
+    };
+  }
+  const artifactOrder = state.artifacts[key] ? state.artifactOrder : [...state.artifactOrder, key];
+  return {
+    ...state,
+    artifacts: {
+      ...state.artifacts,
+      [key]: nextArtifact
+    },
+    artifactOrder,
+    selectedArtifactId: state.selectedArtifactId ?? key
+  };
+}
+
+function removePluginArtifact(state: AppState, payload: Record<string, unknown>): AppState {
+  const plugin = pluginInfo(payload);
+  const artifactId = String(payload.artifact_id ?? payload.id ?? "");
+  if (!artifactId) {
+    return state;
+  }
+  const key = artifactKey(plugin.pluginId, artifactId);
+  if (!state.artifacts[key]) {
+    return state;
+  }
+  const artifacts = { ...state.artifacts };
+  delete artifacts[key];
+  const artifactOrder = state.artifactOrder.filter((item) => item !== key);
+  return {
+    ...state,
+    artifacts,
+    artifactOrder,
+    selectedArtifactId: nextSelectedArtifact(state.selectedArtifactId, key, artifactOrder)
+  };
+}
+
+function clearPluginArtifacts(state: AppState, payload: Record<string, unknown>): AppState {
+  const scope = String(payload.scope ?? "plugin");
+  if (scope === "all") {
+    return {
+      ...state,
+      artifacts: {},
+      artifactOrder: [],
+      selectedArtifactId: undefined
+    };
+  }
+  const plugin = pluginInfo(payload);
+  const artifacts = { ...state.artifacts };
+  const artifactOrder = state.artifactOrder.filter((key) => {
+    if (artifacts[key]?.pluginId !== plugin.pluginId) {
+      return true;
+    }
+    delete artifacts[key];
+    return false;
+  });
+  return {
+    ...state,
+    artifacts,
+    artifactOrder,
+    selectedArtifactId: artifactOrder.includes(state.selectedArtifactId ?? "")
+      ? state.selectedArtifactId
+      : artifactOrder[0]
+  };
+}
+
+function pluginInfo(payload: Record<string, unknown>): { pluginId: string; pluginName: string } {
+  const pluginId = optionalString(payload.plugin_id) ?? "plugin";
+  return {
+    pluginId,
+    pluginName: optionalString(payload.plugin_name) ?? pluginId
+  };
+}
+
+function artifactKey(pluginId: string, artifactId: string): string {
+  return `${pluginId}:${artifactId}`;
+}
+
+function getArtifactPayload(payload: Record<string, unknown>): PluginArtifactPayload | undefined {
+  if (isRecord(payload.artifact)) {
+    return payload.artifact;
+  }
+  return payload as PluginArtifactPayload;
+}
+
+function nextSelectedArtifact(current: string | undefined, removed: string, order: string[]): string | undefined {
+  if (current && current !== removed) {
+    return current;
+  }
+  return order[0];
+}
+
+function stringOrExisting(value: unknown, existing: string | undefined): string | undefined {
+  return typeof value === "string" ? value : existing;
+}
+
+function frameTime(frame: CoreFrame): number {
+  const seconds = Number(frame.ts);
+  return Number.isFinite(seconds) ? seconds * 1000 : Date.now();
+}
+
+function normalizePluginLevel(value: unknown): PluginMessageState["level"] {
+  return value === "debug" || value === "warning" || value === "error" ? value : "info";
+}
+
+function normalizeProgress(value: unknown): number | undefined {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return undefined;
+  }
+  const normalized = numberValue > 1 && numberValue <= 100 ? numberValue / 100 : numberValue;
+  return Math.min(1, Math.max(0, normalized));
 }
 
 function nodeId(kind: string, id: string): string {

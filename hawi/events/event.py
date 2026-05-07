@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ConfigDict
 logger = logging.getLogger(__name__)
 
 
-EventSource = Literal["model", "agent", "scheduler"]
+EventSource = Literal["model", "agent", "scheduler", "plugin"]
 
 ModelEventType = Literal[
     "model.stream_start",
@@ -55,7 +55,18 @@ SchedulerEventType = Literal[
     "scheduler.resume",
 ]
 
-EventType = ModelEventType | AgentEventType | SchedulerEventType
+PluginEventType = Literal[
+    "plugin.event",
+    "plugin.message",
+    "plugin.status",
+    "plugin.tool_progress",
+    "plugin.artifact.upsert",
+    "plugin.artifact.delta",
+    "plugin.artifact.remove",
+    "plugin.artifact.clear",
+]
+
+EventType = ModelEventType | AgentEventType | SchedulerEventType | PluginEventType
 
 
 class Event(BaseModel):
@@ -93,4 +104,5 @@ __all__ = [
     "ModelEventType",
     "AgentEventType",
     "SchedulerEventType",
+    "PluginEventType",
 ]

@@ -92,6 +92,7 @@ class PluginManager:
         # Caches
         self._tools_cache: list[AgentTool] | None = None
         self._tool_defs_cache: list[ToolDefinition] | None = None
+        self._event_bus: Any | None = None
 
     def _collect_plugin_hooks(self) -> None:
         """Collect hooks from all plugins, building hook chains."""
@@ -104,6 +105,12 @@ class PluginManager:
     def get_plugins(self) -> list[HawiPlugin]:
         """Return all plugins (as a copy)."""
         return list(self._plugins)
+
+    def bind_event_bus(self, event_bus: Any | None) -> None:
+        """Bind an event bus to all managed plugins that support plugin events."""
+        self._event_bus = event_bus
+        for plugin in self._plugins:
+            plugin.bind_event_bus(event_bus)
 
     def _invalidate_cache(self) -> None:
         """Invalidate tool and tool definition caches."""
@@ -131,6 +138,18 @@ class PluginManager:
                 if tool.name == name:
                     return tool
         return None
+
+    def get_tool_owner(self, name: str) -> HawiPlugin | None:
+        """Return the plugin instance that owns a tool, if known."""
+        owner_by_name: dict[str, HawiPlugin] = {}
+        for plugin in self._plugins:
+            for tool in plugin.tools:
+                owner_by_name[tool.name] = plugin
+        for tool in self._dynamic.tools:
+            if tool.name == name:
+                owner = getattr(tool, "_hawi_plugin", None)
+                return owner if owner is not None else None
+        return owner_by_name.get(name)
 
     def get_tools(self) -> list[AgentTool]:
         """Get all unmasked tools (cached)."""
@@ -379,12 +398,18 @@ class PluginManager:
         """
         # 1. Clone all plugins
         cloned_plugins = [p.clone() for p in self._plugins]
+        for source, clone in zip(self._plugins, cloned_plugins):
+            clone.bind_plugin_identity(
+                plugin_id=getattr(source, "_plugin_id", None),
+                plugin_name=getattr(source, "_plugin_name", None),
+            )
 
         # 2. Create new manager
         new_manager = PluginManager(
             plugins=cloned_plugins,
             plugin_factories=self._plugin_factories.copy(),
         )
+        new_manager.bind_event_bus(self._event_bus)
 
         # 3. Clone dynamic tools
         for tool in self._dynamic.tools:

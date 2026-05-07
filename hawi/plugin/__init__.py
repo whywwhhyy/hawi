@@ -1,4 +1,4 @@
-from .plugin import HawiPlugin
+from .plugin import HawiPlugin, PluginRuntimeContext
 from .manager import PluginManager
 from .decorators import (
     before_session,
@@ -17,6 +17,7 @@ from .resource import HawiResource, ResourceContent
 
 __all__ = [
     "HawiPlugin",
+    "PluginRuntimeContext",
     "PluginManager",
     "PluginHooks",
     "HookContext",

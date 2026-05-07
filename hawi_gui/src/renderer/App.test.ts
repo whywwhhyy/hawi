@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import App, { isNearChatBottom, renderMarkdown, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
+import App, { isNearChatBottom, renderMarkdown, resolveFollowTailOnScroll, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -26,6 +26,24 @@ describe("isNearChatBottom", () => {
 
   it("does not allow auto scroll when the chat is 5px or more from the bottom", () => {
     expect(isNearChatBottom({ scrollHeight: 1000, scrollTop: 595, clientHeight: 400 })).toBe(false);
+  });
+});
+
+describe("resolveFollowTailOnScroll", () => {
+  it("keeps following during programmatic scroll lag", () => {
+    expect(resolveFollowTailOnScroll(true, false, false, false, false)).toBe(true);
+  });
+
+  it("keeps following while auto scrolling is still settling", () => {
+    expect(resolveFollowTailOnScroll(false, false, false, false, true)).toBe(true);
+  });
+
+  it("stops following when the user scrolls away from the bottom", () => {
+    expect(resolveFollowTailOnScroll(true, false, true, false, false)).toBe(false);
+  });
+
+  it("resumes following when the chat is back near the bottom", () => {
+    expect(resolveFollowTailOnScroll(false, true, true, false, false)).toBe(true);
   });
 });
 
