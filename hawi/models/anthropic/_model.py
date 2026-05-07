@@ -245,6 +245,9 @@ class AnthropicModel(Model):
         max_retries: int = 3,
         enable_image_download: bool = True,
         thinking_budget: int | None = 8000,
+        thinking_type: str | None = None,
+        thinking_effort: str | None = None,
+        output_config: dict[str, Any] | None = None,
         max_output_tokens: int | None = None,
         **params,
     ):
@@ -259,6 +262,9 @@ class AnthropicModel(Model):
             max_retries: 最大重试次数
             enable_image_download: 是否允许下载远程图片转为 base64
             thinking_budget: thinking 模式的 token 预算，0 或 None 表示禁用，默认 8000
+            thinking_type: thinking 模式类型，可为 enabled/adaptive/disabled。默认使用旧 enabled 格式。
+            thinking_effort: adaptive thinking 的 effort，如 low/medium/high。
+            output_config: Anthropic output_config 参数。
             max_output_tokens: 最大输出 token 数，默认 None（使用 API 默认值或请求中的值）
             **params: 其他参数，如 temperature, max_output_tokens 等
         """
@@ -269,6 +275,9 @@ class AnthropicModel(Model):
         self.max_retries = max_retries
         self.enable_image_download = enable_image_download
         self.thinking_budget = thinking_budget
+        self.thinking_type = thinking_type
+        self.thinking_effort = thinking_effort
+        self.output_config = output_config
         self.max_output_tokens = max_output_tokens
         self.params = params
         self._client: Anthropic | None = None
@@ -427,14 +436,28 @@ class AnthropicModel(Model):
                 tool_choice["disable_parallel_tool_use"] = not request.parallel_tool_calls
             req["tool_choice"] = tool_choice
 
-        # Thinking 模式 (thinking_budget 为 0 或 None 时禁用)
+        # Thinking 模式。Opus 4.7 等新模型可通过配置使用 adaptive + output_config.effort。
         # 优先级: 请求级 > 实例级
         effective_thinking_budget = request.thinking_budget if request.thinking_budget is not None else self.thinking_budget
-        if effective_thinking_budget:
+        effective_thinking_type = request.thinking_type or self.thinking_type
+        effective_thinking_effort = request.thinking_effort or self.thinking_effort
+        output_config = dict(self.output_config or {})
+        if request.output_config:
+            output_config.update(request.output_config)
+
+        if effective_thinking_type == "adaptive":
+            req["thinking"] = {"type": "adaptive"}
+            if effective_thinking_effort:
+                output_config["effort"] = effective_thinking_effort
+        elif effective_thinking_type == "disabled":
+            pass
+        elif effective_thinking_budget:
             req["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": effective_thinking_budget,
             }
+        if output_config:
+            req["output_config"] = output_config
 
         # 可选参数
         if request.temperature is not None:

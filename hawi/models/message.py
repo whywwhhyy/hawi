@@ -580,27 +580,27 @@ def downgrade_audio_content(content: Sequence[ContentPart]) -> list[ContentPart]
             result.append(convert_audio_part_to_text(part))
         elif part["type"] == "steer":
             steer_part = cast(SteerPart, part)
-            new_part: SteerPart = {
+            steer_copy: SteerPart = {
                 "type": "steer",
                 "content": downgrade_audio_content(steer_part.get("content", [])),
             }
             if "tool_call_id" in steer_part:
-                new_part["tool_call_id"] = steer_part.get("tool_call_id")
+                steer_copy["tool_call_id"] = steer_part.get("tool_call_id")
             if "preferred_merge_mode" in steer_part:
-                new_part["preferred_merge_mode"] = steer_part.get("preferred_merge_mode")
-            result.append(new_part)
+                steer_copy["preferred_merge_mode"] = steer_part.get("preferred_merge_mode")
+            result.append(steer_copy)
         elif part["type"] == "tool_result":
             # 递归处理 tool_result 中的内容
             tool_part = cast(ToolResultPart, part)
             tool_content = tool_part.get("content")
             if isinstance(tool_content, list):
-                new_part: ToolResultPart = {
+                tool_copy: ToolResultPart = {
                     "type": "tool_result",
                     "tool_call_id": tool_part["tool_call_id"],
                     "content": downgrade_audio_content(tool_content),
                     "is_error": tool_part.get("is_error"),
                 }
-                result.append(new_part)
+                result.append(tool_copy)
             else:
                 result.append(part)
         else:
@@ -687,6 +687,9 @@ class MessageRequest(BaseModel):
     stop_sequences: list[str] | None = None  # Anthropic stop sequences
     metadata: dict[str, Any] | None = None  # Anthropic metadata (e.g., user_id)
     thinking_budget: int | None = None  # Anthropic thinking mode budget (0/None to disable)
+    thinking_type: Literal["auto", "enabled", "adaptive", "disabled"] | None = None
+    thinking_effort: Literal["low", "medium", "high", "max"] | None = None
+    output_config: dict[str, Any] | None = None
 
 
 class MessageResponse(BaseModel):

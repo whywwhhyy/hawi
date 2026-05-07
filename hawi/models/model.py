@@ -343,6 +343,9 @@ class Model(ABC):
             reasoning_effort=merged.get("reasoning_effort"),
             service_tier=merged.get("service_tier"),
             thinking_budget=merged.get("thinking_budget"),
+            thinking_type=merged.get("thinking_type"),
+            thinking_effort=merged.get("thinking_effort"),
+            output_config=merged.get("output_config"),
         )
 
     def _get_params(self) -> ModelParams:

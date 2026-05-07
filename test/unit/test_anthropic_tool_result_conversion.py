@@ -57,6 +57,31 @@ def test_anthropic_keeps_tool_results_before_interleaved_user_text() -> None:
     assert merged_user_message["content"][2]["text"] == "please prioritize the follow-up"
 
 
+def test_anthropic_adaptive_thinking_uses_output_config_effort() -> None:
+    model = AnthropicModel(
+        model_id="claude-opus-4-7",
+        thinking_type="adaptive",
+        thinking_effort="high",
+    )
+
+    prepared = model._prepare_request_sync(MessageRequest(messages=[_user("hi")]))
+
+    assert prepared["thinking"] == {"type": "adaptive"}
+    assert prepared["output_config"]["effort"] == "high"
+
+
+def test_anthropic_legacy_thinking_keeps_budget_tokens() -> None:
+    model = AnthropicModel(model_id="claude-sonnet-4-5", thinking_budget=2048)
+
+    prepared = model._prepare_request_sync(MessageRequest(messages=[_user("hi")]))
+
+    assert prepared["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 2048,
+    }
+    assert "output_config" not in prepared
+
+
 def _user(text: str) -> Message:
     return {
         "role": "user",
