@@ -295,6 +295,13 @@ export default function App() {
     await saveAndSet(config);
   }
 
+  const [systemPromptApplied, setSystemPromptApplied] = useState(false);
+  async function handleApplySystemPrompt() {
+    await applySystemPrompt();
+    setSystemPromptApplied(true);
+    setTimeout(() => setSystemPromptApplied(false), 1500);
+  }
+
   async function selectModel(modelName: string) {
     if (!config || !metadata) return;
     const nextConfig = { ...config, modelName };
@@ -353,10 +360,10 @@ export default function App() {
         <button
           className="tool-button"
           title="应用系统提示"
-          disabled={systemPromptLocked}
-          onClick={applySystemPrompt}
+          disabled={systemPromptLocked || systemPromptApplied}
+          onClick={handleApplySystemPrompt}
         >
-          <Check size={17} /> 应用
+          <Check size={17} /> {systemPromptApplied ? "已应用" : "应用"}
         </button>
       </section>
 
@@ -855,22 +862,30 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
   const initial = mergePluginDefaults(catalog, selectedPlugins, pluginConfigs);
   const [selected, setSelected] = useState(new Set(initial.selectedPlugins));
   const [configs, setConfigs] = useState(initial.pluginConfigs);
-  const [errors, setErrors] = useState<string[]>([]);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   function apply() {
     const selectedList = catalog.filter((item) => selected.has(item.key)).map((item) => item.key);
     const nextConfigs: Record<string, Record<string, unknown>> = {};
-    const validation: string[] = [];
+    const errors: Record<string, string> = {};
     for (const item of catalog) {
       if (!selected.has(item.key)) continue;
       nextConfigs[item.key] = configs[item.key] ?? {};
-      validation.push(...validatePluginConfig(item, nextConfigs[item.key]));
+      for (const err of validatePluginConfig(item, nextConfigs[item.key])) {
+        const colonIdx = err.indexOf(": ");
+        const fieldKey = colonIdx > 0 ? `${item.key}.${err.slice(0, colonIdx)}` : `${item.key}.unknown`;
+        errors[fieldKey] = colonIdx > 0 ? err.slice(colonIdx + 2) : err;
+      }
     }
-    if (validation.length) {
-      setErrors(validation);
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
       return;
     }
     onApply(selectedList, nextConfigs);
+  }
+
+  function getFieldError(pluginKey: string, field: string): string | undefined {
+    return fieldErrors[`${pluginKey}.${field}`];
   }
 
   return (
@@ -880,7 +895,9 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
       onClose={onClose}
       footer={
         <>
-          {errors.length > 0 && <div className="form-errors">{errors.join("\n")}</div>}
+          {Object.keys(fieldErrors).length > 0 && (
+            <div className="form-errors">{Object.values(fieldErrors).join("\n")}</div>
+          )}
           <div className="modal-action-row">
             <button className="tool-button" onClick={onClose}>取消</button>
             <button className="primary-button" onClick={apply}>应用</button>
@@ -910,6 +927,7 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
                 field={field}
                 schema={schema}
                 disabled={!selected.has(item.key)}
+                error={getFieldError(item.key, field)}
                 value={(configs[item.key] ?? item.defaults)[field] ?? schema.default ?? ""}
                 onChange={(value) => {
                   setConfigs({
@@ -929,13 +947,32 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
   );
 }
 
-function SchemaField({ field, schema, disabled, value, onChange }: { field: string; schema: JsonSchemaObject; disabled: boolean; value: unknown; onChange: (value: unknown) => void }) {
+function SchemaField({ field, schema, disabled, value, error, onChange }: { field: string; schema: JsonSchemaObject; disabled: boolean; value: unknown; error?: string; onChange: (value: unknown) => void }) {
   const label = schema.title ?? field;
   if (schema.type === "boolean") {
     return (
       <label className="schema-field inline">
         <span>{label}</span>
         <input type="checkbox" disabled={disabled} checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+      </label>
+    );
+  }
+  if (schema.enum && Array.isArray(schema.enum) && schema.enum.length > 0) {
+    return (
+      <label className="schema-field">
+        <span>{label}</span>
+        <select
+          disabled={disabled}
+          value={String(value ?? "")}
+          onChange={(event) => onChange(coerceSchemaValue(schema, event.target.value))}
+        >
+          <option value="">--</option>
+          {schema.enum.map((opt) => (
+            <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
+          ))}
+        </select>
+        {schema.description && <small>{schema.description}</small>}
+        {error && <small className="schema-error">{error}</small>}
       </label>
     );
   }
@@ -949,6 +986,7 @@ function SchemaField({ field, schema, disabled, value, onChange }: { field: stri
         onChange={(event) => onChange(coerceSchemaValue(schema, event.target.value))}
       />
       {schema.description && <small>{schema.description}</small>}
+      {error && <small className="schema-error">{error}</small>}
     </label>
   );
 }
@@ -1100,14 +1138,5 @@ function escapeHtml(value: string): string {
 }
 
 function escapeText(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&": return "&amp;";
-      case "<": return "&lt;";
-      case ">": return "&gt;";
-      case "\"": return "&quot;";
-      case "'": return "&#039;";
-      default: return char;
-    }
-  }).replace(/\n/g, "<br />");
+  return escapeHtml(value).replace(/\n/g, "<br />");
 }

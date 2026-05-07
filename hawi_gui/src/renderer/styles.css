@@ -606,10 +606,6 @@ button:disabled {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
-.markdown pre.code-block {
-  padding: 0;
-}
-
 .markdown pre code,
 .bubble pre code {
   display: block;
@@ -618,10 +614,6 @@ button:disabled {
   color: inherit;
   font: inherit;
   white-space: pre;
-}
-
-.markdown pre.code-block code {
-  padding: 10px 12px;
 }
 
 .hljs {
@@ -844,75 +836,6 @@ button:disabled {
   overflow: auto;
 }
 
-.json-tree {
-  margin-top: 8px;
-  padding: 9px 10px;
-  border: 1px solid #dce3e6;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #263238;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.json-branch > summary {
-  color: #56636a;
-  font-weight: 600;
-}
-
-.json-branch .json-branch {
-  margin-top: 2px;
-}
-
-.json-children {
-  margin: 4px 0 0 8px;
-  padding-left: 10px;
-  border-left: 1px solid #dfe5e7;
-}
-
-.json-row {
-  display: grid;
-  grid-template-columns: minmax(64px, 180px) minmax(0, 1fr);
-  gap: 8px;
-  padding: 2px 0;
-}
-
-.json-key {
-  min-width: 0;
-  color: #8a5b14;
-  overflow-wrap: anywhere;
-}
-
-.json-key::after {
-  content: ":";
-}
-
-.json-value,
-.json-primitive {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.json-primitive.string {
-  color: #176b5d;
-}
-
-.json-primitive.number {
-  color: #1d5790;
-}
-
-.json-primitive.boolean {
-  color: #8a3f7f;
-}
-
-.json-primitive.null,
-.json-primitive.unknown,
-.json-empty {
-  color: #7d898e;
-}
-
 .note-line {
   max-width: 100%;
   margin: 4px 0 8px;
@@ -1123,7 +1046,8 @@ button:disabled {
   margin: 6px 0;
 }
 
-.schema-field input {
+.schema-field input,
+.schema-field select {
   border: 1px solid #cbd3d5;
   border-radius: 6px;
   padding: 7px 9px;
@@ -1132,6 +1056,10 @@ button:disabled {
 .schema-field small {
   grid-column: 2;
   color: #627076;
+}
+
+.schema-field .schema-error {
+  color: #8f2e26;
 }
 
 .schema-field.inline input {

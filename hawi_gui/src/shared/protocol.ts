@@ -77,6 +77,7 @@ export interface JsonSchemaObject {
   title?: string;
   description?: string;
   default?: unknown;
+  enum?: unknown[];
   properties?: Record<string, JsonSchemaObject>;
   required?: string[];
   additionalProperties?: boolean;

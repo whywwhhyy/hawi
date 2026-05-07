@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseNdjsonChunk, type CoreCommandType, type CoreFrame, type GuiMetadata, type InspectPayload, type PersistedConfig } from "../shared/protocol";
+import { parseNdjsonChunk, type CoreCommand, type CoreCommandType, type CoreFrame, type GuiMetadata, type InspectPayload, type PersistedConfig } from "../shared/protocol";
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const guiRoot = path.join(repoRoot, "hawi_gui");
@@ -14,6 +14,8 @@ const workspaceRoot = resolveWorkspaceRoot();
 const configPath = path.join(workspaceRoot, ".hawi", "node_gui.json");
 const backendLogPath = path.join(workspaceRoot, ".hawi", "hawi-core.log");
 const uvCommand = process.platform === "win32" ? "uv.cmd" : "uv";
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 800;
+const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 
 let mainWindow: BrowserWindow | null = null;
 let inspectPayload: InspectPayload | null = null;
@@ -245,15 +247,15 @@ class CoreProcess {
       if (!child.killed) {
         child.kill();
       }
-    }, 800).unref();
+    }, GRACEFUL_SHUTDOWN_TIMEOUT_MS).unref();
   }
 
-  sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame> {
+  sendCommand(type: CoreCommandType, payload: Record<string, unknown>, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS): Promise<CoreFrame> {
     if (!this.child || !this.child.stdin.writable) {
       return Promise.reject(new Error("hawi-core is not running"));
     }
     const id = this.nextId();
-    const frame = {
+    const frame: CoreCommand = {
       version: "hawi.core.v1",
       type,
       id,
@@ -266,7 +268,7 @@ class CoreProcess {
         if (this.pending.delete(id)) {
           reject(new Error(`Core command timed out: ${type}`));
         }
-      }, 15_000).unref();
+      }, timeoutMs).unref();
     });
   }
 
@@ -275,7 +277,7 @@ class CoreProcess {
     return `gui-${Date.now().toString(36)}-${this.sequence}`;
   }
 
-  private writeFrame(child: ChildProcessWithoutNullStreams | null, frame: { version: string; type: string; id: string; payload: Record<string, unknown> }): void {
+  private writeFrame(child: ChildProcessWithoutNullStreams | null, frame: CoreCommand): void {
     child?.stdin.write(`${JSON.stringify(frame)}\n`, "utf-8");
   }
 
