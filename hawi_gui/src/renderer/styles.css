@@ -236,6 +236,14 @@ button:disabled {
   flex-shrink: 0;
 }
 
+.bubble.tool.success .tool-actions strong {
+  color: #237a4b;
+}
+
+.bubble.tool.fail .tool-actions strong {
+  color: #b13b2f;
+}
+
 .bubble.tool.collapsed .bubble-head {
   border-bottom-color: transparent;
 }

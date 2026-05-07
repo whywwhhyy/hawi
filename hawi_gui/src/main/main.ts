@@ -10,8 +10,9 @@ const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const guiRoot = path.join(repoRoot, "hawi_gui");
 const appIndexPath = path.join(guiRoot, "dist", "index.html");
 const appIndexUrl = pathToFileURL(appIndexPath);
-const configPath = path.join(repoRoot, ".hawi", "node_gui.json");
-const backendLogPath = path.join(repoRoot, ".hawi", "hawi-core.log");
+const workspaceRoot = resolveWorkspaceRoot();
+const configPath = path.join(workspaceRoot, ".hawi", "node_gui.json");
+const backendLogPath = path.join(workspaceRoot, ".hawi", "hawi-core.log");
 const uvCommand = process.platform === "win32" ? "uv.cmd" : "uv";
 
 let mainWindow: BrowserWindow | null = null;
@@ -173,6 +174,8 @@ class CoreProcess {
 
     const args = [
       "run",
+      "--project",
+      repoRoot,
       "hawi-core",
       "--model",
       nextConfig.modelName,
@@ -192,7 +195,7 @@ class CoreProcess {
       backendLogPath
     ];
     const child = spawn(uvCommand, args, {
-      cwd: repoRoot,
+      cwd: workspaceRoot,
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env
     });
@@ -215,7 +218,7 @@ class CoreProcess {
       }
       emitToRenderer("core:exit", { code, signal });
     });
-    emitToRenderer("core:spawn", { args: args.slice(1), logFile: backendLogPath });
+    emitToRenderer("core:spawn", { args: args.slice(1), cwd: workspaceRoot, logFile: backendLogPath });
   }
 
   restart(nextConfig: PersistedConfig, metadata: InspectPayload): void {
@@ -308,8 +311,8 @@ function emitToRenderer(channel: string, payload: unknown): void {
 }
 
 function loadInspectPayload(): InspectPayload {
-  const result = spawnSync(uvCommand, ["run", "hawi-core", "--inspect"], {
-    cwd: repoRoot,
+  const result = spawnSync(uvCommand, ["run", "--project", repoRoot, "hawi-core", "--inspect"], {
+    cwd: workspaceRoot,
     encoding: "utf-8",
     env: process.env
   });
@@ -364,7 +367,17 @@ function saveConfig(nextConfig: PersistedConfig): void {
   writeFileSync(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
 }
 
+function resolveWorkspaceRoot(): string {
+  const raw = parseArgValue("--cwd") || process.env.HAWI_GUI_CWD || process.env.INIT_CWD || process.cwd();
+  return path.resolve(raw);
+}
+
 function parseArgValue(name: string): string | null {
+  const inlinePrefix = `${name}=`;
+  const inlineValue = process.argv.find((arg) => arg.startsWith(inlinePrefix));
+  if (inlineValue) {
+    return inlineValue.slice(inlinePrefix.length);
+  }
   const index = process.argv.indexOf(name);
   if (index >= 0 && process.argv[index + 1]) {
     return process.argv[index + 1];
