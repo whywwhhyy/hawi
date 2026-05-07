@@ -196,6 +196,35 @@ class TestHawiAgentSteer:
         assert steer_message["content"][0]["type"] == "steer"
         assert steer_message["content"][0]["tool_call_id"] == "call_2"
 
+    def test_batch_tool_results_materialize_steer_after_all_results(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._current_tool_calls.extend([
+            {"id": "call_1", "name": "tool_a", "arguments": {}},
+            {"id": "call_2", "name": "tool_b", "arguments": {}},
+        ])
+
+        agent.steer("请优先处理新的用户消息")
+        agent._add_tool_result_with_pending_steer(
+            "call_1",
+            "result for call 1",
+            materialize_pending_steer=False,
+        )
+        agent._add_tool_result_with_pending_steer(
+            "call_2",
+            "result for call 2",
+            materialize_pending_steer=False,
+        )
+        agent._materialize_pending_steer_for_tool_results(["call_1", "call_2"])
+
+        assert [message["role"] for message in agent.context.messages] == [
+            "tool",
+            "tool",
+            "user",
+        ]
+        steer_message = agent.context.messages[-1]
+        assert steer_message["content"][0]["type"] == "steer"
+        assert steer_message["content"][0]["tool_call_id"] == "call_1"
+
     def test_run_only_accepts_message_argument(self):
         agent = HawiAgent(model=MagicMock())
 

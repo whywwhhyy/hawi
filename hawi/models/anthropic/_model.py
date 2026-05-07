@@ -47,6 +47,51 @@ from ._utils import convert_system_prompt, map_stop_reason
 logger = logging.getLogger(__name__)
 
 
+def _append_anthropic_message(
+    messages: list[dict[str, Any]],
+    message: dict[str, Any],
+) -> None:
+    """Append a converted Anthropic message, merging adjacent user turns.
+
+    Hawi stores tool results as role="tool" messages. Anthropic requires the
+    corresponding tool_result blocks to live in the *next* user message after an
+    assistant tool_use block. When a model emits multiple tool calls, Hawi may
+    have multiple adjacent tool messages, or a steer user message between tool
+    results. Convert all adjacent user-role chunks into one Anthropic user
+    message so every tool_use id is answered in that next message.
+    """
+    if message.get("role") == "user" and messages and messages[-1].get("role") == "user":
+        messages[-1]["content"] = _merge_user_content(
+            messages[-1].get("content", []),
+            message.get("content", []),
+        )
+        return
+
+    if message.get("role") == "user":
+        message = {
+            **message,
+            "content": _order_tool_results_first(message.get("content", [])),
+        }
+    messages.append(message)
+
+
+def _merge_user_content(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return _order_tool_results_first([*existing, *incoming])
+
+
+def _order_tool_results_first(
+    content: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not any(part.get("type") == "tool_result" for part in content):
+        return content
+    tool_results = [part for part in content if part.get("type") == "tool_result"]
+    other_parts = [part for part in content if part.get("type") != "tool_result"]
+    return [*tool_results, *other_parts]
+
+
 def _convert_anthropic_error(e: Exception) -> Exception:
     """Convert Anthropic SDK errors to Hawi ModelError.
     
@@ -316,7 +361,7 @@ class AnthropicModel(Model):
             if m["role"] != "system":
                 anthropic_message = self._converter.convert_message(m)
                 if anthropic_message:
-                    anthropic_messages.append(anthropic_message)
+                    _append_anthropic_message(anthropic_messages, anthropic_message)
 
         return self._build_anthropic_request(
             messages=anthropic_messages,
@@ -333,7 +378,7 @@ class AnthropicModel(Model):
                 continue
             msg = await self._async_converter.convert_message_async(m)
             if msg is not None:
-                anthropic_messages.append(msg)
+                _append_anthropic_message(anthropic_messages, msg)
 
         return self._build_anthropic_request(
             messages=anthropic_messages,

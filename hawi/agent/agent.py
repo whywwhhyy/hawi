@@ -560,6 +560,7 @@ class HawiAgent:
         content: str | list[ContentPart],
         *,
         is_error: bool = False,
+        materialize_pending_steer: bool = True,
     ) -> None:
         """Add a tool result and materialize one matching pending input as steer."""
         tool_result_content = self._normalize_content_parts(content)
@@ -569,27 +570,48 @@ class HawiAgent:
             is_error=is_error,
         )
 
-        with self._steer_lock:
-            pending_input = None
-            for index, item in enumerate(self._pending_inputs):
-                if tool_call_id in item.candidate_tool_call_ids:
-                    pending_input = self._pending_inputs.pop(index)
-                    break
+        if materialize_pending_steer:
+            self._materialize_pending_steer_for_tool_results([tool_call_id])
 
-        if pending_input is None:
+    def _materialize_pending_steer_for_tool_results(
+        self,
+        tool_call_ids: list[str],
+    ) -> None:
+        """Append pending steer messages after a completed tool-result batch."""
+        if not tool_call_ids:
             return
 
-        steer_part: ContentPart = {
-            "type": "steer",
-            "content": list(pending_input.content),
-            "tool_call_id": tool_call_id,
-            "preferred_merge_mode": (
-                pending_input.preferred_merge_mode.value
-                if pending_input.preferred_merge_mode is not None
-                else None
-            ),
-        }
-        self._context.add_user_message([steer_part])
+        tool_call_id_set = set(tool_call_ids)
+        materialized: list[tuple[PendingInput, str]] = []
+        with self._steer_lock:
+            remaining: list[PendingInput] = []
+            for item in self._pending_inputs:
+                matched_tool_call_id = next(
+                    (
+                        candidate
+                        for candidate in item.candidate_tool_call_ids
+                        if candidate in tool_call_id_set
+                    ),
+                    None,
+                )
+                if matched_tool_call_id is None:
+                    remaining.append(item)
+                    continue
+                materialized.append((item, matched_tool_call_id))
+            self._pending_inputs = remaining
+
+        for pending_input, matched_tool_call_id in materialized:
+            steer_part: ContentPart = {
+                "type": "steer",
+                "content": list(pending_input.content),
+                "tool_call_id": matched_tool_call_id,
+                "preferred_merge_mode": (
+                    pending_input.preferred_merge_mode.value
+                    if pending_input.preferred_merge_mode is not None
+                    else None
+                ),
+            }
+            self._context.add_user_message([steer_part])
 
     async def _invoke_session_hook(self, hook_type: str, ctx: HookContext) -> HookResult | None:
         """Invoke before/after_session and before/after_conversation hooks: (agent, ctx)."""
@@ -1111,17 +1133,28 @@ class HawiAgent:
                     break
 
                 # Execute tool calls
-                for tc in tool_calls:
-                    # Check for interrupt before executing tool
-                    if self._check_interrupt():
-                        # Interrupted - stop processing remaining tools
-                        break
+                active_batch_tool_calls = [
+                    tc for tc in tool_calls if tc not in self._current_tool_calls
+                ]
+                completed_tool_call_ids: list[str] = []
+                self._current_tool_calls.extend(active_batch_tool_calls)
+                try:
+                    for tc in tool_calls:
+                        # Check for interrupt before executing tool
+                        if self._check_interrupt():
+                            # Interrupted - stop processing remaining tools
+                            break
 
-                    # Track this tool call as currently executing
-                    self._current_tool_calls.append(tc)
-                    try:
-                        record = await self._execute_tool(tc, state)
+                        if tc in self._current_tool_calls:
+                            self._current_tool_calls.remove(tc)
+                        self._current_tool_calls.insert(0, tc)
+                        record = await self._execute_tool(
+                            tc,
+                            state,
+                            materialize_pending_steer=False,
+                        )
                         state.tool_calls.append(record)
+                        completed_tool_call_ids.append(record.tool_call_id)
                         await self._emit_event(
                             AgentToolResultEvent.create(
                                 run_id=run_id,
@@ -1133,10 +1166,15 @@ class HawiAgent:
                             ),
                             event_bus,
                         )
-                    finally:
-                        # Remove from current tool calls
                         if tc in self._current_tool_calls:
                             self._current_tool_calls.remove(tc)
+                finally:
+                    for tc in active_batch_tool_calls:
+                        if tc in self._current_tool_calls:
+                            self._current_tool_calls.remove(tc)
+
+                if completed_tool_call_ids and not self._check_interrupt():
+                    self._materialize_pending_steer_for_tool_results(completed_tool_call_ids)
 
                 # Check if execution was interrupted
                 if self._check_interrupt():
@@ -1532,6 +1570,8 @@ class HawiAgent:
         self,
         tool_call: ToolCallPart,
         state: _ExecutionState,
+        *,
+        materialize_pending_steer: bool = True,
     ) -> ToolCallRecord:
         """Execute a single tool call."""
         tool_name = tool_call["name"]
@@ -1672,6 +1712,7 @@ class HawiAgent:
                 tool_call_id=tool_call_id,
                 content=result_content,
                 is_error=not result.success,
+                materialize_pending_steer=materialize_pending_steer,
             )
 
         return ToolCallRecord(
