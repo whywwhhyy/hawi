@@ -81,6 +81,7 @@ from .usage import (
     normalize_openai_usage,
     normalize_strands_usage,
     normalize_token_usage,
+    usage_context_tokens,
     usage_total,
 )
 from .openai import OpenAIModel
@@ -185,6 +186,7 @@ __all__ = [
     "normalize_openai_usage",
     "normalize_strands_usage",
     "normalize_token_usage",
+    "usage_context_tokens",
     "usage_total",
     # Model implementations
     "OpenAIModel",

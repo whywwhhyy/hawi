@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import App, { isNearChatBottom, renderMarkdown, resolveFollowTailOnScroll, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
+import App, { isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -16,6 +16,16 @@ describe("thinkingExcerpt", () => {
 
   it("adds an ellipsis only when content is truncated", () => {
     expect(thinkingExcerpt("too long", 3)).toBe("too...");
+  });
+});
+
+describe("renderPriorityStatusText", () => {
+  it("describes urgent as interruption, high priority as a merged slot, and normal as queue length", () => {
+    expect(renderPriorityStatusText({ urgent: 1, high_prio: 3, normal: 4 })).toBe("打断 待打断 · 合并 1 · 队列 4");
+  });
+
+  it("shows empty interruption and merge states", () => {
+    expect(renderPriorityStatusText({ urgent: 0, high_prio: 0, normal: 0 })).toBe("打断 无 · 合并 0 · 队列 0");
   });
 });
 

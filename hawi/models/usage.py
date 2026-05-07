@@ -16,6 +16,7 @@ from .message import TokenUsage
 TOKEN_USAGE_INT_FIELDS = (
     "input_tokens",
     "output_tokens",
+    "context_tokens",
     "total_tokens",
     "cache_write_tokens",
     "cache_read_tokens",
@@ -53,6 +54,7 @@ def normalize_openai_usage(usage: Any) -> TokenUsage | None:
     result: dict[str, int | None] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "context_tokens": input_tokens,
         "total_tokens": _int_or_none(data.get("total_tokens")),
     }
 
@@ -120,6 +122,7 @@ def normalize_anthropic_usage(usage: Any) -> TokenUsage | None:
     result: dict[str, int | None] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "context_tokens": input_tokens + (cache_write_tokens or 0) + (cache_read_tokens or 0),
         "total_tokens": _first_int(data.get("total_tokens")),
     }
     _put_optional(result, "cache_write_tokens", cache_write_tokens)
@@ -154,6 +157,7 @@ def normalize_strands_usage(usage: Any) -> TokenUsage | None:
     result: dict[str, int | None] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "context_tokens": input_tokens + (cache_write_tokens or 0) + (cache_read_tokens or 0),
         "total_tokens": _first_int(data.get("totalTokens"), data.get("total_tokens")),
     }
     _put_optional(result, "cache_write_tokens", cache_write_tokens)
@@ -179,6 +183,8 @@ def normalize_token_usage(usage: Any) -> TokenUsage | None:
         result["input_tokens"] = 0
     if "output_tokens" not in result:
         result["output_tokens"] = 0
+    if result.get("context_tokens") is None:
+        result["context_tokens"] = result["input_tokens"]
     if result.get("total_tokens") is None:
         result["total_tokens"] = usage_total(cast(TokenUsage, result))
     return cast(TokenUsage, result)
@@ -208,9 +214,19 @@ def merge_token_usage(
         merged["input_tokens"] = 0
     if "output_tokens" not in merged:
         merged["output_tokens"] = 0
+    if "context_tokens" not in merged:
+        merged["context_tokens"] = merged["input_tokens"]
     if "total_tokens" not in merged:
         merged["total_tokens"] = usage_total(cast(TokenUsage, merged))
     return cast(TokenUsage, merged)
+
+
+def usage_context_tokens(usage: Mapping[str, Any] | None) -> int | None:
+    """Return normalized prompt/context occupancy for one model request."""
+    data = normalize_token_usage(usage)
+    if data is None:
+        return None
+    return _int_or_none(data.get("context_tokens"))
 
 
 def usage_total(usage: Mapping[str, Any] | None) -> int:
@@ -241,6 +257,7 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
+        "context_tokens",
         "prompt_tokens_details",
         "completion_tokens_details",
         "prompt_cache_hit_tokens",

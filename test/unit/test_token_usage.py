@@ -3,6 +3,9 @@ from hawi.models.usage import (
     merge_token_usage,
     normalize_anthropic_usage,
     normalize_openai_usage,
+    normalize_strands_usage,
+    normalize_token_usage,
+    usage_context_tokens,
 )
 
 
@@ -26,6 +29,7 @@ def test_openai_usage_normalizes_cache_and_reasoning_details() -> None:
     assert usage["input_tokens"] == 100
     assert usage["output_tokens"] == 30
     assert usage.get("total_tokens") == 130
+    assert usage.get("context_tokens") == 100
     assert usage.get("cache_read_tokens") == 40
     assert usage.get("reasoning_tokens") == 12
     assert usage.get("input_audio_tokens") == 3
@@ -49,6 +53,7 @@ def test_deepseek_openai_usage_normalizes_cache_hit_and_miss_tokens() -> None:
     assert usage is not None
     assert usage["input_tokens"] == 100
     assert usage["output_tokens"] == 30
+    assert usage.get("context_tokens") == 100
     assert usage.get("cache_read_tokens") == 80
     assert usage.get("cache_miss_tokens") == 20
     assert usage.get("reasoning_tokens") == 11
@@ -82,6 +87,7 @@ def test_openai_stream_processor_reads_usage_from_deepseek_final_choice_chunk() 
     assert usage is not None
     assert usage["input_tokens"] == 17
     assert usage["output_tokens"] == 9
+    assert usage.get("context_tokens") == 17
     assert usage.get("total_tokens") == 26
     assert usage.get("reasoning_tokens") == 2
 
@@ -134,10 +140,35 @@ def test_anthropic_total_includes_cache_input_categories() -> None:
 
     assert usage is not None
     assert usage["input_tokens"] == 10
+    assert usage.get("context_tokens") == 60
     assert usage.get("cache_write_tokens") == 20
     assert usage.get("cache_read_tokens") == 30
     assert usage["output_tokens"] == 40
     assert usage.get("total_tokens") == 100
+
+
+def test_strands_usage_context_includes_separate_cache_categories() -> None:
+    usage = normalize_strands_usage(
+        {
+            "inputTokens": 100,
+            "outputTokens": 50,
+            "cacheWriteInputTokens": 80,
+            "cacheReadInputTokens": 20,
+        }
+    )
+
+    assert usage is not None
+    assert usage["input_tokens"] == 100
+    assert usage.get("context_tokens") == 200
+    assert usage.get("total_tokens") == 250
+
+
+def test_normalized_usage_defaults_context_tokens_to_input_tokens() -> None:
+    usage = normalize_token_usage({"input_tokens": 12, "output_tokens": 3})
+
+    assert usage is not None
+    assert usage.get("context_tokens") == 12
+    assert usage_context_tokens(usage) == 12
 
 
 def test_merge_token_usage_sums_all_known_detail_fields() -> None:
@@ -145,6 +176,7 @@ def test_merge_token_usage_sums_all_known_detail_fields() -> None:
         {
             "input_tokens": 1,
             "output_tokens": 2,
+            "context_tokens": 3,
             "total_tokens": 3,
             "cache_read_tokens": 4,
             "reasoning_tokens": 5,
@@ -152,6 +184,7 @@ def test_merge_token_usage_sums_all_known_detail_fields() -> None:
         {
             "input_tokens": 10,
             "output_tokens": 20,
+            "context_tokens": 30,
             "total_tokens": 30,
             "cache_read_tokens": 40,
             "reasoning_tokens": 50,
@@ -161,6 +194,7 @@ def test_merge_token_usage_sums_all_known_detail_fields() -> None:
     assert merged is not None
     assert merged["input_tokens"] == 11
     assert merged["output_tokens"] == 22
+    assert merged.get("context_tokens") == 33
     assert merged.get("total_tokens") == 33
     assert merged.get("cache_read_tokens") == 44
     assert merged.get("reasoning_tokens") == 55

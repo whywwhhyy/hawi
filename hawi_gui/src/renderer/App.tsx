@@ -60,10 +60,16 @@ const MESSAGE_INPUT_MAX_ROWS = 5;
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const queueLabels: Record<QueueKind, string> = {
-  normal: "普通",
-  high_prio: "高优",
-  urgent: "紧急"
+  normal: "普通队列",
+  high_prio: "高优合并",
+  urgent: "紧急打断"
 };
+
+export function renderPriorityStatusText(queueLengths: Record<QueueKind, number>): string {
+  const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
+  const highMergedCount = queueLengths.high_prio > 0 ? 1 : 0;
+  return `打断 ${urgentStatus} · 合并 ${highMergedCount} · 队列 ${queueLengths.normal}`;
+}
 
 export default function App() {
   const [metadata, setMetadata] = useState<GuiMetadata | null>(null);
@@ -334,7 +340,7 @@ export default function App() {
         <div className="status-strip">
           <StatusCell label="Scheduler" value={state.schedulerState} />
           <StatusCell label="Agent" value={state.agentState} />
-          <div className="queue-status">Queue U/H/N: {state.queueLengths.urgent}/{state.queueLengths.high_prio}/{state.queueLengths.normal}</div>
+          <PriorityStatusCell queueLengths={state.queueLengths} />
           <ContextUsageCell usage={state.contextUsage} />
         </div>
         <button className="tool-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
@@ -488,6 +494,23 @@ function StatusCell({ label, value }: { label: string; value: string }) {
     <div className={`status-cell state-${value.toLowerCase()}`}>
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function PriorityStatusCell({ queueLengths }: { queueLengths: Record<QueueKind, number> }) {
+  const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
+  const highMergedCount = queueLengths.high_prio > 0 ? 1 : 0;
+
+  return (
+    <div
+      className="priority-status"
+      title="紧急消息直接打断当前运行；高优消息合并为一次 steer；普通消息进入队列。"
+      aria-label={renderPriorityStatusText(queueLengths)}
+    >
+      <span>打断 <strong>{urgentStatus}</strong></span>
+      <span>合并 <strong>{highMergedCount}</strong></span>
+      <span>队列 <strong>{queueLengths.normal}</strong></span>
     </div>
   );
 }

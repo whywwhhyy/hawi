@@ -64,7 +64,7 @@ button:disabled {
 }
 
 .status-cell,
-.queue-status,
+.priority-status,
 .context-status {
   display: flex;
   align-items: center;
@@ -85,8 +85,16 @@ button:disabled {
   color: #a15f00;
 }
 
-.queue-status {
+.priority-status {
   border-right: 1px solid #d7dcdd;
+}
+
+.priority-status span {
+  color: #49575d;
+}
+
+.priority-status strong {
+  color: #286352;
 }
 
 .context-status {

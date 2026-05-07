@@ -18,6 +18,7 @@ class TokenUsage(TypedDict):
 
     input_tokens: int
     output_tokens: int
+    context_tokens: NotRequired[int | None]  # Provider-normalized prompt/context occupancy
     total_tokens: NotRequired[int | None]
     cache_write_tokens: NotRequired[int | None]  # Prompt caching: tokens written to cache
     cache_read_tokens: NotRequired[int | None]  # Prompt caching: tokens read from cache

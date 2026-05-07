@@ -32,7 +32,11 @@ from hawi.models import (
     model_registry,
 )
 from hawi.models.message import Message, MessageResponse
-from hawi.models.usage import merge_token_usage, normalize_token_usage
+from hawi.models.usage import (
+    merge_token_usage,
+    normalize_token_usage,
+    usage_context_tokens,
+)
 from hawi.plugin import HawiPlugin
 from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
@@ -1372,8 +1376,9 @@ class HawiAgent:
                 metadata_context_tokens = context_usage.used_tokens
                 metadata_context_ratio = context_usage.usage_ratio
                 metadata_context_source = context_usage.source
-                if usage and usage.get("input_tokens", 0) > 0:
-                    metadata_context_tokens = int(usage["input_tokens"])
+                provider_context_tokens = usage_context_tokens(usage)
+                if provider_context_tokens is not None and provider_context_tokens > 0:
+                    metadata_context_tokens = provider_context_tokens
                     metadata_context_source = "provider_usage"
                     if context_usage.max_context_tokens:
                         metadata_context_ratio = min(

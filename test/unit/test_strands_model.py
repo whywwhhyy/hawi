@@ -51,6 +51,7 @@ class TestStrandsModelTokenUsage:
         assert response.usage is not None
         assert response.usage["input_tokens"] == 100
         assert response.usage["output_tokens"] == 50
+        assert response.usage.get("context_tokens") == 200
         assert response.usage.get("cache_write_tokens") == 80
         assert response.usage.get("cache_read_tokens") == 20
 
@@ -77,6 +78,7 @@ class TestStrandsModelTokenUsage:
         assert response.usage is not None
         assert response.usage["input_tokens"] == 100
         assert response.usage["output_tokens"] == 50
+        assert response.usage.get("context_tokens") == 100
         assert response.usage.get("cache_write_tokens") is None
         assert response.usage.get("cache_read_tokens") is None
 

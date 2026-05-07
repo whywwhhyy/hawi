@@ -7,6 +7,7 @@ import pytest
 
 from hawi.agent import AutoCompactConfig, HawiAgent
 from hawi.agent.context import AgentContext
+from hawi.events import Event, EventBus
 from hawi.models import Model
 from hawi.models.message import DeltaPart, Message, MessageRequest, MessageResponse
 
@@ -65,6 +66,38 @@ class CompactingModel(Model):
         }
 
 
+class ContextTokenModel(Model):
+    @property
+    def model_id(self) -> str:
+        return "context-token-model"
+
+    def _prepare_request_impl(self, request: MessageRequest) -> dict[str, Any]:
+        return {}
+
+    def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
+        return MessageResponse(id="response", content=[])
+
+    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+        return MessageResponse(id="response", content=[])
+
+    async def _ainvoke_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncGenerator[DeltaPart, None]:
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "done",
+            "is_start": True,
+            "is_end": True,
+        }
+        yield {
+            "type": "finish",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "context_tokens": 60, "output_tokens": 5},
+        }
+
+
 def test_context_compaction_keeps_tool_exchange_intact() -> None:
     context = AgentContext()
     context.add_user_message("old request")
@@ -107,6 +140,25 @@ def test_context_usage_snapshot_reports_context_ratio() -> None:
     assert 0 < snapshot.usage_ratio < 1
     assert snapshot.remaining_tokens == 1000 - snapshot.used_tokens
     assert snapshot.source == "estimate"
+
+
+def test_model_metadata_uses_normalized_provider_context_tokens() -> None:
+    events: list[Event] = []
+    bus = EventBus()
+    bus.subscribe_blocking(events.append, event_types=["model.metadata"])
+    model = ContextTokenModel()
+    model.configure_max_context_tokens(100)
+    agent = HawiAgent(model=model, event_bus=bus, streaming=False)
+
+    try:
+        agent.run("hi")
+    finally:
+        bus.close()
+
+    metadata = events[-1]
+    assert metadata.context_tokens == 60
+    assert metadata.context_ratio == 0.6
+    assert metadata.context_source == "provider_usage"
 
 
 @pytest.mark.asyncio
