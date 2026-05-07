@@ -106,6 +106,7 @@ def test_context_usage_snapshot_reports_context_ratio() -> None:
     assert snapshot.usage_ratio is not None
     assert 0 < snapshot.usage_ratio < 1
     assert snapshot.remaining_tokens == 1000 - snapshot.used_tokens
+    assert snapshot.source == "estimate"
 
 
 @pytest.mark.asyncio

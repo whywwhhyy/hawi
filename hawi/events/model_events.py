@@ -407,6 +407,7 @@ class ModelMetadataEvent(Event):
     context_tokens: int | None = None
     max_context_tokens: int | None = None
     context_ratio: float | None = None
+    context_source: str | None = None
 
     @classmethod
     def create(
@@ -417,6 +418,7 @@ class ModelMetadataEvent(Event):
         context_tokens: int | None = None,
         max_context_tokens: int | None = None,
         context_ratio: float | None = None,
+        context_source: str | None = None,
     ) -> ModelMetadataEvent:
         return cls(
             type='model.metadata',
@@ -427,6 +429,7 @@ class ModelMetadataEvent(Event):
             context_tokens=context_tokens,
             max_context_tokens=max_context_tokens,
             context_ratio=context_ratio,
+            context_source=context_source,
         )
 
 

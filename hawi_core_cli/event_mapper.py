@@ -141,6 +141,7 @@ class SemanticEventMapper:
                         "context_tokens": getattr(event, "context_tokens", None),
                         "max_context_tokens": getattr(event, "max_context_tokens", None),
                         "context_ratio": getattr(event, "context_ratio", None),
+                        "context_source": getattr(event, "context_source", None),
                     },
                 )
             ]

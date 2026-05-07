@@ -221,6 +221,7 @@ class ContextUsageSnapshot:
     max_context_tokens: int | None = None
     usage_ratio: float | None = None
     remaining_tokens: int | None = None
+    source: Literal["estimate", "provider_usage"] = "estimate"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the snapshot to a JSON-serializable dictionary."""
@@ -229,6 +230,7 @@ class ContextUsageSnapshot:
             "max_context_tokens": self.max_context_tokens,
             "usage_ratio": self.usage_ratio,
             "remaining_tokens": self.remaining_tokens,
+            "source": self.source,
         }
 
 

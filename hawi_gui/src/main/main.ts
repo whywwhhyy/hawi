@@ -74,7 +74,7 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  core?.stop();
+  core?.stop("before-quit");
 });
 
 function registerIpc(): void {
@@ -169,7 +169,7 @@ class CoreProcess {
     if (!nextConfig.modelName) {
       return;
     }
-    this.stop();
+    this.stop("start-replace-existing");
     mkdirSync(path.dirname(backendLogPath), { recursive: true });
     const pluginConfigPath = path.join(tmpdir(), `hawi-gui-plugins-${process.pid}.json`);
     writeFileSync(pluginConfigPath, JSON.stringify(nextConfig.pluginConfigs, null, 2), "utf-8");
@@ -224,10 +224,11 @@ class CoreProcess {
   }
 
   restart(nextConfig: PersistedConfig, metadata: InspectPayload): void {
+    this.stop("restart");
     this.start(nextConfig, metadata);
   }
 
-  stop(): void {
+  stop(reason: string): void {
     const child = this.child;
     if (!child) {
       return;
@@ -239,7 +240,12 @@ class CoreProcess {
     }
     this.pending.clear();
     try {
-      this.writeFrame(child, { version: "hawi.core.v1", type: "shutdown", id: this.nextId(), payload: {} });
+      this.writeFrame(child, {
+        version: "hawi.core.v1",
+        type: "shutdown",
+        id: this.nextId(),
+        payload: { reason }
+      });
     } catch {
       // Process may already be closing.
     }

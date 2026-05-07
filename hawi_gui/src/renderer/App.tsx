@@ -497,14 +497,15 @@ function ContextUsageCell({ usage }: { usage?: ContextUsageState }) {
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(ratio * 100)}%`;
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
+  const source = usage?.source === "provider_usage" ? "provider" : usage?.source === "estimate" ? "estimated" : "unknown";
   return (
-    <div className="context-status" title={`Context ${used}/${max}`}>
+    <div className="context-status" title={`Context ${used}/${max} (${source})`}>
       <span><Activity size={14} /> Context</span>
       <strong>{percent}</strong>
       <div className="context-meter" aria-hidden="true">
         <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
       </div>
-      <small>{used}/{max}</small>
+      <small>{used}/{max} · {source}</small>
     </div>
   );
 }

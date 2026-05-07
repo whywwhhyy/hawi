@@ -85,6 +85,7 @@ export interface ContextUsageState {
   usedTokens: number;
   maxContextTokens?: number;
   ratio?: number;
+  source?: "estimate" | "provider_usage";
 }
 
 interface RunState {
@@ -397,7 +398,10 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
   const schedulerState = String(payload.scheduler_state ?? state.schedulerState);
   const agentState = String(payload.agent_state ?? state.agentState);
   const queueLengths = normalizeQueueLengths(payload.queue_lengths, state.queueLengths);
-  const contextUsage = parseStatusContextUsage(payload.context_usage) ?? state.contextUsage;
+  const contextUsage = chooseContextUsage(
+    state.contextUsage,
+    parseStatusContextUsage(payload.context_usage)
+  );
   if (
     schedulerState === state.schedulerState
     && agentState === state.agentState
@@ -424,7 +428,8 @@ function parseStatusContextUsage(value: unknown): ContextUsageState | undefined 
   return {
     usedTokens,
     maxContextTokens,
-    ratio: ratio === undefined ? undefined : clamp(ratio, 0, 1)
+    ratio: ratio === undefined ? undefined : clamp(ratio, 0, 1),
+    source: contextUsageSource(value.source) ?? "estimate"
   };
 }
 
@@ -433,7 +438,16 @@ function sameContextUsage(a?: ContextUsageState, b?: ContextUsageState): boolean
   if (!a || !b) return false;
   return a.usedTokens === b.usedTokens
     && a.maxContextTokens === b.maxContextTokens
-    && a.ratio === b.ratio;
+    && a.ratio === b.ratio
+    && a.source === b.source;
+}
+
+function chooseContextUsage(current: ContextUsageState | undefined, incoming: ContextUsageState | undefined): ContextUsageState | undefined {
+  if (!incoming) return current;
+  if (current?.source === "provider_usage" && incoming.source === "estimate") {
+    return current;
+  }
+  return incoming;
 }
 
 function parseContextUsage(payload: Record<string, unknown>): ContextUsageState | undefined {
@@ -444,8 +458,14 @@ function parseContextUsage(payload: Record<string, unknown>): ContextUsageState 
   return {
     usedTokens,
     maxContextTokens,
-    ratio: ratio === undefined ? undefined : clamp(ratio, 0, 1)
+    ratio: ratio === undefined ? undefined : clamp(ratio, 0, 1),
+    source: contextUsageSource(payload.context_source) ?? "provider_usage"
   };
+}
+
+function contextUsageSource(value: unknown): ContextUsageState["source"] | undefined {
+  if (value === "estimate" || value === "provider_usage") return value;
+  return undefined;
 }
 
 function formatModelMetadata(payload: Record<string, unknown>): string {
@@ -472,15 +492,21 @@ function formatUsageDetails(payload: Record<string, unknown>): string {
   if (cacheWrite !== undefined) parts.push(`cache_write=${cacheWrite}`);
   if (cacheMiss !== undefined) parts.push(`cache_miss=${cacheMiss}`);
   if (reasoning !== undefined) parts.push(`reasoning=${reasoning}`);
+  if (contextUsageSource(payload.context_source) === "estimate") {
+    parts.push("provider_usage=missing");
+  }
   return parts.length ? `[${parts.join(" ")}]` : "";
 }
 
 function formatContextUsage(context?: ContextUsageState): string {
   if (!context) return "";
+  const estimated = context.source === "estimate";
+  const prefix = estimated ? "ctx≈" : "ctx=";
+  const suffix = estimated ? " estimated" : "";
   if (!context.maxContextTokens || context.ratio === undefined) {
-    return `ctx=${context.usedTokens}`;
+    return `${prefix}${context.usedTokens}${suffix}`;
   }
-  return `ctx=${context.usedTokens}/${context.maxContextTokens} (${Math.round(context.ratio * 100)}%)`;
+  return `${prefix}${context.usedTokens}/${context.maxContextTokens} (${Math.round(context.ratio * 100)}%)${suffix}`;
 }
 
 function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinking", delta: string): AppState {

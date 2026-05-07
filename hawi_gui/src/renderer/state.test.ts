@@ -261,6 +261,7 @@ describe("core event reducer", () => {
       context_tokens: 128,
       max_context_tokens: 1024,
       context_ratio: 0.125,
+      context_source: "provider_usage",
       latency_ms: 44
     }));
     state = reduceCoreEvent(state, frame("model.retry", { attempt: 1, max_retries: 3, error_type: "network", error_message: "retrying" }));
@@ -272,8 +273,47 @@ describe("core event reducer", () => {
     expect(state.metadataLines[0]).toContain("cache_read=1");
     expect(state.metadataLines[0]).toContain("reasoning=2");
     expect(state.metadataLines[0]).toContain("ctx=128/1024 (13%)");
-    expect(state.contextUsage).toEqual({ usedTokens: 128, maxContextTokens: 1024, ratio: 0.125 });
+    expect(state.metadataLines[0]).not.toContain("estimated");
+    expect(state.contextUsage).toEqual({ usedTokens: 128, maxContextTokens: 1024, ratio: 0.125, source: "provider_usage" });
     expect(state.nodes.map((node) => node.kind)).toContain("error");
+  });
+
+  it("marks estimated context when provider usage is missing", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      context_tokens: 64,
+      max_context_tokens: 1000,
+      context_ratio: 0.064,
+      context_source: "estimate",
+      latency_ms: 10
+    }));
+
+    expect(state.metadataLines[0]).toContain("provider_usage=missing");
+    expect(state.metadataLines[0]).toContain("ctx≈64/1000 (6%) estimated");
+    expect(state.contextUsage).toEqual({ usedTokens: 64, maxContextTokens: 1000, ratio: 0.064, source: "estimate" });
+  });
+
+  it("keeps provider context usage over periodic estimated status", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      context_tokens: 900,
+      max_context_tokens: 1000,
+      context_ratio: 0.9,
+      context_source: "provider_usage"
+    }));
+    state = reduceCoreEvent(state, frame("core.status", {
+      scheduler_state: "IDLE",
+      agent_state: "IDLE",
+      queue_lengths: { urgent: 0, high_prio: 0, normal: 0 },
+      context_usage: {
+        used_tokens: 100,
+        max_context_tokens: 1000,
+        usage_ratio: 0.1,
+        source: "estimate"
+      }
+    }));
+
+    expect(state.contextUsage).toEqual({ usedTokens: 900, maxContextTokens: 1000, ratio: 0.9, source: "provider_usage" });
   });
 
   it("adds debug output as low-emphasis chat notes", () => {

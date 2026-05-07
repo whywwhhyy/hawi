@@ -1369,14 +1369,28 @@ class HawiAgent:
                 )
 
                 # Model metadata (usage + per-call latency)
+                metadata_context_tokens = context_usage.used_tokens
+                metadata_context_ratio = context_usage.usage_ratio
+                metadata_context_source = context_usage.source
+                if usage and usage.get("input_tokens", 0) > 0:
+                    metadata_context_tokens = int(usage["input_tokens"])
+                    metadata_context_source = "provider_usage"
+                    if context_usage.max_context_tokens:
+                        metadata_context_ratio = min(
+                            1.0,
+                            metadata_context_tokens / context_usage.max_context_tokens,
+                        )
+                    else:
+                        metadata_context_ratio = None
                 await self._emit_event(
                     ModelMetadataEvent.create(
                         request_id=request_id,
                         usage=usage,
                         latency_ms=(time.time() - model_call_start) * 1000,
-                        context_tokens=context_usage.used_tokens,
+                        context_tokens=metadata_context_tokens,
                         max_context_tokens=context_usage.max_context_tokens,
-                        context_ratio=context_usage.usage_ratio,
+                        context_ratio=metadata_context_ratio,
+                        context_source=metadata_context_source,
                     ),
                     event_bus,
                 )
