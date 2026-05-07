@@ -93,13 +93,14 @@ class SemanticEventMapper:
             text = self._extract_text(getattr(event, "content", []))
             if not text:
                 return []
+            queue = self._queue_for_user_message(event, run_id)
             return [
                 make_frame(
                     "run.start",
                     {
                         "run_id": run_id,
                         "user_content": text,
-                        "queue": self._run_queue.get(run_id, self._current_queue_kind),
+                        "queue": queue,
                     },
                 )
             ]
@@ -439,6 +440,18 @@ class SemanticEventMapper:
                 if isinstance(part, dict) and part.get("type") == "text":
                     text += str(part.get("text", ""))
         return text
+
+    def _queue_for_user_message(self, event: Event, run_id: str) -> str:
+        metadata = getattr(event, "metadata", None)
+        if isinstance(metadata, dict):
+            queue = str(metadata.get("queue", ""))
+            if queue in {"normal", "high_prio", "urgent"}:
+                return queue
+
+        queue = self._run_queue.get(run_id, self._current_queue_kind)
+        if queue in {"normal", "high_prio", "urgent"}:
+            return queue
+        return "normal"
 
     @staticmethod
     def _error_message(error: Any, fallback: str) -> str:

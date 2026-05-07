@@ -25,6 +25,8 @@ from hawi.models.message import MessageRequest
 class MockModel(Model):
     """Minimal model stub that returns a fixed streaming response."""
 
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     @property
     def model_id(self) -> str:
         return "mock-model"

@@ -10,13 +10,14 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Iterator, List, Literal, cast, overload
+from typing import Any, AsyncGenerator, ClassVar, Iterator, List, Literal, cast, overload
 
 from hawi.models.message import (
     ContentPart,
     Message,
     MessageRequest,
     MessageResponse,
+    STEER_MERGE_MODES,
     DeltaPart,
     SteerMergeMode,
     SteerPart,
@@ -27,7 +28,7 @@ from hawi.models.message import (
     ToolResultPart,
     normalize_cache_point,
 )
-from hawi.errors import ModelError
+from hawi.errors import ConfigurationError, ModelError
 
 __all__ = ["Model", "DelegateModel", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
 
@@ -109,6 +110,9 @@ class Model(ABC):
             if event.type == "content":
                 print(event.content)
     """
+
+    default_steer_merge_mode: ClassVar[SteerMergeMode | None] = None
+    """Concrete models must declare their preferred steer lowering strategy."""
 
     def __init__(self) -> None:
         """初始化模型基类，设置 _async_only 标记。"""
@@ -370,16 +374,31 @@ class Model(ABC):
             request = request.model_copy(update={"messages": lowered_messages})
         return self._prepare_request_impl(request)
 
+    @staticmethod
+    def coerce_steer_merge_mode(
+        merge_mode: Any,
+        *,
+        source: str,
+    ) -> SteerMergeMode | None:
+        """Validate and normalize a steer merge mode value."""
+        if merge_mode is None:
+            return None
+        if merge_mode in STEER_MERGE_MODES:
+            return cast(SteerMergeMode, merge_mode)
+        valid = ", ".join(STEER_MERGE_MODES)
+        raise ConfigurationError(
+            f"Invalid steer_merge_mode from {source}: {merge_mode!r}. "
+            f"Valid values are: {valid}. "
+            "Set steer_merge_mode explicitly in models.yaml or pass one of "
+            "these values in enqueue metadata."
+        )
+
     def configure_steer_merge_mode(self, merge_mode: str | None) -> None:
         """Attach configured steer merge mode to this model instance."""
-        if merge_mode in {
-            "append_to_tool_result",
-            "user_message_template",
-            "tool_result_assistant_template_and_user_message",
-        }:
-            self._configured_steer_merge_mode = cast(SteerMergeMode, merge_mode)
-        else:
-            self._configured_steer_merge_mode = None
+        self._configured_steer_merge_mode = self.coerce_steer_merge_mode(
+            merge_mode,
+            source=f"{self.__class__.__name__}.configure_steer_merge_mode",
+        )
 
     def configure_max_context_tokens(self, max_context_tokens: int | None) -> None:
         """Attach Hawi-level context window metadata to this model instance."""
@@ -395,11 +414,38 @@ class Model(ABC):
 
     def get_default_steer_merge_mode(self) -> SteerMergeMode:
         """Get the default steer lowering strategy for this model."""
-        return "tool_result_assistant_template_and_user_message"
+        mode = self.default_steer_merge_mode
+        if mode in STEER_MERGE_MODES:
+            return cast(SteerMergeMode, mode)
+
+        model_id = getattr(self, "model_id", "<unknown>")
+        valid = ", ".join(STEER_MERGE_MODES)
+        raise ConfigurationError(
+            f"Model {self.__class__.__name__}({model_id!r}) does not declare "
+            "default_steer_merge_mode, and no steer_merge_mode override was "
+            "configured. Steering mode has no framework default by design. "
+            f"Declare default_steer_merge_mode on the model class or set "
+            f"steer_merge_mode in models.yaml. Valid values: {valid}."
+        )
 
     def get_configured_steer_merge_mode(self) -> SteerMergeMode | None:
         """Get steer merge mode configured for this model instance."""
         return getattr(self, "_configured_steer_merge_mode", None)
+
+    def get_effective_steer_merge_mode(self) -> SteerMergeMode:
+        """Return the configured mode or the concrete model declaration."""
+        configured = self.get_configured_steer_merge_mode()
+        if configured is not None:
+            return configured
+        return self.get_default_steer_merge_mode()
+
+    def validate_steer_merge_mode_config(self, *, source: str | None = None) -> None:
+        """Fail early if this model cannot resolve a steer merge mode."""
+        try:
+            self.get_effective_steer_merge_mode()
+        except ConfigurationError as exc:
+            prefix = f"{source}: " if source else ""
+            raise ConfigurationError(prefix + str(exc)) from exc
 
     def lower_messages(self, messages: list[Message]) -> list[Message]:
         """Lower Hawi IR messages into provider-ready messages."""
@@ -483,16 +529,12 @@ class Model(ABC):
     def _resolve_steer_merge_mode(self, steer_part: SteerPart) -> SteerMergeMode:
         """Resolve the effective steer merge mode for one steer message."""
         preferred = steer_part.get("preferred_merge_mode")
-        if preferred in {
-            "append_to_tool_result",
-            "user_message_template",
-            "tool_result_assistant_template_and_user_message",
-        }:
-            return preferred
-        configured = self.get_configured_steer_merge_mode()
-        if configured is not None:
-            return configured
-        return self.get_default_steer_merge_mode()
+        if preferred is not None:
+            return self.coerce_steer_merge_mode(
+                preferred,
+                source="steer message preferred_merge_mode",
+            ) or self.get_effective_steer_merge_mode()
+        return self.get_effective_steer_merge_mode()
 
     def _build_plain_user_message(
         self,
@@ -686,6 +728,9 @@ class DelegateModel(Model):
 
     def _get_params(self) -> ModelParams:
         return self._delegate._get_params()
+
+    def get_default_steer_merge_mode(self) -> SteerMergeMode:
+        return self._delegate.get_default_steer_merge_mode()
 
     def get_balance(self) -> list[BalanceInfo]:
         return self._delegate.get_balance()

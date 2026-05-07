@@ -39,6 +39,8 @@ def create_user_message(text: str) -> Message:
 class MockModel(Model):
     """Mock model for testing the unified interface."""
 
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     def __init__(self, model_id: str = "test-model"):
         self._model_id = model_id
         self._params = {}
@@ -395,6 +397,8 @@ class TestModelNotImplemented:
 
     class NoStreamingModel(Model):
         """Model that doesn't implement streaming."""
+
+        default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
 
         def __init__(self):
             self._model_id = "no-stream"

@@ -16,6 +16,8 @@ from hawi_plugins.shell_plugin import ShellPlugin
 from hawi_plugins.skills_plugin import SkillsPlugin
 
 class MockModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     def __init__(self, workspace: str):
         self._model_id = "mock-model"
         self.workspace = workspace

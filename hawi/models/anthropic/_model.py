@@ -235,6 +235,8 @@ class AnthropicModel(Model):
         response = model.invoke(messages=[create_user_message("Hello")])
     """
 
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     def __init__(
         self,
         *,

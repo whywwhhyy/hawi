@@ -18,6 +18,7 @@ from hawi.agent.scheduler import (
     SchedulerError,
 )
 from hawi.agent.agent import SteerPartMergeMode
+from hawi.errors import ConfigurationError
 from hawi.events import (
     SchedulerEnqueueEvent,
     SchedulerDequeueEvent,
@@ -329,7 +330,7 @@ class TestHawiSchedulerBasic:
             ),
         )
 
-    def test_scheduler_defaults_steer_merge_mode_to_assistant_template(self, mock_agent):
+    def test_scheduler_leaves_missing_steer_merge_mode_to_model(self, mock_agent):
         scheduler = HawiScheduler(mock_agent)
         scheduler._executor._state = SchedulerState.RUNNING
         mock_agent.has_active_tool_calls = True
@@ -339,10 +340,20 @@ class TestHawiSchedulerBasic:
         assert msg_id == "steer-1234"
         mock_agent.steer.assert_called_once_with(
             "new steer",
-            merge_mode=(
-                SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
-            ),
+            merge_mode=None,
         )
+
+    def test_scheduler_rejects_invalid_steer_merge_mode(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        scheduler._executor._state = SchedulerState.RUNNING
+        mock_agent.has_active_tool_calls = True
+
+        with pytest.raises(ConfigurationError, match="Invalid high_prio steer_merge_mode"):
+            scheduler.enqueue(
+                "new steer",
+                "high_prio",
+                metadata={"steer_merge_mode": "missing_default"},
+            )
 
     def test_scheduler_enqueue_urgent(self, mock_agent):
         scheduler = HawiScheduler(mock_agent)
@@ -415,6 +426,42 @@ class TestHawiSchedulerBasic:
         assert emitted_event.message_id == msg.id
         assert emitted_bus is override_bus
 
+    @pytest.mark.asyncio
+    async def test_scheduler_starts_pending_inputs_before_queued_messages(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        scheduler._executor.execute_pending_inputs = MagicMock(return_value=object())
+
+        started = await scheduler._start_pending_input_execution()
+
+        assert started is True
+        scheduler._executor.execute_pending_inputs.assert_called_once_with()
+        mock_agent._emit_event.assert_awaited_once()
+        emitted_event = mock_agent._emit_event.await_args.args[0]
+        assert emitted_event.type == "scheduler.dequeue"
+        assert emitted_event.message_id == "pending-inputs"
+        assert emitted_event.queue_type == "high_prio"
+
+    @pytest.mark.asyncio
+    async def test_scheduler_executes_urgent_message_after_consuming_queue(self, mock_agent):
+        scheduler = HawiScheduler(mock_agent)
+        scheduler.enqueue("stop now", "urgent")
+        scheduler._executor.execute = MagicMock(return_value=object())
+
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.01)
+            scheduler.stop()
+
+        await asyncio.gather(
+            scheduler.run_forever(poll_interval=0.001),
+            stop_soon(),
+        )
+
+        assert scheduler.get_queue_lengths()["urgent"] == 0
+        scheduler._executor.execute.assert_called_once()
+        executed_message = scheduler._executor.execute.call_args.args[0]
+        assert executed_message.content == "stop now"
+        assert executed_message.queue_type == QueueType.URGENT
+
 
 class TestHawiSchedulerErrorHooks:
     """Test HawiScheduler error hooks."""
@@ -472,6 +519,21 @@ class TestAgentExecutorEventBus:
         await task
 
         agent._arun_internal.assert_awaited_once_with("hello", event_bus=event_bus)
+
+    @pytest.mark.asyncio
+    async def test_execute_pending_inputs_runs_without_new_message(self):
+        agent = MagicMock()
+        agent._arun_internal = AsyncMock(return_value=MagicMock())
+        agent.clear_interrupt_state = MagicMock()
+        scheduler = MagicMock()
+        executor = AgentExecutor(agent, scheduler)
+        event_bus = EventBus()
+
+        task = executor.execute_pending_inputs(event_bus=event_bus)
+        assert task is not None
+        await task
+
+        agent._arun_internal.assert_awaited_once_with(None, event_bus=event_bus)
 
 
 if __name__ == "__main__":

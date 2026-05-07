@@ -166,6 +166,7 @@ class AgentMessageAddedEvent(Event):
     run_id: str
     role: Literal["user", "assistant", "tool"]
     content: list[ContentPart]
+    metadata: dict[str, Any] | None = None
 
     @classmethod
     def create(
@@ -173,6 +174,7 @@ class AgentMessageAddedEvent(Event):
         run_id: str,
         role: Literal["user", "assistant", "tool"],
         content: list[ContentPart],
+        metadata: dict[str, Any] | None = None,
     ) -> AgentMessageAddedEvent:
         return cls(
             type="agent.message_added",
@@ -180,6 +182,7 @@ class AgentMessageAddedEvent(Event):
             run_id=run_id,
             role=role,
             content=content,
+            metadata=metadata,
         )
 
 

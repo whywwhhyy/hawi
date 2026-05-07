@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING
 from hawi.agent.result import AgentRunResult
 from hawi.events import EventBus
 from hawi.events.scheduler_events import SchedulerInterruptEvent
+from hawi.models.message import ContentPart
+from .queue import QueuedMessage, QueueType
 
 if TYPE_CHECKING:
     from hawi.agent.agent import HawiAgent
     from .scheduler import HawiScheduler
-    from .queue import QueuedMessage
 
 
 class SchedulerState(Enum):
@@ -126,6 +127,26 @@ class AgentExecutor:
         Returns:
             Task object for the execution, or None if couldn't start
         """
+        return self._start_execution(message, message.content)
+
+    def execute_pending_inputs(
+        self,
+        event_bus: EventBus | None = None,
+    ) -> asyncio.Task | None:
+        """Execute pending agent steer inputs without adding a new message."""
+        message = QueuedMessage.create(
+            "",
+            QueueType.HIGH_PRIO,
+            {"source": "pending_inputs"},
+            event_bus=event_bus,
+        )
+        return self._start_execution(message, None)
+
+    def _start_execution(
+        self,
+        message: QueuedMessage,
+        content: str | list[ContentPart] | None,
+    ) -> asyncio.Task | None:
         if not self.is_idle:
             return None
 
@@ -137,15 +158,19 @@ class AgentExecutor:
 
         # Create and start task
         self._current_task = asyncio.create_task(
-            self._execute_with_error_handling(message)
+            self._execute_with_error_handling(message, content)
         )
         return self._current_task
 
-    async def _execute_with_error_handling(self, message: QueuedMessage) -> None:
+    async def _execute_with_error_handling(
+        self,
+        message: QueuedMessage,
+        content: str | list[ContentPart] | None,
+    ) -> None:
         """Execute message with error handling."""
         try:
             result = await self._agent._arun_internal(
-                message.content,
+                content,
                 event_bus=message.event_bus,
             )
             self._last_result = result
@@ -158,7 +183,7 @@ class AgentExecutor:
             action = await self._scheduler._on_agent_error(e, message)
             if action == ErrorAction.RETRY:
                 # Retry execution
-                await self._execute_with_error_handling(message)
+                await self._execute_with_error_handling(message, content)
                 return
             elif action == ErrorAction.ABORT:
                 raise

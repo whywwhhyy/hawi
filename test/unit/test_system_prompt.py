@@ -471,6 +471,8 @@ class TestSystemPromptWithCacheControl:
 
 
 class _CaptureSystemModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     def __init__(self) -> None:
         super().__init__()
         self.system_seen = None

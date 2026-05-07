@@ -61,6 +61,12 @@ SteerMergeMode = Literal[
     "tool_result_assistant_template_and_user_message",
 ]
 
+STEER_MERGE_MODES: tuple[SteerMergeMode, ...] = (
+    "append_to_tool_result",
+    "user_message_template",
+    "tool_result_assistant_template_and_user_message",
+)
+
 
 # 流式内容块类型 - 事件系统中使用的块类型
 # 注意：这是 ContentPartType 的子集，用于流式块处理

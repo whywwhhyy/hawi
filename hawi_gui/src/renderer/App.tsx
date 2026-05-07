@@ -71,7 +71,7 @@ export function renderPriorityStatusText(
 ): string {
   const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
   const highMergedCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
-  return `打断 ${urgentStatus} · 合并 ${highMergedCount} · 队列 ${queueLengths.normal}`;
+  return `打断 ${urgentStatus} · 合并 ${highMergedCount} · 队列 ${normalQueueCount(queueLengths, queueMessages)}`;
 }
 
 function hasHighPriorityWork(
@@ -79,6 +79,13 @@ function hasHighPriorityWork(
   queueMessages?: Record<QueueKind, QueueMessageState[]>
 ): boolean {
   return queueLengths.high_prio > 0 || (queueMessages?.high_prio.length ?? 0) > 0;
+}
+
+function normalQueueCount(
+  queueLengths: Record<QueueKind, number>,
+  queueMessages?: Record<QueueKind, QueueMessageState[]>
+): number {
+  return Math.max(queueLengths.normal, queueMessages?.normal.length ?? 0);
 }
 
 export default function App() {
@@ -534,6 +541,7 @@ function PriorityStatusCell({
 }) {
   const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
   const highMergedCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
+  const normalCount = normalQueueCount(queueLengths, queueMessages);
 
   return (
     <button
@@ -546,7 +554,7 @@ function PriorityStatusCell({
     >
       <span>打断 <strong>{urgentStatus}</strong></span>
       <span>合并 <strong>{highMergedCount}</strong></span>
-      <span>队列 <strong>{queueLengths.normal}</strong></span>
+      <span>队列 <strong>{normalCount}</strong></span>
     </button>
   );
 }
@@ -578,7 +586,8 @@ function QueueSidebar({
   queueMessages: Record<QueueKind, QueueMessageState[]>;
   onClose: () => void;
 }) {
-  const total = queueLengths.urgent + (hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0) + queueLengths.normal;
+  const normalCount = normalQueueCount(queueLengths, queueMessages);
+  const total = (hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0) + normalCount;
   return (
     <aside className="queue-sidebar">
       <header className="queue-sidebar-head">
@@ -591,18 +600,13 @@ function QueueSidebar({
         </button>
       </header>
       <QueueMessageGroup
-        kind="urgent"
-        length={queueLengths.urgent}
-        messages={queueMessages.urgent}
-      />
-      <QueueMessageGroup
         kind="high_prio"
         length={Math.max(queueLengths.high_prio, queueMessages.high_prio.length)}
         messages={queueMessages.high_prio}
       />
       <QueueMessageGroup
         kind="normal"
-        length={queueLengths.normal}
+        length={normalCount}
         messages={queueMessages.normal}
       />
     </aside>

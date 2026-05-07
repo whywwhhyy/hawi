@@ -241,6 +241,7 @@ class HawiAgent:
         # Resolve model from registry if string is provided
         if isinstance(model, str):
             model = model_registry.create_model(model)
+        self._validate_model_steer_merge_mode(model, source="HawiAgent.__init__")
         self._default_model = model
         self._max_iterations = max_iterations
         self._streaming = streaming
@@ -352,9 +353,16 @@ class HawiAgent:
         """
         if isinstance(model, str):
             model = model_registry.create_model(model)
+        self._validate_model_steer_merge_mode(model, source="HawiAgent.set_model")
         # Reset current model state before replacing
         self._default_model.reset()
         self._default_model = model
+
+    @staticmethod
+    def _validate_model_steer_merge_mode(model: Any, *, source: str) -> None:
+        """Validate steer configuration early for real Hawi Model instances."""
+        if isinstance(model, Model):
+            model.validate_steer_merge_mode_config(source=source)
 
     @property
     def model(self) -> Model:
@@ -483,8 +491,6 @@ class HawiAgent:
         self._cancel_event.clear()
         self._interrupted_tool_call_ids.clear()
         self._current_tool_calls.clear()
-        with self._steer_lock:
-            self._pending_inputs.clear()
 
     def _check_interrupt(self) -> bool:
         """Check if an interrupt has been requested.
@@ -532,9 +538,7 @@ class HawiAgent:
         self,
         content: str | list[ContentPart],
         *,
-        merge_mode: SteerPartMergeMode = (
-            SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
-        ),
+        merge_mode: SteerPartMergeMode | None = None,
     ) -> str:
         """Queue steer content for later materialization.
 
@@ -597,6 +601,11 @@ class HawiAgent:
             }
             for pending in pending_inputs
         ]
+
+    def has_pending_inputs(self) -> bool:
+        """Return whether queued steer inputs still need materialization."""
+        with self._steer_lock:
+            return bool(self._pending_inputs)
 
     def _normalize_content_parts(
         self,
@@ -903,6 +912,11 @@ class HawiAgent:
                     run_id=run_id,
                     role="user",
                     content=pending.content,
+                    metadata={
+                        "queue": "normal",
+                        "source_queue": "high_prio",
+                        "materialized_as": "plain_user_message",
+                    },
                 ),
                 event_bus,
             )
@@ -963,6 +977,7 @@ class HawiAgent:
             return
 
         tool_call_id_set = set(tool_call_ids)
+        fallback_tool_call_id = tool_call_ids[0]
         materialized: list[tuple[PendingInput, str]] = []
         with self._steer_lock:
             remaining: list[PendingInput] = []
@@ -975,6 +990,12 @@ class HawiAgent:
                     ),
                     None,
                 )
+                if matched_tool_call_id is None and not item.candidate_tool_call_ids:
+                    # High-priority input can arrive while the model call is
+                    # still streaming, before tool_call_ids are known. If this
+                    # turn later produces tool results, steer it into the next
+                    # request via the first completed tool result.
+                    matched_tool_call_id = fallback_tool_call_id
                 if matched_tool_call_id is None:
                     remaining.append(item)
                     continue

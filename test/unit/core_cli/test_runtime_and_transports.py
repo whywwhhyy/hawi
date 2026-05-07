@@ -208,12 +208,40 @@ async def test_enqueue_command_returns_message_id() -> None:
 def test_status_payload_includes_queue_messages() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
     scheduler = DummyScheduler()
+    scheduler.get_queue_messages = lambda: {  # type: ignore[method-assign]
+        "normal": [
+            {
+                "id": "msg-1",
+                "queue": "normal",
+                "content_preview": "queued",
+                "created_at": 123.0,
+                "metadata": {},
+            }
+        ],
+        "high_prio": [],
+        "urgent": [
+            {
+                "id": "urgent-1",
+                "queue": "urgent",
+                "content_preview": "interrupt now",
+                "created_at": 123.5,
+                "metadata": {},
+            }
+        ],
+    }
     scheduler.agent.get_pending_input_messages = lambda: [  # type: ignore[attr-defined]
+        {
+            "id": "steer-plain",
+            "queue": "normal",
+            "content_preview": "pending plain steer",
+            "created_at": 124.0,
+            "metadata": {},
+        },
         {
             "id": "steer-1",
             "queue": "high_prio",
             "content_preview": "pending steer",
-            "created_at": 124.0,
+            "created_at": 125.0,
             "metadata": {},
         }
     ]
@@ -222,7 +250,9 @@ def test_status_payload_includes_queue_messages() -> None:
     payload = runtime._status_payload()
 
     assert payload["queue_messages"]["normal"][0]["content_preview"] == "queued"
+    assert payload["queue_messages"]["normal"][1]["content_preview"] == "pending plain steer"
     assert payload["queue_messages"]["high_prio"][0]["content_preview"] == "pending steer"
+    assert payload["queue_messages"]["urgent"] == []
 
 
 def test_parse_extra_tool_parameter() -> None:

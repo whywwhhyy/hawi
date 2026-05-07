@@ -4,11 +4,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from hawi.agent import HawiAgent, SteerPartMergeMode
+from hawi.errors import ConfigurationError
+from hawi.models.deepseek.deepseek_openai import DeepSeekOpenAIModel
 from hawi.models.model import Model
 from hawi.models.message import MessageRequest, MessageResponse
 
 
 class DummyModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     @property
     def model_id(self) -> str:
         return "dummy"
@@ -24,6 +28,13 @@ class DummyModel(Model):
 
 
 class TestHawiAgentSteer:
+    def test_real_model_without_declared_steer_mode_fails_early(self):
+        class UndeclaredModel(DummyModel):
+            default_steer_merge_mode = None
+
+        with pytest.raises(ConfigurationError, match="does not declare default_steer_merge_mode"):
+            HawiAgent(model=UndeclaredModel())
+
     def test_active_tool_steer_materializes_as_raw_steer_part(self):
         agent = HawiAgent(model=MagicMock())
         agent._current_tool_calls.append({"id": "call_1", "name": "tool", "arguments": {}})
@@ -44,10 +55,7 @@ class TestHawiAgentSteer:
         steer_part = steer_message["content"][0]
         assert steer_part["type"] == "steer"
         assert steer_part["tool_call_id"] == "call_1"
-        assert (
-            steer_part["preferred_merge_mode"]
-            == "tool_result_assistant_template_and_user_message"
-        )
+        assert steer_part["preferred_merge_mode"] is None
         assert steer_part["content"] == [{
             "type": "text",
             "text": "Please also consider the user's new message.",
@@ -68,7 +76,42 @@ class TestHawiAgentSteer:
         assert message["created_at"] > 0
         assert message["metadata"] == {
             "candidate_tool_call_ids": ["call_1"],
-            "merge_mode": "tool_result_assistant_template_and_user_message",
+            "merge_mode": None,
+        }
+
+    def test_pending_input_messages_remain_high_priority_without_tool_candidates(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._session_active = True
+
+        steer_id = agent.steer("plain follow-up")
+
+        messages = agent.get_pending_input_messages()
+        assert len(messages) == 1
+        message = messages[0]
+        assert message["id"] == steer_id
+        assert message["queue"] == "high_prio"
+        assert message["content_preview"] == "plain follow-up"
+        assert message["metadata"] == {
+            "candidate_tool_call_ids": [],
+            "merge_mode": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_drained_pending_input_event_is_marked_as_normal_queue(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._session_active = True
+        events = []
+        agent.subscribe_blocking(events.append, ["agent.message_added"])
+
+        agent.steer("plain follow-up")
+        drained = await agent._drain_pending_inputs_to_context("run-plain", None)
+
+        assert drained is True
+        assert len(events) == 1
+        assert events[0].metadata == {
+            "queue": "normal",
+            "source_queue": "high_prio",
+            "materialized_as": "plain_user_message",
         }
 
     def test_user_message_template_lowering_combines_tool_and_steer(self):
@@ -162,19 +205,15 @@ class TestHawiAgentSteer:
         assert lowered[1]["role"] == "assistant"
         assert lowered[2]["role"] == "user"
 
-    def test_clear_interrupt_state_discards_pending_steer(self):
+    def test_clear_interrupt_state_preserves_pending_steer(self):
         agent = HawiAgent(model=MagicMock())
+        agent._session_active = True
 
-        agent.steer("this should be cleared")
+        agent.steer("this should be preserved")
         agent.clear_interrupt_state()
-        agent._add_tool_result_with_pending_steer("call_4", "tool output")
 
-        message = agent.context.messages[-1]
-        assert message["role"] == "tool"
-        tool_result_part = message["content"][0]
-        nested_content = tool_result_part["content"]
-        assert len(nested_content) == 1
-        assert nested_content[0]["text"] == "tool output"
+        assert len(agent._pending_inputs) == 1
+        assert agent._pending_inputs[0].content[0]["text"] == "this should be preserved"
 
     def test_idle_steer_queues_pending_turn_and_requests_new_loop(self):
         agent = HawiAgent(model=MagicMock())
@@ -213,6 +252,35 @@ class TestHawiAgentSteer:
         steer_message = agent.context.messages[-1]
         assert steer_message["content"][0]["type"] == "steer"
         assert steer_message["content"][0]["tool_call_id"] == "call_2"
+
+    def test_tool_result_consumes_pending_input_created_before_tool_call_ids_exist(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._session_active = True
+
+        agent.steer("用户补充：请优先处理这个新要求")
+        agent._add_tool_result_with_pending_steer("call_late", "tool output")
+
+        assert len(agent._pending_inputs) == 0
+        steer_message = agent.context.messages[-1]
+        assert steer_message["content"][0]["type"] == "steer"
+        assert steer_message["content"][0]["tool_call_id"] == "call_late"
+
+    def test_deepseek_appends_pre_tool_call_pending_steer_to_tool_result(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._session_active = True
+
+        agent.steer("用户补充：请优先处理这个新要求")
+        agent._add_tool_result_with_pending_steer("call_late", "tool output")
+
+        model = DeepSeekOpenAIModel(api_key="test-key")
+        lowered = model.lower_messages(agent.context.messages)
+        openai_message = model._convert_message_to_openai(lowered[0])[0]
+
+        assert len(lowered) == 1
+        assert openai_message["role"] == "tool"
+        assert openai_message["tool_call_id"] == "call_late"
+        assert "tool output" in openai_message["content"]
+        assert "用户补充：请优先处理这个新要求" in openai_message["content"]
 
     def test_batch_tool_results_materialize_steer_after_all_results(self):
         agent = HawiAgent(model=MagicMock())

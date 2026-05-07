@@ -9,6 +9,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+from hawi.errors import ConfigurationError
 from hawi.models.registry import (
     ModelRegistry,
     ModelConfig,
@@ -506,6 +507,60 @@ class TestCreateModel:
         assert isinstance(model, OpenAIModel)
         assert model.get_configured_steer_merge_mode() == "user_message_template"
         assert "steer_merge_mode" not in model.params
+
+    def test_create_model_rejects_invalid_steer_merge_mode_override(self):
+        """Invalid steer merge modes should fail before model invocation."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"model_id": "gpt-4", "api_key": "test-key"},
+            quiet=True,
+        )
+
+        with pytest.raises(ConfigurationError, match="Invalid steer_merge_mode"):
+            registry.create_model(
+                "openai/gpt-4",
+                steer_merge_mode="missing_default",
+            )
+
+    def test_create_model_requires_model_declared_steer_merge_mode(self):
+        """A concrete model class must declare a mode or be configured."""
+        class UndeclaredModel(Model):
+            def __init__(self, *, model_id: str, **params):
+                super().__init__()
+                self._model_id = model_id
+                self.params = params
+
+            @property
+            def model_id(self) -> str:
+                return self._model_id
+
+            def _prepare_request_impl(self, request):
+                return {}
+
+            def _parse_response_impl(self, response):
+                return response
+
+            def _invoke_impl(self, request):
+                return self._parse_response_impl({})
+
+        registry = ModelRegistry()
+        registry.clear()
+        registry.register_adapter("UndeclaredModel", UndeclaredModel, quiet=True)
+        registry.register_provider(
+            "test",
+            "UndeclaredModel",
+            ["model"],
+            {},
+            quiet=True,
+        )
+
+        with pytest.raises(ConfigurationError, match="does not declare default_steer_merge_mode"):
+            registry.create_model("test/model")
 
     def test_create_model_applies_max_context_tokens_metadata(self):
         """max_context_tokens should configure Hawi metadata, not provider params."""

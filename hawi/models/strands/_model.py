@@ -70,6 +70,8 @@ class StrandsModel(Model):
         >>> response = hawi_model.invoke(messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}], "name": None, "tool_calls": None, "tool_call_id": None, "metadata": None}])
     """
 
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     def __init__(self, strands_model: Any) -> None:
         """
         Initialize adapter.

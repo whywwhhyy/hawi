@@ -41,6 +41,42 @@ def test_mapper_emits_run_start_with_queue_kind() -> None:
     assert frames[0]["payload"]["user_content"] == "hello"
 
 
+def test_mapper_keeps_high_priority_queue_without_message_override() -> None:
+    mapper = SemanticEventMapper()
+
+    mapper.map(SchedulerDequeueEvent.create("msg-plain", "high_prio"))
+    mapper.map(AgentRunStartEvent.create("run-plain"))
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-plain",
+            "user",
+            [{"type": "text", "text": "plain high-priority message"}],
+        )
+    )
+
+    assert frames[0]["type"] == "run.start"
+    assert frames[0]["payload"]["queue"] == "high_prio"
+    assert frames[0]["payload"]["user_content"] == "plain high-priority message"
+
+
+def test_mapper_uses_message_metadata_queue_override() -> None:
+    mapper = SemanticEventMapper()
+
+    mapper.map(SchedulerDequeueEvent.create("msg-2", "urgent"))
+    mapper.map(AgentRunStartEvent.create("run-2"))
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-2",
+            "user",
+            [{"type": "text", "text": "plain drained steer"}],
+            metadata={"queue": "normal"},
+        )
+    )
+
+    assert frames[0]["type"] == "run.start"
+    assert frames[0]["payload"]["queue"] == "normal"
+
+
 def test_mapper_emits_text_delta_and_run_stop() -> None:
     mapper = SemanticEventMapper()
     mapper.map(AgentRunStartEvent.create("run-2"))

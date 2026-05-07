@@ -346,7 +346,10 @@ class ModelRegistry:
             return properties, None, max_context_tokens
 
         properties = dict(override.get("properties") or {})
-        steer_merge_mode = override.get("steer_merge_mode")
+        steer_merge_mode = Model.coerce_steer_merge_mode(
+            override.get("steer_merge_mode"),
+            source="models.yaml model_configs.steer_merge_mode",
+        )
         max_context_tokens = self._coerce_max_context_tokens(
             override.get("max_context_tokens")
         )
@@ -530,7 +533,10 @@ class ModelRegistry:
         provider_name, model_id = self._split_model_name(name)
         
         # Apply overrides (model_id from config name takes precedence)
-        override_steer_merge_mode = overrides.pop("steer_merge_mode", None)
+        override_steer_merge_mode = Model.coerce_steer_merge_mode(
+            overrides.pop("steer_merge_mode", None),
+            source=f"create_model({name}) steer_merge_mode override",
+        )
         override_max_context_tokens = self._coerce_max_context_tokens(
             overrides.pop("max_context_tokens", None)
         )
@@ -550,6 +556,7 @@ class ModelRegistry:
             or property_max_context_tokens
             or model_config.max_context_tokens
         )
+        model.validate_steer_merge_mode_config(source=f"create_model({name})")
         return model
     # ========================================================================
     # 配置加载

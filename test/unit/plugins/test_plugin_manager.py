@@ -294,6 +294,8 @@ from hawi.models.message import MessageRequest
 class MockModelForAgent(Model):
     """Minimal mock model for agent tests."""
 
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     @property
     def model_id(self) -> str:
         return "mock-model"

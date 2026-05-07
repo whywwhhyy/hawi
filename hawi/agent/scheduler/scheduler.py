@@ -16,6 +16,7 @@ from typing import Any, Callable, Literal
 
 from hawi.agent.agent import HawiAgent
 from hawi.agent.agent import SteerPartMergeMode
+from hawi.errors import ConfigurationError
 from hawi.agent.result import AgentRunResult
 from hawi.events import Event, EventBus
 from hawi.events.scheduler_events import (
@@ -347,20 +348,27 @@ class HawiScheduler:
     def _resolve_steer_merge_mode(
         self,
         metadata: dict[str, Any] | None,
-    ) -> SteerPartMergeMode:
-        """Resolve the steer merge mode from queue metadata."""
+    ) -> SteerPartMergeMode | None:
+        """Resolve an explicit steer merge mode from queue metadata."""
         if metadata is None:
-            return SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
+            return None
 
         raw_mode = metadata.get("steer_merge_mode")
+        if raw_mode is None:
+            return None
         if isinstance(raw_mode, SteerPartMergeMode):
             return raw_mode
         if isinstance(raw_mode, str):
             try:
                 return SteerPartMergeMode(raw_mode)
             except ValueError:
-                logger.warning("Unknown steer merge mode '%s', falling back to default.", raw_mode)
-        return SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE
+                pass
+        valid = ", ".join(mode.value for mode in SteerPartMergeMode)
+        raise ConfigurationError(
+            f"Invalid high_prio steer_merge_mode: {raw_mode!r}. "
+            f"Valid values are: {valid}. "
+            "Omit steer_merge_mode to use the model's declared mode."
+        )
 
     def _build_content_preview(self, content: str | list[ContentPart]) -> str:
         """Build a short content preview without creating a queued message."""
@@ -416,6 +424,26 @@ class HawiScheduler:
             return True
         return False
 
+    async def _start_pending_input_execution(self) -> bool:
+        """Run agent pending steer inputs before moving on to queued messages."""
+        await self._emit_event(
+            SchedulerDequeueEvent.create(
+                message_id="pending-inputs",
+                queue_type="high_prio",
+            ),
+            None,
+        )
+
+        task = self._executor.execute_pending_inputs()
+        if task:
+            self._state = SchedulerState.RUNNING
+            return True
+        return False
+
+    def _agent_has_pending_inputs(self) -> bool:
+        getter = getattr(self._agent, "has_pending_inputs", None)
+        return callable(getter) and getter() is True
+
     # Main loop
 
     async def run_forever(self, poll_interval: float = 0.1) -> None:
@@ -437,6 +465,12 @@ class HawiScheduler:
                             await self._executor.interrupt("urgent")
                         if await self._start_message_execution(msg):
                             continue
+
+                # Drain steered inputs that survived an interruption before
+                # continuing with scheduler-owned queues.
+                if self._executor.is_idle and self._agent_has_pending_inputs():
+                    if await self._start_pending_input_execution():
+                        continue
 
                 # Check high priority (only when idle)
                 if self._executor.is_idle and self._queue_manager.has_high_prio():

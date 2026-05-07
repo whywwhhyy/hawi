@@ -84,6 +84,8 @@ class DeepSeekOpenAIModel(OpenAIModel):
         )
     """
 
+    default_steer_merge_mode = "append_to_tool_result"
+
     def __init__(
         self,
         *,

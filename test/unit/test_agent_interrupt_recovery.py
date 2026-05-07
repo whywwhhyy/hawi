@@ -14,6 +14,8 @@ from hawi.tool.types import AgentTool, ToolResult
 
 
 class ToolCallModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
     @property
     def model_id(self) -> str:
         return "tool-call-model"

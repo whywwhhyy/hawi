@@ -761,6 +761,7 @@ class CoreRuntime:
             if callable(queue_messages_getter)
             else {"normal": [], "high_prio": [], "urgent": []}
         )
+        queue_messages = {**queue_messages, "urgent": []}
         pending_input_getter = getattr(
             self._scheduler.agent,
             "get_pending_input_messages",
@@ -769,13 +770,15 @@ class CoreRuntime:
         if callable(pending_input_getter):
             pending_inputs = pending_input_getter()
             if pending_inputs:
-                queue_messages = {
-                    **queue_messages,
-                    "high_prio": [
-                        *queue_messages.get("high_prio", []),
-                        *pending_inputs,
-                    ],
-                }
+                queue_messages = {**queue_messages}
+                for pending in pending_inputs:
+                    queue = pending.get("queue")
+                    if queue not in {"normal", "high_prio", "urgent"}:
+                        queue = "high_prio"
+                    queue_messages[queue] = [
+                        *queue_messages.get(queue, []),
+                        pending,
+                    ]
         payload = {
             "ready": True,
             "scheduler_state": self._scheduler.state.name,

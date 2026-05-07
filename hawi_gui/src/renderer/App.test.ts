@@ -38,6 +38,17 @@ describe("renderPriorityStatusText", () => {
       }
     )).toBe("打断 无 · 合并 1 · 队列 2");
   });
+
+  it("counts pending normal previews as ordinary queue work", () => {
+    expect(renderPriorityStatusText(
+      { urgent: 0, high_prio: 0, normal: 0 },
+      {
+        urgent: [],
+        high_prio: [],
+        normal: [{ id: "steer-plain", queue: "normal", contentPreview: "plain" }]
+      }
+    )).toBe("打断 无 · 合并 0 · 队列 1");
+  });
 });
 
 describe("isNearChatBottom", () => {
