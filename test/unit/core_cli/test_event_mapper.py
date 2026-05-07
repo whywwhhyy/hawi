@@ -249,12 +249,25 @@ def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:
     metadata = mapper.map(
         ModelMetadataEvent.create(
             "req-3",
-            usage=TokenUsage(input_tokens=2, output_tokens=5),
+            usage=TokenUsage(
+                input_tokens=2,
+                output_tokens=5,
+                total_tokens=9,
+                cache_read_tokens=1,
+                reasoning_tokens=2,
+            ),
             latency_ms=10.0,
+            context_tokens=100,
+            max_context_tokens=1000,
+            context_ratio=0.1,
         )
     )
     assert metadata[0]["type"] == "model.metadata"
-    assert metadata[0]["payload"]["total_tokens"] == 7
+    assert metadata[0]["payload"]["total_tokens"] == 9
+    assert metadata[0]["payload"]["cache_read_tokens"] == 1
+    assert metadata[0]["payload"]["reasoning_tokens"] == 2
+    assert metadata[0]["payload"]["context_tokens"] == 100
+    assert metadata[0]["payload"]["context_ratio"] == 0.1
 
     interrupted = mapper.map(SchedulerInterruptEvent.create("user", ["tc-9"]))
     assert interrupted[0]["type"] == "scheduler.interrupt"

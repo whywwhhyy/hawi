@@ -31,6 +31,7 @@ from hawi.models import (
     model_registry,
 )
 from hawi.models.message import Message, MessageResponse
+from hawi.models.usage import merge_token_usage, normalize_token_usage
 from hawi.plugin import HawiPlugin
 from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
@@ -68,6 +69,7 @@ from hawi.events import (
 from .context import (
     AgentContext,
     ContextCompactionRecord,
+    ContextUsageSnapshot,
     CONTEXT_COMPACTION_PROMPT,
     CONTEXT_COMPACTION_SUMMARY_PREFIX,
     ToolCallContext,
@@ -299,6 +301,12 @@ class HawiAgent:
         """
         return self._context
 
+    def context_usage(self, model: Model | None = None) -> ContextUsageSnapshot:
+        """Return the current estimated context-window occupancy."""
+        return self._context.usage_snapshot(
+            self._context_limit_for_model(model or self._default_model)
+        )
+
     def set_context(self, context: AgentContext) -> None:
         """Replace the agent's context.
 
@@ -409,6 +417,16 @@ class HawiAgent:
             enabled=True,
             max_context_tokens=model_max_context_tokens or 128_000,
         )
+
+    def _context_limit_for_model(self, model: Model) -> int | None:
+        getter = getattr(model, "get_max_context_tokens", None)
+        if callable(getter):
+            value = getter()
+            if isinstance(value, int) and value > 0:
+                return value
+        if self._auto_compact.max_context_tokens > 0:
+            return self._auto_compact.max_context_tokens
+        return None
 
     def interrupt(self, reason: str = "user") -> list[str]:
         """Interrupt current agent execution.
@@ -1237,6 +1255,7 @@ class HawiAgent:
 
                 # Model stream start
                 request_id = f"{run_id}-{state.iteration}"
+                context_usage = self.context_usage(m)
                 await self._emit_event(
                     ModelStreamStartEvent.create(request_id=request_id),
                     event_bus,
@@ -1297,32 +1316,8 @@ class HawiAgent:
                             stop_reason = chunk.get("stop_reason") or "end_turn"
                             usage_data = chunk.get("usage")
                             if usage_data:
-                                # usage_data can be TokenUsage (TypedDict) or dict[str, int]
-                                usage = cast(TokenUsage, usage_data)
-                                # Accumulate usage for multi-turn conversations
-                                if cumulative_usage is None:
-                                    cumulative_usage = usage
-                                else:
-                                    # Use a temp variable to help type checker
-                                    current = cumulative_usage
-
-                                    def add_optional_tokens(a: int | None, b: int | None) -> int | None:
-                                        """Add two optional token counts, returning None if both are None."""
-                                        if a is None and b is None:
-                                            return None
-                                        return (a or 0) + (b or 0)
-                                    cumulative_usage = {
-                                        "input_tokens": current["input_tokens"] + usage["input_tokens"],
-                                        "output_tokens": current["output_tokens"] + usage["output_tokens"],
-                                        "cache_write_tokens": add_optional_tokens(
-                                            current.get("cache_write_tokens"),
-                                            usage.get("cache_write_tokens"),
-                                        ),
-                                        "cache_read_tokens": add_optional_tokens(
-                                            current.get("cache_read_tokens"),
-                                            usage.get("cache_read_tokens"),
-                                        ),
-                                    }
+                                usage = normalize_token_usage(usage_data)
+                                cumulative_usage = merge_token_usage(cumulative_usage, usage)
                             continue
                         else:
                             continue  # Unknown chunk type
@@ -1365,6 +1360,9 @@ class HawiAgent:
                         request_id=request_id,
                         usage=usage,
                         latency_ms=(time.time() - model_call_start) * 1000,
+                        context_tokens=context_usage.used_tokens,
+                        max_context_tokens=context_usage.max_context_tokens,
+                        context_ratio=context_usage.usage_ratio,
                     ),
                     event_bus,
                 )

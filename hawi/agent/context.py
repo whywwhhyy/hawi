@@ -177,6 +177,25 @@ class ContextCompactionRecord:
         }
 
 
+@dataclass(frozen=True)
+class ContextUsageSnapshot:
+    """Estimated context-window occupancy for the current conversation."""
+
+    used_tokens: int
+    max_context_tokens: int | None = None
+    usage_ratio: float | None = None
+    remaining_tokens: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert the snapshot to a JSON-serializable dictionary."""
+        return {
+            "used_tokens": self.used_tokens,
+            "max_context_tokens": self.max_context_tokens,
+            "usage_ratio": self.usage_ratio,
+            "remaining_tokens": self.remaining_tokens,
+        }
+
+
 @dataclass
 class AgentContext:
     """Conversation context for agent execution.
@@ -310,6 +329,27 @@ class AgentContext:
         for message in self.messages:
             total += estimate_message_tokens(message)
         return total
+
+    def usage_snapshot(
+        self,
+        max_context_tokens: int | None = None,
+        *,
+        include_system: bool = True,
+        include_tools: bool = True,
+    ) -> ContextUsageSnapshot:
+        """Return estimated context-window usage for UI and observability."""
+        used_tokens = self.estimate_tokens(
+            include_system=include_system,
+            include_tools=include_tools,
+        )
+        if max_context_tokens is None or max_context_tokens <= 0:
+            return ContextUsageSnapshot(used_tokens=used_tokens)
+        return ContextUsageSnapshot(
+            used_tokens=used_tokens,
+            max_context_tokens=max_context_tokens,
+            usage_ratio=min(1.0, used_tokens / max_context_tokens),
+            remaining_tokens=max(0, max_context_tokens - used_tokens),
+        )
 
     def add_message(self, message: Message) -> None:
         """Append a message to the conversation.

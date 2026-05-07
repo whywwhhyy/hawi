@@ -81,6 +81,12 @@ export interface PluginStatusState {
   updatedAt: number;
 }
 
+export interface ContextUsageState {
+  usedTokens: number;
+  maxContextTokens?: number;
+  ratio?: number;
+}
+
 interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
@@ -95,6 +101,7 @@ export interface AppState {
   agentState: string;
   queueLengths: Record<QueueKind, number>;
   metadataLines: string[];
+  contextUsage?: ContextUsageState;
   debugLines: string[];
   errors: string[];
   artifacts: Record<string, PluginArtifactState>;
@@ -114,6 +121,7 @@ export function createInitialState(): AppState {
     agentState: "IDLE",
     queueLengths: { normal: 0, high_prio: 0, urgent: 0 },
     metadataLines: [],
+    contextUsage: undefined,
     debugLines: [],
     errors: [],
     artifacts: {},
@@ -135,6 +143,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         toolNodeByCallId: {},
         activeRunId: undefined,
         metadataLines: [],
+        contextUsage: undefined,
         debugLines: [],
         errors: [],
         artifacts: {},
@@ -315,11 +324,11 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       });
 
     case "model.metadata": {
-      const latency = payload.latency_ms == null ? "n/a" : `${Number(payload.latency_ms).toFixed(0)}ms`;
-      return addMeta(
-        state,
-        `模型统计 in=${Number(payload.input_tokens ?? 0)} out=${Number(payload.output_tokens ?? 0)} total=${Number(payload.total_tokens ?? 0)} latency=${latency}`
-      );
+      const nextState = {
+        ...state,
+        contextUsage: parseContextUsage(payload) ?? state.contextUsage
+      };
+      return addMeta(nextState, formatModelMetadata(payload));
     }
 
     case "model.retry":
@@ -388,10 +397,12 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
   const schedulerState = String(payload.scheduler_state ?? state.schedulerState);
   const agentState = String(payload.agent_state ?? state.agentState);
   const queueLengths = normalizeQueueLengths(payload.queue_lengths, state.queueLengths);
+  const contextUsage = parseStatusContextUsage(payload.context_usage) ?? state.contextUsage;
   if (
     schedulerState === state.schedulerState
     && agentState === state.agentState
     && sameQueueLengths(queueLengths, state.queueLengths)
+    && sameContextUsage(contextUsage, state.contextUsage)
   ) {
     return state;
   }
@@ -399,8 +410,77 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     ...state,
     schedulerState,
     agentState,
-    queueLengths
+    queueLengths,
+    contextUsage
   };
+}
+
+function parseStatusContextUsage(value: unknown): ContextUsageState | undefined {
+  if (!isRecord(value)) return undefined;
+  const usedTokens = optionalNumber(value.used_tokens);
+  if (usedTokens === undefined) return undefined;
+  const maxContextTokens = optionalNumber(value.max_context_tokens);
+  const ratio = optionalNumber(value.usage_ratio);
+  return {
+    usedTokens,
+    maxContextTokens,
+    ratio: ratio === undefined ? undefined : clamp(ratio, 0, 1)
+  };
+}
+
+function sameContextUsage(a?: ContextUsageState, b?: ContextUsageState): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.usedTokens === b.usedTokens
+    && a.maxContextTokens === b.maxContextTokens
+    && a.ratio === b.ratio;
+}
+
+function parseContextUsage(payload: Record<string, unknown>): ContextUsageState | undefined {
+  const usedTokens = optionalNumber(payload.context_tokens);
+  if (usedTokens === undefined) return undefined;
+  const maxContextTokens = optionalNumber(payload.max_context_tokens);
+  const ratio = optionalNumber(payload.context_ratio);
+  return {
+    usedTokens,
+    maxContextTokens,
+    ratio: ratio === undefined ? undefined : clamp(ratio, 0, 1)
+  };
+}
+
+function formatModelMetadata(payload: Record<string, unknown>): string {
+  const latency = payload.latency_ms == null ? "n/a" : `${Number(payload.latency_ms).toFixed(0)}ms`;
+  const details = formatUsageDetails(payload);
+  const context = formatContextUsage(parseContextUsage(payload));
+  return [
+    `模型统计 in=${Number(payload.input_tokens ?? 0)}`,
+    `out=${Number(payload.output_tokens ?? 0)}`,
+    `total=${Number(payload.total_tokens ?? 0)}`,
+    details,
+    context,
+    `latency=${latency}`
+  ].filter(Boolean).join(" ");
+}
+
+function formatUsageDetails(payload: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const cacheRead = optionalNumber(payload.cache_read_tokens);
+  const cacheWrite = optionalNumber(payload.cache_write_tokens);
+  const cacheMiss = optionalNumber(payload.cache_miss_tokens);
+  const reasoning = optionalNumber(payload.reasoning_tokens);
+  if (cacheRead !== undefined) parts.push(`cache_read=${cacheRead}`);
+  if (cacheWrite !== undefined) parts.push(`cache_write=${cacheWrite}`);
+  if (cacheMiss !== undefined) parts.push(`cache_miss=${cacheMiss}`);
+  if (reasoning !== undefined) parts.push(`reasoning=${reasoning}`);
+  return parts.length ? `[${parts.join(" ")}]` : "";
+}
+
+function formatContextUsage(context?: ContextUsageState): string {
+  if (!context) return "";
+  if (!context.maxContextTokens || context.ratio === undefined) {
+    return `ctx=${context.usedTokens}`;
+  }
+  return `ctx=${context.usedTokens}/${context.maxContextTokens} (${Math.round(context.ratio * 100)}%)`;
 }
 
 function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinking", delta: string): AppState {
@@ -872,6 +952,16 @@ function optionalString(value: unknown): string | undefined {
   if (value == null) return undefined;
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

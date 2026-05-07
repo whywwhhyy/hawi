@@ -10,7 +10,12 @@ from .agent import (
     SteerPartMergeMode,
     AutoCompactConfig,
 )
-from .context import AgentContext, ContextCompactionRecord, ToolCallContext
+from .context import (
+    AgentContext,
+    ContextCompactionRecord,
+    ContextUsageSnapshot,
+    ToolCallContext,
+)
 from .result import AgentRunResult, ToolCallRecord
 
 # Re-export scheduler classes
@@ -39,6 +44,7 @@ __all__ = [
     # Context
     "AgentContext",
     "ContextCompactionRecord",
+    "ContextUsageSnapshot",
     "ToolCallContext",
     # Result
     "AgentRunResult",

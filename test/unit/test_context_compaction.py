@@ -95,6 +95,19 @@ def test_context_compaction_keeps_tool_exchange_intact() -> None:
     assert tool_result["tool_call_id"] == "call-1"
 
 
+def test_context_usage_snapshot_reports_context_ratio() -> None:
+    context = AgentContext()
+    context.add_user_message("hello " * 20)
+
+    snapshot = context.usage_snapshot(max_context_tokens=1000)
+
+    assert snapshot.used_tokens > 0
+    assert snapshot.max_context_tokens == 1000
+    assert snapshot.usage_ratio is not None
+    assert 0 < snapshot.usage_ratio < 1
+    assert snapshot.remaining_tokens == 1000 - snapshot.used_tokens
+
+
 @pytest.mark.asyncio
 async def test_agent_auto_compacts_before_model_call() -> None:
     model = CompactingModel()

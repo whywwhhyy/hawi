@@ -747,13 +747,29 @@ class CoreRuntime:
                 "queue_lengths": {"normal": 0, "high_prio": 0, "urgent": 0},
                 "model_name": self.model_name,
             }
-        return {
+        payload = {
             "ready": True,
             "scheduler_state": self._scheduler.state.name,
             "agent_state": self._scheduler._executor.state.name,
             "queue_lengths": self._scheduler.get_queue_lengths(),
             "model_name": self.model_name,
         }
+        context_usage = self._agent_context_usage()
+        if context_usage is not None:
+            payload["context_usage"] = context_usage
+        return payload
+
+    def _agent_context_usage(self) -> dict[str, Any] | None:
+        if self._scheduler is None:
+            return None
+        getter = getattr(self._scheduler.agent, "context_usage", None)
+        if not callable(getter):
+            return None
+        snapshot = getter()
+        to_dict = getattr(snapshot, "to_dict", None)
+        if callable(to_dict):
+            return to_json_safe(to_dict())
+        return None
 
 
 def load_model_configs(extra_paths: list[str] | None = None) -> list[Path]:

@@ -252,13 +252,27 @@ describe("core event reducer", () => {
   it("updates status, metadata, retry, and error nodes", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("core.status", { scheduler_state: "RUNNING", agent_state: "RUNNING", queue_lengths: { urgent: 1, high_prio: 2, normal: 3 } }));
-    state = reduceCoreEvent(state, frame("model.metadata", { input_tokens: 2, output_tokens: 3, total_tokens: 5, latency_ms: 44 }));
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      input_tokens: 2,
+      output_tokens: 3,
+      total_tokens: 7,
+      cache_read_tokens: 1,
+      reasoning_tokens: 2,
+      context_tokens: 128,
+      max_context_tokens: 1024,
+      context_ratio: 0.125,
+      latency_ms: 44
+    }));
     state = reduceCoreEvent(state, frame("model.retry", { attempt: 1, max_retries: 3, error_type: "network", error_message: "retrying" }));
     state = reduceCoreEvent(state, frame("error", { message: "boom" }));
 
     expect(state.schedulerState).toBe("RUNNING");
     expect(state.queueLengths).toEqual({ urgent: 1, high_prio: 2, normal: 3 });
-    expect(state.metadataLines[0]).toContain("total=5");
+    expect(state.metadataLines[0]).toContain("total=7");
+    expect(state.metadataLines[0]).toContain("cache_read=1");
+    expect(state.metadataLines[0]).toContain("reasoning=2");
+    expect(state.metadataLines[0]).toContain("ctx=128/1024 (13%)");
+    expect(state.contextUsage).toEqual({ usedTokens: 128, maxContextTokens: 1024, ratio: 0.125 });
     expect(state.nodes.map((node) => node.kind)).toContain("error");
   });
 

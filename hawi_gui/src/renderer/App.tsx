@@ -14,7 +14,7 @@ import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, FileText, Plug,
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ToolProgressState } from "./state";
+import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ToolProgressState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -335,6 +335,7 @@ export default function App() {
           <StatusCell label="Scheduler" value={state.schedulerState} />
           <StatusCell label="Agent" value={state.agentState} />
           <div className="queue-status">Queue U/H/N: {state.queueLengths.urgent}/{state.queueLengths.high_prio}/{state.queueLengths.normal}</div>
+          <ContextUsageCell usage={state.contextUsage} />
         </div>
         <button className="tool-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
           <Plug size={17} /> 插件配置
@@ -487,6 +488,23 @@ function StatusCell({ label, value }: { label: string; value: string }) {
     <div className={`status-cell state-${value.toLowerCase()}`}>
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ContextUsageCell({ usage }: { usage?: ContextUsageState }) {
+  const ratio = usage?.ratio ?? 0;
+  const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(ratio * 100)}%`;
+  const used = usage ? compactNumber(usage.usedTokens) : "-";
+  const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
+  return (
+    <div className="context-status" title={`Context ${used}/${max}`}>
+      <span><Activity size={14} /> Context</span>
+      <strong>{percent}</strong>
+      <div className="context-meter" aria-hidden="true">
+        <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+      </div>
+      <small>{used}/{max}</small>
     </div>
   );
 }
@@ -1038,6 +1056,13 @@ export function thinkingExcerpt(value: string, maxChars = 120): string {
   const chars = Array.from(normalized);
   if (chars.length <= maxChars) return normalized;
   return `${chars.slice(0, maxChars).join("")}...`;
+}
+
+function compactNumber(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 10_000) return `${Math.round(value / 1000)}k`;
+  return `${Math.round(value)}`;
 }
 
 export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">): boolean {

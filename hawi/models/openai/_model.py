@@ -16,7 +16,6 @@ from hawi.models import Model
 from hawi.models import (
     MessageRequest,
     MessageResponse,
-    TokenUsage,
     ContentPart,
     DeltaPart,
     DeltaTextPart,
@@ -35,6 +34,7 @@ from hawi.errors import (
     ValidationError,
     UnknownModelError,
 )
+from hawi.models.usage import normalize_openai_usage
 from ._converters import (
     prepare_request,
     convert_openai_content_to_part,
@@ -348,21 +348,8 @@ class OpenAIModel(Model):
                     "arguments": parsed_args,
                 })
 
-        # 转换 usage (支持 prompt caching 字段)
-        usage_data = response.get("usage")
-        if usage_data:
-            usage = TokenUsage(
-                input_tokens=usage_data.get("prompt_tokens", 0),
-                output_tokens=usage_data.get("completion_tokens", 0),
-                cache_write_tokens=usage_data.get(
-                    "prompt_cache_creation_tokens"
-                ),
-                cache_read_tokens=usage_data.get(
-                    "prompt_cache_read_tokens"
-                ),
-            )
-        else:
-            usage = None
+        # 转换 usage (支持 prompt caching / reasoning token details)
+        usage = normalize_openai_usage(response.get("usage"))
 
         # 解析 refusal (模型拒绝回答的情况)
         refusal = message.get("refusal")
@@ -425,7 +412,7 @@ class OpenAIModel(Model):
         """同步流式调用 OpenAI API"""
         req = self._prepare_stream_request(request)
 
-        processor = StreamProcessor()
+        processor = StreamProcessor(expect_usage=self.require_usage)
 
         try:
             stream = self.client.chat.completions.create(**req)
@@ -438,6 +425,7 @@ class OpenAIModel(Model):
         for chunk in stream:
             chunk_dict = chunk.model_dump()
             yield from processor.process_chunk(chunk_dict)
+        yield from processor.finalize()
 
     async def _ainvoke_impl(
         self,
@@ -526,7 +514,7 @@ class OpenAIModel(Model):
         """
         req = self._prepare_stream_request(request)
 
-        processor = StreamProcessor()
+        processor = StreamProcessor(expect_usage=self.require_usage)
 
         # OpenAI async streaming: await the coroutine first, then use async with
         stream = await self.async_client.chat.completions.create(**req)
@@ -536,3 +524,5 @@ class OpenAIModel(Model):
                 chunk_dict = chunk.model_dump()
                 for delta_part in processor.process_chunk(chunk_dict):
                     yield delta_part
+            for delta_part in processor.finalize():
+                yield delta_part

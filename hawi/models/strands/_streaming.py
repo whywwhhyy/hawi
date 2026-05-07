@@ -13,6 +13,7 @@ from hawi.models import (
     DeltaToolCallPart,
     DeltaFinishPart,
 )
+from hawi.models.usage import normalize_strands_usage
 
 from ._utils import _map_strands_stop_reason
 
@@ -264,15 +265,8 @@ def _convert_strands_event_to_stream_part(
         usage = event_data.get("usage") if isinstance(event_data, dict) else None
         if usage:
             # Save usage to pending, wait for finish event
-            if isinstance(usage, dict):
-                new_usage = {
-                    "input_tokens": usage.get("inputTokens", 0),
-                    "output_tokens": usage.get("outputTokens", 0),
-                }
-                if "cacheWriteInputTokens" in usage:
-                    new_usage["cache_write_tokens"] = usage["cacheWriteInputTokens"]
-                if "cacheReadInputTokens" in usage:
-                    new_usage["cache_read_tokens"] = usage["cacheReadInputTokens"]
+            new_usage = normalize_strands_usage(usage)
+            if new_usage is not None:
                 state["pending_usage"] = new_usage
 
     # Retain backward compatibility for old custom event format

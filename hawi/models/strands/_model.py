@@ -20,7 +20,6 @@ from hawi.models import (
     ReasoningPart,
     DeltaPart,
     TextPart,
-    TokenUsage,
     ToolCallPart,
     ToolChoice,
     ToolDefinition,
@@ -31,6 +30,7 @@ from hawi.models import (
     DeltaToolCallPart,
     DeltaFinishPart,
 )
+from hawi.models.usage import normalize_strands_usage
 
 from ._converters import (
     _convert_content_to_strands,
@@ -170,15 +170,7 @@ class StrandsModel(Model):
         # so no need to handle separately here
 
         # Extract usage (Strands uses camelCase field names)
-        usage = None
-        if "usage" in response and response["usage"]:
-            usage_data = response["usage"]
-            usage = TokenUsage(
-                input_tokens=usage_data.get("inputTokens", 0),
-                output_tokens=usage_data.get("outputTokens", 0),
-                cache_write_tokens=usage_data.get("cacheWriteInputTokens"),
-                cache_read_tokens=usage_data.get("cacheReadInputTokens"),
-            )
+        usage = normalize_strands_usage(response.get("usage"))
 
         # Extract stop_reason
         stop_reason = response.get("stop_reason")

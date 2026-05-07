@@ -68,6 +68,14 @@ from .message import (
     VideoPart,
     VideoSource,
 )
+from .usage import (
+    merge_token_usage,
+    normalize_anthropic_usage,
+    normalize_openai_usage,
+    normalize_strands_usage,
+    normalize_token_usage,
+    usage_total,
+)
 from .openai import OpenAIModel
 from .anthropic import AnthropicModel
 from .deepseek import DeepSeekModel
@@ -165,6 +173,12 @@ __all__ = [
     "MessageMetadata",
     "ToolDefinition",
     "ToolChoice",
+    "merge_token_usage",
+    "normalize_anthropic_usage",
+    "normalize_openai_usage",
+    "normalize_strands_usage",
+    "normalize_token_usage",
+    "usage_total",
     # Model implementations
     "OpenAIModel",
     "AnthropicModel",

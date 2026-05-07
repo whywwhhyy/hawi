@@ -64,7 +64,8 @@ button:disabled {
 }
 
 .status-cell,
-.queue-status {
+.queue-status,
+.context-status {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -85,7 +86,46 @@ button:disabled {
 }
 
 .queue-status {
+  border-right: 1px solid #d7dcdd;
+}
+
+.context-status {
+  position: relative;
+  min-width: 172px;
+  justify-content: flex-start;
+  gap: 7px;
   border-right: 0;
+  font-size: 12px;
+}
+
+.context-status span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #49575d;
+}
+
+.context-status strong {
+  color: #176b5d;
+}
+
+.context-status small {
+  color: #69777d;
+  font-size: 11px;
+}
+
+.context-meter {
+  flex: 1 1 40px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3e8e9;
+}
+
+.context-meter span {
+  display: block;
+  height: 100%;
+  background: #237a68;
 }
 
 .tool-button,

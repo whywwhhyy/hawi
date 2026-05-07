@@ -18,8 +18,15 @@ class TokenUsage(TypedDict):
 
     input_tokens: int
     output_tokens: int
+    total_tokens: NotRequired[int | None]
     cache_write_tokens: NotRequired[int | None]  # Prompt caching: tokens written to cache
     cache_read_tokens: NotRequired[int | None]  # Prompt caching: tokens read from cache
+    cache_miss_tokens: NotRequired[int | None]  # Prompt/cache tokens that missed provider cache
+    reasoning_tokens: NotRequired[int | None]  # Hidden/visible reasoning tokens when reported
+    input_audio_tokens: NotRequired[int | None]
+    output_audio_tokens: NotRequired[int | None]
+    accepted_prediction_tokens: NotRequired[int | None]
+    rejected_prediction_tokens: NotRequired[int | None]
 
 
 # =============================================================================

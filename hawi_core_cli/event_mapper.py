@@ -6,6 +6,7 @@ from typing import Any
 
 import hawi.events
 from hawi.events import Event
+from hawi.models.usage import usage_total
 
 from .protocol import make_error, make_frame, to_json_safe
 
@@ -117,7 +118,7 @@ class SemanticEventMapper:
             usage = dict(getattr(event, "usage", None) or {})
             input_tokens = int(usage.get("input_tokens", 0) or 0)
             output_tokens = int(usage.get("output_tokens", 0) or 0)
-            total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
+            total_tokens = usage_total(usage)
             return [
                 make_frame(
                     "model.metadata",
@@ -128,7 +129,18 @@ class SemanticEventMapper:
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
                         "total_tokens": total_tokens,
+                        "cache_write_tokens": usage.get("cache_write_tokens"),
+                        "cache_read_tokens": usage.get("cache_read_tokens"),
+                        "cache_miss_tokens": usage.get("cache_miss_tokens"),
+                        "reasoning_tokens": usage.get("reasoning_tokens"),
+                        "input_audio_tokens": usage.get("input_audio_tokens"),
+                        "output_audio_tokens": usage.get("output_audio_tokens"),
+                        "accepted_prediction_tokens": usage.get("accepted_prediction_tokens"),
+                        "rejected_prediction_tokens": usage.get("rejected_prediction_tokens"),
                         "latency_ms": getattr(event, "latency_ms", None),
+                        "context_tokens": getattr(event, "context_tokens", None),
+                        "max_context_tokens": getattr(event, "max_context_tokens", None),
+                        "context_ratio": getattr(event, "context_ratio", None),
                     },
                 )
             ]

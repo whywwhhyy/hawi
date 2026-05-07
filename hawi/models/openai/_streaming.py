@@ -10,7 +10,8 @@ import json
 import logging
 from typing import Any, Iterator
 
-from hawi.models.message import DeltaPart
+from hawi.models.message import DeltaPart, TokenUsage
+from hawi.models.usage import normalize_openai_usage
 
 logger = logging.getLogger(__name__)
 
@@ -29,20 +30,23 @@ class StreamProcessor:
                 yield part
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, expect_usage: bool = False) -> None:
         # 当前块状态
         self._current_block_type: str | None = None
         self._current_block_index: int = 0
         self._tool_call_states: dict[int, dict[str, Any]] = {}
+        self._expect_usage = expect_usage
         # 累积内容
         self._text_buffer: str = ""
         self._thinking_buffer: str = ""
         # 存储每个块的完整内容
         self._block_contents: dict[int, dict[str, Any]] = {}
         # 存储 usage 数据，在 finish 时一起发送
-        self._pending_usage: dict[str, int] | None = None
+        self._pending_usage: TokenUsage | None = None
         # 存储停止原因
         self._stop_reason: str | None = None
+        self._pending_finish_reason: str | None = None
+        self._finish_emitted = False
 
     @property
     def stop_reason(self) -> str | None:
@@ -50,7 +54,7 @@ class StreamProcessor:
         return self._stop_reason
 
     @property
-    def usage(self) -> dict[str, int] | None:
+    def usage(self) -> TokenUsage | None:
         """获取 usage 数据"""
         return self._pending_usage
 
@@ -88,22 +92,15 @@ class StreamProcessor:
         Yields:
             DeltaPart 增量块
         """
+        usage = normalize_openai_usage(chunk_dict.get("usage"))
+        if usage is not None:
+            self._pending_usage = usage
+
         choices = chunk_dict.get("choices", [])
         if not choices:
-            # 某些 chunk 可能没有 choices（如 usage-only chunk）
-            # 存储 usage 数据，在 finish 时一起发送
-            if chunk_dict.get("usage"):
-                usage = chunk_dict["usage"]
-                # 标准化 usage 字段名
-                self._pending_usage = {
-                    "input_tokens": usage.get("prompt_tokens", 0),
-                    "output_tokens": usage.get("completion_tokens", 0),
-                }
-                # 添加可选字段
-                if "prompt_cache_creation_tokens" in usage:
-                    self._pending_usage["cache_write_tokens"] = usage["prompt_cache_creation_tokens"]
-                if "prompt_cache_read_tokens" in usage:
-                    self._pending_usage["cache_read_tokens"] = usage["prompt_cache_read_tokens"]
+            # 某些 chunk 没有 choices（如 OpenAI include_usage 的 usage-only chunk）。
+            if self._pending_finish_reason is not None and self._pending_usage is not None:
+                yield self._create_finish_part(self._pending_finish_reason)
             return
 
         choice = choices[0]
@@ -261,12 +258,26 @@ class StreamProcessor:
             elif self._current_block_type == "tool_use":
                 yield from self._close_tool_blocks()
 
-            yield {
-                "type": "finish",
-                "stop_reason": self._map_stop_reason(finish_reason),
-                "usage": self._pending_usage,
-            }
-            self._pending_usage = None
+            if self._pending_usage is not None or not self._expect_usage:
+                yield self._create_finish_part(self._stop_reason)
+            else:
+                self._pending_finish_reason = self._stop_reason
+
+    def finalize(self) -> Iterator[DeltaPart]:
+        """Emit a delayed finish part if the provider never sent usage."""
+        if self._pending_finish_reason is not None and not self._finish_emitted:
+            yield self._create_finish_part(self._pending_finish_reason)
+
+    def _create_finish_part(self, stop_reason: str) -> DeltaPart:
+        self._finish_emitted = True
+        self._pending_finish_reason = None
+        usage = self._pending_usage
+        self._pending_usage = None
+        return {
+            "type": "finish",
+            "stop_reason": stop_reason,
+            "usage": usage,
+        }
 
     def _close_text_block(self) -> Iterator[DeltaPart]:
         """关闭 text 块"""

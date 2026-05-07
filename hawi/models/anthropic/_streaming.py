@@ -41,6 +41,7 @@ from hawi.models.message import (
     DeltaToolCallPart,
     DeltaFinishPart,
 )
+from hawi.models.usage import normalize_anthropic_usage
 
 if TYPE_CHECKING:
     from anthropic import Anthropic, AsyncAnthropic
@@ -262,17 +263,7 @@ class _AnthropicStreamHandler:
             if self._stream.current_message_snapshot
             else None
         )
-        usage_dict: dict[str, int] | None = None
-        if usage:
-            usage_dict = {
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-            }
-            # Include cache-related token counts if available
-            if hasattr(usage, "cache_creation_input_tokens") and usage.cache_creation_input_tokens is not None:
-                usage_dict["cache_write_tokens"] = usage.cache_creation_input_tokens
-            if hasattr(usage, "cache_read_input_tokens") and usage.cache_read_input_tokens is not None:
-                usage_dict["cache_read_tokens"] = usage.cache_read_input_tokens
+        usage_dict = normalize_anthropic_usage(usage)
         
         return DeltaFinishPart({
             "type": "finish",

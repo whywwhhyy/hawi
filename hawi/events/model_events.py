@@ -404,6 +404,9 @@ class ModelMetadataEvent(Event):
     request_id: str
     usage: TokenUsage | None = None
     latency_ms: float | None = None
+    context_tokens: int | None = None
+    max_context_tokens: int | None = None
+    context_ratio: float | None = None
 
     @classmethod
     def create(
@@ -411,6 +414,9 @@ class ModelMetadataEvent(Event):
         request_id: str,
         usage: TokenUsage | None = None,
         latency_ms: float | None = None,
+        context_tokens: int | None = None,
+        max_context_tokens: int | None = None,
+        context_ratio: float | None = None,
     ) -> ModelMetadataEvent:
         return cls(
             type='model.metadata',
@@ -418,6 +424,9 @@ class ModelMetadataEvent(Event):
             request_id=request_id,
             usage=usage,
             latency_ms=latency_ms,
+            context_tokens=context_tokens,
+            max_context_tokens=max_context_tokens,
+            context_ratio=context_ratio,
         )
 
 

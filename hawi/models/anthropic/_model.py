@@ -19,10 +19,10 @@ from hawi.models import (
     MessageResponse,
     DeltaPart,
     TextPart,
-    TokenUsage,
     ToolCallPart,
     ReasoningPart,
 )
+from hawi.models.usage import normalize_anthropic_usage
 from hawi.errors import (
     NetworkError,
     RemoteError,
@@ -459,7 +459,7 @@ class AnthropicModel(Model):
     ) -> MessageResponse:
         """将 Anthropic 响应转换为通用格式"""
         content = response.get("content", [])
-        usage = response.get("usage", {})
+        usage = normalize_anthropic_usage(response.get("usage"))
 
         # 解析内容块
         parts: list[ContentPart] = []
@@ -500,14 +500,7 @@ class AnthropicModel(Model):
             id=response.get("id", ""),
             content=parts,
             stop_reason=map_stop_reason(response.get("stop_reason")),
-            usage=TokenUsage(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                cache_write_tokens=usage.get("cache_creation_input_tokens"),
-                cache_read_tokens=usage.get("cache_read_input_tokens"),
-            )
-            if usage
-            else None,
+            usage=usage,
         )
 
     # =======================================================================
