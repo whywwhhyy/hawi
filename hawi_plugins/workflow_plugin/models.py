@@ -279,6 +279,8 @@ class NodeExecution:
     attempt_count: int = 0
     started_at: float | None = None
     completed_at: float | None = None
+    selected_next_node_id: str | None = None
+    routing_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -289,6 +291,8 @@ class NodeExecution:
             "attempt_count": self.attempt_count,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "selected_next_node_id": self.selected_next_node_id,
+            "routing_reason": self.routing_reason,
         }
 
 

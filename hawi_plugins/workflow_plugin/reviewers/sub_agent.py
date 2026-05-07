@@ -76,6 +76,12 @@ class SubAgentReviewer(Reviewer):
 
         # Build upstream context
         upstream_context = self._build_upstream_context(run, node)
+        routing_context = "(no route selected)"
+        if execution.selected_next_node_id:
+            routing_context = (
+                f"{execution.selected_next_node_id}\n"
+                f"Reason: {execution.routing_reason or '(none provided)'}"
+            )
 
         review_message = f"""Review the following workflow node output.
 
@@ -91,6 +97,9 @@ class SubAgentReviewer(Reviewer):
 ---
 {execution.output or "(empty)"}
 ---
+
+## Agent's selected next gate:
+{routing_context}
 
 ## Review criteria:
 {self._review_prompt}

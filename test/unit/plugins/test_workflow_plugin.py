@@ -1,4 +1,4 @@
-"""Unit tests for WorkflowPlugin — simplified: 6 agent tools + 2 human APIs."""
+"""Unit tests for WorkflowPlugin — simplified agent tools + human APIs."""
 
 from __future__ import annotations
 
@@ -43,6 +43,31 @@ def _make_two_node_wf() -> Workflow:
     wf.add_node(WorkflowNode(id="research", name="Research", prompt="Research.", review=ReviewConfig(type="logger")))
     wf.add_node(WorkflowNode(id="write", name="Write", prompt="Write.", review=ReviewConfig(type="logger")))
     wf.add_edge(WorkflowEdge("research", "write"))
+    return wf
+
+
+def _make_branching_wf() -> Workflow:
+    wf = Workflow(id="wf_branch", name="Branch WF", start_node_id="research")
+    wf.add_node(WorkflowNode(
+        id="research",
+        name="Research",
+        prompt="Research and decide the path.",
+        review=ReviewConfig(type="logger"),
+    ))
+    wf.add_node(WorkflowNode(
+        id="write",
+        name="Write",
+        prompt="Write the final answer.",
+        review=ReviewConfig(type="logger"),
+    ))
+    wf.add_node(WorkflowNode(
+        id="escalate",
+        name="Escalate",
+        prompt="Escalate for deeper analysis.",
+        review=ReviewConfig(type="logger"),
+    ))
+    wf.add_edge(WorkflowEdge("research", "write", label="ready"))
+    wf.add_edge(WorkflowEdge("research", "escalate", label="needs_more_work"))
     return wf
 
 
@@ -139,6 +164,67 @@ class TestCompleteNode:
         assert r.output["review_pending"] is True
 
 
+class TestSelectNextNode:
+    def test_no_active_run(self):
+        plugin = WorkflowPlugin()
+        r = plugin.select_next_workflow_node(
+            next_node_id="write",
+            reason="The research is complete.",
+        )
+        assert not r.success
+        assert "No active workflow" in r.error
+
+    def test_requires_reason(self):
+        plugin = WorkflowPlugin()
+        _inject_workflow(plugin, _make_branching_wf())
+        plugin.run_workflow("Branch WF")
+
+        r = plugin.select_next_workflow_node(next_node_id="write", reason="  ")
+
+        assert not r.success
+        assert "reason" in r.error
+
+    def test_rejects_non_downstream_node(self):
+        plugin = WorkflowPlugin()
+        wf = _make_branching_wf()
+        wf.add_node(WorkflowNode(
+            id="archive",
+            name="Archive",
+            prompt="Archive.",
+            review=ReviewConfig(type="logger"),
+        ))
+        _inject_workflow(plugin, wf)
+        plugin.run_workflow("Branch WF")
+
+        r = plugin.select_next_workflow_node(
+            next_node_id="archive",
+            reason="This should not be reachable directly.",
+        )
+
+        assert not r.success
+        assert "not an immediate downstream" in r.error
+
+    def test_success_records_routing_decision(self):
+        plugin = WorkflowPlugin()
+        _inject_workflow(plugin, _make_branching_wf())
+        plugin.run_workflow("Branch WF")
+
+        r = plugin.select_next_workflow_node(
+            next_node_id="escalate",
+            reason="The research found an unresolved risk.",
+        )
+
+        assert r.success
+        execution = plugin._active_run.current_execution()
+        assert execution.selected_next_node_id == "escalate"
+        assert execution.routing_reason == "The research found an unresolved risk."
+
+        status = plugin.get_workflow_status()
+        current = status.output["node_executions"]["research"]
+        assert current["selected_next_node_id"] == "escalate"
+        assert current["routing_reason"] == "The research found an unresolved risk."
+
+
 class TestGetStatus:
     def test_idle_and_running(self):
         plugin = WorkflowPlugin()
@@ -178,6 +264,21 @@ class TestClone:
         clone = plugin.clone()
         assert clone._workflow.name == "Test WF"
         assert clone._active_run.workflow_id == plugin._active_run.workflow_id
+
+    def test_clone_preserves_routing_decision(self):
+        plugin = WorkflowPlugin()
+        _inject_workflow(plugin, _make_branching_wf())
+        plugin.run_workflow("Branch WF")
+        plugin.select_next_workflow_node(
+            next_node_id="escalate",
+            reason="Needs a deeper pass.",
+        )
+
+        clone = plugin.clone()
+        execution = clone._active_run.current_execution()
+        assert execution.selected_next_node_id == "escalate"
+        assert execution.routing_reason == "Needs a deeper pass."
+
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -298,6 +399,28 @@ class TestHooks:
         assert "PASSED" in hr.message
         assert plugin._active_run.current_node_id == "step2"
         assert plugin._active_run.node_executions["step1"].status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_gate_guard_uses_agent_selected_next_node(self):
+        plugin = WorkflowPlugin()
+        _inject_workflow(plugin, _make_branching_wf())
+        plugin.run_workflow("Branch WF")
+        plugin.select_next_workflow_node(
+            next_node_id="escalate",
+            reason="The research found an unresolved risk.",
+        )
+
+        hr = await plugin.gate_guard(
+            MagicMock(), "complete_workflow_node",
+            {"output": "Research found an unresolved risk."},
+            ToolResult(success=True, output={}), MagicMock(),
+        )
+
+        assert hr is not None
+        assert "Route selected by agent" in hr.message
+        assert plugin._active_run.current_node_id == "escalate"
+        assert plugin._active_run.node_executions["research"].status == "completed"
+        assert plugin._active_run.node_executions["write"].status == "pending"
 
     @pytest.mark.asyncio
     async def test_gate_guard_ignores_other_tools(self):

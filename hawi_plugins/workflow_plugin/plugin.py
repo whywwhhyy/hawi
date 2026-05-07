@@ -56,10 +56,11 @@ class WorkflowPlugin(HawiPlugin):
     - ``after_tool_calling``: intercepts ``complete_workflow_node``, runs the
       configured reviewer, and either advances or sends feedback.
 
-    Agent tools (7):
+    Agent tools (8):
     - ``read_workflow_manual`` — read the workflow YAML format & usage guide
     - ``load_workflow``, ``list_workflows`` — discover & validate YAML workflows
     - ``run_workflow`` — start executing a workflow
+    - ``select_next_workflow_node`` — choose the next downstream gate
     - ``complete_workflow_node`` — submit gate output (★ core)
     - ``get_workflow_status``, ``get_pending_reviews`` — inspect state
 
@@ -106,6 +107,8 @@ class WorkflowPlugin(HawiPlugin):
                         review_records=list(ne.review_records),
                         attempt_count=ne.attempt_count,
                         started_at=ne.started_at, completed_at=ne.completed_at,
+                        selected_next_node_id=ne.selected_next_node_id,
+                        routing_reason=ne.routing_reason,
                     )
                     for nid, ne in self._active_run.node_executions.items()
                 },
@@ -371,6 +374,87 @@ class WorkflowPlugin(HawiPlugin):
         return ToolResult(success=True, output=output)
 
     @tool(
+        name="select_next_workflow_node",
+        description=(
+            "Choose which immediate downstream workflow gate should run after "
+            "the current gate is approved, and explain why. This does not "
+            "advance the workflow or skip review; you still must call "
+            "complete_workflow_node with the current gate output."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "next_node_id": {
+                    "type": "string",
+                    "description": "ID of an immediate downstream gate to run next.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why this next gate is the right route.",
+                },
+            },
+            "required": ["next_node_id", "reason"],
+        },
+    )
+    def select_next_workflow_node(self, next_node_id: str, reason: str) -> ToolResult:
+        """Record the agent's routing choice for the current gate."""
+        run = self._active_run
+        wf = self._workflow
+        if not run or not wf:
+            return ToolResult(
+                success=False,
+                error="No active workflow. Use run_workflow to start one.",
+            )
+        if run.status != "running":
+            return ToolResult(
+                success=False,
+                error=f"Cannot select next node while workflow status is '{run.status}'.",
+            )
+
+        node = self._current_node()
+        execution = run.current_execution()
+        if node is None or execution is None:
+            return ToolResult(success=False, error="No current workflow node.")
+
+        next_node_id = next_node_id.strip()
+        reason = reason.strip()
+        if not next_node_id:
+            return ToolResult(success=False, error="next_node_id is required.")
+        if not reason:
+            return ToolResult(success=False, error="reason is required.")
+
+        downstream = wf.downstream_node_ids(node.id)
+        if not downstream:
+            return ToolResult(
+                success=False,
+                error=f"Current node '{node.id}' is terminal; there is no next node to select.",
+            )
+        if next_node_id not in downstream:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Node '{next_node_id}' is not an immediate downstream node "
+                    f"of '{node.id}'. Available next nodes: {downstream}"
+                ),
+            )
+
+        execution.selected_next_node_id = next_node_id
+        execution.routing_reason = reason
+        self._sync_artifact(run)
+
+        selected = wf.nodes[next_node_id]
+        return ToolResult(success=True, output={
+            "current_node_id": node.id,
+            "selected_next_node_id": next_node_id,
+            "selected_next_node_name": selected.name,
+            "routing_reason": reason,
+            "message": (
+                f"Next gate selected: {selected.name} ({next_node_id}). "
+                "This route will be used after the current gate is approved."
+            ),
+        })
+
+    @tool(
         name="complete_workflow_node",
         description=(
             "Submit your output for the current workflow gate. Your output will be "
@@ -396,6 +480,7 @@ class WorkflowPlugin(HawiPlugin):
         node = self._current_node()
         if node is None:
             return ToolResult(success=False, error="No current node.")
+        execution = run.current_execution()
         if not output.strip():
             return ToolResult(success=False, error="Output cannot be empty.")
 
@@ -403,6 +488,8 @@ class WorkflowPlugin(HawiPlugin):
             "node_id": node.id, "node_name": node.name,
             "output_submitted": True, "output_length": len(output),
             "output_preview": output[:200] + ("..." if len(output) > 200 else ""),
+            "selected_next_node_id": execution.selected_next_node_id if execution else None,
+            "routing_reason": execution.routing_reason if execution else "",
             "review_pending": True,
         })
 
@@ -445,6 +532,8 @@ class WorkflowPlugin(HawiPlugin):
                         "node_id": nid, "status": ne.status,
                         "attempt": ne.attempt_count,
                         "output_preview": (ne.output or "")[:200],
+                        "selected_next_node_id": ne.selected_next_node_id,
+                        "routing_reason": ne.routing_reason,
                     })
         return ToolResult(success=True, output={
             "pending_count": len(pending),
@@ -513,6 +602,56 @@ class WorkflowPlugin(HawiPlugin):
         )]
 
     async def _on_approved(self, agent, run, node, execution, decision) -> HookResult | None:
+        output = (execution.output or "").strip()
+
+        # ── Detect STATUS: FAILED — execution-level failure with retry ──
+        # This allows logger-reviewed gates to signal failure and retry,
+        # respecting the node's max_retries before giving up gracefully.
+        if "STATUS: FAILED" in output:
+            if execution.attempt_count >= node.max_retries:
+                execution.status = "rejected"
+                run.status = "failed"
+                run.completed_at = time.time()
+                self._sync_artifact(run)
+                self.emit_plugin_event("plugin.event", {
+                    "event_name": "workflow.failed", "run_id": run.id,
+                    "node_id": node.id, "node_name": node.name,
+                    "title": f"Workflow failed: {self._workflow.name}",
+                    "message": (
+                        f"Gate '{node.name}' failed after "
+                        f"{execution.attempt_count} attempts."
+                    ),
+                })
+                return HookResult.reinvoke(
+                    f"Gate '{node.name}' FAILED after {execution.attempt_count} "
+                    f"attempts (max {node.max_retries}). ❌\n\n"
+                    f"Workflow '{self._workflow.name}' has been stopped.\n\n"
+                    f"Last output:\n{output[:2000]}\n\n"
+                    f"Please fix the issue manually, then run the workflow again."
+                )
+
+            # Retry — reset execution to active
+            execution.status = "active"
+            self._sync_artifact(run)
+            self.emit_plugin_event("plugin.event", {
+                "event_name": "workflow.node.failed", "run_id": run.id,
+                "node_id": node.id, "node_name": node.name,
+                "attempt": execution.attempt_count,
+                "title": f"Gate failed: {node.name}",
+                "message": (
+                    f"Gate '{node.name}' failed "
+                    f"(attempt {execution.attempt_count}/{node.max_retries})."
+                ),
+            })
+            return HookResult.reinvoke(
+                f"Gate '{node.name}' encountered a failure. 🔄\n\n"
+                f"Attempt {execution.attempt_count}/{node.max_retries}.\n\n"
+                f"Output indicated failure:\n{output[:2000]}\n\n"
+                f"Please review the failure reason above, fix the issue, "
+                f"and call complete_workflow_node again."
+            )
+
+        # ── Normal approval path (gate passed successfully) ──
         execution.status = "completed"
         execution.completed_at = time.time()
         if decision.modified_output:
@@ -520,10 +659,25 @@ class WorkflowPlugin(HawiPlugin):
         run.global_context[node.id] = execution.output
         run.status = "running"
 
+        downstream = self._workflow.downstream_node_ids(node.id)
+        route_source = "reviewer" if decision.next_node_id else ""
         next_node_id = decision.next_node_id
+        routing_reason = ""
+        if next_node_id is None and execution.selected_next_node_id:
+            next_node_id = execution.selected_next_node_id
+            routing_reason = execution.routing_reason
+            route_source = "agent"
         if next_node_id is None:
-            downstream = self._workflow.downstream_node_ids(node.id)
             next_node_id = downstream[0] if downstream else None
+            route_source = "default" if next_node_id else ""
+
+        if route_source == "agent" and next_node_id not in downstream:
+            run.status = "failed"
+            self._sync_artifact(run)
+            return HookResult.reinvoke(
+                f"Workflow error: selected next node '{next_node_id}' is no longer "
+                f"an immediate downstream node of '{node.id}'. Workflow failed."
+            )
 
         if next_node_id is None:
             run.status = "completed"
@@ -554,12 +708,21 @@ class WorkflowPlugin(HawiPlugin):
         self.emit_plugin_event("plugin.event", {
             "event_name": "workflow.node.completed", "run_id": run.id,
             "node_id": node.id, "node_name": node.name, "next_node": next_node_id,
+            "route_source": route_source,
+            "routing_reason": routing_reason,
             "title": f"Gate passed: {node.name}",
             "message": f"Gate '{node.name}' approved. Entering: {next_node.name}",
         })
+        route_note = ""
+        if route_source == "agent" and routing_reason:
+            route_note = (
+                f"\n\nRoute selected by agent: {next_node.name} ({next_node_id})"
+                f"\nReason: {routing_reason}"
+            )
         return HookResult.reinvoke(
             f"Gate '{node.name}' PASSED. ✅\n\n"
-            f"Entering next gate: {next_node.name}\n\nTask: {next_node.prompt}"
+            f"Entering next gate: {next_node.name}{route_note}\n\n"
+            f"Task: {next_node.prompt}"
         )
 
     def _on_rejected(self, run, node, execution, decision) -> HookResult | None:
@@ -614,6 +777,7 @@ class WorkflowPlugin(HawiPlugin):
             "- list_workflows: discover saved workflows\n"
             "- load_workflow(name): load & validate a YAML workflow\n"
             "- run_workflow(name, initial_input?): start execution\n"
+            "- select_next_workflow_node(next_node_id, reason): choose a downstream route\n"
             "- complete_workflow_node(output): submit gate output for review\n"
             "- get_workflow_status: inspect current execution state\n"
             "- get_pending_reviews: check if reviews are pending\n"
@@ -633,7 +797,47 @@ class WorkflowPlugin(HawiPlugin):
         upstream_text = "\n\n".join(upstream_parts) if upstream_parts else "(none)"
 
         downstream = wf.downstream_node_ids(node.id) if wf else []
-        downstream_text = ", ".join(downstream) if downstream else "(terminal gate)"
+        if wf and downstream:
+            downstream_lines: list[str] = []
+            for nid in downstream:
+                next_node = wf.nodes.get(nid)
+                if next_node is None:
+                    downstream_lines.append(f"- {nid}")
+                    continue
+                edge = next(
+                    (
+                        edge for edge in wf.edges
+                        if edge.from_node_id == node.id and edge.to_node_id == nid
+                    ),
+                    None,
+                )
+                details = []
+                if edge and edge.label:
+                    details.append(f"label: {edge.label}")
+                if edge and edge.condition:
+                    details.append(f"condition: {edge.condition}")
+                suffix = f" ({'; '.join(details)})" if details else ""
+                downstream_lines.append(
+                    f"- {next_node.name} ({nid}){suffix}: "
+                    f"{next_node.description or next_node.prompt[:120]}"
+                )
+            downstream_text = "\n".join(downstream_lines)
+        else:
+            downstream_text = "(terminal gate)"
+        routing_instruction = ""
+        if len(downstream) > 1:
+            routing_instruction = (
+                "\nMultiple next gates are available. Before calling "
+                "`complete_workflow_node`, call `select_next_workflow_node` "
+                "with your chosen downstream `next_node_id` and a concise "
+                "reason based on this gate's result.\n"
+            )
+        elif len(downstream) == 1:
+            routing_instruction = (
+                "\nThere is one downstream gate. You may call "
+                "`select_next_workflow_node` if you want to record why that "
+                "route is appropriate; otherwise the workflow will use it by default.\n"
+            )
 
         completed = [
             f"- {nid}: {ne.status}"
@@ -660,7 +864,8 @@ class WorkflowPlugin(HawiPlugin):
             f"If rejected, you will receive feedback and must revise.\n"
             f"You have {node.max_retries} attempt(s) "
             f"(current: {execution.attempt_count if execution else 0}).\n\n"
-            f"### After Passing: {downstream_text}\n\n"
+            f"### Available Next Gates After Passing:\n{downstream_text}\n"
+            f"{routing_instruction}\n"
             f"⚠️ You CANNOT skip this gate. You CANNOT move to the next gate\n"
             f"without calling complete_workflow_node and passing review.\n"
             f"{GATE_PROMPT_END}\n"

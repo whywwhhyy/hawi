@@ -84,13 +84,15 @@ edges:                      # Directed connections between gates
 
 ## Tools
 
-### Agent Tools (6)
+### Agent Tools (8)
 
 | Tool | When to use |
 |------|------------|
+| `read_workflow_manual` | Read this guide before writing/loading workflow YAML |
 | `list_workflows` | Discover available workflows on disk |
 | `load_workflow(name)` | Load & validate a YAML file before running |
 | `run_workflow(name, initial_input?)` | Start executing a workflow |
+| `select_next_workflow_node(next_node_id, reason)` | Choose an immediate downstream gate and record why |
 | `complete_workflow_node(output)` | Submit your output for the current gate |
 | `get_workflow_status` | Check progress: which gates are done/active/pending |
 | `get_pending_reviews` | Check if any gates are awaiting review |
@@ -121,9 +123,10 @@ Agent writes YAML → load_workflow validates → fix errors → load again → 
 run_workflow("My Workflow", initial_input="Review file X")
   → Gate prompt injected into system prompt
   → Agent works on the gate's task
+  → If multiple downstream gates are available, agent calls select_next_workflow_node(...)
   → Agent calls complete_workflow_node(output="...")
   → Output is reviewed (logger/sub_agent/human)
-  → If approved: advances to next gate (or completes)
+  → If approved: advances to the selected gate, the default downstream gate, or completes
   → If rejected: agent receives feedback and must revise
 ```
 
@@ -131,6 +134,7 @@ run_workflow("My Workflow", initial_input="Review file X")
 
 - Use `get_workflow_status` to see which gates are done, active, or pending.
 - Previous gate outputs are available as context in the current gate's prompt.
+- For branching workflows, call `select_next_workflow_node(next_node_id, reason)` before `complete_workflow_node`.
 - Use `get_pending_reviews` to check if a gate is waiting for human approval.
 
 ### 4. Handling Rejection

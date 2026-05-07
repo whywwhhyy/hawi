@@ -66,6 +66,8 @@ class HumanReviewer(Reviewer):
                 "node_prompt": node.prompt,
                 "output": execution.output,
                 "output_preview": (execution.output or "")[:500],
+                "selected_next_node_id": execution.selected_next_node_id,
+                "routing_reason": execution.routing_reason,
                 "attempt": execution.attempt_count,
                 "max_retries": node.max_retries,
                 "title": f"Review required: {node.name}",
