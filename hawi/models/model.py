@@ -367,6 +367,18 @@ class Model(ABC):
         else:
             self._configured_steer_merge_mode = None
 
+    def configure_max_context_tokens(self, max_context_tokens: int | None) -> None:
+        """Attach Hawi-level context window metadata to this model instance."""
+        if max_context_tokens is not None and max_context_tokens > 0:
+            self._max_context_tokens = max_context_tokens
+        else:
+            self._max_context_tokens = None
+
+    def get_max_context_tokens(self) -> int | None:
+        """Return configured context window size for this model, if known."""
+        value = getattr(self, "_max_context_tokens", None)
+        return value if isinstance(value, int) and value > 0 else None
+
     def get_default_steer_merge_mode(self) -> SteerMergeMode:
         """Get the default steer lowering strategy for this model."""
         return "tool_result_assistant_template_and_user_message"

@@ -17,7 +17,7 @@ providers: 服务提供商配置列表
       field2: value2
       ...
 model_configs: 模型特定配置
-  provider_name/model_id: 配置项
+  provider_name/model_id: 配置项（也支持 Shell glob 通配符，如 "provider/*"）
     field1: value1
     field2: value2
     steer_merge_mode: tool_result_assistant_template_and_user_message
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+from fnmatch import fnmatchcase
 from pathlib import Path
 from threading import Lock
 from typing import Any, Optional, Union
@@ -84,11 +85,13 @@ class ModelOverrideConfig(BaseModel):
     model_id: str
     properties: dict[str,Any]
     steer_merge_mode: str | None = None
+    max_context_tokens: int | None = None
 
 class ModelConfig(BaseModel):
     adapter: str
     properties: dict[str, Any]
     steer_merge_mode: str | None = None
+    max_context_tokens: int | None = None
 
 class ModelRegistry:
     """Model Registry 单例类
@@ -128,6 +131,7 @@ class ModelRegistry:
         self._providers: list[ModelProviderConfig] = []
         self._provider_groups: dict[str, list[ModelProviderConfig]] = {}
         self._model_config_overrides: dict[str, ModelOverrideConfig] = {}
+        self._model_config_wildcard_overrides: list[ModelOverrideConfig] = []
 
         self._auto_load_needed: bool = True
 
@@ -292,39 +296,98 @@ class ModelRegistry:
             properties: 实例化参数
             quiet: 是否静默（不输出覆盖警告）
         """
-        provider,model_id = name.split('/')
+        provider, model_id = self._split_model_name(name)
 
-        if name in self._model_config_overrides and not quiet:
+        is_wildcard = self._is_wildcard_model_config_name(name)
+        if not is_wildcard and name in self._model_config_overrides and not quiet:
             print(f"[ModelRegistry] Model '{name}' overridden")
 
-        normalized_properties, steer_merge_mode = self._normalize_model_override(properties)
+        normalized_properties, steer_merge_mode, max_context_tokens = self._normalize_model_override(properties)
 
-        self._model_config_overrides[name] = ModelOverrideConfig(
+        override = ModelOverrideConfig(
             provider=provider,
             model_id=model_id,
             properties=normalized_properties,
             steer_merge_mode=steer_merge_mode,
+            max_context_tokens=max_context_tokens,
         )
+        if is_wildcard:
+            self._model_config_wildcard_overrides.append(override)
+        else:
+            self._model_config_overrides[name] = override
+
+    @staticmethod
+    def _split_model_name(name: str) -> tuple[str, str]:
+        """Split provider/model while allowing slashes inside model ids."""
+        if "/" not in name:
+            raise ValueError("Model config name must use provider/model format")
+        provider, model_id = name.split("/", 1)
+        if not provider or not model_id:
+            raise ValueError("Model config name must use provider/model format")
+        return provider, model_id
+
+    @staticmethod
+    def _is_wildcard_model_config_name(name: str) -> bool:
+        """Whether a model config name uses shell-style glob syntax."""
+        return any(ch in name for ch in "*?[")
 
     def _normalize_model_override(
         self,
         override: dict[str, Any],
-    ) -> tuple[dict[str, Any], str | None]:
-        """Split a model override into provider params and steer config."""
-        if "properties" not in override and "steer_merge_mode" not in override:
-            return dict(override), None
+    ) -> tuple[dict[str, Any], str | None, int | None]:
+        """Split a model override into provider params and Hawi metadata."""
+        if (
+            "properties" not in override
+            and "steer_merge_mode" not in override
+            and "max_context_tokens" not in override
+        ):
+            properties = dict(override)
+            max_context_tokens = self._pop_max_context_tokens(properties)
+            return properties, None, max_context_tokens
 
         properties = dict(override.get("properties") or {})
         steer_merge_mode = override.get("steer_merge_mode")
+        max_context_tokens = self._coerce_max_context_tokens(
+            override.get("max_context_tokens")
+        )
         for key, value in override.items():
-            if key not in {"properties", "steer_merge_mode"}:
+            if key not in {"properties", "steer_merge_mode", "max_context_tokens"}:
                 properties[key] = value
-        return properties, steer_merge_mode
+        if max_context_tokens is None:
+            max_context_tokens = self._pop_max_context_tokens(properties)
+        return properties, steer_merge_mode, max_context_tokens
+
+    @staticmethod
+    def _coerce_max_context_tokens(value: Any) -> int | None:
+        """Normalize max_context_tokens values from YAML or CLI overrides."""
+        if value is None:
+            return None
+        try:
+            tokens = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("max_context_tokens must be a positive integer")
+        if tokens <= 0:
+            raise ValueError("max_context_tokens must be a positive integer")
+        return tokens
+
+    def _pop_max_context_tokens(self, properties: dict[str, Any]) -> int | None:
+        """Remove Hawi context metadata from provider params."""
+        if "max_context_tokens" not in properties:
+            return None
+        return self._coerce_max_context_tokens(properties.pop("max_context_tokens"))
 
     def unregister_model_config_override(self, name: str) -> bool:
         """注销 Model"""
         if name in self._model_config_overrides:
             del self._model_config_overrides[name]
+            return True
+        before = len(self._model_config_wildcard_overrides)
+        self._model_config_wildcard_overrides = [
+            override
+            for override in self._model_config_wildcard_overrides
+            if self._override_name(override) != name
+        ]
+        if len(self._model_config_wildcard_overrides) != before:
             return True
         return False
 
@@ -346,7 +409,7 @@ class ModelRegistry:
         """检查 model 是否存在"""
         self._ensure_auto_load()
 
-        provider,model_id = name.split('/')
+        provider, model_id = self._split_model_name(name)
         for p in self._provider_groups.get(provider, []):
             if model_id in p.model_ids:
                 return True
@@ -356,29 +419,82 @@ class ModelRegistry:
         """获取 Model 配置（动态构建）"""
         self._ensure_auto_load()
         
-        provider,model_id = name.split('/')
+        provider, model_id = self._split_model_name(name)
 
         adapter = ""
         properties = {}
+        max_context_tokens = None
         for p in self._provider_groups.get(provider, []):
             if model_id in p.model_ids:
                 adapter = p.adapter
                 properties = dict(p.properties)  # Make a copy
+                max_context_tokens = self._pop_max_context_tokens(properties)
                 break
         else:
             return None
     
         steer_merge_mode = None
+        for override in self._matching_wildcard_overrides(name):
+            properties, steer_merge_mode, max_context_tokens = self._merge_model_override(
+                properties,
+                steer_merge_mode,
+                max_context_tokens,
+                override,
+            )
+
         if name in self._model_config_overrides:
             override = self._model_config_overrides[name]
-            properties.update(override.properties)
-            steer_merge_mode = override.steer_merge_mode
+            properties, steer_merge_mode, max_context_tokens = self._merge_model_override(
+                properties,
+                steer_merge_mode,
+                max_context_tokens,
+                override,
+            )
 
         return ModelConfig(
             adapter=adapter,
             properties=properties,
             steer_merge_mode=steer_merge_mode,
+            max_context_tokens=max_context_tokens,
         )
+
+    @staticmethod
+    def _override_name(override: ModelOverrideConfig) -> str:
+        """Return the full provider/model key represented by an override."""
+        return f"{override.provider}/{override.model_id}"
+
+    def _matching_wildcard_overrides(self, name: str) -> list[ModelOverrideConfig]:
+        """Return wildcard overrides matching a concrete provider/model name."""
+        return [
+            override
+            for override in self._model_config_wildcard_overrides
+            if fnmatchcase(name, self._override_name(override))
+        ]
+
+    def _merge_model_override(
+        self,
+        properties: dict[str, Any],
+        steer_merge_mode: str | None,
+        max_context_tokens: int | None,
+        override: ModelOverrideConfig,
+    ) -> tuple[dict[str, Any], str | None, int | None]:
+        """Apply one normalized override over the accumulated config."""
+        merged_properties = dict(properties)
+        merged_properties.update(override.properties)
+
+        merged_steer_merge_mode = steer_merge_mode
+        if override.steer_merge_mode is not None:
+            merged_steer_merge_mode = override.steer_merge_mode
+
+        merged_max_context_tokens = max_context_tokens
+        if override.max_context_tokens is not None:
+            merged_max_context_tokens = override.max_context_tokens
+        else:
+            property_max_context_tokens = self._pop_max_context_tokens(merged_properties)
+            if property_max_context_tokens is not None:
+                merged_max_context_tokens = property_max_context_tokens
+
+        return merged_properties, merged_steer_merge_mode, merged_max_context_tokens
 
     # ========================================================================
     # 模型创建
@@ -411,17 +527,28 @@ class ModelRegistry:
         assert adapter_class
         
         # Parse provider and model_id from name
-        provider_name, model_id = name.split('/', 1)
+        provider_name, model_id = self._split_model_name(name)
         
         # Apply overrides (model_id from config name takes precedence)
         override_steer_merge_mode = overrides.pop("steer_merge_mode", None)
+        override_max_context_tokens = self._coerce_max_context_tokens(
+            overrides.pop("max_context_tokens", None)
+        )
         properties = dict(model_config.properties)
+        property_max_context_tokens = self._pop_max_context_tokens(properties)
         properties['model_id'] = model_id
         properties.update(overrides)
+        override_property_max_context_tokens = self._pop_max_context_tokens(properties)
         
         model = adapter_class(**properties)
         model.configure_steer_merge_mode(
             override_steer_merge_mode or model_config.steer_merge_mode
+        )
+        model.configure_max_context_tokens(
+            override_max_context_tokens
+            or override_property_max_context_tokens
+            or property_max_context_tokens
+            or model_config.max_context_tokens
         )
         return model
     # ========================================================================
@@ -549,9 +676,40 @@ class ModelRegistry:
         self._providers.clear()
         self._provider_groups.clear()
         self._model_config_overrides.clear()
+        self._model_config_wildcard_overrides.clear()
         self._auto_load_needed = True
         self._register_builtin_classes()
 
 
 # 全局单例实例
 model_registry = ModelRegistry()
+
+
+def create_model(name: str, **overrides: Any) -> Model:
+    """Create a model instance using the global registry."""
+    return model_registry.create_model(name, **overrides)
+
+
+def get_model_adapter(name: str) -> type[Model] | None:
+    """Get a model adapter class using the global registry."""
+    return model_registry.get_model_adapter(name)
+
+
+def get_model_config(name: str) -> ModelConfig | None:
+    """Get model configuration using the global registry."""
+    return model_registry.get_model_config(name)
+
+
+def load_config(path: Union[str, Path], quiet: bool = False) -> None:
+    """Load model configuration using the global registry."""
+    model_registry.load_config(path, quiet=quiet)
+
+
+def list_models() -> list[str]:
+    """List all available models using the global registry."""
+    return model_registry.list_models()
+
+
+def list_providers() -> list[str]:
+    """List all registered providers using the global registry."""
+    return model_registry.list_providers()

@@ -244,6 +244,148 @@ class TestModelConfigOverride:
         assert config is not None
         assert config.steer_merge_mode == "user_message_template"
 
+    def test_wildcard_model_config_matches_multiple_providers(self):
+        """Wildcard model configs should match full provider/model names."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4", "o3-mini"],
+            {"api_key": "test"},
+            quiet=True,
+        )
+        registry.register_provider(
+            "azure",
+            "OpenAIModel",
+            ["gpt-4o"],
+            {"api_key": "test"},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "*/gpt-*",
+            {"temperature": 0.2},
+            quiet=True,
+        )
+
+        openai_config = registry.get_model_config("openai/gpt-4")
+        azure_config = registry.get_model_config("azure/gpt-4o")
+        o3_config = registry.get_model_config("openai/o3-mini")
+
+        assert openai_config is not None
+        assert azure_config is not None
+        assert o3_config is not None
+        assert openai_config.properties["temperature"] == 0.2
+        assert azure_config.properties["temperature"] == 0.2
+        assert "temperature" not in o3_config.properties
+
+    def test_wildcard_model_config_matches_model_ids_with_slashes(self):
+        """Wildcard provider/* should match model ids that contain slashes."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "siliconflow",
+            "OpenAIModel",
+            ["Pro/deepseek-ai/DeepSeek-V3.2"],
+            {"api_key": "test"},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "siliconflow/*",
+            {"temperature": 0.3, "max_context_tokens": 64_000},
+            quiet=True,
+        )
+
+        config = registry.get_model_config("siliconflow/Pro/deepseek-ai/DeepSeek-V3.2")
+
+        assert config is not None
+        assert config.properties["temperature"] == 0.3
+        assert config.max_context_tokens == 64_000
+        assert registry.has_model("siliconflow/Pro/deepseek-ai/DeepSeek-V3.2")
+
+    def test_wildcard_model_configs_merge_in_registration_order(self):
+        """Multiple wildcard matches should merge in registration order."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"api_key": "test", "temperature": 0.1},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "*/*",
+            {"temperature": 0.2, "top_p": 0.8},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "openai/*",
+            {"temperature": 0.9},
+            quiet=True,
+        )
+
+        config = registry.get_model_config("openai/gpt-4")
+
+        assert config is not None
+        assert config.properties["temperature"] == 0.9
+        assert config.properties["top_p"] == 0.8
+
+    def test_exact_model_config_overrides_wildcard_config(self):
+        """Exact model configs should apply after all wildcard configs."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"api_key": "test"},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "openai/*",
+            {"temperature": 0.9, "max_context_tokens": 32_000},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "openai/gpt-4",
+            {"temperature": 0.4, "max_context_tokens": 64_000},
+            quiet=True,
+        )
+
+        config = registry.get_model_config("openai/gpt-4")
+
+        assert config is not None
+        assert config.properties["temperature"] == 0.4
+        assert config.max_context_tokens == 64_000
+
+    def test_wildcard_model_config_does_not_add_models(self):
+        """Wildcard configs should not create new provider/model entries."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"api_key": "test"},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "missing/*",
+            {"temperature": 0.2},
+            quiet=True,
+        )
+
+        models = registry.list_models()
+        assert "openai/gpt-4" in models
+        assert "missing/gpt-4" not in models
+        assert registry.get_model_config("missing/gpt-4") is None
+
     def test_unregister_model_config_override_removes_config(self):
         """Test unregistering a model config override."""
         registry = ModelRegistry()
@@ -365,6 +507,53 @@ class TestCreateModel:
         assert model.get_configured_steer_merge_mode() == "user_message_template"
         assert "steer_merge_mode" not in model.params
 
+    def test_create_model_applies_max_context_tokens_metadata(self):
+        """max_context_tokens should configure Hawi metadata, not provider params."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {
+                "model_id": "gpt-4",
+                "api_key": "test-key",
+                "max_context_tokens": 32_000,
+            },
+            quiet=True,
+        )
+
+        model = registry.create_model("openai/gpt-4")
+
+        assert isinstance(model, OpenAIModel)
+        assert model.get_max_context_tokens() == 32_000
+        assert "max_context_tokens" not in model.params
+
+    def test_create_model_accepts_max_context_tokens_override_kwarg(self):
+        """create_model() should allow CLI/runtime context-window overrides."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"model_id": "gpt-4", "api_key": "test-key"},
+            quiet=True,
+        )
+        registry.register_model_config_override(
+            "openai/*",
+            {"max_context_tokens": 32_000},
+            quiet=True,
+        )
+
+        model = registry.create_model("openai/gpt-4", max_context_tokens=64_000)
+
+        assert isinstance(model, OpenAIModel)
+        assert model.get_max_context_tokens() == 64_000
+        assert "max_context_tokens" not in model.params
+
 
 class TestConfigLoading:
     """Tests for YAML configuration loading."""
@@ -390,6 +579,7 @@ providers:
         # Check provider was created
         assert registry.has_provider("test-provider")
         providers = registry.get_provider("test-provider")
+        assert providers is not None
         assert providers[0].adapter == "OpenAIModel"
 
     def test_load_config_with_model_configs(self, tmp_path):
@@ -444,6 +634,73 @@ model_configs:
         config = registry.get_model_config("my-provider/gpt-4")
         assert config is not None
         assert config.steer_merge_mode == "user_message_template"
+
+    def test_load_config_with_model_max_context_tokens(self, tmp_path):
+        """Test loading Hawi-only max_context_tokens metadata."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: my-provider
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: test-key
+
+model_configs:
+  my-provider/gpt-4:
+    max_context_tokens: 64000
+""")
+
+        registry.load_config(config_file, quiet=True)
+
+        config = registry.get_model_config("my-provider/gpt-4")
+        assert config is not None
+        assert config.max_context_tokens == 64_000
+        assert "max_context_tokens" not in config.properties
+
+        model = registry.create_model("my-provider/gpt-4")
+        assert isinstance(model, OpenAIModel)
+        assert model.get_max_context_tokens() == 64_000
+        assert "max_context_tokens" not in model.params
+
+    def test_load_config_with_wildcard_model_configs(self, tmp_path):
+        """Test loading wildcard model_configs from YAML in declaration order."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: my-provider
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: test-key
+      temperature: 0.1
+
+model_configs:
+  "*/*":
+    temperature: 0.2
+    top_p: 0.8
+  "my-provider/*":
+    temperature: 0.9
+    max_context_tokens: 32000
+  my-provider/gpt-4:
+    temperature: 0.4
+""")
+
+        registry.load_config(config_file, quiet=True)
+
+        config = registry.get_model_config("my-provider/gpt-4")
+        assert config is not None
+        assert config.properties["temperature"] == 0.4
+        assert config.properties["top_p"] == 0.8
+        assert config.max_context_tokens == 32_000
 
     def test_load_nonexistent_file_is_noop(self, tmp_path):
         """Test loading non-existent file does nothing."""

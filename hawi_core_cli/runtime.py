@@ -9,9 +9,9 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Literal, Protocol, Sequence, cast
 
-from hawi.agent import HawiAgent, HawiScheduler
+from hawi.agent import AutoCompactConfig, HawiAgent, HawiScheduler
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.events import Event
 from hawi.models import model_registry
@@ -29,6 +29,8 @@ from .protocol import (
 )
 
 logger = logging.getLogger(__name__)
+
+QueueKind = Literal["normal", "high_prio", "urgent"]
 
 DEFAULT_SYSTEM_PROMPT = "你是Hawi，一个通用agent"
 
@@ -161,6 +163,7 @@ class CoreRuntime:
         selected_plugins: list[str] | None = None,
         plugin_configs: dict[str, dict[str, Any]] | None = None,
         extra_tool_parameters: list[ExtraToolParameter] | None = None,
+        max_context_tokens: int | None = None,
         token: str | None = None,
         status_interval: float = 0.3,
         broadcast_queue_size: int = 1000,
@@ -172,6 +175,7 @@ class CoreRuntime:
             name: dict(cfg) for name, cfg in (plugin_configs or {}).items()
         }
         self._extra_tool_parameters = list(extra_tool_parameters or [])
+        self._max_context_tokens = max_context_tokens
         self._token = token
         self._status_interval = status_interval
 
@@ -572,7 +576,16 @@ class CoreRuntime:
         plugin_configs: dict[str, dict[str, Any]],
         context_to_restore: AgentContext | None,
     ) -> tuple[HawiScheduler, asyncio.Task, list[Any]]:
-        model = model_registry.create_model(model_name)
+        model_overrides: dict[str, Any] = {}
+        if self._max_context_tokens is not None:
+            model_overrides["max_context_tokens"] = self._max_context_tokens
+        model = model_registry.create_model(model_name, **model_overrides)
+        auto_compact = None
+        if self._max_context_tokens is not None:
+            auto_compact = AutoCompactConfig(
+                enabled=True,
+                max_context_tokens=self._max_context_tokens,
+            )
         plugins = await self._create_plugins(selected_plugins, plugin_configs)
         agent = HawiAgent(
             model=model,
@@ -580,6 +593,7 @@ class CoreRuntime:
             system_prompt=self.system_prompt,
             max_iterations=None,
             streaming=True,
+            auto_compact=auto_compact,
         )
         self._apply_extra_tool_parameters(agent)
         if context_to_restore is not None:
@@ -711,10 +725,10 @@ class CoreRuntime:
         return self._scheduler
 
     @staticmethod
-    def _queue_kind(value: Any) -> str:
+    def _queue_kind(value: Any) -> QueueKind:
         if value not in {"normal", "high_prio", "urgent"}:
             raise ValueError("queue must be one of: normal, high_prio, urgent")
-        return str(value)
+        return cast(QueueKind, value)
 
     def _ready_payload(self) -> dict[str, Any]:
         return {

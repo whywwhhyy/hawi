@@ -6,10 +6,13 @@ Provides conversation state management and request preparation.
 from __future__ import annotations
 
 import json
+import math
+import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from hawi.models.message import (
     ContentPart,
@@ -23,6 +26,93 @@ from hawi.tool.types import PendingToolCall
 
 if TYPE_CHECKING:
     from .agent import HawiAgent
+
+
+CONTEXT_COMPACTION_PROMPT = (
+    "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff "
+    "summary for another LLM that will resume the task. Include:\n"
+    "- Current progress and key decisions made\n"
+    "- Important context, constraints, or user preferences\n"
+    "- What remains to be done (clear next steps)\n"
+    "- Any critical data, examples, or references needed to continue\n\n"
+    "Be concise, structured, and focused on helping the next LLM seamlessly "
+    "continue the work."
+)
+
+CONTEXT_COMPACTION_SUMMARY_PREFIX = (
+    "Another language model started to solve this problem and produced a "
+    "summary of its work. Use this summary to build on the work that has "
+    "already been done and avoid duplicating work."
+)
+
+
+def _safe_json_dumps(value: Any) -> str:
+    """Serialize arbitrary values for approximate token estimation."""
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def estimate_text_tokens(text: str) -> int:
+    """Estimate token count from UTF-8 byte length.
+
+    This mirrors the coarse heuristic used by many agent harnesses: roughly
+    four bytes per token with a one-token floor for non-empty strings.
+    """
+    if not text:
+        return 0
+    return max(1, math.ceil(len(text.encode("utf-8")) / 4))
+
+
+def estimate_content_part_tokens(part: ContentPart) -> int:
+    """Estimate token count for one Hawi content part."""
+    part_type = part.get("type")
+    if part_type == "text":
+        return estimate_text_tokens(str(part.get("text", "")))
+    if part_type == "reasoning":
+        return estimate_text_tokens(str(part.get("reasoning") or ""))
+    if part_type == "tool_call":
+        return estimate_text_tokens(
+            f"{part.get('name', '')} {_safe_json_dumps(part.get('arguments', {}))}"
+        )
+    if part_type == "tool_result":
+        content = part.get("content", "")
+        if isinstance(content, list):
+            return estimate_content_tokens(content)
+        return estimate_text_tokens(str(content))
+    if part_type == "steer":
+        return estimate_content_tokens(list(part.get("content", [])))
+    if part_type == "image":
+        # Small fixed cost for the reference itself. Provider-specific image
+        # token accounting happens below the adapter layer.
+        return 85 + estimate_text_tokens(_safe_json_dumps(part.get("source", {})))
+    if part_type in {"document", "audio", "video", "file"}:
+        return estimate_text_tokens(_safe_json_dumps(part))
+    return estimate_text_tokens(_safe_json_dumps(part))
+
+
+def estimate_content_tokens(content: list[ContentPart] | Any) -> int:
+    """Estimate tokens for a content sequence."""
+    if not isinstance(content, list):
+        return estimate_text_tokens(str(content))
+    return sum(
+        estimate_content_part_tokens(cast(ContentPart, part))
+        for part in content
+        if isinstance(part, dict)
+    )
+
+
+def estimate_message_tokens(message: Message) -> int:
+    """Estimate token count for a model-visible message."""
+    metadata = message.get("metadata") or {}
+    tokens = metadata.get("tokens")
+    if isinstance(tokens, int) and tokens >= 0:
+        return tokens
+    # Small role/name framing overhead plus content.
+    return 4 + estimate_text_tokens(str(message.get("role", ""))) + estimate_content_tokens(
+        list(message.get("content", []))
+    )
 
 
 class ToolCallContext:
@@ -65,6 +155,29 @@ class RecoveredToolResult:
 
 
 @dataclass
+class ContextCompactionRecord:
+    """Audit record for one context compaction operation."""
+
+    summary: str
+    replaced_messages: list[Message]
+    kept_messages: int
+    tokens_before: int
+    tokens_after: int
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert the record to a JSON-serializable dictionary."""
+        return {
+            "summary": self.summary,
+            "replaced_messages": self.replaced_messages,
+            "kept_messages": self.kept_messages,
+            "tokens_before": self.tokens_before,
+            "tokens_after": self.tokens_after,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass
 class AgentContext:
     """Conversation context for agent execution.
 
@@ -80,6 +193,12 @@ class AgentContext:
     messages: list[Message] = field(default_factory=list)
     tool_definitions: list[ToolDefinition] | None = None
     system_prompt: list[ContentPart] | None = None
+
+    # Historical compaction audit records. These are intentionally kept out of
+    # model-visible context and only used for debugging/persistence.
+    compaction_records: list[ContextCompactionRecord] = field(
+        default_factory=list, repr=False, compare=False
+    )
 
     # Pending tool calls for audit mechanism
     _pending_tool_calls: dict[str, PendingToolCall] = field(
@@ -170,6 +289,27 @@ class AgentContext:
             system=self.system_prompt,
             tools=self.tool_definitions,
         )
+
+    def estimate_tokens(
+        self,
+        *,
+        include_system: bool = True,
+        include_tools: bool = True,
+    ) -> int:
+        """Estimate model-visible input tokens with a lightweight heuristic.
+
+        This intentionally avoids provider-specific tokenizers. If a message
+        already has ``metadata.tokens`` set, that value is honored; otherwise
+        text is approximated from UTF-8 byte length.
+        """
+        total = 0
+        if include_system and self.system_prompt:
+            total += estimate_content_tokens(self.system_prompt)
+        if include_tools and self.tool_definitions:
+            total += estimate_text_tokens(_safe_json_dumps(self.tool_definitions))
+        for message in self.messages:
+            total += estimate_message_tokens(message)
+        return total
 
     def add_message(self, message: Message) -> None:
         """Append a message to the conversation.
@@ -305,6 +445,62 @@ class AgentContext:
             return
         self.messages = self.messages[-keep_last:]
 
+    def compaction_tail_start(self, keep_last: int) -> int:
+        """Return a safe start index for the recent suffix to keep.
+
+        The returned boundary is moved left to the nearest user message so a
+        compacted history does not begin inside a tool-call exchange.
+        """
+        if keep_last <= 0:
+            desired_start = len(self.messages)
+        else:
+            desired_start = max(0, len(self.messages) - keep_last)
+
+        if desired_start <= 0:
+            return 0
+        if desired_start >= len(self.messages):
+            return len(self.messages)
+
+        start = desired_start
+        while start > 0 and self.messages[start]["role"] != "user":
+            start -= 1
+        return start
+
+    def compact_with_summary(
+        self,
+        summary: str,
+        *,
+        keep_last: int = 8,
+        summary_prefix: str = CONTEXT_COMPACTION_SUMMARY_PREFIX,
+    ) -> ContextCompactionRecord | None:
+        """Replace older history with a summary and keep recent messages.
+
+        Returns ``None`` when there is no safe older span to compact.
+        """
+        tail_start = self.compaction_tail_start(keep_last)
+        if tail_start <= 0:
+            return None
+
+        tokens_before = self.estimate_tokens()
+        replaced_messages = deepcopy(self.messages[:tail_start])
+        kept_tail = deepcopy(self.messages[tail_start:])
+        summary_message = self._make_compaction_summary_message(
+            summary,
+            summary_prefix=summary_prefix,
+        )
+        self.messages = [summary_message, *kept_tail]
+        tokens_after = self.estimate_tokens()
+
+        record = ContextCompactionRecord(
+            summary=summary,
+            replaced_messages=replaced_messages,
+            kept_messages=len(kept_tail),
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+        )
+        self.compaction_records.append(record)
+        return record
+
     def inject(self, message: Message, position: int = -1) -> None:
         """Insert a message at specified position.
 
@@ -341,7 +537,7 @@ class AgentContext:
     @staticmethod
     def _tool_call_parts(message: Message) -> list[ToolCallPart]:
         return [
-            part
+            cast(ToolCallPart, part)
             for part in message["content"]
             if isinstance(part, dict) and part.get("type") == "tool_call"
         ]
@@ -392,11 +588,13 @@ class AgentContext:
         Returns:
             New AgentContext with copied state
         """
-        return AgentContext(
-            messages=self.messages.copy(),
-            tool_definitions=self.tool_definitions.copy() if self.tool_definitions else None,
-            system_prompt=self.system_prompt,
+        copied = AgentContext(
+            messages=deepcopy(self.messages),
+            tool_definitions=deepcopy(self.tool_definitions) if self.tool_definitions else None,
+            system_prompt=deepcopy(self.system_prompt),
+            compaction_records=deepcopy(self.compaction_records),
         )
+        return copied
 
     def save(
         self,
@@ -427,6 +625,9 @@ class AgentContext:
             "saved_at": datetime.now().isoformat(),
             "system_prompt": self.system_prompt,
             "messages": self.messages,
+            "compaction_records": [
+                record.to_dict() for record in self.compaction_records
+            ],
         }
 
         path.write_text(
@@ -504,6 +705,38 @@ class AgentContext:
         # Restore state into this instance (preserve tools and cache setting)
         self.messages = data.get("messages", [])
         self.system_prompt = data.get("system_prompt")
+        self.compaction_records = [
+            ContextCompactionRecord(
+                summary=record.get("summary", ""),
+                replaced_messages=record.get("replaced_messages", []),
+                kept_messages=record.get("kept_messages", 0),
+                tokens_before=record.get("tokens_before", 0),
+                tokens_after=record.get("tokens_after", 0),
+                created_at=record.get("created_at", time.time()),
+            )
+            for record in data.get("compaction_records", [])
+        ]
+
+    @staticmethod
+    def _make_compaction_summary_message(
+        summary: str,
+        *,
+        summary_prefix: str,
+    ) -> Message:
+        text = summary.strip() or "(no summary available)"
+        if summary_prefix:
+            text = f"{summary_prefix}\n\n{text}"
+        return {
+            "role": "user",
+            "content": [{"type": "text", "text": text}],
+            "name": None,
+            "metadata": {
+                "source": "context_compaction",
+                "summarized": True,
+                "timestamp": time.time(),
+                "compression_level": 1,
+            },
+        }
 
     def _format_content_part(self, part: ContentPart) -> list[str]:
         """Format a single ContentPart as markdown lines."""
@@ -572,7 +805,10 @@ class AgentContext:
                 lines.append("**Steer**:")
             steer_lines: list[str] = []
             for sub_part in part.get("content", []):
-                steer_lines.extend(self._format_content_part(sub_part))
+                if isinstance(sub_part, dict):
+                    steer_lines.extend(
+                        self._format_content_part(cast(ContentPart, sub_part))
+                    )
             if steer_lines:
                 steer_text = "\n".join(steer_lines)
                 lines.append(f"```\n{steer_text}\n```")

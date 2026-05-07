@@ -209,6 +209,10 @@ def test_parser_accepts_space_separated_extra_tool_parameters() -> None:
     from hawi_core_cli.__main__ import build_parser
 
     args = build_parser().parse_args([
+        "--model",
+        "test/model",
+        "--max-context-tokens",
+        "64000",
         "--extra-tool-parameter",
         "note",
         "str",
@@ -223,6 +227,7 @@ def test_parser_accepts_space_separated_extra_tool_parameters() -> None:
         ["note", "str", "Reason: use the fast path"],
         ["priority", "int", "Priority from 1 to 5"],
     ]
+    assert args.max_context_tokens == 64_000
 
 
 def test_parse_extra_tool_parameters_rejects_duplicates() -> None:

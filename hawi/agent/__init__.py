@@ -8,8 +8,9 @@ from .agent import (
     ModelErrorNotifyPolicy,
     ModelErrorStopPolicy,
     SteerPartMergeMode,
+    AutoCompactConfig,
 )
-from .context import AgentContext, ToolCallContext
+from .context import AgentContext, ContextCompactionRecord, ToolCallContext
 from .result import AgentRunResult, ToolCallRecord
 
 # Re-export scheduler classes
@@ -34,8 +35,10 @@ __all__ = [
     "ModelErrorNotifyPolicy",
     "ModelErrorStopPolicy",
     "SteerPartMergeMode",
+    "AutoCompactConfig",
     # Context
     "AgentContext",
+    "ContextCompactionRecord",
     "ToolCallContext",
     # Result
     "AgentRunResult",

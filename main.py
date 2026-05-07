@@ -18,7 +18,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-from hawi.agent import HawiAgent
+from hawi.agent import AutoCompactConfig, HawiAgent
 from hawi.agent.printers import create_printer
 from hawi.models import Model, model_registry
 from utils.terminal import user_select
@@ -110,7 +110,12 @@ def create_model_from_argv(argv: list[str]) -> tuple[str, Model]:
     print(f"quick arguments: {' '.join(QUICK_ARGUMENTS)}")
     return model_name, model
 
-def create_agent(model: Model, event_dump_file: str | None = None, streaming: bool = True) -> HawiAgent:
+def create_agent(
+    model: Model,
+    event_dump_file: str | None = None,
+    streaming: bool = True,
+    max_context_tokens: int | None = None,
+) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
     # print(model.get_balance())
     from hawi_plugins.filesystem_plugin import FileSystemPlugin
@@ -130,6 +135,11 @@ def create_agent(model: Model, event_dump_file: str | None = None, streaming: bo
         max_iterations=None,
         event_dump_file=event_dump_file,
         streaming=streaming,
+        auto_compact=(
+            AutoCompactConfig(enabled=True, max_context_tokens=max_context_tokens)
+            if max_context_tokens is not None
+            else None
+        ),
     )
 
 
@@ -141,6 +151,7 @@ def main():
     loop = False
     event_dump_file = None
     streaming = True  # Default to streaming mode
+    max_context_tokens = None
 
     # Parse printer type
     if "--printer" in argv:
@@ -161,6 +172,19 @@ def main():
         argv.remove("--streaming")
         streaming = True
 
+    # Parse max context window override for automatic compaction
+    if "--max-context-tokens" in argv:
+        idx = argv.index("--max-context-tokens")
+        argv.pop(idx)
+        if idx >= len(argv):
+            raise RuntimeError("--max-context-tokens requires a positive integer")
+        try:
+            max_context_tokens = int(argv.pop(idx))
+        except ValueError as e:
+            raise RuntimeError("--max-context-tokens requires a positive integer") from e
+        if max_context_tokens <= 0:
+            raise RuntimeError("--max-context-tokens requires a positive integer")
+
     # Parse event dump file
     if "--dump-events" in argv:
         idx = argv.index("--dump-events")
@@ -175,7 +199,14 @@ def main():
 
     # Create agent using new config system
     model_name, model = create_model_from_argv(argv)
-    agent = create_agent(model, event_dump_file=event_dump_file, streaming=streaming)
+    if max_context_tokens is not None:
+        model.configure_max_context_tokens(max_context_tokens)
+    agent = create_agent(
+        model,
+        event_dump_file=event_dump_file,
+        streaming=streaming,
+        max_context_tokens=max_context_tokens,
+    )
     print(f"Using model: {model_name}")
     print(f"Model: {model.model_id}")
     if event_dump_file:

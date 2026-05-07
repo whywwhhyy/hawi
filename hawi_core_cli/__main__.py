@@ -51,6 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model", default=None, help="Model factory name from models.yaml")
     parser.add_argument(
+        "--max-context-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Override the selected model's context window for automatic "
+            "context compaction."
+        ),
+    )
+    parser.add_argument(
         "--inspect",
         action="store_true",
         help="Print GUI metadata JSON and exit",
@@ -180,6 +189,7 @@ async def async_main(args: argparse.Namespace) -> None:
         selected_plugins=selected_plugins,
         plugin_configs=plugin_configs,
         extra_tool_parameters=extra_tool_parameters,
+        max_context_tokens=args.max_context_tokens,
         token=token_from_arg_or_env(args.token),
         status_interval=args.status_interval,
     )
