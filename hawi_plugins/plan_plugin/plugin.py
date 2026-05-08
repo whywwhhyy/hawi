@@ -11,6 +11,9 @@ from hawi.tool import ToolResult
 PLAN_PROMPT_BEGIN = "<hawi-plan-mode>"
 PLAN_PROMPT_END = "</hawi-plan-mode>"
 
+PLAN_ITEM_KINDS = ("exploratory", "determinate")
+PLAN_ITEM_DEFAULT_KIND = "exploratory"
+
 
 @dataclass
 class PlanItem:
@@ -20,6 +23,7 @@ class PlanItem:
     completed: bool = False
     created_at: float = 0.0
     completed_at: float | None = None
+    kind: str = PLAN_ITEM_DEFAULT_KIND
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -29,6 +33,7 @@ class PlanItem:
             "completed": self.completed,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
+            "kind": self.kind,
         }
 
 
@@ -67,6 +72,7 @@ class PlanPlugin(HawiPlugin):
                 completed=item.completed,
                 created_at=item.created_at,
                 completed_at=item.completed_at,
+                kind=item.kind,
             )
             for item in self._items
         ]
@@ -91,11 +97,27 @@ class PlanPlugin(HawiPlugin):
             "\n"
             "Available plan tools:\n"
             "- add_plan_item: add one concrete task item, or create a whole plan tree "
-            "in one call by passing items=[{content, children}].\n"
+            "in one call by passing items=[{content, children, kind}].\n"
             "  Pass parent_id to create a single child item or attach batch root items "
             "under an existing plan item.\n"
-            "- complete_plan_item: mark a plan item complete as soon as it is actually done. "
-            "Pass item_id='all' only when every open item is complete.\n"
+            "  Each item has a kind that controls how its completion is decided:\n"
+            "    * 'exploratory' (default): a parent whose completion requires your "
+            "judgment (e.g. 'Investigate root cause', 'Decide auth strategy'). When all "
+            "of its children are completed, complete_plan_item will return a "
+            "parent_review_required entry pointing at this parent — for each entry, "
+            "decide whether the work is truly done (call complete_plan_item on it) or "
+            "whether new follow-up children should be added (call add_plan_item).\n"
+            "    * 'determinate': a mechanical parent whose completion is fully implied "
+            "by its children (e.g. 'Run all unit tests' broken into concrete sub-tests). "
+            "When every child completes, this item is auto-completed, and that auto-"
+            "completion can chain upward into other determinate ancestors.\n"
+            "  Leave kind unspecified when unsure — exploratory is the safer default.\n"
+            "  Leaf items can use either kind; kind only matters when the item has "
+            "children.\n"
+            "- complete_plan_item: mark a plan item complete as soon as it is actually "
+            "done. Pass item_id='all' only when every open item is complete. After each "
+            "call, inspect parent_review_required in the result and act on every entry "
+            "before moving on.\n"
             "- list_plan_items: inspect the current plan state.\n"
             "- cancel_plan_notification: stop automatic plan reminders only when remaining "
             "items are impossible, obsolete, or intentionally deferred; include a reason.\n"
@@ -153,7 +175,11 @@ class PlanPlugin(HawiPlugin):
 
     @tool(
         name="add_plan_item",
-        description="Add one concrete task item or a tree of task items to the current plan.",
+        description=(
+            "Add one concrete task item or a tree of task items to the current plan. "
+            "Each item has a kind: 'exploratory' (default, requires your judgment to close) "
+            "or 'determinate' (auto-completes when all children complete)."
+        ),
         parameters_schema={
             "type": "object",
             "properties": {
@@ -165,11 +191,24 @@ class PlanPlugin(HawiPlugin):
                     "type": "string",
                     "description": "Optional parent plan item id for nested plan items.",
                 },
+                "kind": {
+                    "type": "string",
+                    "enum": list(PLAN_ITEM_KINDS),
+                    "description": (
+                        "How this item's completion is decided. 'exploratory' (default): "
+                        "completion requires your judgment; when all children complete you "
+                        "will be reminded via parent_review_required to confirm or extend. "
+                        "'determinate': completion is fully implied by children, so the item "
+                        "auto-completes when every child completes. Pick determinate only for "
+                        "mechanical parents whose work is truly the union of their children."
+                    ),
+                },
                 "items": {
                     "type": "array",
                     "description": (
                         "Optional tree of plan items for creating an entire plan in one call. "
-                        "Each item has content and optional children."
+                        "Each item has content, optional children, and optional kind "
+                        "(exploratory by default)."
                     ),
                     "items": {
                         "type": "object",
@@ -177,6 +216,14 @@ class PlanPlugin(HawiPlugin):
                             "content": {
                                 "type": "string",
                                 "description": "Concrete task for this plan item.",
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": list(PLAN_ITEM_KINDS),
+                                "description": (
+                                    "Same semantics as the top-level kind. Defaults to "
+                                    "'exploratory' when omitted."
+                                ),
                             },
                             "children": {
                                 "type": "array",
@@ -195,6 +242,7 @@ class PlanPlugin(HawiPlugin):
         content: str | None = None,
         parent_id: str | None = None,
         items: list[dict[str, Any]] | None = None,
+        kind: str | None = None,
     ) -> ToolResult:
         has_content = isinstance(content, str) and bool(content.strip())
         has_items = items is not None
@@ -208,6 +256,18 @@ class PlanPlugin(HawiPlugin):
                 success=False,
                 error="Provide content for a single item or items for a plan tree.",
             )
+        if has_items and kind is not None:
+            return ToolResult(
+                success=False,
+                error=(
+                    "Top-level kind is only valid when adding a single item. "
+                    "For tree mode, set kind on each node inside items."
+                ),
+            )
+
+        normalized_kind, kind_error = self._normalize_kind(kind, path="kind")
+        if kind_error:
+            return ToolResult(success=False, error=kind_error)
 
         normalized_parent_id = (
             parent_id.strip()
@@ -250,6 +310,7 @@ class PlanPlugin(HawiPlugin):
             content=content.strip() if isinstance(content, str) else "",
             parent_id=normalized_parent_id,
             created_at=now,
+            kind=normalized_kind,
         )
         self._notification_cancelled = False
         self._cancel_reason = ""
@@ -306,6 +367,7 @@ class PlanPlugin(HawiPlugin):
                     "completed": completed,
                     "tree": self._tree_items(),
                     "pending_count": len(self._incomplete_items()),
+                    "parent_review_required": [],
                 },
             )
 
@@ -322,6 +384,8 @@ class PlanPlugin(HawiPlugin):
                 current.completed = True
                 current.completed_at = now
                 completed.append(current.to_dict())
+        auto_completed, review_required = self._propagate_completion_upward(item, now)
+        completed.extend(auto_completed)
         self._sync_artifact(status="complete" if not self._incomplete_items() else "active")
         for item_data in completed:
             self._emit_plan_item_update("completed", item_data)
@@ -332,6 +396,7 @@ class PlanPlugin(HawiPlugin):
                 "completed": completed,
                 "tree": self._tree_items(),
                 "pending_count": len(self._incomplete_items()),
+                "parent_review_required": review_required,
             },
         )
 
@@ -393,18 +458,35 @@ class PlanPlugin(HawiPlugin):
         )
         return ToolResult(success=True, output=self._state_dict())
 
+    def _normalize_kind(
+        self, kind: Any, *, path: str
+    ) -> tuple[str, str]:
+        if kind is None:
+            return PLAN_ITEM_DEFAULT_KIND, ""
+        if not isinstance(kind, str):
+            return "", f"{path} must be a string when provided."
+        normalized = kind.strip().lower()
+        if not normalized:
+            return PLAN_ITEM_DEFAULT_KIND, ""
+        if normalized not in PLAN_ITEM_KINDS:
+            allowed = ", ".join(repr(k) for k in PLAN_ITEM_KINDS)
+            return "", f"{path} must be one of {allowed}."
+        return normalized, ""
+
     def _create_plan_item(
         self,
         *,
         content: str,
         parent_id: str | None,
         created_at: float,
+        kind: str = PLAN_ITEM_DEFAULT_KIND,
     ) -> PlanItem:
         item = PlanItem(
             id=f"P{self._next_item_number}",
             content=content,
             parent_id=parent_id,
             created_at=created_at,
+            kind=kind,
         )
         self._next_item_number += 1
         self._items.append(item)
@@ -425,10 +507,14 @@ class PlanPlugin(HawiPlugin):
 
         def add_nodes(current_nodes: list[dict[str, Any]], current_parent_id: str | None) -> None:
             for node in current_nodes:
+                node_kind, _ = self._normalize_kind(
+                    node.get("kind"), path="kind"
+                )
                 item = self._create_plan_item(
                     content=str(node["content"]).strip(),
                     parent_id=current_parent_id,
                     created_at=created_at,
+                    kind=node_kind,
                 )
                 created.append(item)
                 children = node.get("children") or []
@@ -450,6 +536,12 @@ class PlanPlugin(HawiPlugin):
             content = node.get("content")
             if not isinstance(content, str) or not content.strip():
                 return f"{item_path}.content must be a non-empty string."
+            if "kind" in node:
+                _, kind_error = self._normalize_kind(
+                    node.get("kind"), path=f"{item_path}.kind"
+                )
+                if kind_error:
+                    return kind_error
             children = node.get("children", [])
             if children is None:
                 continue
@@ -493,6 +585,40 @@ class PlanPlugin(HawiPlugin):
     def _incomplete_items(self) -> list[PlanItem]:
         return [item for item in self._items if not item.completed]
 
+    def _propagate_completion_upward(
+        self, start: PlanItem, now: float
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        auto_completed: list[dict[str, Any]] = []
+        review_required: list[dict[str, Any]] = []
+        cursor = start
+        while cursor.parent_id is not None:
+            parent = self._find_item(cursor.parent_id)
+            if parent is None or parent.completed:
+                break
+            children = self._children_of(parent.id)
+            if not children or not all(child.completed for child in children):
+                break
+            if parent.kind == "determinate":
+                parent.completed = True
+                parent.completed_at = now
+                auto_completed.append(parent.to_dict())
+                cursor = parent
+                continue
+            review_required.append(
+                {
+                    "id": parent.id,
+                    "content": parent.content,
+                    "kind": parent.kind,
+                    "reason": (
+                        "All children are complete, but this item is exploratory — "
+                        "decide whether the work is truly done (call complete_plan_item) "
+                        "or add follow-up children (call add_plan_item)."
+                    ),
+                }
+            )
+            break
+        return auto_completed, review_required
+
     def _tree_items(self) -> list[dict[str, Any]]:
         return [self._tree_item(item) for item in self._children_of(None)]
 
@@ -517,12 +643,30 @@ class PlanPlugin(HawiPlugin):
         for child in self._children_of(item.id):
             self._format_plan_item(child, lines, depth=depth + 1)
 
+    def _format_plan_artifact(self) -> str:
+        if not self._items:
+            return "No plan items."
+        lines: list[str] = []
+        for item in self._children_of(None):
+            self._format_plan_artifact_item(item, lines, depth=0)
+        return "\n".join(lines)
+
+    def _format_plan_artifact_item(
+        self, item: PlanItem, lines: list[str], *, depth: int
+    ) -> None:
+        indent = "  " * depth
+        text = f"{item.id}: {item.content}"
+        rendered = f"~~{text}~~" if item.completed else text
+        lines.append(f"{indent}- {rendered}")
+        for child in self._children_of(item.id):
+            self._format_plan_artifact_item(child, lines, depth=depth + 1)
+
     def _sync_artifact(self, *, status: str) -> None:
         self.upsert_artifact(
             "current-plan",
             artifact_type="plan",
             title="Current Plan",
-            content=f"# Current Plan\n\n{self._format_plan_list()}\n",
+            content=f"{self._format_plan_artifact()}\n",
             language="markdown",
             mime_type="text/markdown",
             status=status,

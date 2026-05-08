@@ -207,6 +207,7 @@ button:disabled {
 .chat-panel {
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   padding: 12px;
   border: 1px solid #d7dcdd;
@@ -290,6 +291,7 @@ button:disabled {
   gap: 7px;
   max-height: 100%;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .queue-message {
@@ -402,6 +404,7 @@ button:disabled {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: 10px;
   border-bottom: 1px solid #e2e7e8;
 }
@@ -751,6 +754,32 @@ button:disabled {
 
 .markdown p:last-child {
   margin-bottom: 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 8px 0;
+  padding-inline-start: 20px;
+}
+
+.markdown ul ul,
+.markdown ul ol,
+.markdown ol ul,
+.markdown ol ol {
+  margin-bottom: 0;
+  padding-inline-start: 18px;
+}
+
+.markdown li {
+  margin: 0;
+}
+
+.markdown li > p {
+  margin: 0;
+}
+
+.markdown del {
+  color: #8a949a;
 }
 
 .markdown :not(pre) > code {
@@ -1143,6 +1172,7 @@ button:disabled {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .model-modal .modal-body {

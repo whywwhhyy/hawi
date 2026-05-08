@@ -34,6 +34,127 @@ def test_plan_items_support_tree_and_recursive_completion() -> None:
     assert {item["id"] for item in output["completed"]} == {"P1", "P2"}
 
 
+def test_default_kind_is_exploratory_and_does_not_auto_complete_parent() -> None:
+    plugin = PlanPlugin()
+    plugin.add_plan_item("Prepare release")
+    plugin.add_plan_item("Run tests", parent_id="P1")
+    plugin.add_plan_item("Tag release", parent_id="P1")
+
+    listed = plugin.list_plan_items()
+    assert isinstance(listed.output, dict)
+    assert listed.output["flat_items"][0]["kind"] == "exploratory"
+
+    first = plugin.complete_plan_item("P2")
+    assert first.success is True
+    output = first.output
+    assert isinstance(output, dict)
+    assert output["parent_review_required"] == []
+    assert output["pending_count"] == 2
+
+    second = plugin.complete_plan_item("P3")
+    assert second.success is True
+    output = second.output
+    assert isinstance(output, dict)
+    assert {item["id"] for item in output["completed"]} == {"P3"}
+    assert output["pending_count"] == 1
+    assert len(output["parent_review_required"]) == 1
+    review = output["parent_review_required"][0]
+    assert review["id"] == "P1"
+    assert review["kind"] == "exploratory"
+    assert "exploratory" in review["reason"]
+
+
+def test_determinate_parent_auto_completes_when_children_done() -> None:
+    plugin = PlanPlugin()
+    plugin.add_plan_item("Prepare release", kind="determinate")
+    plugin.add_plan_item("Run tests", parent_id="P1")
+    plugin.add_plan_item("Tag release", parent_id="P1")
+
+    plugin.complete_plan_item("P2")
+    final = plugin.complete_plan_item("P3")
+    assert final.success is True
+    output = final.output
+    assert isinstance(output, dict)
+    assert {item["id"] for item in output["completed"]} == {"P3", "P1"}
+    assert output["parent_review_required"] == []
+    assert output["pending_count"] == 0
+
+
+def test_determinate_chain_stops_at_exploratory_ancestor() -> None:
+    plugin = PlanPlugin()
+    plugin.add_plan_item(
+        items=[
+            {
+                "content": "Top exploratory",
+                "children": [
+                    {
+                        "content": "Mid determinate",
+                        "kind": "determinate",
+                        "children": [{"content": "Leaf"}],
+                    }
+                ],
+            }
+        ]
+    )
+
+    result = plugin.complete_plan_item("P3")
+    assert result.success is True
+    output = result.output
+    assert isinstance(output, dict)
+    assert {item["id"] for item in output["completed"]} == {"P3", "P2"}
+    assert [r["id"] for r in output["parent_review_required"]] == ["P1"]
+    assert output["pending_count"] == 1
+
+
+def test_auto_completion_emits_events_only_for_determinate_parents() -> None:
+    bus = EventBus()
+    received: list[Event] = []
+    bus.subscribe_blocking(received.append)
+    plugin = PlanPlugin()
+    plugin.bind_plugin_identity(plugin_id="plan", plugin_name="PlanPlugin")
+    plugin.bind_event_bus(bus)
+
+    try:
+        plugin.add_plan_item("Parent", kind="determinate")
+        plugin.add_plan_item("Child A", parent_id="P1")
+        plugin.add_plan_item("Child B", parent_id="P1")
+        plugin.complete_plan_item("P2")
+        plugin.complete_plan_item("P3")
+    finally:
+        bus.close(wait=True, timeout=2)
+
+    completed_ids = [
+        event.payload["item"]["id"]
+        for event in received
+        if event.type == "plugin.event"
+        and event.payload.get("event_name") == "plan.item.updated"
+        and event.payload.get("action") == "completed"
+    ]
+    assert completed_ids == ["P2", "P3", "P1"]
+
+
+def test_add_plan_item_rejects_invalid_kind() -> None:
+    plugin = PlanPlugin()
+    result = plugin.add_plan_item("Task", kind="urgent")
+    assert result.success is False
+    assert "kind" in result.error
+
+    tree_result = plugin.add_plan_item(
+        items=[{"content": "Root", "kind": "weird"}]
+    )
+    assert tree_result.success is False
+    assert "kind" in tree_result.error
+
+
+def test_add_plan_item_rejects_top_level_kind_with_items() -> None:
+    plugin = PlanPlugin()
+    result = plugin.add_plan_item(
+        items=[{"content": "Root"}], kind="determinate"
+    )
+    assert result.success is False
+    assert "tree mode" in result.error.lower() or "kind" in result.error
+
+
 def test_add_plan_item_rejects_unknown_parent() -> None:
     plugin = PlanPlugin()
 
@@ -207,6 +328,9 @@ def test_plan_prompt_injection_is_idempotent() -> None:
     assert len(plan_prompts) == 1
     assert "parent_id" in plan_prompts[0]["text"]
     assert "whole plan tree" in plan_prompts[0]["text"]
-    assert "items=[{content, children}]" in plan_prompts[0]["text"]
+    assert "items=[{content, children, kind}]" in plan_prompts[0]["text"]
+    assert "exploratory" in plan_prompts[0]["text"]
+    assert "determinate" in plan_prompts[0]["text"]
+    assert "parent_review_required" in plan_prompts[0]["text"]
     assert "not a request to create a plan file" in plan_prompts[0]["text"]
     assert "Do not create, edit, or store plan.md" in plan_prompts[0]["text"]
