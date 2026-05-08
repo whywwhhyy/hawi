@@ -9,6 +9,12 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   min-width: 900px;
@@ -40,8 +46,11 @@ button:disabled {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   height: 100vh;
+  min-height: 0;
+  min-width: 0;
   gap: 6px;
   padding: 6px;
+  overflow: hidden;
 }
 
 .topbar,
