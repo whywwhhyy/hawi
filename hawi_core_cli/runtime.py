@@ -696,7 +696,9 @@ class CoreRuntime:
             elif plugin_key == PLUGIN_PLAN:
                 from hawi_plugins.plan_plugin import PlanPlugin
 
-                plugin = PlanPlugin()
+                plugin = PlanPlugin(
+                    fold_completed_tasks=bool(cfg.get("fold_completed_tasks", False))
+                )
             elif plugin_key == PLUGIN_WORKFLOW:
                 from hawi_plugins.workflow_plugin import WorkflowPlugin
 

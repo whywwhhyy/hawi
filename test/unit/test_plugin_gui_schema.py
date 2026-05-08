@@ -39,3 +39,10 @@ def test_skills_schema_has_skills_dir():
     defaults = SkillsPlugin.gui_default_config()
     assert schema["properties"]["skills_dir"]["type"] == "string"
     assert defaults["skills_dir"] == ".skills"
+
+
+def test_plan_schema_has_context_folding_toggle():
+    schema = PlanPlugin.gui_config_schema()
+    defaults = PlanPlugin.gui_default_config()
+    assert schema["properties"]["fold_completed_tasks"]["type"] == "boolean"
+    assert defaults["fold_completed_tasks"] is False

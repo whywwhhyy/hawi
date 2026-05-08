@@ -334,3 +334,165 @@ def test_plan_prompt_injection_is_idempotent() -> None:
     assert "parent_review_required" in plan_prompts[0]["text"]
     assert "not a request to create a plan file" in plan_prompts[0]["text"]
     assert "Do not create, edit, or store plan.md" in plan_prompts[0]["text"]
+
+
+def test_context_folding_requires_summary_when_enabled() -> None:
+    plugin = PlanPlugin(fold_completed_tasks=True)
+    plugin.add_plan_item("Implement feature")
+
+    result = plugin.complete_plan_item("P1")
+
+    assert result.success is False
+    assert "summary is required" in result.error
+    listed = plugin.list_plan_items()
+    assert isinstance(listed.output, dict)
+    assert listed.output["flat_items"][0]["completed"] is False
+
+
+def test_complete_plan_item_folds_context_and_can_read_it() -> None:
+    plugin = PlanPlugin(fold_completed_tasks=True)
+    plugin.add_plan_item("Implement feature")
+    context = AgentContext(
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Please implement the feature."}],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "I changed the backend."}],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-complete",
+                        "name": "complete_plan_item",
+                        "arguments": {
+                            "item_id": "P1",
+                            "summary": "Backend implementation is done.",
+                        },
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+        ]
+    )
+    plugin._active_completion_tool_call_id = "call-complete"
+
+    result = plugin.complete_plan_item(
+        "P1",
+        summary="Backend implementation is done. Remember the new API shape.",
+        ctx=SimpleNamespace(context=context),
+    )
+
+    assert result.success is True
+    assert len(context.messages) == 1
+    assert context.messages[0]["content"][0]["id"] == "call-complete"
+    assert isinstance(result.output, dict)
+    folded = result.output["folded_context"]
+    assert folded["enabled"] is True
+    assert folded["skipped"] is False
+    assert folded["item_id"] == "P1"
+    assert folded["folded_message_count"] == 2
+
+    read = plugin.read_completed_task_context("P1")
+    assert read.success is True
+    assert isinstance(read.output, dict)
+    assert read.output["summary"] == "Backend implementation is done. Remember the new API shape."
+    assert "Please implement the feature." in read.output["transcript"]
+    assert "I changed the backend." in read.output["transcript"]
+
+
+def test_context_folding_preserves_previous_completion_marker() -> None:
+    plugin = PlanPlugin(fold_completed_tasks=True)
+    plugin.add_plan_item("First task")
+    plugin.add_plan_item("Second task")
+    context = AgentContext(
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-first",
+                        "name": "complete_plan_item",
+                        "arguments": {
+                            "item_id": "P1",
+                            "summary": "First task done.",
+                        },
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "tool",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-first",
+                        "content": [{"type": "text", "text": "P1 folded."}],
+                        "is_error": False,
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Now do the second task."}],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-second",
+                        "name": "complete_plan_item",
+                        "arguments": {
+                            "item_id": "P2",
+                            "summary": "Second task done.",
+                        },
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+        ]
+    )
+    plugin._active_completion_tool_call_id = "call-second"
+
+    result = plugin.complete_plan_item(
+        "P2",
+        summary="Second task done. Remember the follow-up detail.",
+        ctx=SimpleNamespace(context=context),
+    )
+
+    assert result.success is True
+    assert [message["role"] for message in context.messages] == [
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert context.messages[0]["content"][0]["id"] == "call-first"
+    assert context.messages[2]["content"][0]["id"] == "call-second"
+    read = plugin.read_completed_task_context("P2")
+    assert isinstance(read.output, dict)
+    assert "Now do the second task." in read.output["transcript"]
+
+
+def test_complete_plan_tool_uses_runtime_context_injection() -> None:
+    plugin = PlanPlugin(fold_completed_tasks=True)
+    tool = next(tool for tool in plugin.tools if tool.name == "complete_plan_item")
+
+    assert tool.context == "ctx"
+    assert "ctx" not in tool.parameters_schema["properties"]

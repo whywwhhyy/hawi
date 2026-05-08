@@ -336,6 +336,21 @@ async def test_runtime_can_create_plan_plugin() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_passes_plan_folding_config() -> None:
+    runtime = CoreRuntime(model_name="test-model")
+
+    plugins = await runtime._create_plugins(
+        ["plan"],
+        {"plan": {"fold_completed_tasks": True}},
+    )
+
+    assert len(plugins) == 1
+    state = plugins[0].list_plan_items()
+    assert isinstance(state.output, dict)
+    assert state.output["context_folding_enabled"] is True
+
+
+@pytest.mark.asyncio
 async def test_runtime_can_create_workflow_plugin() -> None:
     runtime = CoreRuntime(model_name="test-model")
 
