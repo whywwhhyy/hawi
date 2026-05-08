@@ -51,6 +51,28 @@ class ValidationError(ModelError):
         super().__init__('validation', msg or "Validation failed")
 
 
+class ContextLengthError(ModelError):
+    """上下文长度超出模型窗口。"""
+
+    def __init__(
+        self,
+        msg: Optional[str] = None,
+        *,
+        max_context_tokens: int | None = None,
+        requested_tokens: int | None = None,
+        message_tokens: int | None = None,
+        completion_tokens: int | None = None,
+    ):
+        super().__init__(
+            'context_length',
+            msg or "Context length exceeded",
+        )
+        self.max_context_tokens = max_context_tokens
+        self.requested_tokens = requested_tokens
+        self.message_tokens = message_tokens
+        self.completion_tokens = completion_tokens
+
+
 class UnknownModelError(ModelError):
     """未知模型错误"""
     def __init__(self, msg: Optional[str] = None):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, AsyncGenerator, Iterator, cast
 
 from openai import OpenAI, AsyncOpenAI
@@ -32,6 +33,7 @@ from hawi.errors import (
     ThrottleError,
     DeniedError,
     ValidationError,
+    ContextLengthError,
     UnknownModelError,
 )
 from hawi.models.usage import normalize_openai_usage
@@ -44,6 +46,82 @@ from ._converters import (
 from ._streaming import StreamProcessor
 
 logger = logging.getLogger(__name__)
+
+
+_CONTEXT_LENGTH_RE = re.compile(
+    r"maximum context length is\s+([\d,]+)\s+tokens.*?"
+    r"requested\s+([\d,]+)\s+tokens"
+    r"(?:\s+\(([\d,]+)\s+in the messages,\s+([\d,]+)\s+in the completion\))?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _int_from_token_text(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _openai_error_message(e: Exception) -> str:
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        if body.get("message"):
+            return str(body["message"])
+
+    response = getattr(e, "response", None)
+    json_method = getattr(response, "json", None)
+    if callable(json_method):
+        try:
+            payload = json_method()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict) and error.get("message"):
+                return str(error["message"])
+            if payload.get("message"):
+                return str(payload["message"])
+
+    return str(e)
+
+
+def _context_length_error_from_text(text: str) -> ContextLengthError | None:
+    if not text:
+        return None
+    lower_text = text.lower()
+    if (
+        "maximum context length" not in lower_text
+        and "context length" not in lower_text
+    ):
+        return None
+    if "requested" not in lower_text and "reduce the length" not in lower_text:
+        return None
+
+    match = _CONTEXT_LENGTH_RE.search(text)
+    if match:
+        max_context_tokens = _int_from_token_text(match.group(1))
+        requested_tokens = _int_from_token_text(match.group(2))
+        message_tokens = _int_from_token_text(match.group(3))
+        completion_tokens = _int_from_token_text(match.group(4))
+    else:
+        max_context_tokens = None
+        requested_tokens = None
+        message_tokens = None
+        completion_tokens = None
+
+    return ContextLengthError(
+        f"Context length exceeded: {text}",
+        max_context_tokens=max_context_tokens,
+        requested_tokens=requested_tokens,
+        message_tokens=message_tokens,
+        completion_tokens=completion_tokens,
+    )
 
 
 def _convert_openai_error(e: Exception) -> Exception:
@@ -129,8 +207,13 @@ def _convert_openai_error(e: Exception) -> Exception:
         if isinstance(e, InternalServerError):
             return RemoteError(f"Server error: {e}")
         
-        # Bad request (400) -> ValidationError
+        # Bad request (400) -> ContextLengthError or ValidationError
         if isinstance(e, BadRequestError):
+            context_length_error = _context_length_error_from_text(
+                _openai_error_message(e)
+            )
+            if context_length_error is not None:
+                return context_length_error
             return ValidationError(f"Bad request: {e}")
         
         # Not found (404) -> ValidationError (usually invalid model ID)
@@ -518,13 +601,19 @@ class OpenAIModel(Model):
 
         processor = StreamProcessor(expect_usage=self.require_usage)
 
-        # OpenAI async streaming: await the coroutine first, then use async with
-        stream = await self.async_client.chat.completions.create(**req)
+        try:
+            # OpenAI async streaming: await the coroutine first, then use async with
+            stream = await self.async_client.chat.completions.create(**req)
 
-        async with stream:
-            async for chunk in stream:
-                chunk_dict = chunk.model_dump()
-                for delta_part in processor.process_chunk(chunk_dict):
+            async with stream:
+                async for chunk in stream:
+                    chunk_dict = chunk.model_dump()
+                    for delta_part in processor.process_chunk(chunk_dict):
+                        yield delta_part
+                for delta_part in processor.finalize():
                     yield delta_part
-            for delta_part in processor.finalize():
-                yield delta_part
+        except Exception as e:
+            converted = _convert_openai_error(e)
+            if converted is not e:
+                raise converted from e
+            raise

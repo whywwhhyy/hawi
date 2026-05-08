@@ -22,6 +22,7 @@ ModelErrorType = Literal[
     'throttle',
     'access',
     'validation',
+    'context_length',
     'unknown',
 ]
 

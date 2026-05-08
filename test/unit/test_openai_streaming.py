@@ -1,4 +1,42 @@
+import httpx
+from openai import BadRequestError
+
+from hawi.errors import ContextLengthError
+from hawi.models.openai._model import _convert_openai_error
 from hawi.models.openai._streaming import StreamProcessor
+
+
+def test_bad_request_context_length_error_is_structured():
+    message = (
+        "This model's maximum context length is 1048576 tokens. "
+        "However, you requested 1916559 tokens "
+        "(1916559 in the messages, 0 in the completion). "
+        "Please reduce the length of the messages or completion."
+    )
+    body = {
+        "error": {
+            "message": message,
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_request_error",
+        }
+    }
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    response = httpx.Response(400, request=request, json=body)
+    error = BadRequestError(
+        f"Error code: 400 - {body}",
+        response=response,
+        body=body,
+    )
+
+    converted = _convert_openai_error(error)
+
+    assert isinstance(converted, ContextLengthError)
+    assert converted.error_type == "context_length"
+    assert converted.max_context_tokens == 1_048_576
+    assert converted.requested_tokens == 1_916_559
+    assert converted.message_tokens == 1_916_559
+    assert converted.completion_tokens == 0
 
 
 def test_stream_processor_keeps_parallel_tool_calls_separate():

@@ -48,6 +48,7 @@ from hawi.errors import (
     HawiError,
     AgentError,
     ModelError,
+    ContextLengthError,
     MaxIterationsError,
     ToolNotFoundError,
     ToolExecutionError,
@@ -150,6 +151,17 @@ class _PreparedToolArguments:
     tool_arguments: dict[str, Any]
     injected_arguments: dict[str, Any] = field(default_factory=dict)
     short_circuit_result: ToolResult | None = None
+
+
+@dataclass
+class _RecentToolResult:
+    """A tool result that has not yet been accepted by a model call."""
+
+    tool_call_id: str
+    tool_name: str
+    content: str
+    is_error: bool
+    truncate_attempts: int = 0
 
 
 class SteerPartMergeMode(str, Enum):
@@ -304,6 +316,7 @@ class HawiAgent:
         self._last_interrupt_reason: str | None = None
         self._steer_lock = threading.RLock()
         self._pending_inputs: list[PendingInput] = []
+        self._last_unsent_tool_results: list[_RecentToolResult] = []
         self._session_lock = threading.RLock()
         self._session_active = False
         self._autonomous_run_task: asyncio.Task[AgentRunResult] | None = None
@@ -664,6 +677,180 @@ class HawiAgent:
             else:
                 chunks.append(str(part))
         return "\n".join(chunk for chunk in chunks if chunk.strip())
+
+    @staticmethod
+    def _tool_result_content(result: ToolResult) -> str:
+        """Render a ToolResult exactly as it is written into model context."""
+        output_str = (
+            result.output
+            if isinstance(result.output, str)
+            else str(result.output)
+            if result.output
+            else ""
+        )
+        if not result.success and result.error:
+            result_content = f"Error: {result.error}"
+            if output_str:
+                result_content = f"Output before error:\n{output_str}\n\n{result_content}"
+            return result_content
+        return output_str
+
+    def _recent_tool_result_from_record(
+        self,
+        record: ToolCallRecord,
+    ) -> _RecentToolResult:
+        return _RecentToolResult(
+            tool_call_id=record.tool_call_id,
+            tool_name=record.tool_name,
+            content=self._tool_result_content(record.result),
+            is_error=not record.result.success,
+        )
+
+    def _mark_tool_results_unsent(
+        self,
+        records: list[ToolCallRecord],
+    ) -> None:
+        """Remember tool results that still need a successful model round-trip."""
+        self._last_unsent_tool_results = [
+            self._recent_tool_result_from_record(record)
+            for record in records
+        ]
+
+    async def _truncate_last_unsent_tool_results_for_context_retry(
+        self,
+        error: ContextLengthError,
+    ) -> bool:
+        """Shrink the longest latest tool results before retrying a model call."""
+        if not self._last_unsent_tool_results:
+            return False
+
+        candidates = sorted(
+            (
+                item
+                for item in self._last_unsent_tool_results
+                if len(item.content) > 1
+            ),
+            key=lambda item: len(item.content),
+            reverse=True,
+        )
+        if not candidates:
+            return False
+
+        needed_reduction = self._context_retry_needed_reduction_chars(error)
+        selected: list[_RecentToolResult] = []
+        planned_reduction = 0
+        for item in candidates:
+            selected.append(item)
+            target_chars = self._context_retry_tool_result_target_chars(
+                len(item.content),
+                error,
+                attempt=item.truncate_attempts,
+            )
+            planned_reduction += max(1, len(item.content) - target_chars)
+            if needed_reduction is None or planned_reduction >= needed_reduction:
+                break
+
+        changed = False
+        for item in selected:
+            truncated = self._truncate_tool_result_for_retry(
+                item.content,
+                error,
+                attempt=item.truncate_attempts,
+            )
+            if truncated == item.content:
+                continue
+            if not self._context.replace_tool_result_content(
+                item.tool_call_id,
+                truncated,
+                is_error=item.is_error,
+            ):
+                continue
+            item.content = truncated
+            item.truncate_attempts += 1
+            changed = True
+        return changed
+
+    def _truncate_tool_result_for_retry(
+        self,
+        content: str,
+        error: ContextLengthError,
+        *,
+        attempt: int,
+    ) -> str:
+        if len(content) <= 1:
+            return content
+
+        target_chars = self._context_retry_tool_result_target_chars(
+            len(content),
+            error,
+            attempt=attempt,
+        )
+        if target_chars >= len(content):
+            target_chars = max(1, len(content) // 2)
+
+        omitted_chars = max(0, len(content) - target_chars)
+        token_detail = ""
+        if error.requested_tokens is not None and error.max_context_tokens is not None:
+            token_detail = (
+                f" requested_tokens={error.requested_tokens}, "
+                f"max_context_tokens={error.max_context_tokens},"
+            )
+        marker = (
+            "\n\n[Hawi truncated this tool result after a model context-length "
+            f"error;{token_detail} omitted_chars={omitted_chars}.]\n\n"
+        )
+        budget = max(0, target_chars - len(marker))
+        if budget <= 0:
+            return marker.strip()
+
+        head_chars = max(1, int(budget * 0.75))
+        tail_chars = max(0, budget - head_chars)
+        head = content[:head_chars].rstrip()
+        if tail_chars <= 0:
+            return head + marker.rstrip()
+        tail = content[-tail_chars:].lstrip()
+        return head + marker + tail
+
+    @staticmethod
+    def _context_retry_tool_result_target_chars(
+        content_chars: int,
+        error: ContextLengthError,
+        *,
+        attempt: int,
+    ) -> int:
+        ratio: float | None = None
+        if (
+            error.max_context_tokens is not None
+            and error.requested_tokens is not None
+            and error.max_context_tokens > 0
+            and error.requested_tokens > error.max_context_tokens
+        ):
+            ratio = error.max_context_tokens / error.requested_tokens
+
+        if ratio is not None:
+            target = int(content_chars * ratio * 0.8)
+        else:
+            target = content_chars // 2
+
+        if attempt > 0:
+            target = target // (2 ** attempt)
+
+        min_chars = min(2_000, max(1, content_chars // 2))
+        return max(min_chars, min(target, content_chars - 1))
+
+    @staticmethod
+    def _context_retry_needed_reduction_chars(
+        error: ContextLengthError,
+    ) -> int | None:
+        if (
+            error.max_context_tokens is None
+            or error.requested_tokens is None
+            or error.max_context_tokens <= 0
+            or error.requested_tokens <= error.max_context_tokens
+        ):
+            return None
+        overflow_tokens = error.requested_tokens - error.max_context_tokens
+        return max(1, int(overflow_tokens * 4 * 1.2))
 
     def compact(
         self,
@@ -1298,6 +1485,7 @@ class HawiAgent:
 
         # Add user message if provided
         if message is not None:
+            self._last_unsent_tool_results = []
             # Normalize message to list[ContentPart]
             if isinstance(message, str):
                 user_content: list[ContentPart] = [{"type": "text", "text": message}]
@@ -1599,6 +1787,7 @@ class HawiAgent:
                     tc for tc in tool_calls if tc not in self._current_tool_calls
                 ]
                 completed_tool_call_ids: list[str] = []
+                completed_tool_records: list[ToolCallRecord] = []
                 self._current_tool_calls.extend(active_batch_tool_calls)
                 try:
                     for tc in tool_calls:
@@ -1618,6 +1807,7 @@ class HawiAgent:
                         )
                         state.tool_calls.append(record)
                         completed_tool_call_ids.append(record.tool_call_id)
+                        completed_tool_records.append(record)
                         await self._emit_event(
                             AgentToolResultEvent.create(
                                 run_id=run_id,
@@ -1635,6 +1825,9 @@ class HawiAgent:
                     for tc in active_batch_tool_calls:
                         if tc in self._current_tool_calls:
                             self._current_tool_calls.remove(tc)
+
+                if completed_tool_records:
+                    self._mark_tool_results_unsent(completed_tool_records)
 
                 if completed_tool_call_ids and not self._check_interrupt():
                     materialized_messages = (
@@ -1801,7 +1994,9 @@ class HawiAgent:
                 max_retries = p.retry_count
 
         attempt = 0
-        for attempt in range(max_retries + 1):
+        context_retry_attempt = 0
+        max_context_retries = 3
+        while attempt <= max_retries:
             try:
                 request = self._context.prepare_request()
 
@@ -1815,10 +2010,29 @@ class HawiAgent:
                     cache_tool_definitions=request.cache_tool_definitions,
                 ):
                     yield event
+                self._last_unsent_tool_results = []
                 return
 
             except ModelError as e:
                 last_error = e
+
+                if (
+                    isinstance(e, ContextLengthError)
+                    and context_retry_attempt < max_context_retries
+                    and await self._truncate_last_unsent_tool_results_for_context_retry(e)
+                ):
+                    context_retry_attempt += 1
+                    if event_bus:
+                        await event_bus.publish_async(
+                            ModelRetryEvent.create(
+                                request_id=request_id,
+                                error_type=e.error_type,
+                                attempt=context_retry_attempt,
+                                max_retries=max_context_retries,
+                                error_message=str(e),
+                            )
+                        )
+                    continue
 
                 # 直接使用 ModelError 的 error_type
                 policy_for_error = policy[e.error_type]
@@ -1843,10 +2057,11 @@ class HawiAgent:
                             )
                         )
                     await asyncio.sleep(min(2 ** attempt, 60))
+                attempt += 1
 
         if last_error:
             # All retries exhausted for retryable errors
-            err = ModelError("network", f"Model call failed after {attempt + 1} attempts: {last_error}")
+            err = ModelError("network", f"Model call failed after {attempt} attempts: {last_error}")
             state.error = err
             if event_bus:
                 await event_bus.publish_async(ModelErrorEvent.create(error=err))
@@ -2212,15 +2427,7 @@ class HawiAgent:
 
         # Add tool result to context (unless audit pending - will be added after approval)
         if not audit_pending:
-            # Build result content: include both output and error
-            output_str = result.output if isinstance(result.output, str) else str(result.output) if result.output else ""
-            if not result.success and result.error:
-                # On failure, include error information
-                result_content = f"Error: {result.error}"
-                if output_str:
-                    result_content = f"Output before error:\n{output_str}\n\n{result_content}"
-            else:
-                result_content = output_str
+            result_content = self._tool_result_content(result)
             materialized_messages = self._add_tool_result_with_pending_steer(
                 tool_call_id=tool_call_id,
                 content=result_content,
@@ -2319,13 +2526,7 @@ class HawiAgent:
             records.append(record)
 
             # Add tool result to context
-            output_str = result.output if isinstance(result.output, str) else str(result.output) if result.output else ""
-            if not result.success and result.error:
-                result_content = f"Error: {result.error}"
-                if output_str:
-                    result_content = f"Output before error:\n{output_str}\n\n{result_content}"
-            else:
-                result_content = output_str
+            result_content = self._tool_result_content(result)
             materialized_messages = self._add_tool_result_with_pending_steer(
                 tool_call_id=pending.tool_call_id,
                 content=result_content,
@@ -2350,6 +2551,9 @@ class HawiAgent:
                     ),
                     event_bus,
                 )
+
+        if records:
+            self._mark_tool_results_unsent(records)
 
         return records
 

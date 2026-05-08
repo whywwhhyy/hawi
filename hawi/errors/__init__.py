@@ -19,6 +19,7 @@ from .model_errors import (
     ThrottleError,
     DeniedError,
     ValidationError,
+    ContextLengthError,
     UnknownModelError,
 )
 
@@ -45,6 +46,7 @@ __all__ = [
     "ThrottleError",
     "DeniedError",
     "ValidationError",
+    "ContextLengthError",
     "UnknownModelError",
     # Agent
     "AgentError",

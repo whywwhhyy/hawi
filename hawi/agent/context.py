@@ -562,6 +562,40 @@ class AgentContext:
             "metadata": None,
         })
 
+    def replace_tool_result_content(
+        self,
+        tool_call_id: str,
+        content: str | list[ContentPart],
+        *,
+        is_error: bool | None = None,
+    ) -> bool:
+        """Replace the content of an existing tool result message.
+
+        Returns ``True`` when a matching ``tool_call_id`` is found. This keeps
+        the surrounding assistant/tool message structure intact, which matters
+        for OpenAI-compatible providers.
+        """
+        replacement: list[ContentPart]
+        if isinstance(content, str):
+            replacement = [{"type": "text", "text": content}]
+        else:
+            replacement = deepcopy(content)
+
+        for message in reversed(self.messages):
+            if message["role"] != "tool":
+                continue
+            for part in message["content"]:
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "tool_result"
+                    and part.get("tool_call_id") == tool_call_id
+                ):
+                    part["content"] = replacement
+                    if is_error is not None:
+                        part["is_error"] = is_error
+                    return True
+        return False
+
     def add_missing_tool_results(self, content: str) -> list[RecoveredToolResult]:
         """Insert error tool results for assistant tool calls with no response.
 
