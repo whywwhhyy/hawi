@@ -30,6 +30,7 @@ class FileSystemPlugin(HawiPlugin):
     - read_file: 读取文件内容（支持分页、行号格式、缓存去重）
     - write_file: 覆盖写入文件（要求先读取，支持乐观并发控制）
     - edit_file: 精确字符串替换编辑（要求先读取，支持乐观并发控制）
+    - list_dir: 列出目录内容（支持递归、深度、隐藏文件和数量限制）
     - glob: 基于 glob 模式查找文件
     - grep: 基于正则搜索文件内容
     """
@@ -227,6 +228,42 @@ class FileSystemPlugin(HawiPlugin):
             )
 
         return hunks, git_diff
+
+    def _directory_entry_type(self, entry: os.DirEntry) -> str:
+        if entry.is_symlink():
+            return "symlink"
+        if entry.is_dir(follow_symlinks=False):
+            return "directory"
+        if entry.is_file(follow_symlinks=False):
+            return "file"
+        return "other"
+
+    def _directory_entry_info(
+        self,
+        entry: os.DirEntry,
+        *,
+        root_path: str,
+        depth: int,
+    ) -> dict:
+        entry_type = self._directory_entry_type(entry)
+        try:
+            stat_result = entry.stat(follow_symlinks=False)
+            size = stat_result.st_size
+            mtime = stat_result.st_mtime
+        except OSError:
+            size = None
+            mtime = None
+
+        abs_path = os.path.abspath(entry.path)
+        return {
+            "name": entry.name,
+            "path": abs_path,
+            "relativePath": os.path.relpath(abs_path, root_path),
+            "type": entry_type,
+            "size": size,
+            "mtime": mtime,
+            "depth": depth,
+        }
 
     @tool
     def read_file(
@@ -491,6 +528,110 @@ class FileSystemPlugin(HawiPlugin):
                 "structured_patch": hunks,
                 "original_content": original_content,
                 "git_diff": git_diff,
+            },
+        )
+
+    @tool
+    def list_dir(
+        self,
+        path: Optional[str] = None,
+        recursive: bool = False,
+        max_depth: int = 1,
+        include_hidden: bool = False,
+        limit: int = 200,
+    ) -> ToolResult:
+        """
+        列出目录内容，返回文件和子目录的结构化元数据。
+
+        Args:
+            path: 要列出的目录路径，默认为当前工作目录
+            recursive: 是否递归列出子目录
+            max_depth: 递归最大深度；1 表示只列直接子项
+            include_hidden: 是否包含以 "." 开头的隐藏文件和目录
+            limit: 最多返回的条目数量，避免目录结果过大
+        """
+        root_path = self._resolve_path(path or os.getcwd())
+        if not os.path.exists(root_path):
+            return ToolResult(success=False, error=f"Directory not found: {root_path}")
+        if not os.path.isdir(root_path):
+            return ToolResult(success=False, error=f"Path is not a directory: {root_path}")
+
+        effective_depth = max(1, max_depth)
+        effective_limit = max(0, limit)
+        entries: list[dict] = []
+        truncated = False
+
+        def should_include(name: str) -> bool:
+            return include_hidden or not name.startswith(".")
+
+        def sorted_children(directory: str) -> list[os.DirEntry]:
+            with os.scandir(directory) as iterator:
+                children = [
+                    entry
+                    for entry in iterator
+                    if should_include(entry.name)
+                ]
+            return sorted(
+                children,
+                key=lambda entry: (
+                    0 if entry.is_dir(follow_symlinks=False) else 1,
+                    entry.name.lower(),
+                    entry.name,
+                ),
+            )
+
+        def visit(directory: str, depth: int) -> None:
+            nonlocal truncated
+            if truncated:
+                return
+            try:
+                children = sorted_children(directory)
+            except OSError as e:
+                entries.append({
+                    "name": os.path.basename(directory),
+                    "path": directory,
+                    "relativePath": os.path.relpath(directory, root_path),
+                    "type": "error",
+                    "size": None,
+                    "mtime": None,
+                    "depth": depth,
+                    "error": str(e),
+                })
+                return
+
+            for entry in children:
+                if len(entries) >= effective_limit:
+                    truncated = True
+                    return
+
+                info = self._directory_entry_info(
+                    entry,
+                    root_path=root_path,
+                    depth=depth,
+                )
+                entries.append(info)
+
+                if (
+                    recursive
+                    and info["type"] == "directory"
+                    and depth < effective_depth
+                ):
+                    visit(entry.path, depth + 1)
+
+        visit(root_path, 1)
+
+        return ToolResult(
+            success=True,
+            output={
+                "type": "directory",
+                "path": root_path,
+                "entries": entries,
+                "numEntries": len(entries),
+                "isTruncated": truncated,
+                "recursive": recursive,
+                "maxDepth": effective_depth,
+                "includeHidden": include_hidden,
+                "limit": effective_limit,
             },
         )
 

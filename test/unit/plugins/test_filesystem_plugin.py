@@ -170,6 +170,90 @@ class TestFileSystemPlugin:
         assert any("a.py" in r for r in matches)
         assert not any("b.txt" in r for r in matches)
 
+    def test_list_dir_non_recursive(self, plugin, temp_dir):
+        """list_dir should return direct children with structured metadata."""
+        open(os.path.join(temp_dir, "a.py"), "w").close()
+        open(os.path.join(temp_dir, "b.txt"), "w").close()
+        open(os.path.join(temp_dir, ".hidden"), "w").close()
+        subdir = os.path.join(temp_dir, "sub")
+        os.makedirs(subdir, exist_ok=True)
+        open(os.path.join(subdir, "nested.py"), "w").close()
+
+        result = plugin.list_dir(temp_dir)
+
+        assert result.success is True
+        assert result.output["type"] == "directory"
+        assert result.output["path"] == os.path.abspath(temp_dir)
+        assert result.output["recursive"] is False
+        assert result.output["isTruncated"] is False
+
+        entries = result.output["entries"]
+        names = [entry["name"] for entry in entries]
+        assert names == ["sub", "a.py", "b.txt"]
+        assert ".hidden" not in names
+        assert "nested.py" not in names
+
+        sub_entry = entries[0]
+        assert sub_entry["type"] == "directory"
+        assert sub_entry["relativePath"] == "sub"
+        assert sub_entry["depth"] == 1
+        assert "size" in sub_entry
+        assert "mtime" in sub_entry
+
+    def test_list_dir_recursive_respects_depth_and_hidden_flag(self, plugin, temp_dir):
+        """list_dir recursion should obey max_depth and hidden filtering."""
+        visible = os.path.join(temp_dir, "visible")
+        nested = os.path.join(visible, "nested")
+        hidden = os.path.join(temp_dir, ".hidden")
+        os.makedirs(nested, exist_ok=True)
+        os.makedirs(hidden, exist_ok=True)
+        open(os.path.join(visible, "one.txt"), "w").close()
+        open(os.path.join(nested, "two.txt"), "w").close()
+        open(os.path.join(hidden, "secret.txt"), "w").close()
+
+        result = plugin.list_dir(
+            temp_dir,
+            recursive=True,
+            max_depth=2,
+            include_hidden=False,
+        )
+
+        assert result.success is True
+        paths = [entry["relativePath"] for entry in result.output["entries"]]
+        assert "visible" in paths
+        assert os.path.join("visible", "nested") in paths
+        assert os.path.join("visible", "one.txt") in paths
+        assert os.path.join("visible", "nested", "two.txt") not in paths
+        assert ".hidden" not in paths
+
+        with_hidden = plugin.list_dir(temp_dir, include_hidden=True)
+        hidden_paths = [entry["relativePath"] for entry in with_hidden.output["entries"]]
+        assert ".hidden" in hidden_paths
+
+    def test_list_dir_limit_truncates_long_directories(self, plugin, temp_dir):
+        """list_dir should cap large directory outputs."""
+        for i in range(5):
+            open(os.path.join(temp_dir, f"{i}.txt"), "w").close()
+
+        result = plugin.list_dir(temp_dir, limit=2)
+
+        assert result.success is True
+        assert result.output["numEntries"] == 2
+        assert len(result.output["entries"]) == 2
+        assert result.output["isTruncated"] is True
+
+    def test_list_dir_missing_or_file_path(self, plugin, temp_dir):
+        """list_dir should fail cleanly for missing paths and files."""
+        missing = plugin.list_dir(os.path.join(temp_dir, "missing"))
+        assert missing.success is False
+        assert "Directory not found" in missing.error
+
+        file_path = os.path.join(temp_dir, "file.txt")
+        open(file_path, "w").close()
+        file_result = plugin.list_dir(file_path)
+        assert file_result.success is False
+        assert "not a directory" in file_result.error
+
     def test_grep(self, plugin, temp_dir):
         """Test grep tool."""
         file_path = os.path.join(temp_dir, "test.py")
