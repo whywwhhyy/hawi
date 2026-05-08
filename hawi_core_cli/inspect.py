@@ -54,6 +54,9 @@ def _plugin_entries() -> list[tuple[str, str, type]]:
     from hawi_plugins.environ_prompt_plugin import EnvironPromptPlugin
 
     return [
+        # EnvironPromptPlugin first — it injects session/env context into
+        # the prompt before any tool plugin runs.
+        (PLUGIN_ENVIRON_PROMPT, "EnvironPromptPlugin", EnvironPromptPlugin),
         (PLUGIN_FILESYSTEM, "FileSystemPlugin", FileSystemPlugin),
         (PLUGIN_SHELL, "ShellPlugin", ShellPlugin),
         (PLUGIN_WEB, "WebPlugin", WebPlugin),
@@ -62,5 +65,4 @@ def _plugin_entries() -> list[tuple[str, str, type]]:
         (PLUGIN_MCP, "MCPPlugin", MCPPlugin),
         (PLUGIN_PLAN, "PlanPlugin", PlanPlugin),
         (PLUGIN_WORKFLOW, "WorkflowPlugin", WorkflowPlugin),
-        (PLUGIN_ENVIRON_PROMPT, "EnvironPromptPlugin", EnvironPromptPlugin),
     ]

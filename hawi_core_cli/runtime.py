@@ -704,7 +704,8 @@ class CoreRuntime:
             elif plugin_key == PLUGIN_ENVIRON_PROMPT:
                 from hawi_plugins.environ_prompt_plugin import EnvironPromptPlugin
 
-                plugin = EnvironPromptPlugin()
+                config_path = str(cfg.get("config_path") or "").strip() or None
+                plugin = EnvironPromptPlugin(config_path=config_path)
             else:
                 raise ValueError(f"Unknown plugin key: {plugin_key}")
             if hasattr(plugin, "bind_plugin_identity"):

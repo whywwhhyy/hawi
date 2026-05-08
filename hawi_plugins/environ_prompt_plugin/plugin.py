@@ -103,8 +103,8 @@ class EnvironPromptPlugin(HawiPlugin):
     markers and prefixed with a note declaring them as framework-injected.
     """
 
-    def __init__(self) -> None:
-        self._config = self._load_config()
+    def __init__(self, config_path: str | None = None) -> None:
+        self._config = self._load_config(config_path=config_path)
         self._last_prompt_ts: float = 0.0
         """Timestamp (seconds since epoch) of the last user-prompt injection.
 
@@ -118,14 +118,21 @@ class EnvironPromptPlugin(HawiPlugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _load_config() -> dict[str, Any]:
-        """Load configuration from YAML file or fall back to defaults.
+    def _load_config(config_path: str | None = None) -> dict[str, Any]:
+        """Load configuration from YAML/JSON file with three-level priority.
 
-        Searches ``.hawi/environ_prompt.yaml`` in the current working
-        directory, then ``~/.hawi/environ_prompt.yaml``.  If neither file
-        exists the hardcoded :attr:`DEFAULT_CONFIG` is returned.
+        1. **User-specified path** — if *config_path* is given and the file
+           exists, load it.
+        2. **Default search paths** — otherwise search
+           ``.hawi/environ_prompt.yaml`` then ``~/.hawi/environ_prompt.yaml``.
+        3. **Built-in defaults** — if neither exists, return a copy of
+           :attr:`DEFAULT_CONFIG`.
         """
-        for candidate in CONFIG_CANDIDATES:
+        candidates: list[Path] = []
+        if config_path:
+            candidates.append(Path(config_path))
+        candidates.extend(CONFIG_CANDIDATES)
+        for candidate in candidates:
             resolved = candidate.resolve()
             if resolved.is_file():
                 try:
@@ -148,11 +155,15 @@ class EnvironPromptPlugin(HawiPlugin):
         return {
             "type": "object",
             "properties": {
-                "enabled": {
-                    "type": "boolean",
-                    "title": "Enabled",
-                    "description": "Enable environment prompt injection",
-                    "default": True,
+                "config_path": {
+                    "type": "string",
+                    "title": "Config Path",
+                    "default": "",
+                    "description":
+                        "Path to environ_prompt config file (YAML or JSON). "
+                        "When empty, searches .hawi/environ_prompt.yaml then "
+                        "~/.hawi/environ_prompt.yaml before falling back to "
+                        "built-in defaults.",
                 },
             },
             "additionalProperties": False,
@@ -160,7 +171,7 @@ class EnvironPromptPlugin(HawiPlugin):
 
     @classmethod
     def gui_default_config(cls) -> dict[str, Any]:
-        return {"enabled": True}
+        return {"config_path": ""}
 
     # ------------------------------------------------------------------
     # Clone support
