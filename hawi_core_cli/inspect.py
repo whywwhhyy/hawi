@@ -9,6 +9,7 @@ from hawi.models import model_registry
 from .protocol import VERSION, to_json_safe
 from .runtime import (
     DEFAULT_SYSTEM_PROMPT,
+    PLUGIN_ENVIRON_PROMPT,
     PLUGIN_FILESYSTEM,
     PLUGIN_MCP,
     PLUGIN_PLAN,
@@ -50,6 +51,7 @@ def _plugin_entries() -> list[tuple[str, str, type]]:
     from hawi_plugins.skills_plugin import SkillsPlugin
     from hawi_plugins.web import WebPlugin
     from hawi_plugins.workflow_plugin import WorkflowPlugin
+    from hawi_plugins.environ_prompt_plugin import EnvironPromptPlugin
 
     return [
         (PLUGIN_FILESYSTEM, "FileSystemPlugin", FileSystemPlugin),
@@ -60,4 +62,5 @@ def _plugin_entries() -> list[tuple[str, str, type]]:
         (PLUGIN_MCP, "MCPPlugin", MCPPlugin),
         (PLUGIN_PLAN, "PlanPlugin", PlanPlugin),
         (PLUGIN_WORKFLOW, "WorkflowPlugin", WorkflowPlugin),
+        (PLUGIN_ENVIRON_PROMPT, "EnvironPromptPlugin", EnvironPromptPlugin),
     ]

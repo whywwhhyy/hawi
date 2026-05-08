@@ -42,6 +42,7 @@ PLUGIN_PYTHON_INTERPRETER = "python_interpreter"
 PLUGIN_MCP = "mcp"
 PLUGIN_PLAN = "plan"
 PLUGIN_WORKFLOW = "workflow"
+PLUGIN_ENVIRON_PROMPT = "environ_prompt"
 
 KNOWN_PLUGINS = {
     PLUGIN_FILESYSTEM,
@@ -52,6 +53,7 @@ KNOWN_PLUGINS = {
     PLUGIN_MCP,
     PLUGIN_PLAN,
     PLUGIN_WORKFLOW,
+    PLUGIN_ENVIRON_PROMPT,
 }
 
 PLUGIN_LABELS = {
@@ -63,6 +65,7 @@ PLUGIN_LABELS = {
     PLUGIN_MCP: "MCPPlugin",
     PLUGIN_PLAN: "PlanPlugin",
     PLUGIN_WORKFLOW: "WorkflowPlugin",
+    PLUGIN_ENVIRON_PROMPT: "EnvironPromptPlugin",
 }
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -698,6 +701,10 @@ class CoreRuntime:
                 from hawi_plugins.workflow_plugin import WorkflowPlugin
 
                 plugin = WorkflowPlugin()
+            elif plugin_key == PLUGIN_ENVIRON_PROMPT:
+                from hawi_plugins.environ_prompt_plugin import EnvironPromptPlugin
+
+                plugin = EnvironPromptPlugin()
             else:
                 raise ValueError(f"Unknown plugin key: {plugin_key}")
             if hasattr(plugin, "bind_plugin_identity"):

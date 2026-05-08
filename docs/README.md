@@ -16,6 +16,7 @@ Hawi Agent 框架的官方文档。
 | [event_system.md](./event_system.md) | Event 系统使用指南 |
 | [event_system_design.md](./event_system_design.md) | Event 系统设计决策 |
 | [hook_system.md](./hook_system.md) | Hook 系统使用指南 |
+| [plugin_development.md](./plugin_development.md) | 插件开发完整指南（含注册流程） |
 | [models.md](./models.md) | 模型适配器使用指南 |
 | [tools.md](./tools.md) | 工具系统使用指南 |
 | [lifecycle.md](./lifecycle.md) | 生命周期管理（ExitHandler） |

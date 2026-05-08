@@ -1,0 +1,34 @@
+# EnvironPromptPlugin 配置文件
+# 将此文件放到 .hawi/environ_prompt.yaml 或 ~/.hawi/environ_prompt.yaml
+# 如果文件不存在，插件会使用代码中的默认配置（所有功能默认开启）
+
+# 全局开关
+enabled: true
+
+# ===== 系统提示词注入（session 启动时一次性注入，不再更改） =====
+system_prompt:
+  enabled: true
+  # 是否注入 session 级环境信息（启动日期、OS、时区、硬件等）
+  include_session_info: true
+  # 自定义文本，直接注入到 system prompt
+  text: ""
+  # 要读取内容并注入的文件列表
+  # 每个条目可以是字符串（文件路径）或字典（path + label）
+  files: []
+  # 例如：
+  # files:
+  #   - path: ".hawi/project_context.md"
+  #     label: "Project Context"
+  #   - "README.md"
+
+# ===== 用户提示词注入（每次用户消息前注入动态信息） =====
+user_prompt:
+  enabled: true
+  # 是否注入当前工作目录
+  include_cwd: true
+  # 是否注入自上次用户消息后被修改的文件列表
+  include_modified_files: true
+  # 自定义文本，注入到用户消息前
+  text: ""
+  # 要读取内容并注入的文件列表
+  files: []
