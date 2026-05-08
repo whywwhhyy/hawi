@@ -1226,8 +1226,8 @@ export function thinkingExcerpt(value: string, maxChars = 120): string {
 function compactNumber(value: number): string {
   if (!Number.isFinite(value)) return "-";
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(value) >= 10_000) return `${Math.round(value / 1000)}k`;
-  return `${Math.round(value)}`;
+  if (Math.abs(value) >= 1000) return `${Math.round(value / 1000)}k`;
+  return `${(value / 1000).toFixed(1)}k`;
 }
 
 function formatQueueTimestamp(value?: number): string | null {
