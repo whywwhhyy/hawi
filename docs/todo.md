@@ -1,34 +1,171 @@
-- [ ] 重写agent为多队列单循环：
-    - [ ] 1. 插队消息队列
-    - [ ] 2. 工具调用请求队列
-    - [ ] 3. 用户消息队列
+- [ ] 重写 agent 为多队列单循环：
+    - [x] 插队消息队列：scheduler 已有 `urgent` / `high_prio`
+    - [x] 用户消息队列：scheduler 已有 `normal`
+    - [x] scheduler 已有 `run_forever()` 单循环消费队列
+    - [ ] 工具调用请求队列：将 tool call request 显式队列化，而不是只在 agent loop 内顺序执行
+    - [ ] agent 内部执行循环与 scheduler 队列模型进一步统一
+    - [ ] 明确 urgent / high_prio / normal 在 tool 执行中、model streaming 中、空闲时的完整语义
 
-- [ ] agent messages提供标签和id功能，以支持插件和工具实现便捷的上下文管理方法
+- [ ] agent messages 提供标签和 id 功能，以支持插件和工具实现便捷的上下文管理方法
+    - [x] scheduler / steer 路径已经通过 message metadata 传递 `message_id`
+    - [x] `AgentMessageAddedEvent` 已携带 message metadata
+    - [x] `AgentContext.save/load` 会保留 message metadata
+    - [ ] `Message` 类型增加一等公民 `id`
+    - [ ] `Message` 类型增加 `tags` / `labels`
+    - [ ] `AgentContext` 提供按 id / tag 查询、折叠、删除、替换的 API
+    - [ ] 明确哪些 metadata 会进入模型上下文，哪些仅用于运行时/GUI/插件
 
-- [ ] 还需要提供持久化机制，确保agent可以做到不管什么时候crash再拉起来都可以恢复session
+- [ ] 还需要提供持久化机制，确保 agent 可以做到不管什么时候 crash 再拉起来都可以恢复 session
+    - [x] `AgentContext.save/load` 已支持 JSON 保存/恢复 messages、system prompt、cache 配置、compaction records
+    - [x] core runtime 在切换插件时已支持 preserve context
+    - [ ] 持久化 scheduler 队列：urgent / high_prio / normal
+    - [ ] 持久化 pending steer inputs
+    - [ ] 持久化 pending audit tool calls
+    - [ ] 持久化插件状态：PlanPlugin、WorkflowPlugin、ShellPlugin、PythonInterpreterPlugin 等
+    - [ ] 持久化当前 run / tool call 的恢复策略：可重试、可补偿、不可恢复
+    - [ ] 增加原子 checkpoint 与 crash recovery 测试
+    - [ ] GUI需要支持session切换
 
-- [ ] agent打断接口
-    - [x] 添加打断接口
-    - [ ] 实现agent打断接口
+- [ ] 先设计 subagent 顶层 API：作为 multi-agent workflow 与插件编排的基础原语
+    - [ ] subagent 首先是 core 级 API，而不是只给模型调用的 tool
+    - [ ] 基于顶层 API 再提供 tool wrapper，让 agent 可以通过工具创建/驱动 subagent
+    - [ ] 插件可以直接调用 subagent API；例如 WorkflowPlugin 用 subagent 做 gate review / reviewer，而不需要绕回模型工具调用
+    - [ ] 明确 API 形态：`spawn_subagent` / `send_subagent_input` / `read_subagent_result` / `close_subagent`，还是单个 `run_subagent`
+    - [ ] 明确 tool 形态：暴露完整 lifecycle tool set，还是只暴露 `run_subagent`
+    - [ ] 支持选择模型：继承主 agent、显式指定模型、按任务类型选择模型
+    - [ ] 支持 subagent 角色/模式：planner、reviewer、explorer、implementer、critic、summarizer
+    - [ ] 支持输入材料选择：完整上下文、摘要上下文、文件/artifact 引用、显式消息列表
+    - [ ] 支持上下文隔离：默认不共享可变上下文，只通过 artifact / message handoff 交换结果
+    - [ ] 支持工具权限配置：继承主 agent 工具、只读工具集、指定 allowlist、禁用危险工具
+    - [ ] 支持预算与边界：最大轮数、最大 token、最大时间、最大 tool call 数、递归深度限制
+    - [ ] 支持 ownership：声明 subagent 可读/可写的文件或模块范围，避免并行修改冲突
+    - [ ] 支持运行控制：interrupt、cancel、timeout、retry、resume
+    - [ ] 支持结果协议：纯文本、结构化 JSON、artifact id、diff、plan、review、signoff
+    - [ ] 支持事件映射：subagent run/tool/model 事件要能关联回 parent run 与 parent tool_call_id
+    - [ ] 支持持久化：subagent 状态、队列、artifact、未完成任务可恢复
+    - [ ] 支持审计：记录 prompt、输入材料、工具权限、模型、输出、用户确认
+    - [ ] 明确失败语义：subagent 失败时主 agent 是继续、重试、降级，还是请求用户确认
+    - [ ] 评估落点：Agent core 提供顶层 API，SubAgentPlugin 提供 tool wrapper，WorkflowPlugin 等插件直接复用 API
 
-- [ ] 增加retry事件
+- [ ] multi-agent 支持：保留多种可能性，先把可验证的模式沉淀成受控 workflow / tool
+    - [ ] 明确设计原则：主循环仍保持可调试，multi-agent 不是默认执行架构
+    - [ ] 依赖 subagent 顶层 API / tool wrapper 提供稳定的创建、通信、权限、结果与生命周期协议
+    - [ ] 多模型计划收敛 workflow：
+        - [ ] 主 agent 创建两个不同模型的 subagent，各自生成独立计划书
+        - [ ] 两份计划书交换阅读
+        - [ ] subagent 在自己的计划书中吸收对方计划里的启发点
+        - [ ] subagent 从对方计划中寻找冲突、遗漏、假设差异等摩擦点
+        - [ ] subagent 在自己的计划书末尾追加 review 章节：列举摩擦点与对对方文档的审阅意见
+        - [ ] 主 agent 汇总两边摩擦点，交给用户阅读并收集用户意见
+        - [ ] 将用户意见分别注入两个 subagent，触发下一轮修改
+        - [ ] 重复交换阅读、更新、review，直到摩擦点收敛
+        - [ ] 设计 signoff 机制：主 agent、两个 subagent、用户四方均可显式 signoff
+        - [ ] 摩擦点收敛后，由主 agent 使用最强模型写汇总计划书
+        - [ ] 两个 subagent review 主 agent 汇总计划书
+        - [ ] review 标准 1：是否包含所有设计点
+        - [ ] review 标准 2：是否存在不符合原始材料的设计点
+        - [ ] review 标准 3：是否存在多出来的设计点，并先全部标记为潜在幻觉
+        - [ ] 对额外设计点逐个批判性检查：是否有价值、是否错误、是否需要用户确认
+        - [ ] 主 agent 根据 review 与用户意见继续修订，直到四方均认同
+    - [ ] 多专家审阅 workflow：架构、安全、性能、测试、产品等不同角色并行审查同一产物
+    - [ ] 分叉实验 workflow：多个 subagent 分别提出/实现替代方案，主 agent 对比取舍
+    - [ ] 探索/实现/验证分工 workflow：探索者读代码，执行者改代码，审查者验证风险
+    - [ ] 长任务分片 workflow：按模块或文件 ownership 拆分，避免并行写同一片区域
+    - [ ] 对抗性审查 workflow：一个 subagent 提案，另一个专门找反例、漏洞和误读
+    - [ ] 为每轮产物建立 artifact：计划、diff、review、frictions、user_feedback、merged output、signoff
+    - [ ] 设计上下文隔离：subagent 只能看到必要材料、对方产物、用户反馈，避免互相污染
+    - [ ] 设计终止条件：最大轮数、无新增摩擦点、四方 signoff、用户强制中止
+    - [ ] 评估是否落在 WorkflowPlugin、PlanPlugin，还是新增 MultiAgentPlugin / MultiAgentPlanningPlugin
 
-- [x] Agent改名为Bao
+- [x] agent 打断接口
+    - [x] 添加打断接口：`HawiAgent.interrupt()` / `HawiScheduler.interrupt()`
+    - [x] core runtime 已提供 `interrupt` 命令
+    - [x] 中断/取消时会补缺失的 tool result，避免 provider message history 损坏
+    - [x] scheduler urgent 消息会触发当前执行中断
 
-- [ ] 给plugin加上name和tags字段，设计依赖管理和冲突识别的机制
+- [x] 增加 retry 事件
+    - [x] 已有 `ModelRetryEvent`
+    - [x] 已注册 `model.retry` event type
+    - [x] model retry / context-length retry 会发布 retry event
+    - [x] core-cli semantic event mapper 已映射 `model.retry`
 
-- [x] 将skills plugin拆分为terminal和skills
+- [ ] Agent 改名为 Bao
+    - [ ] 当前代码主类仍是 `HawiAgent`
+    - [ ] 当前导出仍是 `HawiAgent`
+    - [ ] 当前默认 system prompt 仍是“你是Hawi，一个通用agent”
+    - [ ] 需要决定是做兼容别名 `Bao` / `BaoAgent`，还是整体 rename
+    - [ ] 同步更新 docs、tests、GUI 文案、core protocol 文案
+
+- [ ] 给 plugin 加上 name 和 tags 字段，设计依赖管理和冲突识别的机制
+    - [x] `HawiPlugin` 已有 `plugin_id` / `plugin_name`
+    - [x] `bind_plugin_identity()` 已支持 GUI/事件侧绑定插件身份
+    - [x] `AgentTool` 已有 `tags`
+    - [x] 动态工具 shadow plugin tool 时已有 warning
+    - [x] framework injected parameter 已有冲突检查
+    - [ ] plugin 级 `tags`
+    - [ ] plugin manifest：id、name、tags、capabilities、config schema、resources
+    - [ ] plugin dependency / optional dependency 声明
+    - [ ] plugin conflict 声明与加载前校验
+    - [ ] 同名 hook / tool / resource 的冲突策略文档化
+
+- [x] 将 skills plugin 拆分为 terminal 和 skills
+    - [x] SkillsPlugin 独立负责 skill discovery / use_skill
+    - [x] ShellPlugin 独立负责 terminal/shell command
+    - [x] GUI/runtime 已能分别选择 `skills` 与 `shell`
 
 - [ ] filesystem plugin:
-    - [ ] read_file 增加语言相关的高亮/标注能力
-    - [ ] 评估是否需要和 ClaudeCode 一样补充更完整的 language detection 策略
+    - [x] `read_file` 已返回 `language` 元数据
+    - [x] 已有基于文件名/扩展名的基础 language detection
+    - [ ] `read_file` 增加语言相关的高亮/标注能力
+    - [ ] 评估是否需要和 Claude Code 一样补充更完整的 language detection 策略
+    - [ ] 对超大文件提供结构化分页、折叠、symbol/section 级读取
+    - [ ] 给 grep/glob/read/edit 补充更完整的工具说明与正反示例
 
-- [ ] 重构渐进式加载的tool设计，新增brief字段，使用tool_help来获得tool的详细介绍，run_tool来执行tool
+- [ ] 重构渐进式加载的 tool 设计，新增 `brief` 字段，使用 `tool_help` 获得 tool 的详细介绍，`run_tool` 执行 tool
+    - [ ] `AgentTool` 增加 `brief` 字段：短描述，用于默认暴露给模型
+    - [ ] 保留 `description` 作为长说明：详细行为、边界、示例、安全约束
+    - [ ] 设计 lazy tool catalog：默认只暴露 tool name、brief、tags、风险级别、是否需要确认
+    - [ ] 新增 `tool_help(name)`：返回完整 description、schema、examples、常见错误、权限/确认策略
+    - [ ] 新增 `run_tool(name, arguments)`：统一分发执行真实 tool
+    - [ ] 支持 `run_tool` 透传 tool_call_id / run_id / plugin identity，保证事件与审计不丢
+    - [ ] 支持直接暴露模式、lazy 模式、hybrid 模式三种兼容策略
+    - [ ] PluginManager 增加 lazy catalog / full schema cache 与失效机制
+    - [ ] 对高频核心工具支持 always-exposed 白名单
+    - [ ] 对危险/低频工具默认仅暴露 brief，需要先 `tool_help`
+    - [ ] 更新 model adapter：只把 wrapper tools 或 hybrid tool set 发给模型
+    - [ ] 补测试：工具发现、help 拉取、真实执行、审计、事件映射、错误路径、向后兼容
 
-- [x] 优化各个hook的参数
+- [x] 优化各个 hook 的参数
+    - [x] 已统一使用 `HookContext`
+    - [x] tool hooks 已能拿到 `tool_call_id` 与 `tool`
+    - [x] after hooks 已能拿到 duration/error 等上下文
 
-- [ ] tool result导致爆上下文的时候，撤销tool result并且提示模型
+- [ ] tool result 导致爆上下文的时候，撤销 tool result 并且提示模型
+    - [x] context-length retry 时已能截断最长的未发送 tool result
+    - [x] 截断后的 tool result 会带 Hawi 生成的提示标记
+    - [x] retry 成功后会清理 `_last_unsent_tool_results`
+    - [ ] 支持完整撤销 tool result
+    - [ ] 支持把超长 tool result 外置为 artifact / handle，模型上下文只保留摘要和读取方式
+    - [ ] 支持按 range / query 重新读取被外置的 tool result
 
-- [ ] “需要用户确认”这个动作要做成一个hook，并且仅支持一个hook
+- [ ] “需要用户确认”这个动作要做成一个 hook，并且仅支持一个 hook
+    - [x] `AgentTool.audit = True` 已支持工具调用进入 pending review
+    - [x] `review_pending_tools()` / `approve_pending_tools()` / `reject_pending_tools()` 已存在
+    - [x] `ToolParameterInjection` 可给确认场景注入 `approval_reason` 等模型可见参数
+    - [ ] 抽象成唯一 confirmation hook
+    - [ ] 明确同一时刻只能有一个 confirmation hook 生效
+    - [ ] confirmation hook 支持 allow / deny / modify / timeout / policy decision
+    - [ ] GUI / CLI / headless runtime 使用同一确认协议
 
-- [ ] https://zhuanlan.zhihu.com/p/1943399204027373513?share_code=1roZMkugobZJr&utm_psn=2020735776124667643
+- [ ] 参考 Claude Code 逆向文章：https://zhuanlan.zhihu.com/p/1943399204027373513?share_code=1roZMkugobZJr&utm_psn=2020735776124667643
+    - [x] 单一主循环 / 扁平消息历史：HawiAgent + scheduler 已有基础形态
+    - [x] 朴素 To-Do：PlanPlugin 已提供显式计划工具
+    - [x] LLM 像人一样搜索：FileSystemPlugin / ShellPlugin 已提供 grep、glob、shell 等低层能力
+    - [x] 高/中/低层工具组合：shell、filesystem、web、workflow、plan 已初步覆盖
+    - [ ] 小模型任务分级：读大文件、网页解析、git 历史、summary、状态文案等交给 cheap model
+    - [ ] `CLAUDE.md` / `AGENTS.md` 风格的项目记忆文件自动加载与作用域规则
+    - [ ] 系统提示词结构化：XML tags、Markdown 分区、good/bad examples、流程化算法
+    - [ ] Task/sub-agent 工具：允许主 agent 派生一个 clone 处理子问题，并限制递归深度；优先服务“多模型计划收敛”工作流
+    - [ ] 为高频工具补充更详细 prompt、示例和失败处理策略
+    - [ ] 工具使用策略文档化：什么时候用专用工具，什么时候回退 shell
+    - [ ] 可控性规则：语气、主动性、危险操作、URL、文件编辑等统一写进 runtime prompt
