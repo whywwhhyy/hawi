@@ -7,6 +7,51 @@ function frame(type: string, payload: Record<string, unknown>): CoreFrame {
 }
 
 describe("core event reducer", () => {
+  it("shows materialized high priority messages as normal chat history", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-1",
+      message_id: "steer-1",
+      user_content: "new priority",
+      queue: "normal",
+      display_message_type: "normal"
+    }));
+
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0]).toMatchObject({
+      id: "user-message-steer-1",
+      kind: "user",
+      queue: "normal",
+      displayMessageType: "normal",
+      content: "new priority"
+    });
+    expect(state.activeRunId).toBe("run-1");
+  });
+
+  it("shows materialized steer messages with steer display type", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-1",
+      message_id: "steer-1",
+      user_content: "new priority",
+      queue: "high_prio",
+      display_message_type: "steer"
+    }));
+
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0]).toMatchObject({
+      id: "user-message-steer-1",
+      kind: "user",
+      queue: "high_prio",
+      displayMessageType: "steer",
+      content: "new priority"
+    });
+    expect(state.activeRunId).toBe("run-1");
+    expect(state.runs["run-1"]).toEqual({});
+  });
+
   it("splits agent content around tool calls", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("run.start", { run_id: "run-1", user_content: "hi", queue: "normal" }));

@@ -493,11 +493,16 @@ class AgentContext:
         """
         self.messages.append(message)
 
-    def add_user_message(self, content: str | list[ContentPart]) -> None:
+    def add_user_message(
+        self,
+        content: str | list[ContentPart],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Add a user message.
 
         Args:
             content: Text string or content parts
+            metadata: Optional message metadata
         """
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
@@ -506,7 +511,7 @@ class AgentContext:
             "role": "user",
             "content": content,
             "name": None,
-            "metadata": None,
+            "metadata": dict(metadata) if metadata else None,
         })
 
     def add_assistant_message(

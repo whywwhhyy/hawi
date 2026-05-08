@@ -38,16 +38,19 @@ class SemanticEventMapper:
 
         if etype == "scheduler.enqueue":
             event = event  # type: ignore[assignment]
+            queue_type = str(getattr(event, "queue_type", ""))
+            message_id = str(getattr(event, "message_id", ""))
+            content_preview = str(getattr(event, "content_preview", ""))
             return [
                 make_frame(
                     "debug.info",
                     {
                         "message": (
-                            f"Enqueue to {getattr(event, 'queue_type', '')}: "
-                            f"{getattr(event, 'content_preview', '')}"
+                            f"Enqueue to {queue_type}: "
+                            f"{content_preview}"
                         ),
                         "event_type": etype,
-                        "message_id": getattr(event, "message_id", ""),
+                        "message_id": message_id,
                     },
                 )
             ]
@@ -55,6 +58,7 @@ class SemanticEventMapper:
         if etype == "scheduler.dequeue":
             event = event  # type: ignore[assignment]
             queue_type = str(getattr(event, "queue_type", "normal"))
+            message_id = str(getattr(event, "message_id", ""))
             if queue_type in {"normal", "high_prio", "urgent"}:
                 self._current_queue_kind = queue_type
             return [
@@ -63,7 +67,7 @@ class SemanticEventMapper:
                     {
                         "message": f"Dequeue from {queue_type}",
                         "event_type": etype,
-                        "message_id": getattr(event, "message_id", ""),
+                        "message_id": message_id,
                         "queue": queue_type,
                     },
                 )
@@ -94,13 +98,20 @@ class SemanticEventMapper:
             if not text:
                 return []
             queue = self._queue_for_user_message(event, run_id)
+            message_id = self._message_id_for_user_message(event, run_id)
+            display_message_type = self._display_message_type_for_user_message(
+                event,
+                queue,
+            )
             return [
                 make_frame(
                     "run.start",
                     {
                         "run_id": run_id,
+                        "message_id": message_id,
                         "user_content": text,
                         "queue": queue,
+                        "display_message_type": display_message_type,
                     },
                 )
             ]
@@ -432,14 +443,16 @@ class SemanticEventMapper:
 
         return []
 
-    @staticmethod
-    def _extract_text(content: Any) -> str:
-        text = ""
+    @classmethod
+    def _extract_text(cls, content: Any) -> str:
+        chunks: list[str] = []
         if isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "text":
-                    text += str(part.get("text", ""))
-        return text
+                    chunks.append(str(part.get("text", "")))
+                elif isinstance(part, dict) and part.get("type") == "steer":
+                    chunks.append(cls._extract_text(part.get("content", [])))
+        return "".join(chunk for chunk in chunks if chunk)
 
     def _queue_for_user_message(self, event: Event, run_id: str) -> str:
         metadata = getattr(event, "metadata", None)
@@ -451,6 +464,25 @@ class SemanticEventMapper:
         queue = self._run_queue.get(run_id, self._current_queue_kind)
         if queue in {"normal", "high_prio", "urgent"}:
             return queue
+        return "normal"
+
+    def _message_id_for_user_message(self, event: Event, _run_id: str) -> str:
+        metadata = getattr(event, "metadata", None)
+        if isinstance(metadata, dict):
+            message_id = str(metadata.get("message_id", "") or "")
+            if message_id:
+                return message_id
+        return ""
+
+    @staticmethod
+    def _display_message_type_for_user_message(event: Event, queue: str) -> str:
+        metadata = getattr(event, "metadata", None)
+        if isinstance(metadata, dict):
+            display_message_type = str(metadata.get("display_message_type", "") or "")
+            if display_message_type in {"normal", "steer", "urgent"}:
+                return display_message_type
+        if queue == "urgent":
+            return "urgent"
         return "normal"
 
     @staticmethod

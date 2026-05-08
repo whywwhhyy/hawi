@@ -518,7 +518,45 @@ class TestAgentExecutorEventBus:
         assert task is not None
         await task
 
-        agent._arun_internal.assert_awaited_once_with("hello", event_bus=event_bus)
+        agent._arun_internal.assert_awaited_once_with(
+            "hello",
+            event_bus=event_bus,
+            message_metadata={
+                "message_id": message.id,
+                "queue": "normal",
+                "display_message_type": "normal",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_marks_high_prio_plain_message_as_normal(self):
+        agent = MagicMock()
+        agent._arun_internal = AsyncMock(return_value=MagicMock())
+        agent.clear_interrupt_state = MagicMock()
+        scheduler = MagicMock()
+        executor = AgentExecutor(agent, scheduler)
+        message = QueuedMessage.create(
+            "hello",
+            QueueType.HIGH_PRIO,
+            metadata={"client": "gui"},
+        )
+
+        task = executor.execute(message)
+        assert task is not None
+        await task
+
+        agent._arun_internal.assert_awaited_once_with(
+            "hello",
+            event_bus=None,
+            message_metadata={
+                "client": "gui",
+                "message_id": message.id,
+                "queue": "normal",
+                "display_message_type": "normal",
+                "source_queue": "high_prio",
+                "materialized_as": "plain_user_message",
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_execute_pending_inputs_runs_without_new_message(self):
@@ -533,7 +571,11 @@ class TestAgentExecutorEventBus:
         assert task is not None
         await task
 
-        agent._arun_internal.assert_awaited_once_with(None, event_bus=event_bus)
+        agent._arun_internal.assert_awaited_once_with(
+            None,
+            event_bus=event_bus,
+            message_metadata=None,
+        )
 
 
 if __name__ == "__main__":

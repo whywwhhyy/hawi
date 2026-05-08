@@ -172,6 +172,14 @@ class PendingInput:
     preferred_merge_mode: SteerPartMergeMode | None = None
 
 
+@dataclass
+class MaterializedSteerMessage:
+    """A pending steer input that has been appended to context."""
+
+    content: list[ContentPart]
+    metadata: dict[str, Any]
+
+
 class HawiAgent:
     """Core agent implementation for Hawi framework.
 
@@ -906,17 +914,20 @@ class HawiAgent:
             return False
 
         for pending in pending_inputs:
-            self._context.add_user_message(pending.content)
+            metadata = {
+                "message_id": pending.id,
+                "queue": "normal",
+                "display_message_type": "normal",
+                "source_queue": "high_prio",
+                "materialized_as": "plain_user_message",
+            }
+            self._context.add_user_message(pending.content, metadata=metadata)
             await self._emit_event(
                 AgentMessageAddedEvent.create(
                     run_id=run_id,
                     role="user",
                     content=pending.content,
-                    metadata={
-                        "queue": "normal",
-                        "source_queue": "high_prio",
-                        "materialized_as": "plain_user_message",
-                    },
+                    metadata=metadata,
                 ),
                 event_bus,
             )
@@ -956,7 +967,7 @@ class HawiAgent:
         *,
         is_error: bool = False,
         materialize_pending_steer: bool = True,
-    ) -> None:
+    ) -> list[MaterializedSteerMessage]:
         """Add a tool result and materialize one matching pending input as steer."""
         tool_result_content = self._normalize_content_parts(content)
         self._context.add_tool_result(
@@ -966,15 +977,16 @@ class HawiAgent:
         )
 
         if materialize_pending_steer:
-            self._materialize_pending_steer_for_tool_results([tool_call_id])
+            return self._materialize_pending_steer_for_tool_results([tool_call_id])
+        return []
 
     def _materialize_pending_steer_for_tool_results(
         self,
         tool_call_ids: list[str],
-    ) -> None:
+    ) -> list[MaterializedSteerMessage]:
         """Append pending steer messages after a completed tool-result batch."""
         if not tool_call_ids:
-            return
+            return []
 
         tool_call_id_set = set(tool_call_ids)
         fallback_tool_call_id = tool_call_ids[0]
@@ -1002,6 +1014,7 @@ class HawiAgent:
                 materialized.append((item, matched_tool_call_id))
             self._pending_inputs = remaining
 
+        materialized_messages: list[MaterializedSteerMessage] = []
         for pending_input, matched_tool_call_id in materialized:
             steer_part: ContentPart = {
                 "type": "steer",
@@ -1013,7 +1026,49 @@ class HawiAgent:
                     else None
                 ),
             }
-            self._context.add_user_message([steer_part])
+            content = [steer_part]
+            metadata = self._steer_message_metadata(pending_input, matched_tool_call_id)
+            self._context.add_user_message(content, metadata=metadata)
+            materialized_messages.append(
+                MaterializedSteerMessage(content=content, metadata=metadata)
+            )
+        return materialized_messages
+
+    @staticmethod
+    def _steer_message_metadata(
+        pending_input: PendingInput,
+        matched_tool_call_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "message_id": pending_input.id,
+            "queue": "high_prio",
+            "display_message_type": "steer",
+            "source_queue": "high_prio",
+            "materialized_as": "steer",
+            "tool_call_id": matched_tool_call_id,
+            "merge_mode": (
+                pending_input.preferred_merge_mode.value
+                if pending_input.preferred_merge_mode is not None
+                else None
+            ),
+        }
+
+    async def _emit_materialized_steer_events(
+        self,
+        run_id: str,
+        materialized_messages: list[MaterializedSteerMessage],
+        event_bus: EventBus | None,
+    ) -> None:
+        for message in materialized_messages:
+            await self._emit_event(
+                AgentMessageAddedEvent.create(
+                    run_id=run_id,
+                    role="user",
+                    content=message.content,
+                    metadata=message.metadata,
+                ),
+                event_bus,
+            )
 
     async def _invoke_session_hook(self, hook_type: str, ctx: HookContext) -> HookResult | None:
         """Invoke before/after_session and before/after_conversation hooks: (agent, ctx)."""
@@ -1101,6 +1156,7 @@ class HawiAgent:
         model_error_policy: Optional[ModelErrorPolicyConfig] = None,
         event_bus: EventBus | None = None,
         streaming: bool | None = None,
+        message_metadata: dict[str, Any] | None = None,
     ) -> AgentRunResult:
         """Internal async run entry that supports runtime overrides."""
         m = model or self._default_model
@@ -1111,7 +1167,14 @@ class HawiAgent:
         with self._session_lock:
             self._session_active = True
         try:
-            return await self._execute(message, m, policy, effective_event_bus, effective_streaming)
+            return await self._execute(
+                message,
+                m,
+                policy,
+                effective_event_bus,
+                effective_streaming,
+                message_metadata,
+            )
         finally:
             with self._session_lock:
                 self._session_active = False
@@ -1201,6 +1264,7 @@ class HawiAgent:
         policy: ModelErrorPolicyConfig,
         event_bus: EventBus | None,
         streaming: bool,
+        message_metadata: dict[str, Any] | None = None,
     ) -> AgentRunResult:
         """Execute agent and return result (pure EventBus-driven)."""
 
@@ -1240,12 +1304,14 @@ class HawiAgent:
             else:
                 user_content = message
             
-            self._context.add_user_message(message)
+            message_metadata = dict(message_metadata) if message_metadata else None
+            self._context.add_user_message(message, metadata=message_metadata)
             await self._emit_event(
                 AgentMessageAddedEvent.create(
                     run_id=run_id,
                     role="user",
                     content=user_content,
+                    metadata=message_metadata,
                 ),
                 event_bus,
             )
@@ -1571,7 +1637,16 @@ class HawiAgent:
                             self._current_tool_calls.remove(tc)
 
                 if completed_tool_call_ids and not self._check_interrupt():
-                    self._materialize_pending_steer_for_tool_results(completed_tool_call_ids)
+                    materialized_messages = (
+                        self._materialize_pending_steer_for_tool_results(
+                            completed_tool_call_ids
+                        )
+                    )
+                    await self._emit_materialized_steer_events(
+                        run_id,
+                        materialized_messages,
+                        event_bus,
+                    )
 
                 # Check if execution was interrupted
                 if self._check_interrupt():
@@ -2146,11 +2221,16 @@ class HawiAgent:
                     result_content = f"Output before error:\n{output_str}\n\n{result_content}"
             else:
                 result_content = output_str
-            self._add_tool_result_with_pending_steer(
+            materialized_messages = self._add_tool_result_with_pending_steer(
                 tool_call_id=tool_call_id,
                 content=result_content,
                 is_error=not result.success,
                 materialize_pending_steer=materialize_pending_steer,
+            )
+            await self._emit_materialized_steer_events(
+                state.run_id,
+                materialized_messages,
+                event_bus,
             )
 
         return ToolCallRecord(
@@ -2246,10 +2326,15 @@ class HawiAgent:
                     result_content = f"Output before error:\n{output_str}\n\n{result_content}"
             else:
                 result_content = output_str
-            self._add_tool_result_with_pending_steer(
+            materialized_messages = self._add_tool_result_with_pending_steer(
                 tool_call_id=pending.tool_call_id,
                 content=result_content,
                 is_error=not result.success,
+            )
+            await self._emit_materialized_steer_events(
+                "audit",
+                materialized_messages,
+                event_bus,
             )
 
             # Emit event if event bus provided

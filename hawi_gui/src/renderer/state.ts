@@ -5,6 +5,7 @@ const MAX_DEBUG_LINES = 200;
 const MAX_RESULT_PREVIEW_LENGTH = 1200;
 
 export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider";
+export type DisplayMessageType = "normal" | "steer" | "urgent";
 
 export interface ChatNode {
   id: string;
@@ -12,6 +13,7 @@ export interface ChatNode {
   content: string;
   complete?: boolean;
   queue?: QueueKind;
+  displayMessageType?: DisplayMessageType;
   tool?: ToolState;
 }
 
@@ -182,12 +184,20 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     case "run.start": {
       const runId = String(payload.run_id ?? "");
       const queue = normalizeQueue(payload.queue);
+      const displayMessageType = normalizeDisplayMessageType(
+        payload.display_message_type,
+        queue
+      );
+      const messageId = optionalString(payload.message_id);
+      const userContent = String(payload.user_content ?? "");
+      const userNodeId = messageId ? userMessageNodeId(messageId) : nodeId("user", runId);
       return {
         ...appendNode(state, {
-          id: nodeId("user", runId),
+          id: userNodeId,
           kind: "user",
           queue,
-          content: String(payload.user_content ?? "")
+          displayMessageType,
+          content: userContent
         }),
         activeRunId: runId,
         runs: { ...state.runs, [runId]: {} }
@@ -921,8 +931,22 @@ function nodeId(kind: string, id: string): string {
   return `${kind}-${id}`;
 }
 
+function userMessageNodeId(messageId: string): string {
+  return nodeId("user-message", messageId);
+}
+
 function normalizeQueue(value: unknown): QueueKind {
   return value === "normal" || value === "urgent" ? value : "high_prio";
+}
+
+function normalizeDisplayMessageType(
+  value: unknown,
+  queue: QueueKind = "normal"
+): DisplayMessageType {
+  if (value === "normal" || value === "steer" || value === "urgent") return value;
+  if (queue === "urgent") return "urgent";
+  if (queue === "high_prio") return "steer";
+  return "normal";
 }
 
 function normalizeQueueLengths(value: unknown, fallback: Record<QueueKind, number> = { normal: 0, high_prio: 0, urgent: 0 }): Record<QueueKind, number> {

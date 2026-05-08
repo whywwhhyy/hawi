@@ -172,6 +172,11 @@ class AgentExecutor:
             result = await self._agent._arun_internal(
                 content,
                 event_bus=message.event_bus,
+                message_metadata=(
+                    self._message_metadata_for_execution(message)
+                    if content is not None
+                    else None
+                ),
             )
             self._last_result = result
         except asyncio.CancelledError:
@@ -191,6 +196,24 @@ class AgentExecutor:
         finally:
             self._set_state(SchedulerState.IDLE)
             self._current_event_bus = None
+
+    @staticmethod
+    def _message_metadata_for_execution(message: QueuedMessage) -> dict[str, object]:
+        metadata: dict[str, object] = dict(message.metadata)
+        queue = message.queue_type.name.lower()
+        metadata.setdefault("message_id", message.id)
+        if queue == "high_prio":
+            metadata.setdefault("queue", "normal")
+            metadata.setdefault("display_message_type", "normal")
+            metadata.setdefault("source_queue", "high_prio")
+            metadata.setdefault("materialized_as", "plain_user_message")
+        else:
+            metadata.setdefault("queue", queue)
+            metadata.setdefault(
+                "display_message_type",
+                "urgent" if queue == "urgent" else "normal",
+            )
+        return metadata
 
     async def wait_for_complete(self) -> AgentRunResult | None:
         """Wait for current execution to complete.

@@ -103,15 +103,54 @@ class TestHawiAgentSteer:
         events = []
         agent.subscribe_blocking(events.append, ["agent.message_added"])
 
-        agent.steer("plain follow-up")
+        steer_id = agent.steer("plain follow-up")
         drained = await agent._drain_pending_inputs_to_context("run-plain", None)
 
         assert drained is True
         assert len(events) == 1
         assert events[0].metadata == {
+            "message_id": steer_id,
             "queue": "normal",
+            "display_message_type": "normal",
             "source_queue": "high_prio",
             "materialized_as": "plain_user_message",
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "merge_mode",
+        [
+            SteerPartMergeMode.APPEND_TO_TOOL_RESULT,
+            SteerPartMergeMode.USER_MESSAGE_TEMPLATE,
+            SteerPartMergeMode.TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE,
+        ],
+    )
+    async def test_materialized_steer_event_is_emitted_for_each_merge_mode(
+        self,
+        merge_mode: SteerPartMergeMode,
+    ):
+        agent = HawiAgent(model=MagicMock())
+        agent._current_tool_calls.append({"id": "call_1", "name": "tool", "arguments": {}})
+        events = []
+        agent.subscribe_blocking(events.append, ["agent.message_added"])
+
+        steer_id = agent.steer("steer follow-up", merge_mode=merge_mode)
+        materialized = agent._add_tool_result_with_pending_steer("call_1", "tool output")
+        await agent._emit_materialized_steer_events("run-steer", materialized, None)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.run_id == "run-steer"
+        assert event.content[0]["type"] == "steer"
+        assert event.content[0]["preferred_merge_mode"] == merge_mode.value
+        assert event.metadata == {
+            "message_id": steer_id,
+            "queue": "high_prio",
+            "display_message_type": "steer",
+            "source_queue": "high_prio",
+            "materialized_as": "steer",
+            "tool_call_id": "call_1",
+            "merge_mode": merge_mode.value,
         }
 
     def test_user_message_template_lowering_combines_tool_and_steer(self):

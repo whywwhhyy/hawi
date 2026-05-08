@@ -65,6 +65,12 @@ const queueLabels: Record<QueueKind, string> = {
   urgent: "紧急打断"
 };
 
+const userMessageTypeLabels = {
+  normal: "普通消息",
+  steer: "Steer",
+  urgent: "紧急消息"
+} as const;
+
 export function renderPriorityStatusText(
   queueLengths: Record<QueueKind, number>,
   queueMessages?: Record<QueueKind, QueueMessageState[]>
@@ -684,12 +690,21 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   return (
     <article className={`bubble ${node.kind}`}>
       <div className="bubble-head">
-        <span>{node.kind === "user" ? queueLabels[node.queue ?? "normal"] : labelForKind(node.kind)}</span>
+        <span>{node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind)}</span>
       </div>
       <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
     </article>
   );
 });
+
+function labelForUserMessage(node: ChatNode): string {
+  if (node.displayMessageType) {
+    return userMessageTypeLabels[node.displayMessageType];
+  }
+  if (node.queue === "urgent") return userMessageTypeLabels.urgent;
+  if (node.queue === "high_prio") return userMessageTypeLabels.steer;
+  return userMessageTypeLabels.normal;
+}
 
 const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }) {
   const [collapsed, setCollapsed] = useState(() => node.complete === true);

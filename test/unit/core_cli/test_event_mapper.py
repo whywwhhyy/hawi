@@ -15,6 +15,7 @@ from hawi.events import (
     ModelToolCallBlockStopEvent,
     PluginEvent,
     SchedulerDequeueEvent,
+    SchedulerEnqueueEvent,
     SchedulerInterruptEvent,
 )
 from hawi.models.message import DeltaPart, TokenUsage
@@ -22,26 +23,53 @@ from hawi.tool.types import ToolResult
 from hawi_core_cli.event_mapper import SemanticEventMapper
 
 
+def test_mapper_only_logs_high_priority_message_on_enqueue() -> None:
+    mapper = SemanticEventMapper()
+
+    frames = mapper.map(
+        SchedulerEnqueueEvent.create("steer-1", "high_prio", "new priority")
+    )
+
+    assert [frame["type"] for frame in frames] == ["debug.info"]
+    assert frames[0]["payload"]["message_id"] == "steer-1"
+
+
+def test_mapper_does_not_display_normal_message_on_enqueue() -> None:
+    mapper = SemanticEventMapper()
+
+    frames = mapper.map(
+        SchedulerEnqueueEvent.create("msg-1", "normal", "queued normal")
+    )
+
+    assert [frame["type"] for frame in frames] == ["debug.info"]
+
+
 def test_mapper_emits_run_start_with_queue_kind() -> None:
     mapper = SemanticEventMapper()
 
-    mapper.map(SchedulerDequeueEvent.create("msg-1", "urgent"))
     mapper.map(AgentRunStartEvent.create("run-1"))
     frames = mapper.map(
         AgentMessageAddedEvent.create(
             "run-1",
             "user",
             [{"type": "text", "text": "hello"}],
+            metadata={
+                "message_id": "msg-1",
+                "queue": "urgent",
+                "display_message_type": "urgent",
+            },
         )
     )
 
     assert frames[0]["type"] == "run.start"
     assert frames[0]["payload"]["run_id"] == "run-1"
+    assert frames[0]["payload"]["message_id"] == "msg-1"
     assert frames[0]["payload"]["queue"] == "urgent"
+    assert frames[0]["payload"]["display_message_type"] == "urgent"
     assert frames[0]["payload"]["user_content"] == "hello"
 
 
-def test_mapper_keeps_high_priority_queue_without_message_override() -> None:
+def test_mapper_falls_back_to_run_queue_without_message_metadata() -> None:
     mapper = SemanticEventMapper()
 
     mapper.map(SchedulerDequeueEvent.create("msg-plain", "high_prio"))
@@ -55,8 +83,69 @@ def test_mapper_keeps_high_priority_queue_without_message_override() -> None:
     )
 
     assert frames[0]["type"] == "run.start"
+    assert frames[0]["payload"]["message_id"] == ""
     assert frames[0]["payload"]["queue"] == "high_prio"
+    assert frames[0]["payload"]["display_message_type"] == "normal"
     assert frames[0]["payload"]["user_content"] == "plain high-priority message"
+
+
+def test_mapper_displays_materialized_high_priority_message_as_normal() -> None:
+    mapper = SemanticEventMapper()
+
+    mapper.map(SchedulerDequeueEvent.create("msg-plain", "high_prio"))
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-plain",
+            "user",
+            [{"type": "text", "text": "plain high-priority message"}],
+            metadata={
+                "message_id": "msg-plain",
+                "queue": "normal",
+                "display_message_type": "normal",
+                "source_queue": "high_prio",
+                "materialized_as": "plain_user_message",
+            },
+        )
+    )
+
+    assert frames[0]["type"] == "run.start"
+    assert frames[0]["payload"]["message_id"] == "msg-plain"
+    assert frames[0]["payload"]["queue"] == "normal"
+    assert frames[0]["payload"]["display_message_type"] == "normal"
+    assert frames[0]["payload"]["user_content"] == "plain high-priority message"
+
+
+def test_mapper_displays_materialized_steer_message() -> None:
+    mapper = SemanticEventMapper()
+
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-steer",
+            "user",
+            [
+                {
+                    "type": "steer",
+                    "content": [{"type": "text", "text": "new steer"}],
+                    "tool_call_id": "call-1",
+                    "preferred_merge_mode": "append_to_tool_result",
+                }
+            ],
+            metadata={
+                "message_id": "steer-1",
+                "queue": "high_prio",
+                "display_message_type": "steer",
+                "source_queue": "high_prio",
+                "materialized_as": "steer",
+                "tool_call_id": "call-1",
+            },
+        )
+    )
+
+    assert frames[0]["type"] == "run.start"
+    assert frames[0]["payload"]["message_id"] == "steer-1"
+    assert frames[0]["payload"]["queue"] == "high_prio"
+    assert frames[0]["payload"]["display_message_type"] == "steer"
+    assert frames[0]["payload"]["user_content"] == "new steer"
 
 
 def test_mapper_uses_message_metadata_queue_override() -> None:
@@ -75,6 +164,27 @@ def test_mapper_uses_message_metadata_queue_override() -> None:
 
     assert frames[0]["type"] == "run.start"
     assert frames[0]["payload"]["queue"] == "normal"
+    assert frames[0]["payload"]["display_message_type"] == "normal"
+
+
+def test_mapper_uses_message_metadata_message_id_override() -> None:
+    mapper = SemanticEventMapper()
+
+    mapper.map(SchedulerDequeueEvent.create("pending-inputs", "high_prio"))
+    mapper.map(AgentRunStartEvent.create("run-3"))
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-3",
+            "user",
+            [{"type": "text", "text": "plain drained steer"}],
+            metadata={"queue": "normal", "message_id": "steer-1"},
+        )
+    )
+
+    assert frames[0]["type"] == "run.start"
+    assert frames[0]["payload"]["message_id"] == "steer-1"
+    assert frames[0]["payload"]["queue"] == "normal"
+    assert frames[0]["payload"]["display_message_type"] == "normal"
 
 
 def test_mapper_emits_text_delta_and_run_stop() -> None:
