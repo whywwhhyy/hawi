@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import json
-import time
-from copy import deepcopy
-from dataclasses import dataclass
 from typing import Any
 
 from hawi.plugin import (
@@ -17,64 +13,32 @@ from hawi.plugin import (
 )
 from hawi.tool import ToolResult
 
+from .engine import (
+    PLAN_ITEM_DEFAULT_KIND,
+    PLAN_ITEM_KINDS,
+    PlanEngine,
+    PlanEngineResult,
+    PlanFoldRecord,
+    PlanItem,
+)
+
 
 PLAN_PROMPT_BEGIN = "<hawi-plan-mode>"
 PLAN_PROMPT_END = "</hawi-plan-mode>"
+PLAN_REMINDER_BEGIN = "<hawi-plan-runtime-reminder>"
+PLAN_REMINDER_END = "</hawi-plan-runtime-reminder>"
 
-PLAN_ITEM_KINDS = ("exploratory", "determinate")
-PLAN_ITEM_DEFAULT_KIND = "exploratory"
-
-
-@dataclass
-class PlanItem:
-    id: str
-    content: str
-    parent_id: str | None = None
-    completed: bool = False
-    created_at: float = 0.0
-    completed_at: float | None = None
-    kind: str = PLAN_ITEM_DEFAULT_KIND
-    completion_summary: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "content": self.content,
-            "parent_id": self.parent_id,
-            "completed": self.completed,
-            "created_at": self.created_at,
-            "completed_at": self.completed_at,
-            "kind": self.kind,
-            "completion_summary": self.completion_summary,
-        }
-
-
-@dataclass
-class PlanFoldRecord:
-    fold_id: str
-    item_id: str
-    item_content: str
-    summary: str
-    messages: list[dict[str, Any]]
-    completed_item_ids: list[str]
-    created_at: float
-
-    def reference_dict(self) -> dict[str, Any]:
-        return {
-            "fold_id": self.fold_id,
-            "item_id": self.item_id,
-            "item_content": self.item_content,
-            "summary": self.summary,
-            "completed_item_ids": self.completed_item_ids,
-            "folded_message_count": len(self.messages),
-            "read_tool": "read_completed_task_context",
-            "note": (
-                "Plan context folding is enabled. Detailed messages from this "
-                "completed task were moved out of the active model context and "
-                "stored in PlanPlugin memory. Use read_completed_task_context "
-                "with this item_id or fold_id if later work needs the details."
-            ),
-        }
+__all__ = [
+    "PLAN_ITEM_DEFAULT_KIND",
+    "PLAN_ITEM_KINDS",
+    "PLAN_PROMPT_BEGIN",
+    "PLAN_PROMPT_END",
+    "PLAN_REMINDER_BEGIN",
+    "PLAN_REMINDER_END",
+    "PlanFoldRecord",
+    "PlanItem",
+    "PlanPlugin",
+]
 
 
 class PlanPlugin(HawiPlugin):
@@ -85,14 +49,71 @@ class PlanPlugin(HawiPlugin):
     """
 
     def __init__(self, fold_completed_tasks: bool = False) -> None:
-        self._items: list[PlanItem] = []
-        self._next_item_number = 1
-        self._notification_cancelled = False
-        self._cancel_reason = ""
-        self._fold_completed_tasks = bool(fold_completed_tasks)
-        self._fold_records: list[PlanFoldRecord] = []
-        self._next_fold_number = 1
-        self._active_completion_tool_call_id: str | None = None
+        self._engine = PlanEngine(fold_completed_tasks=fold_completed_tasks)
+
+    @property
+    def _items(self) -> list[PlanItem]:
+        return self._engine.items
+
+    @_items.setter
+    def _items(self, value: list[PlanItem]) -> None:
+        self._engine.items = value
+
+    @property
+    def _next_item_number(self) -> int:
+        return self._engine.next_item_number
+
+    @_next_item_number.setter
+    def _next_item_number(self, value: int) -> None:
+        self._engine.next_item_number = value
+
+    @property
+    def _plan_paused(self) -> bool:
+        return self._engine.plan_paused
+
+    @_plan_paused.setter
+    def _plan_paused(self, value: bool) -> None:
+        self._engine.plan_paused = value
+
+    @property
+    def _pause_reason(self) -> str:
+        return self._engine.pause_reason
+
+    @_pause_reason.setter
+    def _pause_reason(self, value: str) -> None:
+        self._engine.pause_reason = value
+
+    @property
+    def _fold_completed_tasks(self) -> bool:
+        return self._engine.fold_completed_tasks
+
+    @_fold_completed_tasks.setter
+    def _fold_completed_tasks(self, value: bool) -> None:
+        self._engine.fold_completed_tasks = bool(value)
+
+    @property
+    def _fold_records(self) -> list[PlanFoldRecord]:
+        return self._engine.fold_records
+
+    @_fold_records.setter
+    def _fold_records(self, value: list[PlanFoldRecord]) -> None:
+        self._engine.fold_records = value
+
+    @property
+    def _next_fold_number(self) -> int:
+        return self._engine.next_fold_number
+
+    @_next_fold_number.setter
+    def _next_fold_number(self, value: int) -> None:
+        self._engine.next_fold_number = value
+
+    @property
+    def _active_completion_tool_call_id(self) -> str | None:
+        return self._engine.active_completion_tool_call_id
+
+    @_active_completion_tool_call_id.setter
+    def _active_completion_tool_call_id(self, value: str | None) -> None:
+        self._engine.active_completion_tool_call_id = value
 
     @classmethod
     def gui_config_schema(cls) -> dict:
@@ -118,54 +139,28 @@ class PlanPlugin(HawiPlugin):
         return {"fold_completed_tasks": False}
 
     def clone(self) -> "PlanPlugin":
-        new_plugin = PlanPlugin(fold_completed_tasks=self._fold_completed_tasks)
-        new_plugin._items = [
-            PlanItem(
-                id=item.id,
-                content=item.content,
-                parent_id=item.parent_id,
-                completed=item.completed,
-                created_at=item.created_at,
-                completed_at=item.completed_at,
-                kind=item.kind,
-                completion_summary=item.completion_summary,
-            )
-            for item in self._items
-        ]
-        new_plugin._next_item_number = self._next_item_number
-        new_plugin._notification_cancelled = self._notification_cancelled
-        new_plugin._cancel_reason = self._cancel_reason
-        new_plugin._fold_records = [
-            PlanFoldRecord(
-                fold_id=record.fold_id,
-                item_id=record.item_id,
-                item_content=record.item_content,
-                summary=record.summary,
-                messages=deepcopy(record.messages),
-                completed_item_ids=list(record.completed_item_ids),
-                created_at=record.created_at,
-            )
-            for record in self._fold_records
-        ]
-        new_plugin._next_fold_number = self._next_fold_number
+        new_plugin = PlanPlugin(
+            fold_completed_tasks=self._engine.fold_completed_tasks
+        )
+        new_plugin._engine = self._engine.clone()
         return new_plugin
 
     @before_conversation
     def inject_plan_instructions(self, agent: Any, ctx: Any) -> None:
         """Inject plan mode guidance into the system prompt."""
         folding_guidance = ""
-        if self._fold_completed_tasks:
+        if self._engine.fold_completed_tasks:
             folding_guidance = (
                 "\n"
                 "Completed-task context folding is enabled. When you call "
-                "complete_plan_item, you must provide summary. The summary is a "
-                "handoff note for future tasks and must briefly cover: (1) what "
-                "happened since the previous plan item was completed, and (2) any "
-                "details worth remembering for the rest of the work. After a "
+                "complete_plan_item, you must provide summary and handoff_notes. "
+                "The summary must briefly state what was completed in this task. "
+                "The handoff_notes must state the information later tasks must "
+                "remember; if there is nothing lasting, say so explicitly. After a "
                 "completion, PlanPlugin will move detailed messages since the "
                 "previous completion out of the active context and keep only the "
-                "completion tool call/result marker with the summary and a task id. "
-                "If later work needs folded details, call read_completed_task_context "
+                "completion tool call/result marker with the task id, summary, "
+                "handoff notes, and read-back instructions. If later work needs folded details, call read_completed_task_context "
                 "with the relevant item_id or fold_id.\n"
             )
         prompt = (
@@ -188,31 +183,49 @@ class PlanPlugin(HawiPlugin):
             "    * 'exploratory' (default): a parent whose completion requires your "
             "judgment (e.g. 'Investigate root cause', 'Decide auth strategy'). When all "
             "of its children are completed, complete_plan_item will return a "
-            "parent_review_required entry pointing at this parent — for each entry, "
+            "parent_review_required entry pointing at this parent - for each entry, "
             "decide whether the work is truly done (call complete_plan_item on it) or "
             "whether new follow-up children should be added (call add_plan_item).\n"
             "    * 'determinate': a mechanical parent whose completion is fully implied "
             "by its children (e.g. 'Run all unit tests' broken into concrete sub-tests). "
             "When every child completes, this item is auto-completed, and that auto-"
             "completion can chain upward into other determinate ancestors.\n"
-            "  Leave kind unspecified when unsure — exploratory is the safer default.\n"
+            "  Leave kind unspecified when unsure - exploratory is the safer default.\n"
             "  Leaf items can use either kind; kind only matters when the item has "
             "children.\n"
             "- complete_plan_item: mark a plan item complete as soon as it is actually "
             "done. Pass item_id='all' only when every open item is complete. After each "
             "call, inspect parent_review_required in the result and act on every entry "
             "before moving on. When completed-task context folding is enabled, summary "
-            "is required.\n"
+            "and handoff_notes are required. summary is a concise statement of what "
+            "was completed; handoff_notes are the details later tasks must remember. "
+            "If completing a parent with unfinished children, pass "
+            "mark_all_children=true only when every child should also be marked done.\n"
             "- list_plan_items: inspect the current plan state.\n"
-            "- read_completed_task_context: read details that were folded out of the "
-            "active context after a previous complete_plan_item call.\n"
-            "- cancel_plan_notification: stop automatic plan reminders only when remaining "
-            "items are impossible, obsolete, or intentionally deferred; include a reason.\n"
+            "- read_completed_task_context: read or search details that were folded "
+            "out of the active context after a previous complete_plan_item call. "
+            "Pass query to search folded contexts by keyword. Use max_chars to "
+            "limit transcript or search-snippet output length. Use task_id with "
+            "message_start/message_end to read a precise folded message range.\n"
+            "- plan_control: pause, continue, or abandon plan execution. Use action='pause' "
+            "to temporarily exit plan state when plan-driven continuation should stop "
+            "for now; include a reason. Use action='continue' to resume plan execution "
+            "and automatic reminders. Use action='abandon' to completely discard the "
+            "current plan and clear plan memory.\n"
             f"{folding_guidance}"
             "\n"
             "Keep plan items actionable. Do not leave completed work unchecked. When Hawi "
             "reminds you about unfinished plan items, either continue the work, mark completed "
-            "items complete, or cancel the notification with a clear reason.\n"
+            "items complete, or call plan_control with action='pause' and a clear reason "
+            "to temporarily leave plan execution.\n"
+            "\n"
+            "Important message-origin rule: messages enclosed in "
+            f"{PLAN_REMINDER_BEGIN}...{PLAN_REMINDER_END} are automatic runtime "
+            "reminders generated by PlanPlugin. They may appear in the conversation "
+            "as user-role messages because Hawi reinvokes the model through the "
+            "normal message channel, but they are not human-user messages. Treat "
+            "them as plugin control guidance, do not attribute them to the user, "
+            "and do not infer that the user said or requested their wording.\n"
             f"{PLAN_PROMPT_END}\n"
         )
         system_prompt = list(agent.context.system_prompt or [])
@@ -237,7 +250,9 @@ class PlanPlugin(HawiPlugin):
         ctx: Any,
     ) -> None:
         if tool_name == "complete_plan_item":
-            self._active_completion_tool_call_id = getattr(ctx, "tool_call_id", None)
+            self._engine.active_completion_tool_call_id = getattr(
+                ctx, "tool_call_id", None
+            )
 
     @after_tool_calling
     def clear_completion_tool_call(
@@ -249,22 +264,22 @@ class PlanPlugin(HawiPlugin):
         ctx: Any,
     ) -> None:
         if tool_name == "complete_plan_item":
-            self._active_completion_tool_call_id = None
+            self._engine.active_completion_tool_call_id = None
 
     @after_conversation
     def notify_unfinished_plan(self, agent: Any, ctx: Any) -> HookResult | None:
         """Re-drive the agent while plan items remain unfinished."""
-        if ctx.error is not None or self._notification_cancelled:
+        if ctx.error is not None or self._engine.plan_paused:
             return None
-        if not self._items:
+        if not self._engine.items:
             return None
 
-        incomplete = self._incomplete_items()
+        incomplete = self._engine.incomplete_items()
         if not incomplete:
             self._sync_artifact(status="complete")
             return None
 
-        plan_text = self._format_plan_list()
+        plan_text = self._engine.format_plan_list()
         self._sync_artifact(status="active")
         self.emit_message(
             "Plan has unfinished items; asking the agent to continue.",
@@ -272,17 +287,7 @@ class PlanPlugin(HawiPlugin):
             data={"pending_count": len(incomplete)},
             run_id=ctx.run_id,
         )
-        return HookResult.reinvoke(
-            (
-                "Plan reminder: the following plan items are still unfinished.\n\n"
-                f"{plan_text}\n\n"
-                "Continue executing the remaining work. If some items are already done, "
-                "call complete_plan_item for each completed item before proceeding. If all "
-                "remaining items are impossible, obsolete, blocked by missing information, or "
-                "intentionally deferred, call cancel_plan_notification with a clear reason. "
-                "Otherwise keep working on the plan."
-            )
-        )
+        return HookResult.reinvoke(self._format_runtime_reminder(plan_text))
 
     @tool(
         name="add_plan_item",
@@ -355,93 +360,21 @@ class PlanPlugin(HawiPlugin):
         items: list[dict[str, Any]] | None = None,
         kind: str | None = None,
     ) -> ToolResult:
-        has_content = isinstance(content, str) and bool(content.strip())
-        has_items = items is not None
-        if has_content and has_items:
-            return ToolResult(
-                success=False,
-                error="Provide either content for a single item or items for a plan tree, not both.",
-            )
-        if not has_content and not has_items:
-            return ToolResult(
-                success=False,
-                error="Provide content for a single item or items for a plan tree.",
-            )
-        if has_items and kind is not None:
-            return ToolResult(
-                success=False,
-                error=(
-                    "Top-level kind is only valid when adding a single item. "
-                    "For tree mode, set kind on each node inside items."
-                ),
-            )
-
-        normalized_kind, kind_error = self._normalize_kind(kind, path="kind")
-        if kind_error:
-            return ToolResult(success=False, error=kind_error)
-
-        normalized_parent_id = (
-            parent_id.strip()
-            if isinstance(parent_id, str) and parent_id.strip()
-            else None
+        result = self._engine.add_plan_item(
+            content=content,
+            parent_id=parent_id,
+            items=items,
+            kind=kind,
         )
-        if (
-            normalized_parent_id is not None
-            and self._find_item(normalized_parent_id) is None
-        ):
-            return ToolResult(
-                success=False,
-                error=f"Unknown parent plan item id: {normalized_parent_id}",
-            )
-
-        now = time.time()
-        if has_items:
-            created, error = self._add_plan_item_tree(
-                items or [],
-                parent_id=normalized_parent_id,
-                created_at=now,
-            )
-            if error:
-                return ToolResult(success=False, error=error)
-            self._notification_cancelled = False
-            self._cancel_reason = ""
-            self._sync_artifact(status="active")
-            for item in created:
-                self._emit_plan_item_update("added", item)
-            return ToolResult(
-                success=True,
-                output={
-                    "items": [item.to_dict() for item in created],
-                    "tree": self._tree_items(),
-                    "pending_count": len(self._incomplete_items()),
-                },
-            )
-
-        item = self._create_plan_item(
-            content=content.strip() if isinstance(content, str) else "",
-            parent_id=normalized_parent_id,
-            created_at=now,
-            kind=normalized_kind,
-        )
-        self._notification_cancelled = False
-        self._cancel_reason = ""
-        self._sync_artifact(status="active")
-        self._emit_plan_item_update("added", item)
-        return ToolResult(
-            success=True,
-            output={
-                "item": item.to_dict(),
-                "tree": self._tree_items(),
-                "pending_count": len(self._incomplete_items()),
-            },
-        )
+        return self._finish_engine_result(result)
 
     @tool(
         name="complete_plan_item",
         description=(
             "Mark a plan item complete. Use item_id='all' only when every open item "
             "is actually complete. When completed-task context folding is enabled, "
-            "summary is required and becomes the handoff note left in active context."
+            "summary and handoff_notes are required and become the handoff note "
+            "left in active context."
         ),
         context="ctx",
         parameters_schema={
@@ -451,17 +384,27 @@ class PlanPlugin(HawiPlugin):
                     "type": "string",
                     "description": "Plan item id from list_plan_items, or 'all'.",
                 },
-                "complete_children": {
+                "mark_all_children": {
                     "type": "boolean",
-                    "description": "When true, also mark all descendant items complete.",
+                    "description": (
+                        "When true, also mark all descendant items complete. Required "
+                        "to complete a parent that still has unfinished children."
+                    ),
                     "default": False,
                 },
                 "summary": {
                     "type": "string",
                     "description": (
                         "Required when completed-task context folding is enabled. "
-                        "Briefly state what happened since the previous completed "
-                        "plan item and what details future tasks should remember."
+                        "Briefly summarize what was completed in this task."
+                    ),
+                },
+                "handoff_notes": {
+                    "type": "string",
+                    "description": (
+                        "Required when completed-task context folding is enabled. "
+                        "State information later tasks must remember, or explicitly "
+                        "say there are no lasting notes."
                     ),
                 },
             },
@@ -471,93 +414,36 @@ class PlanPlugin(HawiPlugin):
     def complete_plan_item(
         self,
         item_id: str,
-        complete_children: bool = False,
+        mark_all_children: bool = False,
         summary: str | None = None,
+        handoff_notes: str | None = None,
         ctx: Any = None,
+        complete_children: bool | None = None,
     ) -> ToolResult:
-        item_id = item_id.strip()
-        summary_text = summary.strip() if isinstance(summary, str) else ""
-        if self._fold_completed_tasks and not summary_text:
+        result = self._engine.complete_plan_item(
+            item_id,
+            mark_all_children=mark_all_children,
+            summary=summary,
+            handoff_notes=handoff_notes,
+            complete_children=complete_children,
+        )
+        if not result.success:
             return ToolResult(
                 success=False,
-                error=(
-                    "summary is required when completed-task context folding is "
-                    "enabled. Provide a concise handoff summary covering what "
-                    "happened since the previous completed item and what should "
-                    "be remembered for later work."
-                ),
+                error=self._format_completion_error_markdown(result),
             )
-        now = time.time()
 
-        if item_id.lower() == "all":
-            completed = []
-            for item in self._items:
-                if not item.completed:
-                    item.completed = True
-                    item.completed_at = now
-                    if summary_text:
-                        item.completion_summary = summary_text
-                    completed.append(item.to_dict())
-            self._sync_artifact(status="complete")
-            for item_data in completed:
-                self._emit_plan_item_update("completed", item_data)
+        self._sync_artifact(status=self._engine.plan_status())
+        self._emit_item_events(result)
+        if result.fold_request is not None:
             folded_context = self._maybe_fold_completed_context(
                 ctx,
-                item_id="all",
-                item_content="All open plan items",
-                summary=summary_text,
-                completed_item_ids=[item["id"] for item in completed],
+                **result.fold_request,
             )
-            return ToolResult(
-                success=True,
-                output={
-                    "completed": completed,
-                    "tree": self._tree_items(),
-                    "pending_count": len(self._incomplete_items()),
-                    "parent_review_required": [],
-                    "completion_summary": summary_text or None,
-                    "folded_context": folded_context,
-                },
-            )
-
-        item = self._find_item(item_id)
-        if item is None:
-            return ToolResult(success=False, error=f"Unknown plan item id: {item_id}")
-
-        items_to_complete = [item]
-        if complete_children:
-            items_to_complete.extend(self._descendants(item.id))
-        completed = []
-        for current in items_to_complete:
-            if not current.completed:
-                current.completed = True
-                current.completed_at = now
-                if summary_text:
-                    current.completion_summary = summary_text
-                completed.append(current.to_dict())
-        auto_completed, review_required = self._propagate_completion_upward(item, now)
-        completed.extend(auto_completed)
-        self._sync_artifact(status="complete" if not self._incomplete_items() else "active")
-        for item_data in completed:
-            self._emit_plan_item_update("completed", item_data)
-        folded_context = self._maybe_fold_completed_context(
-            ctx,
-            item_id=item.id,
-            item_content=item.content,
-            summary=summary_text,
-            completed_item_ids=[item_data["id"] for item_data in completed],
-        )
+            result.output["folded_context"] = folded_context
         return ToolResult(
             success=True,
-            output={
-                "item": item.to_dict(),
-                "completed": completed,
-                "tree": self._tree_items(),
-                "pending_count": len(self._incomplete_items()),
-                "parent_review_required": review_required,
-                "completion_summary": summary_text or None,
-                "folded_context": folded_context,
-            },
+            output=self._format_completion_markdown(result.output),
         )
 
     @tool(
@@ -570,23 +456,15 @@ class PlanPlugin(HawiPlugin):
         },
     )
     def list_plan_items(self) -> ToolResult:
-        self._sync_artifact(
-            status="cancelled"
-            if self._notification_cancelled
-            else "complete"
-            if self._items and not self._incomplete_items()
-            else "active"
-            if self._items
-            else "empty"
-        )
-        return ToolResult(success=True, output=self._state_dict())
+        self._sync_artifact(status=self._engine.plan_status())
+        return ToolResult(success=True, output=self._engine.state_dict())
 
     @tool(
         name="read_completed_task_context",
         description=(
             "Read detailed messages that PlanPlugin folded out of active context "
-            "after a completed plan item. Use this when a later task needs details "
-            "from a previously completed item."
+            "after a completed plan item, or search folded task contexts by keyword. "
+            "Use this when a later task needs details from a previous item."
         ),
         parameters_schema={
             "type": "object",
@@ -594,17 +472,73 @@ class PlanPlugin(HawiPlugin):
                 "item_id": {
                     "type": "string",
                     "description": (
-                        "Completed plan item id, such as P1. Use this unless you "
-                        "have a specific fold_id."
+                        "Completed plan item id, such as P1. Omit this when using "
+                        "query to search every folded context."
+                    ),
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": (
+                        "Alias for item_id. Use this with message_start/message_end "
+                        "to read a precise range from a completed task context."
                     ),
                 },
                 "fold_id": {
                     "type": "string",
                     "description": "Specific folded context id from a completion result.",
                 },
+                "message_start": {
+                    "type": "integer",
+                    "description": (
+                        "Optional 1-based first folded message index to read. "
+                        "Indexes come from the Folded context preview list."
+                    ),
+                },
+                "message_end": {
+                    "type": "integer",
+                    "description": (
+                        "Optional 1-based last folded message index to read, inclusive."
+                    ),
+                },
+                "message_range": {
+                    "type": "string",
+                    "description": (
+                        "Optional message range shorthand such as '2-4' or '3'. "
+                        "Equivalent to message_start/message_end."
+                    ),
+                },
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Optional case-insensitive keyword search. When provided, "
+                        "the tool returns matching snippets instead of a full transcript. "
+                        "If item_id and fold_id are omitted, all folded contexts are searched."
+                    ),
+                },
+                "case_sensitive": {
+                    "type": "boolean",
+                    "description": "Whether query matching should be case-sensitive.",
+                    "default": False,
+                },
+                "max_matches": {
+                    "type": "integer",
+                    "description": "Maximum number of search matches to return.",
+                    "default": 20,
+                },
+                "context_chars": {
+                    "type": "integer",
+                    "description": (
+                        "Characters of surrounding context to include before and "
+                        "after each search match."
+                    ),
+                    "default": 240,
+                },
                 "max_chars": {
                     "type": "integer",
-                    "description": "Maximum transcript characters to return.",
+                    "description": (
+                        "Maximum transcript characters to return in read mode, or "
+                        "maximum aggregate snippet characters to return in search mode."
+                    ),
                     "default": 20000,
                 },
             },
@@ -614,17 +548,45 @@ class PlanPlugin(HawiPlugin):
     def read_completed_task_context(
         self,
         item_id: str = "",
+        task_id: str = "",
         fold_id: str | None = None,
+        message_start: int | None = None,
+        message_end: int | None = None,
+        message_range: str | None = None,
+        query: str | None = None,
+        case_sensitive: bool = False,
+        max_matches: int = 20,
+        context_chars: int = 240,
         max_chars: int = 20000,
     ) -> ToolResult:
-        if not (item_id or fold_id):
+        normalized_item_id = item_id or task_id
+        query_text = query.strip() if isinstance(query, str) else ""
+        if query_text:
+            result = self._engine.search_folded_contexts(
+                query=query_text,
+                item_id=normalized_item_id,
+                fold_id=fold_id,
+                case_sensitive=bool(case_sensitive),
+                max_matches=max_matches,
+                context_chars=context_chars,
+                max_chars=max_chars,
+            )
+            return self._finish_read_result(result)
+
+        if not (normalized_item_id or fold_id):
             return ToolResult(
                 success=False,
-                error="Provide item_id or fold_id to read a folded task context.",
+                error=(
+                    "Provide task_id, item_id, or fold_id to read a folded task "
+                    "context, or provide query to search folded task contexts."
+                ),
             )
-        record = self._find_fold_record(item_id=item_id, fold_id=fold_id)
+        record = self._engine.find_fold_record(
+            item_id=normalized_item_id,
+            fold_id=fold_id,
+        )
         if record is None:
-            if not self._fold_records:
+            if not self._engine.fold_records:
                 return ToolResult(
                     success=False,
                     error="No completed task contexts have been folded yet.",
@@ -633,165 +595,324 @@ class PlanPlugin(HawiPlugin):
                 success=False,
                 error=(
                     "No folded context found for "
-                    f"item_id={item_id!r}, fold_id={fold_id!r}."
+                    f"task_id={normalized_item_id!r}, fold_id={fold_id!r}."
                 ),
             )
+        selected_messages, selected_start, selected_end, range_error = (
+            self._select_folded_messages(
+                record.messages,
+                message_start=message_start,
+                message_end=message_end,
+                message_range=message_range,
+            )
+        )
+        if range_error:
+            return ToolResult(success=False, error=range_error)
 
-        max_chars = max(1000, int(max_chars or 20000))
-        transcript = self._format_folded_messages(record.messages)
-        truncated = len(transcript) > max_chars
-        if truncated:
-            transcript = transcript[: max_chars - 120].rstrip() + (
+        max_chars = self._engine.normalize_int(
+            max_chars,
+            default=20000,
+            minimum=1,
+            maximum=200000,
+        )
+        transcript = self._engine.format_folded_messages(
+            selected_messages,
+            start_index=selected_start,
+        )
+        transcript, truncated = self._engine.truncate_text(
+            transcript,
+            max_chars,
+            marker=(
                 "\n\n[Transcript truncated. Call read_completed_task_context "
                 "with a larger max_chars value for more detail.]"
-            )
+            ),
+        )
         return ToolResult(
             success=True,
             output={
+                "mode": "read",
                 "fold_id": record.fold_id,
                 "item_id": record.item_id,
                 "item_content": record.item_content,
                 "summary": record.summary,
+                "handoff_notes": record.handoff_notes,
                 "completed_item_ids": record.completed_item_ids,
                 "message_count": len(record.messages),
+                "selected_message_count": len(selected_messages),
+                "message_start": selected_start,
+                "message_end": selected_end,
                 "transcript": transcript,
                 "truncated": truncated,
+                "max_chars": max_chars,
             },
         )
 
     @tool(
-        name="cancel_plan_notification",
+        name="plan_control",
         description=(
-            "Cancel automatic reminders for unfinished plan items when they cannot "
-            "or should not be completed in this run."
+            "Pause, continue, or abandon plan execution. Pause temporarily exits "
+            "plan state and stops automatic reminders; continue resumes plan "
+            "execution; abandon clears the current plan."
         ),
         parameters_schema={
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["pause", "continue", "abandon"],
+                    "description": (
+                        "Use 'pause' to temporarily stop plan-driven continuation; "
+                        "use 'continue' to resume plan execution; use 'abandon' "
+                        "to completely clear the current plan."
+                    ),
+                },
                 "reason": {
                     "type": "string",
-                    "description": "Why remaining plan items should not continue now.",
-                }
+                    "description": "Required when action is 'pause'; optional for abandon.",
+                },
             },
-            "required": ["reason"],
+            "required": ["action"],
         },
     )
-    def cancel_plan_notification(self, reason: str) -> ToolResult:
-        reason = reason.strip()
-        if not reason:
-            return ToolResult(success=False, error="Cancellation reason cannot be empty.")
-        self._notification_cancelled = True
-        self._cancel_reason = reason
-        self._sync_artifact(status="cancelled")
+    def plan_control(self, action: str, reason: str | None = None) -> ToolResult:
+        result = self._engine.control(action=action, reason=reason)
+        return self._finish_engine_result(result)
+
+    def _select_folded_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        message_start: int | None,
+        message_end: int | None,
+        message_range: str | None,
+    ) -> tuple[list[dict[str, Any]], int, int, str]:
+        total = len(messages)
+        if total == 0:
+            return [], 1, 0, ""
+
+        start = message_start
+        end = message_end
+        range_text = message_range.strip() if isinstance(message_range, str) else ""
+        if range_text:
+            parsed_start, parsed_end, error = self._parse_message_range(range_text)
+            if error:
+                return [], 1, total, error
+            start = parsed_start
+            end = parsed_end
+
+        start = 1 if start is None else start
+        end = total if end is None else end
+        if not isinstance(start, int) or not isinstance(end, int):
+            return [], 1, total, "message_start and message_end must be integers."
+        if start < 1 or end < 1:
+            return [], 1, total, "message_start and message_end are 1-based and must be positive."
+        if start > end:
+            return [], 1, total, "message_start must be less than or equal to message_end."
+        if start > total:
+            return [], 1, total, f"message_start exceeds folded message count ({total})."
+        end = min(end, total)
+        return messages[start - 1 : end], start, end, ""
+
+    @staticmethod
+    def _parse_message_range(message_range: str) -> tuple[int | None, int | None, str]:
+        if "-" in message_range:
+            raw_start, raw_end = message_range.split("-", 1)
+            try:
+                start = int(raw_start.strip())
+                end = int(raw_end.strip())
+            except ValueError:
+                return None, None, "message_range must look like '2-4' or '3'."
+            return start, end, ""
+        try:
+            value = int(message_range)
+        except ValueError:
+            return None, None, "message_range must look like '2-4' or '3'."
+        return value, value, ""
+
+    def _format_runtime_reminder(self, plan_text: str) -> str:
+        return (
+            f"{PLAN_REMINDER_BEGIN}\n"
+            "source: PlanPlugin\n"
+            "origin: automatic runtime reminder, not a human user message\n"
+            "purpose: continue plan execution while unfinished plan items remain\n"
+            "\n"
+            "The following plan items are still unfinished:\n\n"
+            f"{plan_text}\n\n"
+            "Continue executing the remaining work. If some items are already done, "
+            "call complete_plan_item for each completed item before proceeding. If all "
+            "remaining items are impossible, obsolete, blocked by missing information, or "
+            "intentionally deferred for now, call plan_control with action='pause' and "
+            "a clear reason to temporarily exit plan execution. When plan execution "
+            "should resume, call plan_control with action='continue'. If the current "
+            "plan should be completely discarded, call plan_control with "
+            "action='abandon'. Otherwise keep working on the plan.\n"
+            f"{PLAN_REMINDER_END}"
+        )
+
+    def _format_completion_markdown(self, output: dict[str, Any]) -> str:
+        completed = output.get("completed", [])
+        parent_review_required = output.get("parent_review_required", [])
+        pending_count = int(output.get("pending_count") or 0)
+        completion_summary = output.get("completion_summary")
+        handoff_notes = output.get("handoff_notes")
+        lines = [
+            "Plan item completed." if completed else "No new plan items were completed.",
+            "",
+        ]
+
+        if completed:
+            lines.append("Completed:")
+            for item in completed:
+                lines.append(f"- {self._format_item_reference(item)}")
+            lines.append("")
+
+        lines.append(f"Pending items: {pending_count}")
+
+        if completion_summary:
+            lines.extend(["", "Task summary:"])
+            lines.append(str(completion_summary))
+
+        if handoff_notes:
+            lines.extend(["", "Information for later tasks:"])
+            lines.append(str(handoff_notes))
+
+        if parent_review_required:
+            lines.extend(["", "Parent review required:"])
+            for item in parent_review_required:
+                lines.append(f"- {self._format_item_reference(item)}")
+                reason = item.get("reason")
+                if reason:
+                    lines.append(f"  {reason}")
+
+        folded_context = output.get("folded_context")
+        if isinstance(folded_context, dict) and folded_context.get("enabled"):
+            lines.extend(["", "Folded context:"])
+            if folded_context.get("skipped"):
+                lines.append(f"- Not folded: {folded_context.get('reason', 'No details.')}")
+            else:
+                fold_id = folded_context.get("fold_id")
+                item_id = folded_context.get("item_id")
+                folded_message_count = folded_context.get("folded_message_count")
+                if fold_id:
+                    lines.append(f"- Fold id: `{fold_id}`")
+                if item_id:
+                    lines.append(f"- Item id: `{item_id}`")
+                if folded_message_count is not None:
+                    lines.append(f"- Folded messages: {folded_message_count}")
+                message_previews = folded_context.get("message_previews", [])
+                if message_previews:
+                    lines.extend(["", "Folded message previews:"])
+                    for preview in message_previews:
+                        index = preview.get("index")
+                        role = preview.get("role", "unknown")
+                        text = preview.get("preview", "")
+                        lines.append(f"{index}. {role}: {text}")
+                if fold_id or item_id:
+                    lines.extend(["", "How to read folded details:"])
+                if item_id:
+                    lines.append(
+                        "- Full task context: "
+                        f"`read_completed_task_context(task_id=\"{item_id}\")`."
+                    )
+                if item_id and folded_message_count:
+                    range_end = min(int(folded_message_count), 3)
+                    lines.append(
+                        "- Message range: "
+                        f"`read_completed_task_context(task_id=\"{item_id}\", "
+                        f"message_start=1, message_end={range_end})`."
+                    )
+                if fold_id:
+                    lines.append(
+                        "- Fold id lookup: "
+                        f"`read_completed_task_context(fold_id=\"{fold_id}\")`."
+                    )
+                if item_id:
+                    lines.append(
+                        "- Search this task: "
+                        f"`read_completed_task_context(task_id=\"{item_id}\", "
+                        "query=\"keyword\")`."
+                    )
+
+        lines.extend(["", f"Next action: {self._completion_next_action(output)}"])
+        return "\n".join(lines)
+
+    def _format_completion_error_markdown(self, result: PlanEngineResult) -> str:
+        output = result.output or {}
+        unfinished_children = output.get("unfinished_children", [])
+        item = output.get("item", {})
+        if unfinished_children:
+            item_id = item.get("id", "the requested item")
+            lines = [
+                f"Cannot complete `{item_id}` because it has unfinished child task(s).",
+                "",
+                "Unfinished children:",
+            ]
+            for child in unfinished_children:
+                lines.append(f"- {self._format_item_reference(child)}")
+            pending_count = output.get("pending_count")
+            if pending_count is not None:
+                lines.extend(["", f"Pending items: {pending_count}"])
+            lines.extend(
+                [
+                    "",
+                    "Next action: Complete the child tasks first, or call "
+                    "`complete_plan_item` with `mark_all_children=true` only if every "
+                    "unfinished child should also be marked done.",
+                ]
+            )
+            return "\n".join(lines)
+        return result.error
+
+    @staticmethod
+    def _format_item_reference(item: dict[str, Any]) -> str:
+        item_id = item.get("id", "unknown")
+        content = item.get("content", "")
+        return f"`{item_id}` {content}".rstrip()
+
+    @staticmethod
+    def _completion_next_action(output: dict[str, Any]) -> str:
+        if output.get("parent_review_required"):
+            return "Resolve every parent review item before moving on."
+        pending_count = int(output.get("pending_count") or 0)
+        if pending_count > 0:
+            return "Continue with the remaining plan items."
+        return "The plan is complete."
+
+    def _finish_engine_result(self, result: PlanEngineResult) -> ToolResult:
+        if not result.success:
+            return self._failed_tool_result(result)
+
+        self._sync_artifact(status=self._engine.plan_status())
+        self._emit_item_events(result)
+        if result.plugin_event is not None:
+            self._emit_engine_plugin_event(result.plugin_event)
+        return ToolResult(success=True, output=result.output)
+
+    def _finish_read_result(self, result: PlanEngineResult) -> ToolResult:
+        if not result.success:
+            return self._failed_tool_result(result)
+        return ToolResult(success=True, output=result.output)
+
+    @staticmethod
+    def _failed_tool_result(result: PlanEngineResult) -> ToolResult:
+        return ToolResult(
+            success=False,
+            output=result.output or None,
+            error=result.error,
+        )
+
+    def _emit_item_events(self, result: PlanEngineResult) -> None:
+        for event in result.item_events:
+            self._emit_plan_item_update(event["action"], event["item"])
+
+    def _emit_engine_plugin_event(self, payload: dict[str, Any]) -> None:
         self.emit_plugin_event(
             "plugin.event",
             {
-                "event_name": "plan.notification.cancelled",
-                "reason": reason,
-                "state": self._state_dict(),
-                "title": "Plan notification cancelled",
-                "message": reason,
-                "data": {"reason": reason},
+                **payload,
+                "state": self._engine.state_dict(),
             },
         )
-        return ToolResult(success=True, output=self._state_dict())
-
-    def _normalize_kind(
-        self, kind: Any, *, path: str
-    ) -> tuple[str, str]:
-        if kind is None:
-            return PLAN_ITEM_DEFAULT_KIND, ""
-        if not isinstance(kind, str):
-            return "", f"{path} must be a string when provided."
-        normalized = kind.strip().lower()
-        if not normalized:
-            return PLAN_ITEM_DEFAULT_KIND, ""
-        if normalized not in PLAN_ITEM_KINDS:
-            allowed = ", ".join(repr(k) for k in PLAN_ITEM_KINDS)
-            return "", f"{path} must be one of {allowed}."
-        return normalized, ""
-
-    def _create_plan_item(
-        self,
-        *,
-        content: str,
-        parent_id: str | None,
-        created_at: float,
-        kind: str = PLAN_ITEM_DEFAULT_KIND,
-    ) -> PlanItem:
-        item = PlanItem(
-            id=f"P{self._next_item_number}",
-            content=content,
-            parent_id=parent_id,
-            created_at=created_at,
-            kind=kind,
-        )
-        self._next_item_number += 1
-        self._items.append(item)
-        return item
-
-    def _add_plan_item_tree(
-        self,
-        nodes: list[dict[str, Any]],
-        *,
-        parent_id: str | None,
-        created_at: float,
-    ) -> tuple[list[PlanItem], str]:
-        validation_error = self._validate_plan_item_nodes(nodes, path="items")
-        if validation_error:
-            return [], validation_error
-
-        created: list[PlanItem] = []
-
-        def add_nodes(current_nodes: list[dict[str, Any]], current_parent_id: str | None) -> None:
-            for node in current_nodes:
-                node_kind, _ = self._normalize_kind(
-                    node.get("kind"), path="kind"
-                )
-                item = self._create_plan_item(
-                    content=str(node["content"]).strip(),
-                    parent_id=current_parent_id,
-                    created_at=created_at,
-                    kind=node_kind,
-                )
-                created.append(item)
-                children = node.get("children") or []
-                add_nodes(children, item.id)
-
-        add_nodes(nodes, parent_id)
-        return created, ""
-
-    def _validate_plan_item_nodes(self, nodes: Any, *, path: str) -> str:
-        if not isinstance(nodes, list):
-            return f"{path} must be a list of plan item objects."
-        if path == "items" and not nodes:
-            return "items must contain at least one plan item."
-
-        for index, node in enumerate(nodes):
-            item_path = f"{path}[{index}]"
-            if not isinstance(node, dict):
-                return f"{item_path} must be an object."
-            content = node.get("content")
-            if not isinstance(content, str) or not content.strip():
-                return f"{item_path}.content must be a non-empty string."
-            if "kind" in node:
-                _, kind_error = self._normalize_kind(
-                    node.get("kind"), path=f"{item_path}.kind"
-                )
-                if kind_error:
-                    return kind_error
-            children = node.get("children", [])
-            if children is None:
-                continue
-            if not isinstance(children, list):
-                return f"{item_path}.children must be a list when provided."
-            child_error = self._validate_plan_item_nodes(
-                children,
-                path=f"{item_path}.children",
-            )
-            if child_error:
-                return child_error
-        return ""
 
     def _maybe_fold_completed_context(
         self,
@@ -801,358 +922,55 @@ class PlanPlugin(HawiPlugin):
         item_content: str,
         summary: str,
         completed_item_ids: list[str],
+        handoff_notes: str | None = None,
     ) -> dict[str, Any]:
-        if not self._fold_completed_tasks:
-            return {
-                "enabled": False,
-                "summary": summary or None,
-            }
-        if not completed_item_ids:
-            return {
-                "enabled": True,
-                "skipped": True,
-                "reason": "No plan items were newly completed by this call.",
-                "summary": summary,
-            }
-
-        context = getattr(ctx, "context", None)
-        messages = getattr(context, "messages", None)
-        if not isinstance(messages, list):
-            return {
-                "enabled": True,
-                "skipped": True,
-                "reason": (
-                    "No runtime AgentContext was available. Folding only runs "
-                    "during agent tool execution."
-                ),
-                "summary": summary,
-            }
-
-        current_index = self._find_current_completion_message_index(messages)
-        if current_index is None:
-            return {
-                "enabled": True,
-                "skipped": True,
-                "reason": (
-                    "Could not locate the active complete_plan_item tool call in "
-                    "the current context, so no messages were folded."
-                ),
-                "summary": summary,
-            }
-
-        start_index = self._fold_start_index(messages, current_index)
-        folded_messages = deepcopy(messages[start_index:current_index])
-        if start_index < current_index:
-            del messages[start_index:current_index]
-
-        record = PlanFoldRecord(
-            fold_id=f"PF{self._next_fold_number}",
+        folded_context, record = self._engine.fold_completed_context(
+            ctx,
             item_id=item_id,
             item_content=item_content,
             summary=summary,
-            messages=folded_messages,
-            completed_item_ids=list(completed_item_ids),
-            created_at=time.time(),
+            handoff_notes=handoff_notes,
+            completed_item_ids=completed_item_ids,
         )
-        self._next_fold_number += 1
-        self._fold_records.append(record)
-        self.emit_plugin_event(
-            "plugin.event",
-            {
-                "event_name": "plan.context.folded",
-                "fold": record.reference_dict(),
-                "title": "Plan context folded",
-                "message": (
-                    f"Folded {len(folded_messages)} message(s) for {item_id}."
-                ),
-                "data": {
-                    "fold_id": record.fold_id,
-                    "item_id": item_id,
-                    "folded_message_count": len(folded_messages),
-                },
-            },
-        )
-
-        folded_context = record.reference_dict()
-        folded_context["enabled"] = True
-        folded_context["skipped"] = False
-        return folded_context
-
-    def _find_current_completion_message_index(
-        self,
-        messages: list[dict[str, Any]],
-    ) -> int | None:
-        if self._active_completion_tool_call_id:
-            for index in range(len(messages) - 1, -1, -1):
-                message = messages[index]
-                if self._assistant_has_tool_call_id(
-                    message,
-                    self._active_completion_tool_call_id,
-                ):
-                    return index
-
-        for index in range(len(messages) - 1, -1, -1):
-            message = messages[index]
-            if self._assistant_has_tool_call_name(message, "complete_plan_item"):
-                return index
-        return None
-
-    def _fold_start_index(
-        self,
-        messages: list[dict[str, Any]],
-        current_index: int,
-    ) -> int:
-        latest_marker_end = -1
-        for index in range(current_index):
-            message = messages[index]
-            if not self._assistant_has_tool_call_name(message, "complete_plan_item"):
-                continue
-            marker_end = index
-            while (
-                marker_end + 1 < current_index
-                and messages[marker_end + 1].get("role") == "tool"
-            ):
-                marker_end += 1
-            latest_marker_end = marker_end
-        return latest_marker_end + 1
-
-    @staticmethod
-    def _assistant_has_tool_call_id(message: dict[str, Any], tool_call_id: str) -> bool:
-        if message.get("role") != "assistant":
-            return False
-        for part in message.get("content", []):
-            if (
-                isinstance(part, dict)
-                and part.get("type") == "tool_call"
-                and part.get("id") == tool_call_id
-            ):
-                return True
-        return False
-
-    @staticmethod
-    def _assistant_has_tool_call_name(message: dict[str, Any], tool_name: str) -> bool:
-        if message.get("role") != "assistant":
-            return False
-        for part in message.get("content", []):
-            if (
-                isinstance(part, dict)
-                and part.get("type") == "tool_call"
-                and part.get("name") == tool_name
-            ):
-                return True
-        return False
-
-    def _find_fold_record(
-        self,
-        *,
-        item_id: str,
-        fold_id: str | None,
-    ) -> PlanFoldRecord | None:
-        normalized_fold_id = fold_id.strip().lower() if isinstance(fold_id, str) else ""
-        if normalized_fold_id:
-            for record in reversed(self._fold_records):
-                if record.fold_id.lower() == normalized_fold_id:
-                    return record
-
-        normalized_item_id = item_id.strip().lower() if isinstance(item_id, str) else ""
-        if normalized_item_id:
-            for record in reversed(self._fold_records):
-                if record.item_id.lower() == normalized_item_id or any(
-                    completed_id.lower() == normalized_item_id
-                    for completed_id in record.completed_item_ids
-                ):
-                    return record
-        return None
-
-    def _format_folded_messages(self, messages: list[dict[str, Any]]) -> str:
-        if not messages:
-            return "[No detailed messages were folded for this completion.]"
-
-        sections: list[str] = []
-        for index, message in enumerate(messages, 1):
-            role = message.get("role", "unknown")
-            name = message.get("name")
-            title = f"Message {index} ({role})"
-            if name:
-                title += f" name={name}"
-            content = self._format_content(message.get("content", []))
-            sections.append(f"## {title}\n{content}")
-        return "\n\n".join(sections)
-
-    def _format_content(self, content: Any) -> str:
-        if isinstance(content, str):
-            return content
-        if not isinstance(content, list):
-            return self._safe_json(content)
-
-        parts: list[str] = []
-        for part in content:
-            if not isinstance(part, dict):
-                parts.append(str(part))
-                continue
-            part_type = part.get("type")
-            if part_type == "text":
-                parts.append(str(part.get("text", "")))
-            elif part_type == "reasoning":
-                reasoning = part.get("reasoning") or ""
-                if reasoning:
-                    parts.append(f"[reasoning]\n{reasoning}")
-            elif part_type == "tool_call":
-                parts.append(
-                    "[tool_call] "
-                    f"id={part.get('id', '')} "
-                    f"name={part.get('name', '')} "
-                    f"arguments={self._safe_json(part.get('arguments', {}))}"
-                )
-            elif part_type == "tool_result":
-                result_content = part.get("content", [])
-                parts.append(
-                    "[tool_result] "
-                    f"tool_call_id={part.get('tool_call_id', '')} "
-                    f"is_error={part.get('is_error', False)}\n"
-                    f"{self._format_content(result_content)}"
-                )
-            elif part_type == "steer":
-                parts.append(f"[steer]\n{self._format_content(part.get('content', []))}")
-            else:
-                parts.append(self._safe_json(part))
-        return "\n".join(text for text in parts if text)
-
-    @staticmethod
-    def _safe_json(value: Any) -> str:
-        try:
-            return json.dumps(value, ensure_ascii=False, sort_keys=True)
-        except (TypeError, ValueError):
-            return str(value)
-
-    def _state_dict(self) -> dict[str, Any]:
-        incomplete = self._incomplete_items()
-        return {
-            "items": self._tree_items(),
-            "flat_items": [item.to_dict() for item in self._items],
-            "pending_count": len(incomplete),
-            "notification_cancelled": self._notification_cancelled,
-            "cancel_reason": self._cancel_reason,
-            "context_folding_enabled": self._fold_completed_tasks,
-            "folded_contexts": [
-                record.reference_dict() for record in self._fold_records
-            ],
-        }
-
-    def _find_item(self, item_id: str) -> PlanItem | None:
-        normalized = item_id.strip().lower()
-        for item in self._items:
-            if item.id.lower() == normalized:
-                return item
-        return None
-
-    def _children_of(self, parent_id: str | None) -> list[PlanItem]:
-        return [item for item in self._items if item.parent_id == parent_id]
-
-    def _descendants(self, parent_id: str) -> list[PlanItem]:
-        descendants: list[PlanItem] = []
-        for child in self._children_of(parent_id):
-            descendants.append(child)
-            descendants.extend(self._descendants(child.id))
-        return descendants
-
-    def _incomplete_items(self) -> list[PlanItem]:
-        return [item for item in self._items if not item.completed]
-
-    def _propagate_completion_upward(
-        self, start: PlanItem, now: float
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        auto_completed: list[dict[str, Any]] = []
-        review_required: list[dict[str, Any]] = []
-        cursor = start
-        while cursor.parent_id is not None:
-            parent = self._find_item(cursor.parent_id)
-            if parent is None or parent.completed:
-                break
-            children = self._children_of(parent.id)
-            if not children or not all(child.completed for child in children):
-                break
-            if parent.kind == "determinate":
-                parent.completed = True
-                parent.completed_at = now
-                auto_completed.append(parent.to_dict())
-                cursor = parent
-                continue
-            review_required.append(
+        if record is not None:
+            self.emit_plugin_event(
+                "plugin.event",
                 {
-                    "id": parent.id,
-                    "content": parent.content,
-                    "kind": parent.kind,
-                    "reason": (
-                        "All children are complete, but this item is exploratory — "
-                        "decide whether the work is truly done (call complete_plan_item) "
-                        "or add follow-up children (call add_plan_item)."
+                    "event_name": "plan.context.folded",
+                    "fold": record.reference_dict(),
+                    "title": "Plan context folded",
+                    "message": (
+                        f"Folded {len(record.messages)} message(s) for {item_id}."
                     ),
-                }
+                    "data": {
+                        "fold_id": record.fold_id,
+                        "item_id": item_id,
+                        "folded_message_count": len(record.messages),
+                    },
+                },
             )
-            break
-        return auto_completed, review_required
-
-    def _tree_items(self) -> list[dict[str, Any]]:
-        return [self._tree_item(item) for item in self._children_of(None)]
-
-    def _tree_item(self, item: PlanItem) -> dict[str, Any]:
-        return {
-            **item.to_dict(),
-            "children": [self._tree_item(child) for child in self._children_of(item.id)],
-        }
-
-    def _format_plan_list(self) -> str:
-        if not self._items:
-            return "No plan items."
-        lines: list[str] = []
-        for item in self._children_of(None):
-            self._format_plan_item(item, lines, depth=0)
-        return "\n".join(lines)
-
-    def _format_plan_item(self, item: PlanItem, lines: list[str], *, depth: int) -> None:
-        mark = "x" if item.completed else " "
-        indent = "  " * depth
-        lines.append(f"{indent}- [{mark}] {item.id}: {item.content}")
-        for child in self._children_of(item.id):
-            self._format_plan_item(child, lines, depth=depth + 1)
-
-    def _format_plan_artifact(self) -> str:
-        if not self._items:
-            return "No plan items."
-        lines: list[str] = []
-        for item in self._children_of(None):
-            self._format_plan_artifact_item(item, lines, depth=0)
-        return "\n".join(lines)
-
-    def _format_plan_artifact_item(
-        self, item: PlanItem, lines: list[str], *, depth: int
-    ) -> None:
-        indent = "  " * depth
-        text = f"{item.id}: {item.content}"
-        rendered = f"~~{text}~~" if item.completed else text
-        lines.append(f"{indent}- {rendered}")
-        for child in self._children_of(item.id):
-            self._format_plan_artifact_item(child, lines, depth=depth + 1)
+        return folded_context
 
     def _sync_artifact(self, *, status: str) -> None:
         self.upsert_artifact(
             "current-plan",
             artifact_type="plan",
             title="Current Plan",
-            content=f"{self._format_plan_artifact()}\n",
+            content=f"{self._engine.format_plan_artifact()}\n",
             language="markdown",
             mime_type="text/markdown",
             status=status,
             metadata={
-                "pending_count": len(self._incomplete_items()),
-                "notification_cancelled": self._notification_cancelled,
-                "cancel_reason": self._cancel_reason,
-                "items": self._tree_items(),
+                "pending_count": len(self._engine.incomplete_items()),
+                "plan_paused": self._engine.plan_paused,
+                "pause_reason": self._engine.pause_reason,
+                "items": self._engine.tree_items(),
             },
         )
 
-    def _emit_plan_item_update(self, action: str, item: PlanItem | dict[str, Any]) -> None:
+    def _emit_plan_item_update(
+        self, action: str, item: PlanItem | dict[str, Any]
+    ) -> None:
         item_data = item.to_dict() if isinstance(item, PlanItem) else item
         self.emit_plugin_event(
             "plugin.event",
@@ -1160,7 +978,7 @@ class PlanPlugin(HawiPlugin):
                 "event_name": "plan.item.updated",
                 "action": action,
                 "item": item_data,
-                "state": self._state_dict(),
+                "state": self._engine.state_dict(),
                 "title": "Plan updated",
                 "message": f"{action.capitalize()} {item_data.get('id', 'plan item')}",
                 "data": item_data,
