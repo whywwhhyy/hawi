@@ -248,7 +248,7 @@ class TestGetPendingReviews:
     def test_shows_human_count_without_review_ids(self):
         plugin = WorkflowPlugin()
         _inject_workflow(plugin, _make_two_node_wf())
-        plugin._pending_human_reviews["r1"] = asyncio.get_event_loop().create_future()
+        plugin._pending_human_reviews["r1"] = asyncio.new_event_loop().create_future()
 
         r = plugin.get_pending_reviews()
         assert r.output["human_review_count"] >= 1
@@ -289,21 +289,21 @@ class TestClone:
 class TestHumanReviewAPI:
     def test_approve(self):
         plugin = WorkflowPlugin()
-        plugin._pending_human_reviews["rid1"] = asyncio.get_event_loop().create_future()
+        plugin._pending_human_reviews["rid1"] = asyncio.new_event_loop().create_future()
         r = plugin.approve_workflow_node("rid1", feedback="Good")
         assert r.success
         assert plugin._pending_human_reviews["rid1"].result().approved
 
     def test_approve_already_resolved(self):
         plugin = WorkflowPlugin()
-        plugin._pending_human_reviews["rid1"] = asyncio.get_event_loop().create_future()
+        plugin._pending_human_reviews["rid1"] = asyncio.new_event_loop().create_future()
         plugin.approve_workflow_node("rid1")
         r = plugin.approve_workflow_node("rid1")
         assert not r.success
 
     def test_reject(self):
         plugin = WorkflowPlugin()
-        plugin._pending_human_reviews["rid2"] = asyncio.get_event_loop().create_future()
+        plugin._pending_human_reviews["rid2"] = asyncio.new_event_loop().create_future()
         r = plugin.reject_workflow_node("rid2", feedback="Try again.")
         assert r.success
         d = plugin._pending_human_reviews["rid2"].result()
@@ -312,7 +312,7 @@ class TestHumanReviewAPI:
 
     def test_reject_requires_feedback(self):
         plugin = WorkflowPlugin()
-        plugin._pending_human_reviews["rid3"] = asyncio.get_event_loop().create_future()
+        plugin._pending_human_reviews["rid3"] = asyncio.new_event_loop().create_future()
         r = plugin.reject_workflow_node("rid3", feedback="  ")
         assert not r.success
 
