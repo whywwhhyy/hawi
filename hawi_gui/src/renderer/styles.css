@@ -287,13 +287,23 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
   min-height: 38px;
-  padding: 0 10px;
-  border: 0;
   border-bottom: 1px solid #edf1f2;
   background: #ffffff;
   color: #263238;
+}
+
+.session-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
   text-align: left;
 }
 
@@ -302,17 +312,35 @@ button:disabled {
   background: #edf7f3;
 }
 
-.session-option span {
+.session-select span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-option small {
+.session-select small {
   color: #758188;
   font-size: 11px;
   white-space: nowrap;
+}
+
+.session-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #8d4a43;
+}
+
+.session-delete:hover {
+  background: #f9e9e6;
+  color: #9a3328;
 }
 
 .session-empty {

@@ -737,6 +737,15 @@ class CoreRuntime:
             raise ValueError(
                 "'session_delete.payload.session_id' must be a non-empty string"
             )
+        if session_id == sm.current_session_id:
+            await client.send(
+                make_error(
+                    "Cannot delete the current session.",
+                    request_id=command.id,
+                    code="invalid_session_delete",
+                )
+            )
+            return
         sm.delete_session(session_id)
         await client.send(
             make_ack(

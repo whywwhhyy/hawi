@@ -114,6 +114,7 @@ class DummySessionManager:
 
     def __init__(self) -> None:
         self.loaded: str | None = None
+        self.deleted: list[str] = []
         self.histories = {
             "current-session": [
                 {
@@ -149,6 +150,10 @@ class DummySessionManager:
         self.new_session_name = name
         self.current_session_id = "new-session"
         return self.current_session_id
+
+    def delete_session(self, session_id: str) -> None:
+        self.deleted.append(session_id)
+        self.histories.pop(session_id, None)
 
 
 class SimpleTool(AgentTool):
@@ -296,6 +301,51 @@ async def test_session_load_ack_includes_message_history() -> None:
     assert payload["command"] == "session_load"
     assert payload["session_id"] == "saved-session"
     assert payload["message_history"][0]["content"][0]["text"] == "saved"
+
+
+@pytest.mark.asyncio
+async def test_session_delete_rejects_current_session() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    sm = DummySessionManager()
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_delete","id":"delete",'
+            '"payload":{"session_id":"current-session"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "error"
+    assert payload["code"] == "invalid_session_delete"
+    assert sm.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_session_delete_removes_non_current_session() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    sm = DummySessionManager()
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_delete","id":"delete",'
+            '"payload":{"session_id":"saved-session"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_delete"
+    assert payload["session_id"] == "saved-session"
+    assert sm.deleted == ["saved-session"]
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, ChevronDown, ChevronRight, FileText, Plug, Plus, RotateCcw, Send, Square, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, ChevronDown, ChevronRight, FileText, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
@@ -339,6 +339,24 @@ export default function App() {
     }
   }
 
+  async function deleteSession(sessionId: string) {
+    if (!sessionId || sessionId === currentSessionId) {
+      return;
+    }
+    if (!window.confirm(`删除 Session ${shortSessionId(sessionId)}？`)) {
+      return;
+    }
+    setSessionBusy(true);
+    try {
+      const frame = await sendCommand("session_delete", { session_id: sessionId });
+      if (!frame) return;
+      setSessions((items) => items.filter((item) => item.session_id !== sessionId));
+      await refreshSessions();
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
   async function newSession() {
     setSessionBusy(true);
     try {
@@ -502,6 +520,7 @@ export default function App() {
             busy={sessionBusy}
             onToggle={openSessionDialog}
             onSelect={loadSession}
+            onDelete={deleteSession}
             onNew={newSession}
           />
         </div>
@@ -729,6 +748,7 @@ function SessionStatusCell({
   busy,
   onToggle,
   onSelect,
+  onDelete,
   onNew
 }: {
   messageCount: number;
@@ -738,6 +758,7 @@ function SessionStatusCell({
   busy: boolean;
   onToggle: () => void;
   onSelect: (sessionId: string) => void;
+  onDelete: (sessionId: string) => void;
   onNew: () => void;
 }) {
   const sortedSessions = [...sessions].sort((a, b) => {
@@ -781,17 +802,37 @@ function SessionStatusCell({
           <div className="session-list">
             {sortedSessions.length === 0 ? (
               <div className="session-empty">No sessions</div>
-            ) : sortedSessions.map((session) => (
-              <button
-                key={session.session_id}
-                className={`session-option ${session.session_id === currentSessionId ? "current" : ""}`}
-                disabled={busy}
-                onClick={() => onSelect(session.session_id)}
-              >
-                <span>{session.name || shortSessionId(session.session_id)}</span>
-                <small>{formatSessionUpdatedAt(session.updated_at)}</small>
-              </button>
-            ))}
+            ) : sortedSessions.map((session) => {
+              const isCurrent = session.session_id === currentSessionId;
+              return (
+                <div
+                  key={session.session_id}
+                  className={`session-option ${isCurrent ? "current" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="session-select"
+                    disabled={busy}
+                    onClick={() => onSelect(session.session_id)}
+                  >
+                    <span>{session.name || shortSessionId(session.session_id)}</span>
+                    <small>{formatSessionUpdatedAt(session.updated_at)}</small>
+                  </button>
+                  {!isCurrent && (
+                    <button
+                      type="button"
+                      className="session-delete"
+                      title="删除 Session"
+                      aria-label={`删除 Session ${shortSessionId(session.session_id)}`}
+                      disabled={busy}
+                      onClick={() => onDelete(session.session_id)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
