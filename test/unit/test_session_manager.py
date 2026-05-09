@@ -291,6 +291,50 @@ class TestSessionManager:
         sm.delete_session(sid)
         assert not sd.exists()
 
+    def test_load_recovers_interrupted_tool_calls(self, session_root: Path) -> None:
+        """A session saved mid-tool-call must come back with synthetic
+        error results so GUI snapshots taken right after load are
+        provider-valid (no orphan tool_calls)."""
+        agent = _StubAgent()
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            # Build a context that mimics a crash mid-tool-call: assistant
+            # message with a tool_call but no tool result.
+            agent.context.add_user_message("do a thing")
+            agent.context.add_assistant_message([
+                {"type": "text", "text": "ok"},
+                {
+                    "type": "tool_call",
+                    "id": "tc-orphan-1",
+                    "name": "do_thing",
+                    "arguments": {"x": 1},
+                },
+            ])
+            sid = sm.new_session(name="crash")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        agent2 = _StubAgent()
+        scheduler2 = _StubScheduler()
+        sm2 = SessionManager(root=session_root)
+        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        try:
+            sm2.load_session(sid)
+            tool_results = [
+                m for m in agent2.context.messages if m["role"] == "tool"
+            ]
+            assert len(tool_results) == 1, (
+                "load_session should synthesize a tool_result for the orphan"
+            )
+            result_part = tool_results[0]["content"][0]
+            assert result_part["tool_call_id"] == "tc-orphan-1"
+            assert result_part["is_error"] is True
+        finally:
+            sm2.detach()
+
     def test_event_triggers_checkpoint(self, session_root: Path) -> None:
         agent = _StubAgent()
         scheduler = _StubScheduler()

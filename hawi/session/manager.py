@@ -259,6 +259,26 @@ class SessionManager:
                 self._agent.load_runtime(runtime_data)
                 loaded.append(layout.COMPONENT_RUNTIME)
 
+            # Synthesize error tool results for any in-flight tool calls that
+            # were interrupted by the crash. Done at load time (not deferred to
+            # the next run) so the context is provider-valid immediately and
+            # GUI snapshots produced right after load show no orphan tool
+            # nodes. add_missing_tool_results scans messages directly and is
+            # idempotent.
+            recovered = self._agent.context.add_missing_tool_results(
+                "Tool call interrupted before completion (reason: session restored)."
+            )
+            if recovered:
+                # Clear runtime tool-call list — these are now "answered" with
+                # synthetic results; nothing live should pick them up.
+                self._agent._current_tool_calls = []
+                self._agent._last_unsent_tool_results = []
+                logger.info(
+                    "session %s load: recovered %d interrupted tool calls",
+                    session_id,
+                    len(recovered),
+                )
+
             plugins_dir = layout.plugins_dir(session_dir)
             if plugins_dir.exists():
                 self._load_plugins(plugins_dir, manifest)

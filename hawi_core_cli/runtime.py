@@ -226,6 +226,15 @@ class CoreRuntime:
             scheduler,
             event_bus=getattr(scheduler.agent, "_event_bus", None),
         )
+        # Auto-create an initial session so every boundary event from now on
+        # actually persists. Users can later switch to a different session
+        # via the GUI; the manifest's name defaults to "session-<id>" and is
+        # rename-able through ``session_new`` (with a name) or future rename
+        # commands.
+        try:
+            self._session_manager.new_session()
+        except Exception:
+            logger.exception("failed to auto-create initial session")
         self._broadcast_task = asyncio.create_task(self._broadcast_loop())
         self._status_task = asyncio.create_task(self._status_loop())
         self._started = True
