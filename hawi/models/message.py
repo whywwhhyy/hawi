@@ -582,6 +582,7 @@ class MessageMetadata(TypedDict, total=False):
     compression_level: int  # 已被压缩的次数
     source: str  # 来源标识
     summarized: bool  # 是否已被摘要
+    reasoning_content: NotRequired[str | None]  # OpenAI-compatible reasoning 内容
 
 
 class Message(TypedDict):

@@ -23,11 +23,10 @@ from typing import Any
 import httpx
 
 from hawi.models.openai import OpenAIModel
-from hawi.models import DeltaPart, MessageRequest, MessageResponse
+from hawi.models import DeltaPart, MessageRequest
 from hawi.models import BalanceInfo
 from ._adaptive_reasoning import (
     awith_empty_reasoning_delta_if_missing,
-    ensure_reasoning_part,
     is_reasoning_model,
     should_ensure_reasoning_part,
     with_empty_reasoning_delta_if_missing,
@@ -80,7 +79,7 @@ class DeepSeekOpenAIModel(OpenAIModel):
             model_id="deepseek-reasoner",
             api_key="sk-...",
             base_url="https://api.deepseek.com",
-            include_reasoning_in_context=True,  # 工具调用场景需要开启
+            include_reasoning_in_context=True,  # 普通 assistant 历史也保留 reasoning
         )
     """
 
@@ -107,14 +106,23 @@ class DeepSeekOpenAIModel(OpenAIModel):
                 这是 DeepSeek thinking mode 的协议要求。
             **params: 其他参数，如 temperature, max_tokens 等
         """
+        include_reasoning_in_tool_calls = params.pop(
+            "include_reasoning_in_tool_calls",
+            True,
+        )
+        default_tool_call_reasoning_content = params.pop(
+            "default_tool_call_reasoning_content",
+            "",
+        )
         super().__init__(
             model_id=model_id,
             api_key=api_key,
             base_url=base_url,
+            include_reasoning_in_context=include_reasoning_in_context,
+            include_reasoning_in_tool_calls=include_reasoning_in_tool_calls,
+            default_tool_call_reasoning_content=default_tool_call_reasoning_content,
             **params
         )
-
-        self.include_reasoning_in_context = include_reasoning_in_context
 
         # 如果是 Reasoner 模型，警告不支持的参数
         if self.model_id == "deepseek-reasoner":
@@ -219,46 +227,7 @@ class DeepSeekOpenAIModel(OpenAIModel):
                 if isinstance(content, list):
                     result["content"] = self._serialize_content_to_string(content)
 
-            if result.get("role") == "assistant":
-                self._apply_reasoning_content(result, message)
-
         return results
-
-    def _apply_reasoning_content(
-        self,
-        result: dict[str, Any],
-        message: dict[str, Any],
-    ) -> None:
-        """Attach DeepSeek reasoning_content when the request protocol requires it."""
-        reasoning, has_reasoning = self._extract_request_reasoning(message)
-        has_tool_calls = bool(result.get("tool_calls"))
-
-        # DeepSeek thinking mode requires assistant messages that contain
-        # tool_calls to be passed back with reasoning_content. Adaptive thinking
-        # may intentionally emit no reasoning, and the valid value is then "".
-        if has_tool_calls:
-            result["reasoning_content"] = reasoning if has_reasoning else ""
-            return
-
-        # Keep the opt-in legacy behavior for callers that explicitly want to
-        # preserve reasoning on ordinary assistant turns.
-        if self.include_reasoning_in_context and has_reasoning:
-            result["reasoning_content"] = reasoning
-
-    def _extract_request_reasoning(
-        self,
-        message: dict[str, Any],
-    ) -> tuple[str, bool]:
-        """Extract reasoning_content from Hawi message content or metadata."""
-        for part in message.get("content", []):
-            if part.get("type") == "reasoning":
-                return part.get("reasoning") or "", True
-
-        metadata = message.get("metadata")
-        if isinstance(metadata, dict) and "reasoning_content" in metadata:
-            return str(metadata.get("reasoning_content") or ""), True
-
-        return "", False
 
     def _sanitize_openai_content(self, content: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sanitized: list[dict[str, Any]] = []
@@ -293,45 +262,16 @@ class DeepSeekOpenAIModel(OpenAIModel):
         # DeepSeek API 不接受空的 content
         return "\n".join(texts) if texts else " "
 
-    def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
-        """解析响应，提取 reasoning_content"""
-        msg_response = super()._parse_response_impl(response)
-
-        # 从原始响应中提取 reasoning_content
-        choices = response.get("choices", [])
-        if choices:
-            message = choices[0].get("message", {})
-            reasoning, server_reasoning_present = self._extract_response_reasoning(message)
-            if should_ensure_reasoning_part(
-                self.model_id,
-                server_reasoning_present=server_reasoning_present,
-            ):
-                ensure_reasoning_part(msg_response, reasoning)
-
-        return msg_response
-
-    def _extract_response_reasoning(
+    def _should_include_response_reasoning_part(
         self,
-        message: dict[str, Any],
-    ) -> tuple[str, bool]:
-        """Extract DeepSeek reasoning from OpenAI-compatible response message."""
-        if "reasoning_content" in message:
-            return message.get("reasoning_content") or "", True
-
-        content = message.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") in {"reasoning", "thinking"}:
-                    return (
-                        block.get("reasoning")
-                        or block.get("thinking")
-                        or "",
-                        True,
-                    )
-
-        return "", False
+        *,
+        server_reasoning_present: bool,
+    ) -> bool:
+        """DeepSeek reasoners need an empty block when adaptive thinking is silent."""
+        return should_ensure_reasoning_part(
+            self.model_id,
+            server_reasoning_present=server_reasoning_present,
+        )
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用，适配 DeepSeek adaptive thinking 的空 reasoning 块。"""

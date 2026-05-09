@@ -16,7 +16,7 @@ from hawi.models import BalanceInfo
 from hawi.models import DeltaPart
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
-from hawi.models import MessageRequest, MessageResponse
+from hawi.models import MessageRequest
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +83,26 @@ class KimiOpenAIModel(OpenAIModel):
             enable_thinking: 是否启用 thinking 模式（K2.5），默认为 True
             **params: 其他参数
         """
+        thinking_model = self._is_thinking_model_id(model_id)
+        include_reasoning_in_context = params.pop(
+            "include_reasoning_in_context",
+            thinking_model,
+        )
+        include_reasoning_in_tool_calls = params.pop(
+            "include_reasoning_in_tool_calls",
+            thinking_model,
+        )
+        default_tool_call_reasoning_content = params.pop(
+            "default_tool_call_reasoning_content",
+            "Using tool to solve the problem...",
+        )
         super().__init__(
             model_id=model_id,
             api_key=api_key,
             base_url=base_url,
+            include_reasoning_in_context=include_reasoning_in_context,
+            include_reasoning_in_tool_calls=include_reasoning_in_tool_calls,
+            default_tool_call_reasoning_content=default_tool_call_reasoning_content,
             **params
         )
         self.enable_thinking = enable_thinking
@@ -101,9 +117,14 @@ class KimiOpenAIModel(OpenAIModel):
         "kimi-k2-thinking-turbo",
     })
 
+    @classmethod
+    def _is_thinking_model_id(cls, model_id: str) -> bool:
+        """检查模型 ID 是否为 thinking 模型"""
+        return model_id in cls._THINKING_MODELS
+
     def _is_thinking_model(self) -> bool:
         """检查是否为 thinking 模型"""
-        return self.model_id in self._THINKING_MODELS
+        return self._is_thinking_model_id(self.model_id)
 
     def _get_params(self) -> dict[str, Any]:
         """获取模型参数（K2.5 固定参数处理）"""
@@ -201,66 +222,6 @@ class KimiOpenAIModel(OpenAIModel):
                 chunk_dict = chunk.model_dump()
                 for event in processor.process_chunk(chunk_dict):
                     yield event
-
-    def _convert_message_to_openai(self, message) -> list[dict[str, Any]]:
-        """转换消息，处理 Kimi K2.5 reasoning_content"""
-        results = super()._convert_message_to_openai(message)
-
-        # 对于 K2.5 thinking 模型，从消息中提取 reasoning_content
-        # 注意：reasoning_content 应该来自模型的实际响应，而非硬编码
-        if self._is_thinking_model():
-            for result in results:
-                if result.get("role") != "assistant":
-                    continue
-
-                for part in message.get("content", []):
-                    if part.get("type") == "reasoning":
-                        result["reasoning_content"] = part.get("reasoning", "")
-                        break
-
-                # 如果消息元数据中有 reasoning_content，也提取出来
-                metadata = message.get("metadata")
-                if not result.get("reasoning_content") and metadata and metadata.get("reasoning_content"):
-                    result["reasoning_content"] = metadata["reasoning_content"]
-
-                # Kimi K2.5 API 要求 tool call 消息必须有非空的 reasoning_content
-                # 如果没有 reasoning_content 但有 tool_calls，添加一个默认值
-                # Check for tool_calls in result (set by parent) or in message content
-                has_tool_calls = result.get("tool_calls") or any(
-                    part.get("type") == "tool_call" for part in message.get("content", [])
-                )
-                if not result.get("reasoning_content") and has_tool_calls:
-                    result["reasoning_content"] = "Using tool to solve the problem..."
-
-        return results
-
-    def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
-        """解析响应，提取 reasoning_content 并添加到 content 列表"""
-        msg_response = super()._parse_response_impl(response)
-
-        # 从原始响应中提取 reasoning_content
-        choices = response.get("choices", [])
-        if choices:
-            message = choices[0].get("message", {})
-            reasoning = message.get("reasoning_content")
-            if reasoning:
-                msg_response.reasoning_content = reasoning
-                # 将 reasoning_content 添加到 content 列表作为 ReasoningPart
-                # 这样 HawiAgent 可以正确处理并显示它
-                from hawi.models.message import ReasoningPart
-                reasoning_part: ReasoningPart = {
-                    "type": "reasoning",
-                    "reasoning": reasoning,
-                    "signature": None,
-                }
-                # 插入到 content 开头，保持 reasoning 在 text 之前
-                # 这与流式输出顺序一致：reasoning_content 先于 content 出现
-                # content 是 Iterable，需要转换为 list 才能插入
-                content_list = list(msg_response.content)
-                content_list.insert(0, reasoning_part)
-                msg_response.content = content_list
-
-        return msg_response
 
     def get_balance(self) -> list[BalanceInfo]:
         """

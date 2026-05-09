@@ -288,6 +288,9 @@ class OpenAIModel(Model):
         timeout: float = 60.0,
         max_retries: int = 3,
         require_usage: bool = True,
+        include_reasoning_in_context: bool = False,
+        include_reasoning_in_tool_calls: bool | None = None,
+        default_tool_call_reasoning_content: str = "",
         **params,
     ):
         """初始化 OpenAI 模型
@@ -299,6 +302,14 @@ class OpenAIModel(Model):
             timeout: 请求超时时间
             max_retries: 最大重试次数
             require_usage: 是否要求获取 token 使用量（用于计费），默认 True
+            include_reasoning_in_context: 是否将历史 assistant 消息中的
+                reasoning part/metadata 作为 OpenAI-compatible
+                reasoning_content 字段回传
+            include_reasoning_in_tool_calls: 是否在 assistant tool_call 历史
+                中回传 reasoning_content。None 表示跟随
+                include_reasoning_in_context
+            default_tool_call_reasoning_content: tool_call 历史没有
+                reasoning 时回传的默认 reasoning_content
             **params: 其他参数，如 temperature, max_tokens 等
         """
         self._model_id = model_id
@@ -307,6 +318,15 @@ class OpenAIModel(Model):
         self.timeout = timeout
         self.max_retries = max_retries
         self.require_usage = require_usage
+        self.include_reasoning_in_context = include_reasoning_in_context
+        self.include_reasoning_in_tool_calls = (
+            include_reasoning_in_context
+            if include_reasoning_in_tool_calls is None
+            else include_reasoning_in_tool_calls
+        )
+        self.default_tool_call_reasoning_content = (
+            default_tool_call_reasoning_content
+        )
         self.params = params
         self._client: OpenAI | None = None
         self._async_client: AsyncOpenAI | None = None
@@ -382,7 +402,46 @@ class OpenAIModel(Model):
         Returns:
             OpenAI 格式的消息字典列表
         """
-        return convert_message_to_openai(message)
+        results = convert_message_to_openai(message)
+        for result in results:
+            if result.get("role") == "assistant":
+                self._apply_reasoning_content(result, message)
+        return results
+
+    def _apply_reasoning_content(
+        self,
+        result: dict[str, Any],
+        message: dict[str, Any],
+    ) -> None:
+        """Attach reasoning_content to assistant history when configured."""
+        reasoning, has_reasoning = self._extract_request_reasoning(message)
+        has_tool_calls = bool(result.get("tool_calls"))
+
+        if has_tool_calls and self.include_reasoning_in_tool_calls:
+            result["reasoning_content"] = (
+                reasoning
+                if has_reasoning
+                else self.default_tool_call_reasoning_content
+            )
+            return
+
+        if self.include_reasoning_in_context and has_reasoning:
+            result["reasoning_content"] = reasoning
+
+    def _extract_request_reasoning(
+        self,
+        message: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Extract reasoning_content from Hawi message content or metadata."""
+        for part in message.get("content", []):
+            if isinstance(part, dict) and part.get("type") == "reasoning":
+                return part.get("reasoning") or "", True
+
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict) and "reasoning_content" in metadata:
+            return str(metadata.get("reasoning_content") or ""), True
+
+        return "", False
 
     def _prepare_request_impl(self, request: MessageRequest) -> dict[str, Any]:
         """将通用请求转换为 OpenAI 格式"""
@@ -403,7 +462,9 @@ class OpenAIModel(Model):
         content: list[ContentPart] = []
 
         # 处理 reasoning_content (OpenAI o1, o3 系列推理模型)
-        reasoning_content = message.get("reasoning_content")
+        reasoning_content, server_reasoning_present = (
+            self._extract_response_reasoning(message)
+        )
 
         # 处理消息内容
         msg_content = message.get("content")
@@ -441,13 +502,80 @@ class OpenAIModel(Model):
         if refusal and not content:
             content.append({"type": "text", "text": f"[Refused: {refusal}]"})
 
-        return MessageResponse(
+        msg_response = MessageResponse(
             id=response["id"],
             content=content,
             stop_reason=map_stop_reason(choice.get("finish_reason")),
             usage=usage,
-            reasoning_content=reasoning_content,
+            reasoning_content=(
+                reasoning_content if server_reasoning_present else None
+            ),
         )
+        if self._should_include_response_reasoning_part(
+            server_reasoning_present=server_reasoning_present
+        ):
+            self._ensure_response_reasoning_part(
+                msg_response,
+                reasoning_content,
+            )
+
+        return msg_response
+
+    def _extract_response_reasoning(
+        self,
+        message: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Extract reasoning from an OpenAI-compatible response message."""
+        if "reasoning_content" in message:
+            return message.get("reasoning_content") or "", True
+
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") in {"reasoning", "thinking"}:
+                    return (
+                        block.get("reasoning")
+                        or block.get("thinking")
+                        or block.get("text")
+                        or "",
+                        True,
+                    )
+
+        return "", False
+
+    def _should_include_response_reasoning_part(
+        self,
+        *,
+        server_reasoning_present: bool,
+    ) -> bool:
+        """Whether response.reasoning_content should also become a content part."""
+        return server_reasoning_present
+
+    def _ensure_response_reasoning_part(
+        self,
+        response: MessageResponse,
+        reasoning: str | None,
+    ) -> None:
+        """Ensure response.content starts with a reasoning part."""
+        reasoning_text = reasoning or ""
+        content = list(response.content)
+
+        for part in content:
+            if part.get("type") == "reasoning":
+                part["reasoning"] = part.get("reasoning") or ""
+                response.reasoning_content = part["reasoning"]
+                response.content = content
+                return
+
+        reasoning_part: ReasoningPart = {
+            "type": "reasoning",
+            "reasoning": reasoning_text,
+            "signature": None,
+        }
+        response.reasoning_content = reasoning_text
+        response.content = [reasoning_part] + content
 
     # ==================================================================
     # 调用实现

@@ -189,7 +189,7 @@ def _is_mixed_content(content: list[ContentPart]) -> bool:
         True if content contains both tool_calls and other parts
     """
     has_tool_call = any(p["type"] == "tool_call" for p in content)
-    has_other = any(p["type"] != "tool_call" for p in content)
+    has_other = any(p["type"] not in {"tool_call", "reasoning"} for p in content)
     return has_tool_call and has_other
 
 
@@ -213,9 +213,14 @@ def convert_message_to_openai(message: Message) -> list[dict[str, Any]]:
 
     content = message["content"]
 
-    # Separate tool_calls from other content
+    # Separate tool_calls from other content. Reasoning parts are represented
+    # by provider-specific fields such as reasoning_content, not content blocks.
     tool_call_parts = [p for p in content if p["type"] == "tool_call"]
-    other_parts = [p for p in content if p["type"] != "tool_call"]
+    other_parts = [
+        p
+        for p in content
+        if p["type"] not in {"tool_call", "reasoning"}
+    ]
 
     # If no mixing, return single message
     if not tool_call_parts or not other_parts:
@@ -224,8 +229,10 @@ def convert_message_to_openai(message: Message) -> list[dict[str, Any]]:
         # Handle content - must be null (not empty) when tool_calls present
         if other_parts:
             result["content"] = convert_content_to_openai(other_parts)
-        else:
+        elif tool_call_parts:
             result["content"] = None
+        else:
+            result["content"] = ""
 
         # Handle tool_calls
         if tool_call_parts:
