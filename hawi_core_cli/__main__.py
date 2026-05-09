@@ -13,6 +13,7 @@ from typing import Any
 
 from hawi.models import model_registry
 
+from .init import prepare_hawi_dir
 from .runtime import (
     DEFAULT_SYSTEM_PROMPT,
     CoreRuntime,
@@ -48,6 +49,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hawi-core",
         description="Run Hawi as an always-on JSON protocol core process.",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Create a starter Hawi environment config",
+        description="Create a starter .hawi directory without overwriting existing files.",
+    )
+    init_parser.add_argument(
+        "hawi_dir",
+        nargs="?",
+        default=None,
+        help=(
+            "Existing Hawi config directory to use. "
+            "If omitted, the bundled template is copied into ./.hawi."
+        ),
     )
     parser.add_argument("--model", default=None, help="Model factory name from models.yaml")
     parser.add_argument(
@@ -157,6 +173,22 @@ def configure_logging(args: argparse.Namespace) -> None:
 
 
 async def async_main(args: argparse.Namespace) -> None:
+    if getattr(args, "command", None) == "init":
+        result = prepare_hawi_dir(hawi_dir=args.hawi_dir)
+        if args.hawi_dir:
+            print(f"Using Hawi config directory: {result.config_dir}")
+        elif result.changed:
+            print(f"Initialized Hawi config directory: {result.config_dir}")
+            for item in result.files:
+                if item.action == "created":
+                    print(f"{item.action}: {item.path}")
+            if result.skipped:
+                print("Some existing files were left unchanged.")
+            print("Set the provider API key environment variable before running a model.")
+        else:
+            print(f"Hawi config directory already exists: {result.config_dir}")
+        return
+
     loaded = load_model_configs(args.models_config)
     available = model_registry.list_models()
     if args.inspect:
@@ -177,7 +209,7 @@ async def async_main(args: argparse.Namespace) -> None:
         raise RuntimeError(
             f"No model configurations available. Loaded configs: {loaded_text}. "
             "Create ~/.hawi/models.yaml, ./.hawi/models.yaml, ./models.yaml, "
-            "or pass --models-config PATH."
+            "pass --models-config PATH, or run `hawi-core init`."
         )
 
     selected_plugins = parse_plugins(args.plugins)

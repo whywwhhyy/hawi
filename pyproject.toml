@@ -35,6 +35,12 @@ gui = [
 where = ["."]
 include = ["hawi*"]
 
+[tool.setuptools.package-data]
+hawi_core_cli = [
+    "templates/hawi_template/.hawi/*",
+    "templates/hawi_template/.hawi/**/*",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"

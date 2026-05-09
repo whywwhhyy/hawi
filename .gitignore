@@ -227,4 +227,7 @@ hawi_gui/.vite/
 .kiro/
 .clinerules/
 .hawi/
+!hawi_core_cli/templates/hawi_template/.hawi/
+!hawi_core_cli/templates/hawi_template/.hawi/**
 models.yaml
+!hawi_core_cli/templates/hawi_template/.hawi/models.yaml

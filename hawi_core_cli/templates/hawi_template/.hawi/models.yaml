@@ -1,0 +1,35 @@
+# Hawi model configuration for {{HAWI_PROJECT_NAME}}.
+# Generated into {{HAWI_MODELS_CONFIG_PATH}}.
+#
+# Set the API key environment variable for the provider you want to use.
+#
+# Example:
+#   export DEEPSEEK_API_KEY="sk-..."
+#   hawi-core --model deepseek/deepseek-chat
+
+providers:
+  - name: deepseek
+    adapter: DeepSeekOpenAIModel
+    model_ids:
+      - deepseek-chat
+      - deepseek-reasoner
+    properties:
+      api_key: ${DEEPSEEK_API_KEY}
+
+  - name: openai
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4o-mini
+    properties:
+      api_key: ${OPENAI_API_KEY}
+
+  - name: kimi
+    adapter: KimiOpenAIModel
+    model_ids:
+      - kimi-k2
+    properties:
+      api_key: ${KIMI_API_KEY}
+
+model_configs:
+  "*/*":
+    temperature: 0.7
