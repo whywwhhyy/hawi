@@ -89,15 +89,27 @@ class DeepSeekAnthropicModel(AnthropicModel):
         base_url: str = "https://api.deepseek.com/anthropic",
         thinking_budget: int | None = None,
         max_output_tokens: int | None = None,
+        include_reasoning_in_context: bool = False,
         **params,
     ):
         """初始化 DeepSeek Anthropic 模型"""
+        include_reasoning_in_tool_calls = params.pop(
+            "include_reasoning_in_tool_calls",
+            True,
+        )
+        default_tool_call_reasoning_content = params.pop(
+            "default_tool_call_reasoning_content",
+            "",
+        )
         super().__init__(
             model_id=model_id,
             api_key=api_key,
             base_url=base_url,
             thinking_budget=thinking_budget,
             max_output_tokens=max_output_tokens,
+            include_reasoning_in_context=include_reasoning_in_context,
+            include_reasoning_in_tool_calls=include_reasoning_in_tool_calls,
+            default_tool_call_reasoning_content=default_tool_call_reasoning_content,
             **params
         )
 
@@ -223,6 +235,7 @@ class DeepSeekAnthropicModel(AnthropicModel):
     def _extract_response_reasoning(
         self,
         response: dict[str, Any],
+        parts: list[Any] | None = None,
     ) -> tuple[str, bool]:
         """Extract DeepSeek reasoning from Anthropic-compatible response."""
         content = response.get("content", [])

@@ -38,11 +38,30 @@ logger = logging.getLogger(__name__)
 class ContentConverter:
     """同步内容转换器"""
 
-    def __init__(self, enable_image_download: bool = True):
+    def __init__(
+        self,
+        enable_image_download: bool = True,
+        *,
+        include_reasoning_in_context: bool = False,
+        include_reasoning_in_tool_calls: bool | None = None,
+        default_tool_call_reasoning_content: str = "",
+    ):
         self.enable_image_download = enable_image_download
+        self.include_reasoning_in_context = include_reasoning_in_context
+        self.include_reasoning_in_tool_calls = (
+            include_reasoning_in_context
+            if include_reasoning_in_tool_calls is None
+            else include_reasoning_in_tool_calls
+        )
+        self.default_tool_call_reasoning_content = (
+            default_tool_call_reasoning_content
+        )
 
     def convert_content(
-        self, content: Sequence[ContentPart]
+        self,
+        content: Sequence[ContentPart],
+        *,
+        include_unsigned_reasoning: bool | None = None,
     ) -> list[dict[str, Any]]:
         """将 ContentPart 列表转换为 Anthropic 格式
 
@@ -51,6 +70,11 @@ class ContentConverter:
         """
         result: list[dict[str, Any]] = []
         pending_cache_point: CachePoint | None = None
+        include_unsigned_reasoning = (
+            self.include_reasoning_in_context
+            if include_unsigned_reasoning is None
+            else include_unsigned_reasoning
+        )
 
         for part in content:
             # 处理 cache point：正常应用到前一个内容块；如果 marker 出现在
@@ -63,7 +87,10 @@ class ContentConverter:
                     pending_cache_point = cache_point
                 continue
 
-            converted = self.convert_single_part(part)
+            converted = self.convert_single_part(
+                part,
+                include_unsigned_reasoning=include_unsigned_reasoning,
+            )
             if converted:
                 # 应用最前面的兼容性 cache point
                 if pending_cache_point is not None:
@@ -73,9 +100,19 @@ class ContentConverter:
 
         return result
 
-    def convert_single_part(self, part: ContentPart) -> dict[str, Any] | None:
+    def convert_single_part(
+        self,
+        part: ContentPart,
+        *,
+        include_unsigned_reasoning: bool | None = None,
+    ) -> dict[str, Any] | None:
         """转换单个 ContentPart"""
         p_type = part["type"]
+        include_unsigned_reasoning = (
+            self.include_reasoning_in_context
+            if include_unsigned_reasoning is None
+            else include_unsigned_reasoning
+        )
 
         if p_type == "text":
             return self._convert_text(cast(TextPart, part))
@@ -88,7 +125,10 @@ class ContentConverter:
         elif p_type == "tool_result":
             return self._convert_tool_result(cast(ToolResultPart, part))
         elif p_type == "reasoning":
-            return self._convert_reasoning(cast(ReasoningPart, part))
+            return self._convert_reasoning(
+                cast(ReasoningPart, part),
+                include_unsigned=include_unsigned_reasoning,
+            )
         elif p_type == "guard_content":
             return self._convert_guard_content(cast(GuardContentPart, part))
         elif p_type in {"cache_point", "cache_control"}:
@@ -114,7 +154,21 @@ class ContentConverter:
             tool_call_parts = [p for p in msg_content if p.get("type") == "tool_call"]
             # 过滤掉 content 中的 tool_call 类型，避免重复
             filtered_content = [p for p in msg_content if p.get("type") != "tool_call"]
-            content = self.convert_content(filtered_content)
+            include_unsigned_reasoning = (
+                self.include_reasoning_in_tool_calls
+                if tool_call_parts
+                else self.include_reasoning_in_context
+            )
+            content = self.convert_content(
+                filtered_content,
+                include_unsigned_reasoning=include_unsigned_reasoning,
+            )
+            self._ensure_configured_reasoning_block(
+                content,
+                message,
+                has_tool_calls=bool(tool_call_parts),
+                include_unsigned_reasoning=include_unsigned_reasoning,
+            )
             # 将 ToolCallPart 转换为 Anthropic 的 tool_use 块
             for tc in tool_call_parts:
                 tool_use_block = self._convert_tool_call(cast(ToolCallPart, tc))
@@ -264,7 +318,12 @@ class ContentConverter:
             result["is_error"] = True
         return result
 
-    def _convert_reasoning(self, part: ReasoningPart) -> dict[str, Any] | None:
+    def _convert_reasoning(
+        self,
+        part: ReasoningPart,
+        *,
+        include_unsigned: bool = False,
+    ) -> dict[str, Any] | None:
         """转换 reasoning/thinking"""
         # 处理 redacted_content（Anthropic 加密的安全推理内容）
         redacted = part.get("redacted_content")
@@ -276,6 +335,12 @@ class ContentConverter:
 
         signature = part.get("signature")
         if not isinstance(signature, str) or not signature:
+            if include_unsigned:
+                return {
+                    "type": "thinking",
+                    "thinking": part.get("reasoning") or "",
+                }
+
             # Anthropic requires previous thinking blocks to carry the original
             # signature string. Unsigned reasoning can come from other providers
             # or older streaming accumulation; skip it rather than sending an
@@ -288,6 +353,49 @@ class ContentConverter:
             "thinking": part.get("reasoning") or "",
             "signature": signature,
         }
+
+    def _ensure_configured_reasoning_block(
+        self,
+        content: list[dict[str, Any]],
+        message: Message,
+        *,
+        has_tool_calls: bool,
+        include_unsigned_reasoning: bool,
+    ) -> None:
+        """Insert configured metadata/default reasoning when needed."""
+        if any(part.get("type") in {"thinking", "redacted_thinking"} for part in content):
+            return
+
+        metadata_reasoning, has_metadata_reasoning = self._extract_metadata_reasoning(
+            message
+        )
+        if has_metadata_reasoning and include_unsigned_reasoning:
+            content.insert(
+                0,
+                {
+                    "type": "thinking",
+                    "thinking": metadata_reasoning,
+                },
+            )
+            return
+
+        if not has_tool_calls or not self.include_reasoning_in_tool_calls:
+            return
+
+        content.insert(
+            0,
+            {
+                "type": "thinking",
+                "thinking": self.default_tool_call_reasoning_content,
+            },
+        )
+
+    @staticmethod
+    def _extract_metadata_reasoning(message: Message) -> tuple[str, bool]:
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict) and "reasoning_content" in metadata:
+            return str(metadata.get("reasoning_content") or ""), True
+        return "", False
 
     def _convert_guard_content(self, part: GuardContentPart) -> dict[str, Any]:
         """转换 guard_content（Anthropic Guardrails）"""
@@ -314,7 +422,10 @@ class AsyncContentConverter(ContentConverter):
     """异步内容转换器（支持远程图片下载）"""
 
     async def convert_content_async(
-        self, content: Sequence[ContentPart]
+        self,
+        content: Sequence[ContentPart],
+        *,
+        include_unsigned_reasoning: bool | None = None,
     ) -> list[dict[str, Any]]:
         """异步转换 ContentPart 列表
 
@@ -323,6 +434,11 @@ class AsyncContentConverter(ContentConverter):
         """
         result: list[dict[str, Any]] = []
         pending_cache_point: CachePoint | None = None
+        include_unsigned_reasoning = (
+            self.include_reasoning_in_context
+            if include_unsigned_reasoning is None
+            else include_unsigned_reasoning
+        )
 
         for part in content:
             cache_point = get_content_cache_point(part)
@@ -333,7 +449,10 @@ class AsyncContentConverter(ContentConverter):
                     pending_cache_point = cache_point
                 continue
 
-            converted = await self.convert_single_part_async(part)
+            converted = await self.convert_single_part_async(
+                part,
+                include_unsigned_reasoning=include_unsigned_reasoning,
+            )
             if converted:
                 if pending_cache_point is not None:
                     converted["cache_control"] = convert_cache_point(pending_cache_point)
@@ -343,7 +462,10 @@ class AsyncContentConverter(ContentConverter):
         return result
 
     async def convert_single_part_async(
-        self, part: ContentPart
+        self,
+        part: ContentPart,
+        *,
+        include_unsigned_reasoning: bool | None = None,
     ) -> dict[str, Any] | None:
         """异步转换单个 ContentPart"""
         p_type = part["type"]
@@ -354,7 +476,10 @@ class AsyncContentConverter(ContentConverter):
             return self._convert_document(cast(DocumentPart, part))
 
         # 其他类型使用同步版本
-        return self.convert_single_part(part)
+        return self.convert_single_part(
+            part,
+            include_unsigned_reasoning=include_unsigned_reasoning,
+        )
 
     async def convert_message_async(
         self, message: Message
@@ -372,7 +497,21 @@ class AsyncContentConverter(ContentConverter):
             tool_call_parts = [p for p in msg_content if p.get("type") == "tool_call"]
             # 过滤掉 content 中的 tool_call 类型，避免重复
             filtered_content = [p for p in msg_content if p.get("type") != "tool_call"]
-            content = await self.convert_content_async(filtered_content)
+            include_unsigned_reasoning = (
+                self.include_reasoning_in_tool_calls
+                if tool_call_parts
+                else self.include_reasoning_in_context
+            )
+            content = await self.convert_content_async(
+                filtered_content,
+                include_unsigned_reasoning=include_unsigned_reasoning,
+            )
+            self._ensure_configured_reasoning_block(
+                content,
+                message,
+                has_tool_calls=bool(tool_call_parts),
+                include_unsigned_reasoning=include_unsigned_reasoning,
+            )
             # 将 ToolCallPart 转换为 Anthropic 的 tool_use 块
             for tc in tool_call_parts:
                 tool_use_block = self._convert_tool_call(cast(ToolCallPart, tc))

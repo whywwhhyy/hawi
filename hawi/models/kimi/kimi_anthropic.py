@@ -47,12 +47,28 @@ class KimiAnthropicModel(AnthropicModel):
         **params,
     ):
         """初始化 Kimi Anthropic 模型"""
+        thinking_enabled = bool(thinking_budget)
+        include_reasoning_in_context = params.pop(
+            "include_reasoning_in_context",
+            thinking_enabled,
+        )
+        include_reasoning_in_tool_calls = params.pop(
+            "include_reasoning_in_tool_calls",
+            thinking_enabled,
+        )
+        default_tool_call_reasoning_content = params.pop(
+            "default_tool_call_reasoning_content",
+            "Using tool to solve the problem...",
+        )
         super().__init__(
             model_id=model_id,
             api_key=api_key,
             base_url=base_url,
             thinking_budget=thinking_budget,
             max_output_tokens=max_output_tokens,
+            include_reasoning_in_context=include_reasoning_in_context,
+            include_reasoning_in_tool_calls=include_reasoning_in_tool_calls,
+            default_tool_call_reasoning_content=default_tool_call_reasoning_content,
             **params
         )
 

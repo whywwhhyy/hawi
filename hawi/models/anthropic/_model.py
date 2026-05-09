@@ -251,6 +251,9 @@ class AnthropicModel(Model):
         thinking_effort: str | None = None,
         output_config: dict[str, Any] | None = None,
         max_output_tokens: int | None = None,
+        include_reasoning_in_context: bool = False,
+        include_reasoning_in_tool_calls: bool | None = None,
+        default_tool_call_reasoning_content: str = "",
         **params,
     ):
         """
@@ -268,6 +271,13 @@ class AnthropicModel(Model):
             thinking_effort: adaptive thinking 的 effort，如 low/medium/high。
             output_config: Anthropic output_config 参数。
             max_output_tokens: 最大输出 token 数，默认 None（使用 API 默认值或请求中的值）
+            include_reasoning_in_context: 是否将历史 assistant 消息中的无签名
+                reasoning part/metadata 回传为 Anthropic thinking block。默认 False，
+                保持 Claude 只回传有 signature thinking 的行为。
+            include_reasoning_in_tool_calls: 是否在 assistant tool_call 历史中
+                回传无签名 reasoning。None 表示跟随 include_reasoning_in_context。
+            default_tool_call_reasoning_content: tool_call 历史没有 reasoning 时
+                回传的默认 thinking 内容。
             **params: 其他参数，如 temperature, max_output_tokens 等
         """
         self._model_id = model_id
@@ -281,6 +291,15 @@ class AnthropicModel(Model):
         self.thinking_effort = thinking_effort
         self.output_config = output_config
         self.max_output_tokens = max_output_tokens
+        self.include_reasoning_in_context = include_reasoning_in_context
+        self.include_reasoning_in_tool_calls = (
+            include_reasoning_in_context
+            if include_reasoning_in_tool_calls is None
+            else include_reasoning_in_tool_calls
+        )
+        self.default_tool_call_reasoning_content = (
+            default_tool_call_reasoning_content
+        )
         self.params = params
         self._client: Anthropic | None = None
         self._async_client: AsyncAnthropic | None = None
@@ -293,8 +312,19 @@ class AnthropicModel(Model):
             os.environ.pop("ANTHROPIC_BASE_URL", None)
 
         # 初始化转换器
-        self._converter = ContentConverter(enable_image_download)
-        self._async_converter = AsyncContentConverter(enable_image_download)
+        converter_kwargs = {
+            "include_reasoning_in_context": self.include_reasoning_in_context,
+            "include_reasoning_in_tool_calls": self.include_reasoning_in_tool_calls,
+            "default_tool_call_reasoning_content": self.default_tool_call_reasoning_content,
+        }
+        self._converter = ContentConverter(
+            enable_image_download,
+            **converter_kwargs,
+        )
+        self._async_converter = AsyncContentConverter(
+            enable_image_download,
+            **converter_kwargs,
+        )
 
     @property
     def model_id(self) -> str:
@@ -544,7 +574,11 @@ class AnthropicModel(Model):
                 parts.append(
                     ReasoningPart(
                         type="reasoning",
-                        reasoning=block.get("thinking", ""),
+                        reasoning=(
+                            block.get("thinking")
+                            or block.get("reasoning")
+                            or ""
+                        ),
                         signature=block.get("signature"),
                     )
                 )
@@ -559,12 +593,56 @@ class AnthropicModel(Model):
                     )
                 )
 
-        return MessageResponse(
+        reasoning_content, server_reasoning_present = (
+            self._extract_response_reasoning(response, parts)
+        )
+        msg_response = MessageResponse(
             id=response.get("id", ""),
             content=parts,
             stop_reason=map_stop_reason(response.get("stop_reason")),
             usage=usage,
+            reasoning_content=(
+                reasoning_content if server_reasoning_present else None
+            ),
         )
+        if (
+            server_reasoning_present
+            and not any(part.get("type") == "reasoning" for part in parts)
+        ):
+            self._ensure_response_reasoning_part(
+                msg_response,
+                reasoning_content,
+            )
+
+        return msg_response
+
+    def _extract_response_reasoning(
+        self,
+        response: dict[str, Any],
+        parts: list[ContentPart],
+    ) -> tuple[str, bool]:
+        """Extract reasoning from an Anthropic-compatible response."""
+        for part in parts:
+            if part.get("type") == "reasoning":
+                return part.get("reasoning") or "", True
+
+        if "reasoning_content" in response:
+            return response.get("reasoning_content") or "", True
+
+        return "", False
+
+    def _ensure_response_reasoning_part(
+        self,
+        response: MessageResponse,
+        reasoning: str | None,
+    ) -> None:
+        reasoning_part = ReasoningPart(
+            type="reasoning",
+            reasoning=reasoning or "",
+            signature=None,
+        )
+        response.reasoning_content = reasoning or ""
+        response.content = [reasoning_part, *list(response.content)]
 
     # =======================================================================
     # 调用实现

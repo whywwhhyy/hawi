@@ -246,6 +246,85 @@ def test_anthropic_skips_unsigned_reasoning_blocks() -> None:
     assert "signature" not in content[0]
 
 
+def test_anthropic_can_keep_unsigned_reasoning_blocks() -> None:
+    model = AnthropicModel(
+        model_id="claude-test",
+        thinking_budget=None,
+        include_reasoning_in_context=True,
+    )
+
+    prepared = model._prepare_request_sync(
+        MessageRequest(messages=[_assistant_with_reasoning(signature=None)])
+    )
+
+    content = prepared["messages"][0]["content"]
+    assert content[0] == {
+        "type": "thinking",
+        "thinking": "Need to reason.",
+    }
+    assert content[1] == {"type": "text", "text": "Done."}
+
+
+def test_anthropic_can_pass_unsigned_reasoning_for_tool_calls() -> None:
+    model = AnthropicModel(
+        model_id="claude-test",
+        thinking_budget=None,
+        include_reasoning_in_tool_calls=True,
+    )
+
+    prepared = model._prepare_request_sync(
+        MessageRequest(messages=[_assistant_reasoning_tool_call()])
+    )
+
+    content = prepared["messages"][0]["content"]
+    assert content[0] == {
+        "type": "thinking",
+        "thinking": "Need to use a tool.",
+    }
+    assert content[1]["type"] == "tool_use"
+    assert content[1]["id"] == "call-1"
+
+
+def test_anthropic_uses_default_reasoning_for_tool_calls() -> None:
+    model = AnthropicModel(
+        model_id="claude-test",
+        thinking_budget=None,
+        include_reasoning_in_tool_calls=True,
+        default_tool_call_reasoning_content="Using a tool.",
+    )
+
+    prepared = model._prepare_request_sync(
+        MessageRequest(messages=[_assistant_tool_calls(["call-1"])])
+    )
+
+    content = prepared["messages"][0]["content"]
+    assert content[0] == {
+        "type": "thinking",
+        "thinking": "Using a tool.",
+    }
+    assert content[1]["type"] == "tool_use"
+    assert content[1]["id"] == "call-1"
+
+
+def test_anthropic_can_pass_metadata_reasoning() -> None:
+    model = AnthropicModel(
+        model_id="claude-test",
+        thinking_budget=None,
+        include_reasoning_in_context=True,
+    )
+    message = _assistant_text("Done.")
+    message["metadata"] = {"reasoning_content": "Stored reasoning."}
+
+    prepared = model._prepare_request_sync(MessageRequest(messages=[message]))
+
+    content = prepared["messages"][0]["content"]
+    assert content[0] == {
+        "type": "thinking",
+        "thinking": "Stored reasoning.",
+    }
+    assert content[1] == {"type": "text", "text": "Done."}
+
+
 def test_anthropic_keeps_signed_reasoning_blocks() -> None:
     model = AnthropicModel(model_id="claude-test", thinking_budget=None)
 
@@ -259,6 +338,45 @@ def test_anthropic_keeps_signed_reasoning_blocks() -> None:
         "thinking": "Need to reason.",
         "signature": "sig-123",
     }
+    assert content[1] == {"type": "text", "text": "Done."}
+
+
+def test_anthropic_response_sets_reasoning_content() -> None:
+    model = AnthropicModel(model_id="claude-test", thinking_budget=None)
+
+    result = model._parse_response_impl({
+        "id": "msg-1",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "Need to reason.",
+                "signature": "sig-123",
+            },
+            {"type": "text", "text": "Done."},
+        ],
+        "stop_reason": "end_turn",
+    })
+
+    content = list(result.content)
+    assert result.reasoning_content == "Need to reason."
+    assert content[0]["type"] == "reasoning"
+    assert content[0]["reasoning"] == "Need to reason."
+
+
+def test_anthropic_response_top_level_reasoning_content_becomes_part() -> None:
+    model = AnthropicModel(model_id="claude-test", thinking_budget=None)
+
+    result = model._parse_response_impl({
+        "id": "msg-1",
+        "content": [{"type": "text", "text": "Done."}],
+        "reasoning_content": "Stored reasoning.",
+        "stop_reason": "end_turn",
+    })
+
+    content = list(result.content)
+    assert result.reasoning_content == "Stored reasoning."
+    assert content[0]["type"] == "reasoning"
+    assert content[0]["reasoning"] == "Stored reasoning."
     assert content[1] == {"type": "text", "text": "Done."}
 
 
@@ -288,6 +406,15 @@ def _assistant_tool_calls(tool_call_ids: list[str]) -> Message:
     }
 
 
+def _assistant_text(text: str) -> Message:
+    return {
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "name": None,
+        "metadata": None,
+    }
+
+
 def _assistant_with_reasoning(signature: str | None) -> Message:
     return {
         "role": "assistant",
@@ -299,6 +426,28 @@ def _assistant_with_reasoning(signature: str | None) -> Message:
                 "redacted_content": None,
             },
             {"type": "text", "text": "Done."},
+        ],
+        "name": None,
+        "metadata": None,
+    }
+
+
+def _assistant_reasoning_tool_call() -> Message:
+    return {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "reasoning",
+                "reasoning": "Need to use a tool.",
+                "signature": None,
+                "redacted_content": None,
+            },
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "example_tool",
+                "arguments": {},
+            },
         ],
         "name": None,
         "metadata": None,
