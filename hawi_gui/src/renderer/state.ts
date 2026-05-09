@@ -101,6 +101,7 @@ export interface QueueMessageState {
 interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
+  assistantMessageCounted?: boolean;
 }
 
 export interface AppState {
@@ -122,6 +123,7 @@ export interface AppState {
   pluginMessages: PluginMessageState[];
   pluginStatuses: Record<string, PluginStatusState>;
   toolProgress: Record<string, ToolProgressState>;
+  sessionMessageCount: number;
 }
 
 export function createInitialState(): AppState {
@@ -141,7 +143,8 @@ export function createInitialState(): AppState {
     artifactOrder: [],
     pluginMessages: [],
     pluginStatuses: {},
-    toolProgress: {}
+    toolProgress: {},
+    sessionMessageCount: 0
   };
 }
 
@@ -164,8 +167,30 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         selectedArtifactId: undefined,
         pluginMessages: [],
         pluginStatuses: {},
-        toolProgress: {}
+        toolProgress: {},
+        sessionMessageCount: 0
       };
+
+    case "gui.load_session_history": {
+      const history = normalizeSessionHistory(payload.message_history);
+      return {
+        ...state,
+        nodes: sessionHistoryNodes(history),
+        runs: {},
+        toolNodeByCallId: {},
+        activeRunId: undefined,
+        metadataLines: [],
+        debugLines: [],
+        errors: [],
+        artifacts: {},
+        artifactOrder: [],
+        selectedArtifactId: undefined,
+        pluginMessages: [],
+        pluginStatuses: {},
+        toolProgress: {},
+        sessionMessageCount: history.length
+      };
+    }
 
     case "gui.select_artifact": {
       const artifactKey = String(payload.artifact_key ?? "");
@@ -199,6 +224,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           displayMessageType,
           content: userContent
         }),
+        sessionMessageCount: state.sessionMessageCount + 1,
         activeRunId: runId,
         runs: { ...state.runs, [runId]: {} }
       };
@@ -445,6 +471,170 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
   };
 }
 
+interface SessionHistoryRecord {
+  runId: string;
+  role: "user" | "assistant" | "tool";
+  content: unknown[];
+  metadata?: Record<string, unknown>;
+}
+
+function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item, index): SessionHistoryRecord | null => {
+      const role = item.role;
+      if (role !== "user" && role !== "assistant" && role !== "tool") {
+        return null;
+      }
+      const content = Array.isArray(item.content) ? item.content : [];
+      if (content.length === 0) {
+        return null;
+      }
+      return {
+        runId: optionalString(item.run_id ?? item.runId) ?? `history-${index}`,
+        role,
+        content,
+        metadata: isRecord(item.metadata) ? item.metadata : undefined
+      };
+    })
+    .filter((item): item is SessionHistoryRecord => item !== null);
+}
+
+function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
+  return history.flatMap((record, index) => {
+    const baseId = `${record.runId}-${index}`;
+    if (record.role === "user") {
+      const queue = normalizeQueue(record.metadata?.queue ?? "normal");
+      return [{
+        id: userMessageNodeId(optionalString(record.metadata?.message_id) ?? `history-${baseId}`),
+        kind: "user",
+        queue,
+        displayMessageType: normalizeDisplayMessageType(
+          record.metadata?.display_message_type,
+          queue
+        ),
+        content: historyContentText(record.content)
+      }];
+    }
+    if (record.role === "assistant") {
+      const nodes: ChatNode[] = [];
+      const reasoning = historyReasoningText(record.content);
+      const answer = historyAssistantText(record.content);
+      if (reasoning) {
+        nodes.push({
+          id: nodeId("thinking-history", baseId),
+          kind: "thinking",
+          content: reasoning,
+          complete: true
+        });
+      }
+      if (answer) {
+        nodes.push({
+          id: nodeId("agent-history", baseId),
+          kind: "agent",
+          content: answer,
+          complete: true
+        });
+      }
+      return nodes;
+    }
+    const result = historyToolResult(record.content);
+    return [{
+      id: nodeId("tool-history", baseId),
+      kind: "tool",
+      content: "",
+      tool: {
+        runId: record.runId,
+        toolCallId: result.toolCallId,
+        name: result.name,
+        status: result.isError ? "fail" : "success",
+        argsRaw: "",
+        argsState: "complete",
+        resultPreview: truncate(result.text)
+      }
+    }];
+  });
+}
+
+function historyAssistantText(content: unknown[]): string {
+  const text = historyContentText(content, { includeReasoning: false });
+  if (text) return text;
+  const toolCalls = content
+    .filter(isRecord)
+    .filter((part) => part.type === "tool_call")
+    .map((part) => {
+      const name = optionalString(part.name) ?? "tool";
+      const id = optionalString(part.id);
+      return id ? `Tool call: ${name} (${id})` : `Tool call: ${name}`;
+    });
+  return toolCalls.join("\n");
+}
+
+function historyReasoningText(content: unknown[]): string {
+  return content
+    .filter(isRecord)
+    .filter((part) => part.type === "reasoning")
+    .map((part) => optionalString(part.reasoning ?? part.text) ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function historyContentText(
+  content: unknown[],
+  options: { includeReasoning?: boolean } = {},
+): string {
+  const includeReasoning = options.includeReasoning ?? true;
+  return content
+    .map((part) => {
+      if (!isRecord(part)) return formatToolValue(part);
+      if (part.type === "text") return optionalString(part.text) ?? "";
+      if (part.type === "steer" && Array.isArray(part.content)) {
+        return historyContentText(part.content);
+      }
+      if (includeReasoning && part.type === "reasoning") {
+        return optionalString(part.reasoning ?? part.text) ?? "";
+      }
+      if (part.type === "tool_result") {
+        const nested = Array.isArray(part.content)
+          ? historyContentText(part.content)
+          : formatToolValue(part.content);
+        const label = optionalString(part.tool_call_id) ?? "tool";
+        return `Tool result ${label}: ${nested}`;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function historyToolResult(content: unknown[]): {
+  toolCallId: string;
+  name: string;
+  text: string;
+  isError: boolean;
+} {
+  const part = content.filter(isRecord).find((item) => item.type === "tool_result");
+  if (!part) {
+    return {
+      toolCallId: "",
+      name: "tool_result",
+      text: historyContentText(content),
+      isError: false
+    };
+  }
+  const nested = Array.isArray(part.content)
+    ? historyContentText(part.content)
+    : formatToolValue(part.content);
+  const toolCallId = optionalString(part.tool_call_id) ?? "";
+  return {
+    toolCallId,
+    name: toolCallId || "tool_result",
+    text: nested,
+    isError: part.is_error === true
+  };
+}
+
 function parseStatusContextUsage(value: unknown): ContextUsageState | undefined {
   if (!isRecord(value)) return undefined;
   const usedTokens = optionalNumber(value.used_tokens);
@@ -544,11 +734,19 @@ function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinkin
   }
   const id = nodeId(kind, `${runId}-${state.nodes.length}`);
   const next = appendNode(state, { id, kind, content: delta, complete: false });
+  const shouldCountAssistant = run.assistantMessageCounted !== true;
   return {
     ...next,
+    sessionMessageCount: shouldCountAssistant
+      ? next.sessionMessageCount + 1
+      : next.sessionMessageCount,
     runs: {
       ...next.runs,
-      [runId]: { ...(next.runs[runId] ?? {}), [key]: id }
+      [runId]: {
+        ...(next.runs[runId] ?? {}),
+        [key]: id,
+        assistantMessageCounted: true
+      }
     }
   };
 }

@@ -27,6 +27,7 @@ COMMAND_TYPES = {
     "session_switch",
     "session_delete",
     "session_save_now",
+    "session_history",
 }
 
 EVENT_TYPES = {

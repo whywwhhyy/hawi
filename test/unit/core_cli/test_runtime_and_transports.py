@@ -101,6 +101,43 @@ class DummyScheduler:
         return 2
 
 
+class DummySessionManager:
+    current_session_id = "current-session"
+
+    def __init__(self) -> None:
+        self.loaded: str | None = None
+        self.histories = {
+            "current-session": [
+                {
+                    "version": 1,
+                    "run_id": "run-current",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "current"}],
+                    "metadata": None,
+                }
+            ],
+            "saved-session": [
+                {
+                    "version": 1,
+                    "run_id": "run-saved",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "saved"}],
+                    "metadata": None,
+                }
+            ],
+        }
+
+    def read_message_history(
+        self,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return list(self.histories[session_id or self.current_session_id])
+
+    def load_session(self, session_id: str) -> None:
+        self.loaded = session_id
+        self.current_session_id = session_id
+
+
 class SimpleTool(AgentTool):
     @property
     def name(self) -> str:
@@ -204,6 +241,48 @@ async def test_enqueue_command_returns_message_id() -> None:
     assert client.sent[-1]["type"] == "ack"
     assert client.sent[-1]["payload"]["message_id"] == "msg-123"
     assert scheduler.enqueued == [("hi", "high_prio", {"queue_kind": "high_prio"})]
+
+
+@pytest.mark.asyncio
+async def test_session_history_command_returns_current_history() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runtime._session_manager = DummySessionManager()  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        '{"version":"%s","type":"session_history","id":"hist","payload":{}}'
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_history"
+    assert payload["session_id"] == "current-session"
+    assert payload["message_history"][0]["content"][0]["text"] == "current"
+
+
+@pytest.mark.asyncio
+async def test_session_load_ack_includes_message_history() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    sm = DummySessionManager()
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_load","id":"load",'
+            '"payload":{"session_id":"saved-session"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert sm.loaded == "saved-session"
+    assert payload["command"] == "session_load"
+    assert payload["session_id"] == "saved-session"
+    assert payload["message_history"][0]["content"][0]["text"] == "saved"
 
 
 def test_status_payload_includes_queue_messages() -> None:

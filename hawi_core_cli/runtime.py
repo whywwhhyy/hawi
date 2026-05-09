@@ -361,6 +361,8 @@ class CoreRuntime:
                 await self._handle_session_delete(client, command)
             elif command.type == "session_save_now":
                 await self._handle_session_save_now(client, command)
+            elif command.type == "session_history":
+                await self._handle_session_history(client, command)
             elif command.type == "shutdown":
                 await client.send(make_ack("shutdown", request_id=command.id))
                 await self.stop()
@@ -597,6 +599,17 @@ class CoreRuntime:
             raise RuntimeError("SessionManager not initialized; runtime not started")
         return self._session_manager
 
+    @staticmethod
+    def _optional_session_id(command: CoreCommand) -> str | None:
+        session_id = command.payload.get("session_id")
+        if session_id is None:
+            return None
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError(
+                "payload.session_id must be a non-empty string when present"
+            )
+        return session_id
+
     async def _handle_session_list(
         self,
         client: RuntimeClient,
@@ -653,11 +666,15 @@ class CoreRuntime:
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("'session_load.payload.session_id' must be a non-empty string")
         sm.load_session(session_id)
+        message_history = sm.read_message_history(session_id)
         await client.send(
             make_ack(
                 "session_load",
                 request_id=command.id,
-                payload={"session_id": session_id},
+                payload={
+                    "session_id": session_id,
+                    "message_history": message_history,
+                },
             )
         )
 
@@ -673,11 +690,15 @@ class CoreRuntime:
                 "'session_switch.payload.session_id' must be a non-empty string"
             )
         sm.switch_to(session_id)
+        message_history = sm.read_message_history(session_id)
         await client.send(
             make_ack(
                 "session_switch",
                 request_id=command.id,
-                payload={"session_id": session_id},
+                payload={
+                    "session_id": session_id,
+                    "message_history": message_history,
+                },
             )
         )
 
@@ -713,6 +734,26 @@ class CoreRuntime:
                 "session_save_now",
                 request_id=command.id,
                 payload={"session_id": sm.current_session_id},
+            )
+        )
+
+    async def _handle_session_history(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        requested_session_id = self._optional_session_id(command)
+        session_id = requested_session_id or sm.current_session_id
+        message_history = sm.read_message_history(requested_session_id)
+        await client.send(
+            make_ack(
+                "session_history",
+                request_id=command.id,
+                payload={
+                    "session_id": session_id,
+                    "message_history": message_history,
+                },
             )
         )
 

@@ -74,7 +74,8 @@ button:disabled {
 
 .status-cell,
 .priority-status,
-.context-status {
+.context-status,
+.session-status {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -119,7 +120,7 @@ button:disabled {
   min-width: 172px;
   justify-content: flex-start;
   gap: 7px;
-  border-right: 0;
+  border-right: 1px solid #d7dcdd;
   font-size: 12px;
 }
 
@@ -151,6 +152,126 @@ button:disabled {
   display: block;
   height: 100%;
   background: #237a68;
+}
+
+.session-status {
+  position: relative;
+  justify-content: flex-start;
+  min-width: 278px;
+  gap: 7px;
+  border-right: 0;
+  font-size: 12px;
+}
+
+.session-status > span {
+  color: #49575d;
+}
+
+.session-status > strong {
+  color: #176b5d;
+}
+
+.session-status > small {
+  max-width: 64px;
+  color: #69777d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-status.active {
+  background: #f4f9f7;
+}
+
+.mini-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid #ccd5d7;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #263238;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mini-button:hover {
+  background: #eef6f3;
+}
+
+.session-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 6px;
+  width: 280px;
+  max-height: 360px;
+  overflow: hidden;
+  border: 1px solid #cbd5d7;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(27, 45, 54, 0.16);
+}
+
+.session-popover header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid #e1e6e7;
+  color: #4a575d;
+}
+
+.session-popover header strong {
+  color: #176b5d;
+}
+
+.session-list {
+  display: grid;
+  max-height: 320px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.session-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 1px solid #edf1f2;
+  background: #ffffff;
+  color: #263238;
+  text-align: left;
+}
+
+.session-option:hover,
+.session-option.current {
+  background: #edf7f3;
+}
+
+.session-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-option small {
+  color: #758188;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.session-empty {
+  padding: 12px 10px;
+  color: #7d898e;
+  font-size: 12px;
 }
 
 .tool-button,

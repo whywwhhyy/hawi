@@ -16,7 +16,7 @@ import pytest
 
 from hawi.agent.context import AgentContext
 from hawi.agent.scheduler.queue import MessageQueueManager
-from hawi.events import EventBus, SessionWriteFailedEvent
+from hawi.events import AgentMessageAddedEvent, EventBus, SessionWriteFailedEvent
 from hawi.session import SessionManager, SessionWriter, WriteJob
 from hawi.session import layout
 from hawi.utils.lifecycle import (
@@ -152,6 +152,50 @@ class TestSessionWriter:
         assert layout.queues_path(sd).exists()
         assert layout.runtime_path(sd).exists()
         assert layout.manifest_path(sd).exists()
+
+    def test_appends_message_history_incrementally(self, tmp_path: Path) -> None:
+        writer = SessionWriter()
+        writer.start()
+        try:
+            sd = tmp_path / "session-1"
+            writer.submit(
+                WriteJob(
+                    session_dir=sd,
+                    message_history_entries=[
+                        {
+                            "version": 1,
+                            "run_id": "r1",
+                            "role": "user",
+                            "content": [{"type": "text", "text": "hello"}],
+                            "metadata": None,
+                        }
+                    ],
+                    manifest_patch={"session_id": "session-1"},
+                )
+            )
+            writer.submit(
+                WriteJob(
+                    session_dir=sd,
+                    message_history_entries=[
+                        {
+                            "version": 1,
+                            "run_id": "r1",
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "hi"}],
+                            "metadata": None,
+                        }
+                    ],
+                    manifest_patch={"session_id": "session-1"},
+                )
+            )
+            assert writer.wait_idle(timeout=3.0)
+        finally:
+            writer.shutdown()
+
+        entries = layout.read_jsonl(layout.message_history_path(sd))
+        assert [entry["role"] for entry in entries] == ["user", "assistant"]
+        manifest = json.loads(layout.manifest_path(sd).read_text())
+        assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
 
     def test_drop_oldest_under_backpressure(self, tmp_path: Path) -> None:
         writer = SessionWriter(max_queue_size=2)
@@ -348,6 +392,41 @@ class TestSessionManager:
             # Wait for the writer thread to flush.
             sm._writer.wait_idle(timeout=2.0)
             assert layout.runtime_path(layout.session_dir(session_root, sid)).exists()
+        finally:
+            sm.detach()
+
+    def test_message_added_appends_visible_history_only(self, session_root: Path) -> None:
+        agent = _StubAgent()
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            agent.event_bus.publish(
+                AgentMessageAddedEvent.create(
+                    run_id="r1",
+                    role="user",
+                    content=[{"type": "text", "text": "visible"}],
+                    metadata={"display_message_type": "normal"},
+                )
+            )
+            agent.event_bus.publish(
+                AgentMessageAddedEvent.create(
+                    run_id="r1",
+                    role="user",
+                    content=[{"type": "text", "text": "hidden"}],
+                    metadata={"display": False},
+                )
+            )
+            sm._writer.wait_idle(timeout=2.0)
+            entries = sm.read_message_history(sid)
+            assert len(entries) == 1
+            assert entries[0]["content"][0]["text"] == "visible"
+
+            sd = layout.session_dir(session_root, sid)
+            assert layout.context_path(sd).exists()
+            manifest = json.loads(layout.manifest_path(sd).read_text())
+            assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
         finally:
             sm.detach()
 

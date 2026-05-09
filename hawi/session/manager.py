@@ -291,6 +291,18 @@ class SessionManager:
                     )
                 )
 
+    def read_message_history(
+        self,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read append-only, user-visible message history for a session."""
+        sid = session_id or self._session_id
+        if sid is None:
+            return []
+        return layout.read_jsonl(
+            layout.message_history_path(layout.session_dir(self._root, sid))
+        )
+
     def switch_to(self, session_id: str) -> None:
         """Save the current session, then load another."""
         previous = self._session_id
@@ -361,12 +373,22 @@ class SessionManager:
                 event.type,
             )
             return
+        message_history_entries: list[dict[str, Any]] = []
+        if event.type == "agent.message_added":
+            entry = self._message_history_entry(event)
+            if entry is not None:
+                message_history_entries.append(entry)
+        component_names = set(components)
+        if message_history_entries:
+            component_names.add(layout.COMPONENT_MESSAGE_HISTORY)
         job = WriteJob(
             session_dir=layout.session_dir(self._root, self._session_id),
             snapshots=snapshots,
+            message_history_entries=message_history_entries,
             manifest_patch=manifest_patch,
             fsync=False,
-            component_set_key=",".join(sorted(components)),
+            component_set_key=",".join(sorted(component_names)),
+            drop_on_overflow=not message_history_entries,
         )
         self._writer.submit(job)
 
@@ -498,6 +520,56 @@ class SessionManager:
         return [
             getattr(p, "plugin_name", p.__class__.__name__) for p in self._iter_plugins()
         ]
+
+    def _message_history_entry(self, event: Event) -> dict[str, Any] | None:
+        """Build an append-only history record for displayable message events."""
+        try:
+            data = event.model_dump(mode="json")
+        except Exception:
+            logger.exception("failed to serialize message history event")
+            return None
+
+        role = data.get("role")
+        if role not in {"user", "assistant", "tool"}:
+            return None
+        metadata = data.get("metadata")
+        if not self._should_persist_message(metadata):
+            return None
+        content = data.get("content")
+        if not isinstance(content, list) or not content:
+            return None
+
+        return {
+            "version": 1,
+            "timestamp": data.get("timestamp"),
+            "run_id": data.get("run_id"),
+            "role": role,
+            "content": content,
+            "metadata": metadata if isinstance(metadata, dict) else None,
+        }
+
+    @staticmethod
+    def _should_persist_message(metadata: Any) -> bool:
+        """Return whether a message should be kept in display history.
+
+        Hidden/internal messages can opt out through metadata. Messages that
+        never emit ``agent.message_added`` are not considered here at all.
+        """
+        if not isinstance(metadata, dict):
+            return True
+        if metadata.get("hidden") is True:
+            return False
+        for key in ("display", "visible", "persist", "persist_session"):
+            if metadata.get(key) is False:
+                return False
+        display_type = metadata.get("display_message_type")
+        if isinstance(display_type, str) and display_type in {
+            "hidden",
+            "internal",
+            "none",
+        }:
+            return False
+        return True
 
     def _load_plugins(self, plugins_dir_: Path, manifest: dict[str, Any]) -> None:
         existing_by_name = {

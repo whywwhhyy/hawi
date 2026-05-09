@@ -10,8 +10,8 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, FileText, Plug, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind } from "../shared/protocol";
+import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, FileText, FolderOpen, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type QueueMessageState, type ToolProgressState } from "./state";
@@ -103,6 +103,10 @@ export default function App() {
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
   const [queueSidebarOpen, setQueueSidebarOpen] = useState(false);
+  const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
+  const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionBusy, setSessionBusy] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -136,6 +140,11 @@ export default function App() {
       offLog();
     };
   }, []);
+
+  useEffect(() => {
+    if (!metadata) return;
+    void initializeSessionState();
+  }, [metadata]);
 
   useBrowserLayoutEffect(() => {
     keepChatTailVisible();
@@ -248,11 +257,101 @@ export default function App() {
     return Boolean((anchor && element.contains(anchor)) || (focus && element.contains(focus)));
   }
 
-  async function sendCommand(type: CoreCommandType, payload: Record<string, unknown>) {
+  async function sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame | null> {
     try {
-      await window.hawi.sendCommand(type, payload);
+      return await window.hawi.sendCommand(type, payload);
     } catch (error) {
       dispatch(errorFrame(error));
+      return null;
+    }
+  }
+
+  async function initializeSessionState() {
+    const listFrame = await sendCommand("session_list", {});
+    updateSessionsFromFrame(listFrame);
+    const historyFrame = await sendCommand("session_history", {});
+    applySessionHistoryFromFrame(historyFrame);
+  }
+
+  async function refreshSessions() {
+    const frame = await sendCommand("session_list", {});
+    updateSessionsFromFrame(frame);
+  }
+
+  function updateSessionsFromFrame(frame: CoreFrame | null) {
+    const payload = framePayload(frame);
+    if (!payload) return;
+    const nextSessions = normalizeSessionList(payload.sessions);
+    setSessions(nextSessions);
+    const nextCurrent = optionalPayloadString(payload.current_session_id);
+    if (nextCurrent) {
+      setCurrentSessionId(nextCurrent);
+    }
+  }
+
+  function applySessionHistoryFromFrame(frame: CoreFrame | null) {
+    const payload = framePayload(frame);
+    if (!payload) return;
+    const nextCurrent = optionalPayloadString(payload.session_id);
+    if (nextCurrent) {
+      setCurrentSessionId(nextCurrent);
+    }
+    dispatch({
+      version: VERSION,
+      type: "gui.load_session_history",
+      payload: { message_history: Array.isArray(payload.message_history) ? payload.message_history : [] }
+    });
+    followTailRef.current = true;
+  }
+
+  async function openSessionDialog() {
+    setSessionDialogOpen((value) => !value);
+    setSessionBusy(true);
+    try {
+      await refreshSessions();
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function loadSession(sessionId: string) {
+    if (!sessionId || sessionId === currentSessionId) {
+      setSessionDialogOpen(false);
+      return;
+    }
+    setSessionBusy(true);
+    try {
+      const frame = await sendCommand("session_switch", { session_id: sessionId });
+      applySessionHistoryFromFrame(frame);
+      await refreshSessions();
+      setSessionDialogOpen(false);
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function newSession() {
+    setSessionBusy(true);
+    try {
+      if (state.sessionMessageCount > 0) {
+        await sendCommand("session_save_now", {});
+      }
+      const frame = await sendCommand("session_new", {});
+      const payload = framePayload(frame);
+      const sessionId = optionalPayloadString(payload?.session_id);
+      if (sessionId) {
+        setCurrentSessionId(sessionId);
+      }
+      dispatch({
+        version: VERSION,
+        type: "gui.load_session_history",
+        payload: { message_history: [] }
+      });
+      followTailRef.current = true;
+      await refreshSessions();
+      setSessionDialogOpen(false);
+    } finally {
+      setSessionBusy(false);
     }
   }
 
@@ -371,6 +470,16 @@ export default function App() {
             onToggle={() => setQueueSidebarOpen((value) => !value)}
           />
           <ContextUsageCell usage={state.contextUsage} />
+          <SessionStatusCell
+            messageCount={state.sessionMessageCount}
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            open={sessionDialogOpen}
+            busy={sessionBusy}
+            onToggleLoad={openSessionDialog}
+            onSelect={loadSession}
+            onNew={newSession}
+          />
         </div>
         <button className="tool-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
           <Plug size={17} /> 插件配置
@@ -579,6 +688,79 @@ function ContextUsageCell({ usage }: { usage?: ContextUsageState }) {
         <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
       </div>
       <small>{used}/{max} · {source}</small>
+    </div>
+  );
+}
+
+function SessionStatusCell({
+  messageCount,
+  sessions,
+  currentSessionId,
+  open,
+  busy,
+  onToggleLoad,
+  onSelect,
+  onNew
+}: {
+  messageCount: number;
+  sessions: SessionMetaPayload[];
+  currentSessionId: string | null;
+  open: boolean;
+  busy: boolean;
+  onToggleLoad: () => void;
+  onSelect: (sessionId: string) => void;
+  onNew: () => void;
+}) {
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const left = Date.parse(a.updated_at || a.created_at || "");
+    const right = Date.parse(b.updated_at || b.created_at || "");
+    return (Number.isFinite(right) ? right : 0) - (Number.isFinite(left) ? left : 0);
+  });
+
+  return (
+    <div className={`session-status ${open ? "active" : ""}`}>
+      <span>Session</span>
+      <strong>{messageCount}</strong>
+      <small>{currentSessionId ? shortSessionId(currentSessionId) : "-"}</small>
+      <button
+        className="mini-button"
+        title="加载 Session"
+        disabled={busy}
+        onClick={onToggleLoad}
+      >
+        <FolderOpen size={14} /> Load
+      </button>
+      <button
+        className="mini-button"
+        title="新建 Session"
+        disabled={busy}
+        onClick={onNew}
+      >
+        <Plus size={14} /> New
+      </button>
+      {open && (
+        <div className="session-popover">
+          <header>
+            <span>Sessions</span>
+            <strong>{sortedSessions.length}</strong>
+          </header>
+          <div className="session-list">
+            {sortedSessions.length === 0 ? (
+              <div className="session-empty">No sessions</div>
+            ) : sortedSessions.map((session) => (
+              <button
+                key={session.session_id}
+                className={`session-option ${session.session_id === currentSessionId ? "current" : ""}`}
+                disabled={busy}
+                onClick={() => onSelect(session.session_id)}
+              >
+                <span>{session.name || shortSessionId(session.session_id)}</span>
+                <small>{formatSessionUpdatedAt(session.updated_at)}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1195,6 +1377,56 @@ function errorFrame(error: unknown): CoreFrame {
     type: "error",
     payload: { message: error instanceof Error ? error.message : String(error) }
   };
+}
+
+function framePayload(frame: CoreFrame | null): Record<string, unknown> | null {
+  if (!frame || !frame.payload || typeof frame.payload !== "object" || Array.isArray(frame.payload)) {
+    return null;
+  }
+  return frame.payload as Record<string, unknown>;
+}
+
+function normalizeSessionList(value: unknown): SessionMetaPayload[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => (
+      item !== null && typeof item === "object" && !Array.isArray(item)
+    ))
+    .map((item) => ({
+      session_id: String(item.session_id ?? ""),
+      name: String(item.name ?? item.session_id ?? ""),
+      created_at: String(item.created_at ?? ""),
+      updated_at: String(item.updated_at ?? ""),
+      last_checkpoint_event: typeof item.last_checkpoint_event === "string"
+        ? item.last_checkpoint_event
+        : null,
+      components_present: Array.isArray(item.components_present)
+        ? item.components_present.map((entry) => String(entry))
+        : []
+    }))
+    .filter((item) => item.session_id);
+}
+
+function optionalPayloadString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function shortSessionId(value: string): string {
+  if (value.length <= 8) return value;
+  return value.slice(0, 8);
+}
+
+function formatSessionUpdatedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return date.toLocaleString([], {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function labelForKind(kind: string): string {

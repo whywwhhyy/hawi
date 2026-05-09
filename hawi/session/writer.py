@@ -5,8 +5,9 @@ Design constraints:
   caller's thread and handed over.
 - Failures must not crash the writer thread; they emit ``session.write_failed``
   events and the loop continues.
-- A bounded queue prevents pathological cases from blowing memory; on overflow
-  the *oldest* same-component pending job is dropped.
+- A bounded queue prevents pathological cases from blowing memory; on overflow,
+  droppable state snapshots discard the oldest same-component pending job.
+- Message history entries are append-only records, not full snapshots.
 - ``fsync=True`` (set on the final-flush sentinel and on explicit
   ``save_session``) flushes file contents AND the parent directory inode.
 """
@@ -39,27 +40,34 @@ class WriteJob:
     Each entry in ``snapshots`` maps a component name (one of
     ``layout.COMPONENT_*``) to its already-captured pure-data snapshot dict
     (or, for plugins, a nested mapping of plugin name → state dict).
+    ``message_history_entries`` are appended to the session history JSONL file.
 
     When ``fsync`` is True, the writer fsyncs each file and the parent dir.
     """
 
     session_dir: Path
-    snapshots: dict[str, Any]
+    snapshots: dict[str, Any] = field(default_factory=dict)
+    message_history_entries: list[dict[str, Any]] = field(default_factory=list)
     manifest_patch: dict[str, Any] = field(default_factory=dict)
     fsync: bool = False
     component_set_key: str = ""
+    drop_on_overflow: bool = True
 
     def __post_init__(self) -> None:
         if not self.component_set_key:
-            self.component_set_key = ",".join(sorted(self.snapshots.keys()))
+            components = set(self.snapshots.keys())
+            if self.message_history_entries:
+                components.add(layout.COMPONENT_MESSAGE_HISTORY)
+            self.component_set_key = ",".join(sorted(components))
 
 
 class SessionWriter:
     """Daemon thread that consumes :class:`WriteJob` items.
 
     Use :py:meth:`start` to spin up the thread and :py:meth:`shutdown` to drain
-    and stop it. ``submit`` is non-blocking; on a full queue the oldest job
-    sharing the same component set is dropped (with a warning log).
+    and stop it. On a full queue, droppable jobs discard the oldest job sharing
+    the same component set. Non-droppable jobs (message history increments)
+    wait briefly for capacity before logging a loss.
     """
 
     def __init__(
@@ -98,7 +106,21 @@ class SessionWriter:
         try:
             self._queue.put_nowait(job)
         except queue.Full:
-            self._drop_oldest_with_key(job.component_set_key)
+            dropped = self._drop_oldest_with_key(job.component_set_key)
+            if not dropped and not job.drop_on_overflow:
+                try:
+                    self._queue.put(job, timeout=1.0)
+                    return
+                except queue.Full:
+                    logger.error(
+                        "session writer queue full; losing non-droppable job %s",
+                        job.component_set_key,
+                    )
+                    with self._inflight_lock:
+                        self._inflight_count -= 1
+                        if self._inflight_count == 0:
+                            self._idle_event.set()
+                    return
             try:
                 self._queue.put_nowait(job)
             except queue.Full:
@@ -129,7 +151,7 @@ class SessionWriter:
         """Block until all submitted jobs have been processed."""
         return self._idle_event.wait(timeout)
 
-    def _drop_oldest_with_key(self, key: str) -> None:
+    def _drop_oldest_with_key(self, key: str) -> bool:
         # We can't remove a specific item from queue.Queue without draining it.
         # Drain into a list, drop the oldest matching job, refill.
         drained: list[WriteJob | object] = []
@@ -146,6 +168,7 @@ class SessionWriter:
                 not dropped
                 and isinstance(item, WriteJob)
                 and item.component_set_key == key
+                and item.drop_on_overflow
             ):
                 dropped = True
                 logger.warning(
@@ -162,7 +185,8 @@ class SessionWriter:
         if not dropped and kept:
             # No same-key match found; drop the oldest WriteJob anyway.
             for i, item in enumerate(kept):
-                if isinstance(item, WriteJob):
+                if isinstance(item, WriteJob) and item.drop_on_overflow:
+                    dropped = True
                     logger.warning(
                         "session writer queue full and no match for %s; "
                         "dropping oldest job (components=%s)",
@@ -188,6 +212,7 @@ class SessionWriter:
                         self._inflight_count -= 1
                         if self._inflight_count == 0:
                             self._idle_event.set()
+        return dropped
 
     def _run(self) -> None:
         while True:
@@ -225,6 +250,17 @@ class SessionWriter:
                     job.session_dir,
                 )
                 self._emit_failure(job, name, exc)
+
+        if job.message_history_entries:
+            try:
+                self._write_message_history(job.session_dir, job, fsync=job.fsync)
+                wrote_components.append(layout.COMPONENT_MESSAGE_HISTORY)
+            except Exception as exc:
+                logger.exception(
+                    "session writer failed appending message history in %s",
+                    job.session_dir,
+                )
+                self._emit_failure(job, layout.COMPONENT_MESSAGE_HISTORY, exc)
 
         # Manifest write — merge in patch with current updated_at + last
         # checkpoint trigger. The manifest is always written last so that a
@@ -271,6 +307,19 @@ class SessionWriter:
                 layout.atomic_write_text(file_path, text, fsync=fsync)
         else:
             raise ValueError(f"Unknown session component: {component!r}")
+
+    def _write_message_history(
+        self,
+        session_dir_: Path,
+        job: WriteJob,
+        *,
+        fsync: bool,
+    ) -> None:
+        layout.append_jsonl(
+            layout.message_history_path(session_dir_),
+            job.message_history_entries,
+            fsync=fsync,
+        )
 
     def _write_manifest(self, job: WriteJob, wrote_components: list[str]) -> None:
         manifest_path = layout.manifest_path(job.session_dir)

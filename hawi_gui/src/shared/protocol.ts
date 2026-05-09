@@ -29,7 +29,8 @@ export type CoreCommandType =
   | "session_load"
   | "session_switch"
   | "session_delete"
-  | "session_save_now";
+  | "session_save_now"
+  | "session_history";
 
 export interface SessionMetaPayload {
   session_id: string;

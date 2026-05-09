@@ -24,6 +24,22 @@ def test_parse_valid_command_frame() -> None:
     assert command.payload["content"] == "hi"
 
 
+def test_parse_session_history_command() -> None:
+    command = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "session_history",
+                "id": "history-1",
+                "payload": {},
+            }
+        )
+    )
+
+    assert command.type == "session_history"
+    assert command.id == "history-1"
+
+
 def test_parse_rejects_unknown_command() -> None:
     with pytest.raises(ProtocolError, match="Unknown command"):
         parse_frame(json.dumps({"version": VERSION, "type": "wat"}))

@@ -27,6 +27,45 @@ describe("core event reducer", () => {
       content: "new priority"
     });
     expect(state.activeRunId).toBe("run-1");
+    expect(state.sessionMessageCount).toBe(1);
+  });
+
+  it("loads session message history into chat nodes", () => {
+    const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
+      message_history: [
+        {
+          run_id: "run-1",
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          metadata: { queue: "normal", display_message_type: "normal" }
+        },
+        {
+          run_id: "run-1",
+          role: "assistant",
+          content: [
+            { type: "reasoning", reasoning: "thinking" },
+            { type: "text", text: "answer" }
+          ],
+          metadata: null
+        }
+      ]
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent"]);
+    expect(state.nodes[0].content).toBe("hello");
+    expect(state.nodes[1]).toMatchObject({ content: "thinking", complete: true });
+    expect(state.nodes[2]).toMatchObject({ content: "answer", complete: true });
+    expect(state.sessionMessageCount).toBe(2);
+  });
+
+  it("counts one assistant message across thinking and answer deltas", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-count", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.thinking_delta", { run_id: "run-count", delta: "thinking" }));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-count", delta: "answer" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent"]);
+    expect(state.sessionMessageCount).toBe(2);
   });
 
   it("shows materialized steer messages with steer display type", () => {
