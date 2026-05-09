@@ -834,9 +834,14 @@ class AgentContext:
         else:
             self._save_markdown(path)
 
-    def _save_json(self, path: Path) -> None:
-        """Save context as JSON for complete state restoration."""
-        data = {
+    def snapshot(self) -> dict[str, Any]:
+        """Return a JSON-serializable snapshot of the full context state.
+
+        Used by both :py:meth:`save` (for the legacy file API) and the
+        SessionManager. Includes ``pending_tool_calls`` so audit state survives
+        across restarts.
+        """
+        return {
             "version": "1.0",
             "saved_at": datetime.now().isoformat(),
             "system_prompt": self.system_prompt,
@@ -847,10 +852,64 @@ class AgentContext:
             "compaction_records": [
                 record.to_dict() for record in self.compaction_records
             ],
+            "pending_tool_calls": [
+                {
+                    "tool_call_id": p.tool_call_id,
+                    "tool_name": p.tool_name,
+                    "arguments": p.arguments,
+                    "requested_at": p.requested_at,
+                }
+                for p in self._pending_tool_calls.values()
+            ],
         }
 
+    def load_snapshot(self, data: dict[str, Any]) -> None:
+        """Restore context state from a dict produced by :py:meth:`snapshot`.
+
+        Tool definitions are intentionally NOT restored (they come from the
+        live PluginManager and would otherwise drift). Caller is responsible
+        for ensuring the plugin set matches what was active when the snapshot
+        was captured.
+        """
+        version = data.get("version", "1.0")
+        if version != "1.0":
+            raise ValueError(f"Unsupported context snapshot version: {version}")
+
+        self.messages = data.get("messages", [])
+        self.system_prompt = data.get("system_prompt")
+        self.cache_point = normalize_cache_point(data.get("cache_point"))
+        self.cache_tool_definitions = normalize_cache_point(
+            data.get("cache_tool_definitions")
+        )
+        self.auto_cache_static_prefix = normalize_cache_point(
+            data.get("auto_cache_static_prefix")
+        )
+        self.compaction_records = [
+            ContextCompactionRecord(
+                summary=record.get("summary", ""),
+                replaced_messages=record.get("replaced_messages", []),
+                kept_messages=record.get("kept_messages", 0),
+                tokens_before=record.get("tokens_before", 0),
+                tokens_after=record.get("tokens_after", 0),
+                created_at=record.get("created_at", time.time()),
+            )
+            for record in data.get("compaction_records", [])
+        ]
+
+        self._pending_tool_calls = {
+            entry["tool_call_id"]: PendingToolCall(
+                tool_call_id=entry["tool_call_id"],
+                tool_name=entry["tool_name"],
+                arguments=entry.get("arguments", {}),
+                requested_at=entry.get("requested_at", time.time()),
+            )
+            for entry in data.get("pending_tool_calls", [])
+        }
+
+    def _save_json(self, path: Path) -> None:
+        """Save context as JSON for complete state restoration."""
         path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
+            json.dumps(self.snapshot(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -897,8 +956,8 @@ class AgentContext:
     def load(self, filepath: str | Path) -> None:
         """Load context state from a JSON file into this instance.
 
-        Restores messages, system_prompt, and cache-point settings from the file.
-        Tool definitions remain unchanged.
+        Restores messages, system_prompt, cache-point settings, compaction
+        records, and pending audit tool calls. Tool definitions remain unchanged.
 
         Args:
             filepath: Path to the JSON file
@@ -916,32 +975,7 @@ class AgentContext:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in context file: {e}")
 
-        # Validate version
-        version = data.get("version", "1.0")
-        if version != "1.0":
-            raise ValueError(f"Unsupported context version: {version}")
-
-        # Restore state into this instance (preserve tools and cache setting)
-        self.messages = data.get("messages", [])
-        self.system_prompt = data.get("system_prompt")
-        self.cache_point = normalize_cache_point(data.get("cache_point"))
-        self.cache_tool_definitions = normalize_cache_point(
-            data.get("cache_tool_definitions")
-        )
-        self.auto_cache_static_prefix = normalize_cache_point(
-            data.get("auto_cache_static_prefix")
-        )
-        self.compaction_records = [
-            ContextCompactionRecord(
-                summary=record.get("summary", ""),
-                replaced_messages=record.get("replaced_messages", []),
-                kept_messages=record.get("kept_messages", 0),
-                tokens_before=record.get("tokens_before", 0),
-                tokens_after=record.get("tokens_after", 0),
-                created_at=record.get("created_at", time.time()),
-            )
-            for record in data.get("compaction_records", [])
-        ]
+        self.load_snapshot(data)
 
     @staticmethod
     def _make_compaction_summary_message(

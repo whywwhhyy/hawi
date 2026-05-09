@@ -145,6 +145,71 @@ class PlanPlugin(HawiPlugin):
         new_plugin._engine = self._engine.clone()
         return new_plugin
 
+    def save_state(self) -> dict[str, Any]:
+        """Capture the engine's persistent state for SessionManager."""
+        return {
+            "fold_completed_tasks": self._engine.fold_completed_tasks,
+            "items": [item.to_dict() for item in self._engine.items],
+            "next_item_number": self._engine.next_item_number,
+            "plan_paused": self._engine.plan_paused,
+            "pause_reason": self._engine.pause_reason,
+            "fold_records": [
+                {
+                    "fold_id": r.fold_id,
+                    "item_id": r.item_id,
+                    "item_content": r.item_content,
+                    "summary": r.summary,
+                    "messages": r.messages,
+                    "completed_item_ids": list(r.completed_item_ids),
+                    "created_at": r.created_at,
+                    "handoff_notes": r.handoff_notes,
+                }
+                for r in self._engine.fold_records
+            ],
+            "next_fold_number": self._engine.next_fold_number,
+            "active_completion_tool_call_id": (
+                self._engine.active_completion_tool_call_id
+            ),
+        }
+
+    def load_state(self, data: dict[str, Any]) -> None:
+        """Restore the engine from a :py:meth:`save_state` payload."""
+        engine = self._engine
+        engine.fold_completed_tasks = bool(data.get("fold_completed_tasks", False))
+        engine.items = [
+            PlanItem(
+                id=item["id"],
+                content=item.get("content", ""),
+                parent_id=item.get("parent_id"),
+                completed=bool(item.get("completed", False)),
+                created_at=float(item.get("created_at", 0.0)),
+                completed_at=item.get("completed_at"),
+                kind=item.get("kind", "exploratory"),
+                completion_summary=item.get("completion_summary"),
+            )
+            for item in data.get("items", [])
+        ]
+        engine.next_item_number = int(data.get("next_item_number", 1))
+        engine.plan_paused = bool(data.get("plan_paused", False))
+        engine.pause_reason = str(data.get("pause_reason", ""))
+        engine.fold_records = [
+            PlanFoldRecord(
+                fold_id=r["fold_id"],
+                item_id=r["item_id"],
+                item_content=r.get("item_content", ""),
+                summary=r.get("summary", ""),
+                messages=list(r.get("messages", [])),
+                completed_item_ids=list(r.get("completed_item_ids", [])),
+                created_at=float(r.get("created_at", 0.0)),
+                handoff_notes=r.get("handoff_notes"),
+            )
+            for r in data.get("fold_records", [])
+        ]
+        engine.next_fold_number = int(data.get("next_fold_number", 1))
+        engine.active_completion_tool_call_id = data.get(
+            "active_completion_tool_call_id"
+        )
+
     @before_conversation
     def inject_plan_instructions(self, agent: Any, ctx: Any) -> None:
         """Inject plan mode guidance into the system prompt."""

@@ -320,6 +320,10 @@ class HawiAgent:
         self._session_lock = threading.RLock()
         self._session_active = False
         self._autonomous_run_task: asyncio.Task[AgentRunResult] | None = None
+        # Live reference to the in-flight _ExecutionState. Set in _execute()
+        # and cleared in its finally block; SessionManager reads it via
+        # snapshot_runtime() to capture run_id and iteration.
+        self._active_execution_state: _ExecutionState | None = None
 
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
@@ -554,6 +558,97 @@ class HawiAgent:
     def has_active_tool_calls(self) -> bool:
         """Whether the agent is currently waiting on one or more tool calls."""
         return len(self._current_tool_calls) > 0
+
+    def snapshot_runtime(self) -> dict[str, Any]:
+        """Capture in-flight run state for SessionManager persistence.
+
+        ``active_run_id`` and ``iteration`` are populated only while a run is
+        executing; otherwise they're ``None`` / ``0``. Tool-call objects are
+        stored verbatim — they are TypedDicts so they survive ``json.dumps``.
+        """
+        state = self._active_execution_state
+        return {
+            "version": 1,
+            "active_run_id": state.run_id if state else None,
+            "iteration": state.iteration if state else 0,
+            "current_tool_calls": list(self._current_tool_calls),
+            "interrupted_tool_call_ids": list(self._interrupted_tool_call_ids),
+            "last_unsent_tool_results": [
+                {
+                    "tool_call_id": r.tool_call_id,
+                    "tool_name": r.tool_name,
+                    "content": r.content,
+                    "is_error": r.is_error,
+                    "truncate_attempts": r.truncate_attempts,
+                }
+                for r in self._last_unsent_tool_results
+            ],
+            "last_interrupt_reason": self._last_interrupt_reason,
+        }
+
+    def load_runtime(self, data: dict[str, Any]) -> None:
+        """Restore in-flight runtime state from :py:meth:`snapshot_runtime`.
+
+        Does NOT resume the run loop. Callers (typically SessionManager) feed
+        ``current_tool_calls`` into :py:meth:`_recover_unanswered_tool_calls`
+        to materialize synthetic error tool results before the next run starts.
+        """
+        version = data.get("version", 1)
+        if version != 1:
+            raise ValueError(f"Unsupported runtime snapshot version: {version}")
+        self._current_tool_calls = list(data.get("current_tool_calls", []))
+        self._interrupted_tool_call_ids = list(
+            data.get("interrupted_tool_call_ids", [])
+        )
+        self._last_unsent_tool_results = [
+            _RecentToolResult(
+                tool_call_id=entry["tool_call_id"],
+                tool_name=entry["tool_name"],
+                content=entry.get("content", ""),
+                is_error=entry.get("is_error", False),
+                truncate_attempts=entry.get("truncate_attempts", 0),
+            )
+            for entry in data.get("last_unsent_tool_results", [])
+        ]
+        self._last_interrupt_reason = data.get("last_interrupt_reason")
+
+    def snapshot_steer(self) -> list[dict[str, Any]]:
+        """Capture pending steer inputs (under the steer lock)."""
+        with self._steer_lock:
+            return [
+                {
+                    "id": p.id,
+                    "content": p.content,
+                    "candidate_tool_call_ids": list(p.candidate_tool_call_ids),
+                    "created_at": p.created_at,
+                    "preferred_merge_mode": (
+                        p.preferred_merge_mode.value
+                        if p.preferred_merge_mode is not None
+                        else None
+                    ),
+                }
+                for p in self._pending_inputs
+            ]
+
+    def load_steer(self, data: list[dict[str, Any]]) -> None:
+        """Restore pending steer inputs from :py:meth:`snapshot_steer`."""
+        with self._steer_lock:
+            self._pending_inputs = [
+                PendingInput(
+                    id=entry["id"],
+                    content=entry.get("content", []),
+                    candidate_tool_call_ids=tuple(
+                        entry.get("candidate_tool_call_ids", [])
+                    ),
+                    created_at=entry.get("created_at", time.time()),
+                    preferred_merge_mode=(
+                        SteerPartMergeMode(entry["preferred_merge_mode"])
+                        if entry.get("preferred_merge_mode")
+                        else None
+                    ),
+                )
+                for entry in data
+            ]
 
     def steer(
         self,
@@ -1460,6 +1555,7 @@ class HawiAgent:
         run_id = str(uuid.uuid4())[:8]
         state.run_id = run_id
         start_time = time.time()
+        self._active_execution_state = state
 
         if self._last_interrupt_reason:
             await self._recover_unanswered_tool_calls(
@@ -1932,6 +2028,10 @@ class HawiAgent:
 
             # after_session hook
             await self._invoke_session_hook("after_session", _final_ctx)
+
+            # Clear the live reference so SessionManager.snapshot_runtime()
+            # reports an idle agent.
+            self._active_execution_state = None
 
         if post_conversation_reinvoke_message is not None:
             self._context.add_user_message(post_conversation_reinvoke_message)

@@ -18,13 +18,15 @@
 - [ ] 还需要提供持久化机制，确保 agent 可以做到不管什么时候 crash 再拉起来都可以恢复 session
     - [x] `AgentContext.save/load` 已支持 JSON 保存/恢复 messages、system prompt、cache 配置、compaction records
     - [x] core runtime 在切换插件时已支持 preserve context
-    - [ ] 持久化 scheduler 队列：urgent / high_prio / normal
-    - [ ] 持久化 pending steer inputs
-    - [ ] 持久化 pending audit tool calls
-    - [ ] 持久化插件状态：PlanPlugin、WorkflowPlugin、ShellPlugin、PythonInterpreterPlugin 等
-    - [ ] 持久化当前 run / tool call 的恢复策略：可重试、可补偿、不可恢复
-    - [ ] 增加原子 checkpoint 与 crash recovery 测试
-    - [ ] GUI需要支持session切换
+    - [x] 持久化 scheduler 队列：urgent / high_prio / normal（`MessageQueueManager.snapshot/load_snapshot`，`event_bus` 引用 rebind）
+    - [x] 持久化 pending steer inputs（`HawiAgent.snapshot_steer/load_steer`）
+    - [x] 持久化 pending audit tool calls（`AgentContext.snapshot` 含 `pending_tool_calls`）
+    - [x] 持久化插件状态：PlanPlugin、WorkflowPlugin、PythonInterpreterPlugin 已实现 `save_state/load_state`；ShellPlugin 因 command 本质短暂不持久化
+    - [x] 持久化当前 run / tool call 的恢复策略：统一在重启时给未完成 tool call 填合成 error result（复用 `_recover_unanswered_tool_calls`）
+    - [x] 增加原子 checkpoint 与 crash recovery 测试（`test_session_manager.py`、`test_snapshot_round_trip.py`）
+    - [x] core protocol 增加 session_list / new / load / switch / delete / save_now 命令
+    - [ ] GUI Renderer 增加 session 列表与切换 UI（protocol 已就绪，仅缺 React 侧）
+    - [x] SessionManager 异步写盘 + ExitHandler 优先级保证最后 flush（`EXIT_PRIORITY_SESSION_FLUSH`）
 
 - [ ] 先设计 subagent 顶层 API：作为 multi-agent workflow 与插件编排的基础原语
     - [ ] subagent 首先是 core 级 API，而不是只给模型调用的 tool

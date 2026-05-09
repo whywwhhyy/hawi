@@ -468,6 +468,47 @@ class PythonInterpreterPlugin(HawiPlugin):
         )
         return new_plugin
 
+    def save_state(self) -> dict:
+        """Capture state that survives a process restart.
+
+        Subprocess Python state (defined functions, imports, in-memory
+        variables) is fundamentally lost when the interpreter dies, so we
+        only persist what's reproducible: the work directory and the names
+        of declared interpreters. Saved scripts on disk survive naturally
+        because they live under ``self._work_dir``.
+        """
+        with self.lock:
+            interpreter_names = list(self.interpreters.keys())
+        return {
+            "work_dir": self._work_dir,
+            "owns_work_dir": self._owns_work_dir,
+            "print_execution": self.print_execution,
+            "interpreter_names": interpreter_names,
+        }
+
+    def load_state(self, data: dict) -> None:
+        """Re-establish interpreter slots after a restart.
+
+        Each previously-declared interpreter is reinstantiated empty —
+        callers must re-run any setup scripts that established prior in-process
+        state. Callers should treat this as a clean restart.
+        """
+        work_dir = data.get("work_dir")
+        if work_dir and os.path.isdir(work_dir):
+            self._work_dir = work_dir
+            self._owns_work_dir = bool(data.get("owns_work_dir", False))
+        self.print_execution = bool(
+            data.get("print_execution", self.print_execution)
+        )
+
+        with self.lock:
+            for name in data.get("interpreter_names", []):
+                if name in self.interpreters:
+                    continue
+                self.interpreters[name] = PythonInterpreterPlugin.Instance(
+                    print_execution=self.print_execution
+                )
+
     def __enter__(self):
         """上下文管理器入口"""
         return self

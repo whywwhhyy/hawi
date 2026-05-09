@@ -15,6 +15,7 @@ from hawi.agent import AutoCompactConfig, HawiAgent, HawiScheduler
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.events import Event
 from hawi.models import model_registry
+from hawi.session import SessionManager
 from hawi.tool import ToolParameterInjection
 
 from .event_mapper import SemanticEventMapper
@@ -190,6 +191,7 @@ class CoreRuntime:
         self._status_task: asyncio.Task | None = None
         self._broadcast_task: asyncio.Task | None = None
         self._plugins: list[Any] = []
+        self._session_manager: SessionManager | None = None
 
         self._clients: set[RuntimeClient] = set()
         self._mapper = SemanticEventMapper()
@@ -218,6 +220,12 @@ class CoreRuntime:
         self._scheduler = scheduler
         self._scheduler_task = scheduler_task
         self._plugins = plugins
+        self._session_manager = SessionManager()
+        self._session_manager.attach(
+            scheduler.agent,
+            scheduler,
+            event_bus=getattr(scheduler.agent, "_event_bus", None),
+        )
         self._broadcast_task = asyncio.create_task(self._broadcast_loop())
         self._status_task = asyncio.create_task(self._status_loop())
         self._started = True
@@ -231,6 +239,17 @@ class CoreRuntime:
         if self._status_task and not self._status_task.done():
             self._status_task.cancel()
             await asyncio.gather(self._status_task, return_exceptions=True)
+
+        if self._session_manager is not None:
+            try:
+                self._session_manager.save_now()
+            except Exception:
+                logger.exception("session save_now failed during shutdown")
+            try:
+                self._session_manager.detach()
+            except Exception:
+                logger.exception("session detach failed during shutdown")
+            self._session_manager = None
 
         await self._stop_scheduler(self._scheduler, self._scheduler_task, self._plugins)
         self._scheduler = None
@@ -321,6 +340,18 @@ class CoreRuntime:
                         request_id=command.id,
                     )
                 )
+            elif command.type == "session_list":
+                await self._handle_session_list(client, command)
+            elif command.type == "session_new":
+                await self._handle_session_new(client, command)
+            elif command.type == "session_load":
+                await self._handle_session_load(client, command)
+            elif command.type == "session_switch":
+                await self._handle_session_switch(client, command)
+            elif command.type == "session_delete":
+                await self._handle_session_delete(client, command)
+            elif command.type == "session_save_now":
+                await self._handle_session_save_now(client, command)
             elif command.type == "shutdown":
                 await client.send(make_ack("shutdown", request_id=command.id))
                 await self.stop()
@@ -549,6 +580,130 @@ class CoreRuntime:
                     "selected_plugins": list(self._selected_plugins),
                     "plugin_configs": to_json_safe(self._plugin_configs),
                 },
+            )
+        )
+
+    def _require_session_manager(self) -> SessionManager:
+        if self._session_manager is None:
+            raise RuntimeError("SessionManager not initialized; runtime not started")
+        return self._session_manager
+
+    async def _handle_session_list(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        sessions = [
+            {
+                "session_id": m.session_id,
+                "name": m.name,
+                "created_at": m.created_at,
+                "updated_at": m.updated_at,
+                "last_checkpoint_event": m.last_checkpoint_event,
+                "components_present": m.components_present,
+            }
+            for m in sm.list_sessions()
+        ]
+        await client.send(
+            make_ack(
+                "session_list",
+                request_id=command.id,
+                payload={
+                    "sessions": sessions,
+                    "current_session_id": sm.current_session_id,
+                },
+            )
+        )
+
+    async def _handle_session_new(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        name = command.payload.get("name")
+        if name is not None and not isinstance(name, str):
+            raise ValueError("'session_new.payload.name' must be a string when present")
+        session_id = sm.new_session(name=name)
+        await client.send(
+            make_ack(
+                "session_new",
+                request_id=command.id,
+                payload={"session_id": session_id, "name": name or session_id},
+            )
+        )
+
+    async def _handle_session_load(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        session_id = command.payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("'session_load.payload.session_id' must be a non-empty string")
+        sm.load_session(session_id)
+        await client.send(
+            make_ack(
+                "session_load",
+                request_id=command.id,
+                payload={"session_id": session_id},
+            )
+        )
+
+    async def _handle_session_switch(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        session_id = command.payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError(
+                "'session_switch.payload.session_id' must be a non-empty string"
+            )
+        sm.switch_to(session_id)
+        await client.send(
+            make_ack(
+                "session_switch",
+                request_id=command.id,
+                payload={"session_id": session_id},
+            )
+        )
+
+    async def _handle_session_delete(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        session_id = command.payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError(
+                "'session_delete.payload.session_id' must be a non-empty string"
+            )
+        sm.delete_session(session_id)
+        await client.send(
+            make_ack(
+                "session_delete",
+                request_id=command.id,
+                payload={"session_id": session_id},
+            )
+        )
+
+    async def _handle_session_save_now(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        sm.save_now()
+        await client.send(
+            make_ack(
+                "session_save_now",
+                request_id=command.id,
+                payload={"session_id": sm.current_session_id},
             )
         )
 

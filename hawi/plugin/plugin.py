@@ -101,6 +101,29 @@ class HawiPlugin:
         """
         return self
 
+    def save_state(self) -> dict[str, Any] | None:
+        """Return JSON-serializable plugin state for session persistence.
+
+        Default returns ``None`` — the SessionManager will skip writing a state
+        file for this plugin. Plugins that hold non-reproducible state (open
+        documents, paused workflows, plan items, etc.) should override and
+        return a plain ``dict`` whose values survive ``json.dumps``.
+
+        Implementations must NOT include live references (subprocess handles,
+        sockets, ``EventBus`` instances). Capture only the data needed to
+        rebuild equivalent state in :py:meth:`load_state`.
+        """
+        return None
+
+    def load_state(self, data: dict[str, Any]) -> None:
+        """Restore plugin state previously produced by :py:meth:`save_state`.
+
+        Default is a no-op. Plugins that override ``save_state`` should
+        override this counterpart. The agent guarantees that ``load_state``
+        is called before the plugin is used by any active run.
+        """
+        return None
+
     @property
     def plugin_id(self) -> str:
         """Stable plugin identifier used in plugin.* events."""

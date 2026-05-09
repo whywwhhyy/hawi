@@ -66,7 +66,20 @@ PluginEventType = Literal[
     "plugin.artifact.clear",
 ]
 
-EventType = ModelEventType | AgentEventType | SchedulerEventType | PluginEventType
+SessionEventType = Literal[
+    "session.checkpoint_requested",
+    "session.write_failed",
+    "session.loaded",
+    "session.switched",
+]
+
+EventType = (
+    ModelEventType
+    | AgentEventType
+    | SchedulerEventType
+    | PluginEventType
+    | SessionEventType
+)
 
 
 class Event(BaseModel):
@@ -105,4 +118,5 @@ __all__ = [
     "AgentEventType",
     "SchedulerEventType",
     "PluginEventType",
+    "SessionEventType",
 ]

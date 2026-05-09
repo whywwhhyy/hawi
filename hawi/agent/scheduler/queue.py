@@ -246,3 +246,76 @@ class MessageQueueManager:
             "high_prio": self.clear_queue(QueueType.HIGH_PRIO),
             "normal": self.clear_queue(QueueType.NORMAL),
         }
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a JSON-friendly snapshot of all queues for session persistence.
+
+        ``event_bus`` references on ``QueuedMessage`` are stripped — callers must
+        re-attach a live bus via :py:meth:`rebind_event_bus` after load.
+        """
+        return {
+            "version": 1,
+            "urgent": (
+                self._queued_to_dict(self._pending_urgent)
+                if self._pending_urgent is not None
+                else None
+            ),
+            "high_prio": [self._queued_to_dict(m) for m in self._high_prio_queue],
+            "normal": [self._queued_to_dict(m) for m in self._normal_queue],
+        }
+
+    def load_snapshot(self, data: dict[str, Any]) -> None:
+        """Replace queue contents from a snapshot produced by :py:meth:`snapshot`."""
+        version = data.get("version", 1)
+        if version != 1:
+            raise ValueError(f"Unsupported queue snapshot version: {version}")
+        urgent = data.get("urgent")
+        self._pending_urgent = (
+            self._queued_from_dict(urgent) if urgent is not None else None
+        )
+        self._high_prio_queue = [
+            self._queued_from_dict(d) for d in data.get("high_prio", [])
+        ]
+        self._normal_queue = [
+            self._queued_from_dict(d) for d in data.get("normal", [])
+        ]
+
+    def rebind_event_bus(self, event_bus: EventBus | None) -> None:
+        """Re-attach a live ``EventBus`` to every restored queued message."""
+        if self._pending_urgent is not None:
+            self._pending_urgent.event_bus = event_bus
+        for msg in self._high_prio_queue:
+            msg.event_bus = event_bus
+        for msg in self._normal_queue:
+            msg.event_bus = event_bus
+
+    @staticmethod
+    def _queued_to_dict(msg: QueuedMessage) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for key, value in msg.metadata.items():
+            if isinstance(value, Enum):
+                # str+Enum members serialize cleanly already, but also handle
+                # plain Enums by storing the member name.
+                metadata[key] = value.value if isinstance(value, str) else value.name
+            else:
+                metadata[key] = value
+        return {
+            "id": msg.id,
+            "content": msg.content,
+            "queue_type": msg.queue_type.name,
+            "created_at": msg.created_at,
+            "metadata": metadata,
+            "merged_tool_call_ids": list(msg.merged_tool_call_ids),
+        }
+
+    @staticmethod
+    def _queued_from_dict(data: dict[str, Any]) -> QueuedMessage:
+        return QueuedMessage(
+            id=data["id"],
+            content=data["content"],
+            queue_type=QueueType[data["queue_type"]],
+            created_at=data["created_at"],
+            event_bus=None,
+            metadata=dict(data.get("metadata", {})),
+            merged_tool_call_ids=list(data.get("merged_tool_call_ids", [])),
+        )

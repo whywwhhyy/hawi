@@ -20,6 +20,7 @@ from .event import (
     AgentEventType,
     SchedulerEventType,
     PluginEventType,
+    SessionEventType,
 )
 from .model_events import (
     ModelStreamStartEvent,
@@ -56,6 +57,12 @@ from .plugin_events import (
     PLUGIN_EVENT_TYPES,
     PluginEvent,
 )
+from .session_events import (
+    SessionCheckpointRequestedEvent,
+    SessionWriteFailedEvent,
+    SessionLoadedEvent,
+    SessionSwitchedEvent,
+)
 from .event_bus import (
     EventBus,
     EventHandler,
@@ -77,6 +84,7 @@ __all__ = [
     "AgentEventType",
     "SchedulerEventType",
     "PluginEventType",
+    "SessionEventType",
     # Model
     "ModelStreamStartEvent",
     "ModelStreamStopEvent",
@@ -108,6 +116,11 @@ __all__ = [
     # Plugin
     "PLUGIN_EVENT_TYPES",
     "PluginEvent",
+    # Session
+    "SessionCheckpointRequestedEvent",
+    "SessionWriteFailedEvent",
+    "SessionLoadedEvent",
+    "SessionSwitchedEvent",
     # Dump Manager
     "DumpManager",
 ]

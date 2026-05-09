@@ -27,6 +27,13 @@ from typing import Any, Callable
 # Type aliases
 ExitFunc = Callable[[], Any]
 
+# Named priority tiers. Lower values run first. Use these constants instead of
+# magic numbers so that ordering relationships across components stay legible.
+EXIT_PRIORITY_NORMAL = 100
+EXIT_PRIORITY_PLUGIN_TEARDOWN = 200
+EXIT_PRIORITY_AGENT_DRAIN = 500
+EXIT_PRIORITY_SESSION_FLUSH = 900
+
 
 @dataclass(order=True, frozen=True)
 class _HandlerEntry:
@@ -272,6 +279,33 @@ class ExitHandler:
         """
         self._register_impl(func, priority, name)
 
+    def register_last(
+        self,
+        func: ExitFunc,
+        name: str | None = None,
+    ) -> None:
+        """
+        Register a function that must run AFTER every other registered handler.
+
+        Reserved for the SessionManager's final flush so that any state mutated
+        by earlier teardown handlers (e.g. plugin shutdown) still gets captured
+        on disk.
+
+        Raises:
+            RuntimeError: If a handler with priority >= EXIT_PRIORITY_SESSION_FLUSH
+                is already registered. Only one "last" handler is supported.
+        """
+        slot_priority = EXIT_PRIORITY_SESSION_FLUSH + 1
+        with self._handlers_lock:
+            for entry in self._handlers:
+                if entry.priority >= EXIT_PRIORITY_SESSION_FLUSH:
+                    raise RuntimeError(
+                        f"register_last: another handler is already at "
+                        f"priority {entry.priority} (name={entry.name!r}). "
+                        f"Only one final-flush handler is supported."
+                    )
+        self._register_impl(func, slot_priority, name)
+
     def register_weakref(
         self,
         obj: Any,
@@ -307,6 +341,23 @@ class ExitHandler:
         self._register_impl(func, priority=999, name=name or f"weakref_{id(obj)}")
 
         return ref
+
+    def unregister(self, func: ExitFunc) -> bool:
+        """Remove a previously-registered handler.
+
+        Matches by equality so bound methods compare correctly (each access
+        of ``self.method`` creates a new bound-method object that is ``is``-
+        distinct but ``==``-equal).
+
+        Returns True if a matching handler was found and removed. Used by
+        components that want to detach cleanly (e.g. SessionManager.detach()).
+        """
+        with self._handlers_lock:
+            for i, entry in enumerate(self._handlers):
+                if entry.func is func or entry.func == func:
+                    self._handlers.pop(i)
+                    return True
+        return False
 
     def execute_early_and_clear(self) -> list[Any]:
         """

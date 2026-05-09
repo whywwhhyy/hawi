@@ -118,6 +118,69 @@ class WorkflowPlugin(HawiPlugin):
             )
         new._manual_read = self._manual_read
         return new
+
+    def save_state(self) -> dict[str, Any] | None:
+        """Persist workflow definition + active run for SessionManager.
+
+        Pending human-review futures are deliberately NOT serialized — on load,
+        a node in ``paused_awaiting_review`` stays paused and the GUI prompts
+        the reviewer again.
+        """
+        if self._workflow is None and self._active_run is None:
+            return None
+        return {
+            "workflow": self._workflow.to_dict() if self._workflow else None,
+            "active_run": (
+                self._active_run.to_dict() if self._active_run else None
+            ),
+            "manual_read": self._manual_read,
+        }
+
+    def load_state(self, data: dict[str, Any]) -> None:
+        wf_dict = data.get("workflow")
+        self._workflow = Workflow.from_dict(wf_dict) if wf_dict else None
+
+        run_dict = data.get("active_run")
+        if run_dict is None:
+            self._active_run = None
+        else:
+            node_execs = {
+                nid: NodeExecution(
+                    node_id=ne.get("node_id", nid),
+                    status=ne.get("status", "pending"),
+                    output=ne.get("output"),
+                    review_records=[
+                        ReviewRecord(
+                            node_id=r.get("node_id", ""),
+                            reviewer_type=r.get("reviewer_type", "logger"),
+                            approved=bool(r.get("approved", False)),
+                            feedback=r.get("feedback", ""),
+                            reviewer_identity=r.get("reviewer_identity"),
+                            timestamp=float(r.get("timestamp", 0.0)),
+                        )
+                        for r in ne.get("review_records", [])
+                    ],
+                    attempt_count=int(ne.get("attempt_count", 0)),
+                    started_at=ne.get("started_at"),
+                    completed_at=ne.get("completed_at"),
+                    selected_next_node_id=ne.get("selected_next_node_id"),
+                    routing_reason=ne.get("routing_reason", ""),
+                )
+                for nid, ne in run_dict.get("node_executions", {}).items()
+            }
+            self._active_run = WorkflowRun(
+                id=run_dict["id"],
+                workflow_id=run_dict.get("workflow_id", ""),
+                status=run_dict.get("status", "running"),
+                current_node_id=run_dict.get("current_node_id", ""),
+                node_executions=node_execs,
+                global_context=dict(run_dict.get("global_context", {})),
+                created_at=float(run_dict.get("created_at", 0.0)),
+                completed_at=run_dict.get("completed_at"),
+            )
+
+        self._pending_human_reviews = {}
+        self._manual_read = bool(data.get("manual_read", False))
     # ═══════════════════════════════════════════════════════════════
 
     @before_conversation

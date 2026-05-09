@@ -23,7 +23,22 @@ export type CoreCommandType =
   | "apply_plugins"
   | "get_status"
   | "shutdown"
-  | "ping";
+  | "ping"
+  | "session_list"
+  | "session_new"
+  | "session_load"
+  | "session_switch"
+  | "session_delete"
+  | "session_save_now";
+
+export interface SessionMetaPayload {
+  session_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  last_checkpoint_event: string | null;
+  components_present: string[];
+}
 
 export interface CoreFrame<TPayload = Record<string, unknown>> {
   version: typeof VERSION;
