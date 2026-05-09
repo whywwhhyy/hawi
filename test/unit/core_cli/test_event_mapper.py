@@ -325,50 +325,42 @@ def test_mapper_includes_tool_error_output() -> None:
     assert frames[0]["payload"]["error"] == "Parameter validation failed"
 
 
-def test_mapper_reconciles_pending_tool_call_id() -> None:
+def test_mapper_drops_block_start_without_tool_call_id() -> None:
+    """Defense in depth: empty-id block_start events are now suppressed at
+    the stream accumulator (deferred until id arrives). If one slips through
+    to the mapper the right behavior is to drop it rather than forward an
+    ambiguous frame to the GUI under a placeholder id."""
     mapper = SemanticEventMapper()
     mapper.map(AgentRunStartEvent.create("run-pending-tool"))
 
-    start = mapper.map(
+    frames = mapper.map(
         ModelToolCallBlockStartEvent.create("req-pending", 0, "", "WebPlugin__fetch")
     )
-    display_id = start[0]["payload"]["tool_call_id"]
-    assert display_id.startswith("pending:req-pending:0")
-    assert start[0]["payload"]["actual_tool_call_id"] == ""
-    assert start[0]["payload"]["status"] == "pending"
+    assert frames == []
 
-    delta = mapper.map(
-        ModelToolCallBlockDeltaEvent.create(
-            "req-pending",
-            0,
-            "",
-            '{"url":"https://this-domain-does-not-exist-123456789.com"}',
-        )
-    )
-    assert delta[0]["payload"]["tool_call_id"] == display_id
-
+    # Real flow continues normally once a downstream stop carries the id.
     stop = mapper.map(
         ModelToolCallBlockStopEvent.create(
             "req-pending",
             0,
             "tc-real",
             "WebPlugin__fetch",
-            {"url": "https://this-domain-does-not-exist-123456789.com"},
+            {"url": "https://example.com"},
         )
     )
-    assert stop[0]["payload"]["tool_call_id"] == display_id
-    assert stop[0]["payload"]["actual_tool_call_id"] == "tc-real"
+    assert stop[0]["payload"]["tool_call_id"] == "tc-real"
 
     running = mapper.map(
         AgentToolCallEvent.create(
             "run-pending-tool",
             "WebPlugin__fetch",
-            {"url": "https://this-domain-does-not-exist-123456789.com"},
+            {"url": "https://example.com"},
             "tc-real",
         )
     )
-    assert running[0]["payload"]["tool_call_id"] == display_id
+    assert running[0]["payload"]["tool_call_id"] == "tc-real"
     assert running[0]["payload"]["status"] == "running"
+
     result = mapper.map(
         AgentToolResultEvent.create(
             "run-pending-tool",
@@ -376,16 +368,114 @@ def test_mapper_reconciles_pending_tool_call_id() -> None:
             False,
             "",
             3.0,
-            ToolResult(success=False, error="抓取失败: DNS lookup failed"),
+            ToolResult(success=False, error="DNS failed"),
         )
     )
-
-    assert result[0]["type"] == "tool.result"
-    assert result[0]["payload"]["tool_call_id"] == display_id
-    assert result[0]["payload"]["actual_tool_call_id"] == "tc-real"
+    assert result[0]["payload"]["tool_call_id"] == "tc-real"
     assert result[0]["payload"]["tool_name"] == "WebPlugin__fetch"
     assert result[0]["payload"]["success"] is False
-    assert result[0]["payload"]["error"] == "抓取失败: DNS lookup failed"
+
+
+def test_stream_accumulator_defers_start_until_tool_call_id_known() -> None:
+    """The root fix for the pending: workaround: when the underlying provider
+    streams a tool_call without id at is_start, the accumulator must defer
+    the ModelToolCallBlockStartEvent until a later chunk reveals the id.
+    Downstream consumers therefore never see an empty-id block_start."""
+    from hawi.agent.stream_accumulator import StreamBlockAccumulator
+
+    acc = StreamBlockAccumulator.create_tool_handler()
+
+    # First chunk: is_start with empty id (mimics OpenAI streaming variants
+    # that supply id later).
+    [(_, events)] = acc.handle(
+        {
+            "type": "tool_call_delta",
+            "index": 0,
+            "id": None,
+            "name": "fetch",
+            "arguments_delta": "",
+            "is_start": True,
+            "is_end": False,
+        },
+        request_id="req-A",
+    )
+    start_events = [e for e in events if e.type == "model.tool_call_block_start"]
+    assert start_events == [], "StartEvent must be deferred"
+
+    # Subsequent chunk carrying the real id: StartEvent flushes now.
+    [(_, events)] = acc.handle(
+        {
+            "type": "tool_call_delta",
+            "index": 0,
+            "id": "tc-real",
+            "name": None,
+            "arguments_delta": '{"q":',
+            "is_start": False,
+            "is_end": False,
+        },
+        request_id="req-A",
+    )
+    start_events = [e for e in events if e.type == "model.tool_call_block_start"]
+    assert len(start_events) == 1
+    assert start_events[0].tool_call_id == "tc-real"
+    assert start_events[0].tool_name == "fetch"
+
+    # Closing the block does not re-emit a Start.
+    [(_, events)] = acc.handle(
+        {
+            "type": "tool_call_delta",
+            "index": 0,
+            "id": "tc-real",
+            "name": "fetch",
+            "arguments_delta": "",
+            "is_start": False,
+            "is_end": True,
+        },
+        request_id="req-A",
+    )
+    start_events = [e for e in events if e.type == "model.tool_call_block_start"]
+    assert start_events == []
+    stop_events = [e for e in events if e.type == "model.tool_call_block_stop"]
+    assert len(stop_events) == 1
+    assert stop_events[0].tool_call_id == "tc-real"
+
+
+def test_stream_accumulator_flushes_pending_start_on_block_end() -> None:
+    """If the id only arrives in the is_end chunk, StartEvent must be flushed
+    before StopEvent so consumers see Start → Stop in order."""
+    from hawi.agent.stream_accumulator import StreamBlockAccumulator
+
+    acc = StreamBlockAccumulator.create_tool_handler()
+    acc.handle(
+        {
+            "type": "tool_call_delta",
+            "index": 0,
+            "id": None,
+            "name": "fetch",
+            "arguments_delta": "",
+            "is_start": True,
+            "is_end": False,
+        },
+        request_id="req-B",
+    )
+    [(_, events)] = acc.handle(
+        {
+            "type": "tool_call_delta",
+            "index": 0,
+            "id": "tc-late",
+            "name": "fetch",
+            "arguments_delta": "{}",
+            "is_start": False,
+            "is_end": True,
+        },
+        request_id="req-B",
+    )
+    types = [e.type for e in events]
+    assert "model.tool_call_block_start" in types
+    assert "model.tool_call_block_stop" in types
+    assert types.index("model.tool_call_block_start") < types.index(
+        "model.tool_call_block_stop"
+    )
 
 
 def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:

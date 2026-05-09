@@ -66,6 +66,11 @@ class StreamBlockAccumulator:
     _pending: dict[int, list[DeltaPart]] = field(default_factory=dict, repr=False)
     _finished_indices: set[int] = field(default_factory=set, repr=False)
     _tool_accumulators: dict[int, dict[str, Any]] = field(default_factory=dict, repr=False)
+    # Per-block-index buffer for tool_use blocks whose tool_call_id was empty
+    # at is_start. The StartEvent is held back until a delta or stop chunk
+    # reveals the real id, so downstream consumers (event_mapper, GUI) never
+    # see an empty tool_call_id in a block_start event.
+    _pending_tool_start: dict[int, dict[str, Any]] = field(default_factory=dict, repr=False)
 
     @classmethod
     def create_text_handler(cls) -> StreamBlockAccumulator:
@@ -234,17 +239,38 @@ class StreamBlockAccumulator:
             self._signature_accumulator = [] if self.block_type == "reasoning" else None
 
             if self.block_type == "tool_use":
-                events.append(ModelToolCallBlockStartEvent.create(
-                    request_id=request_id,
-                    block_index=idx,
-                    tool_call_id=chunk.get("id") or "",
-                    tool_name=chunk.get("name") or "",
-                ))
+                chunk_id = chunk.get("id") or ""
+                if chunk_id:
+                    events.append(ModelToolCallBlockStartEvent.create(
+                        request_id=request_id,
+                        block_index=idx,
+                        tool_call_id=chunk_id,
+                        tool_name=chunk.get("name") or "",
+                    ))
+                else:
+                    # Defer StartEvent until id is known. Some OpenAI-compatible
+                    # providers stream the id in a later chunk.
+                    self._pending_tool_start[idx] = {
+                        "tool_name": chunk.get("name") or "",
+                    }
             else:
                 events.append(ModelContentBlockStartEvent.create(
                     request_id=request_id,
                     block_index=idx,
                     block_type=self.block_type,
+                ))
+
+        # If a tool block's StartEvent is pending and this chunk now reveals
+        # the id, flush the StartEvent before emitting the DeltaEvent.
+        if self.block_type == "tool_use" and idx in self._pending_tool_start:
+            chunk_id = chunk.get("id") or ""
+            if chunk_id:
+                meta = self._pending_tool_start.pop(idx)
+                events.append(ModelToolCallBlockStartEvent.create(
+                    request_id=request_id,
+                    block_index=idx,
+                    tool_call_id=chunk_id,
+                    tool_name=meta.get("tool_name") or chunk.get("name") or "",
                 ))
 
         # 创建 DeltaEvent
@@ -273,6 +299,21 @@ class StreamBlockAccumulator:
 
             if self.block_type == "tool_use":
                 acc = self._accumulator
+                # Last chance to flush a deferred StartEvent — the accumulator
+                # has the canonical id by now (set via _add_delta above).
+                if idx in self._pending_tool_start:
+                    acc_id = acc.get("id") or ""
+                    if acc_id:
+                        meta = self._pending_tool_start.pop(idx)
+                        events.append(ModelToolCallBlockStartEvent.create(
+                            request_id=request_id,
+                            block_index=idx,
+                            tool_call_id=acc_id,
+                            tool_name=meta.get("tool_name") or acc.get("name") or "",
+                        ))
+                    else:
+                        # No id ever arrived — drop the pending start.
+                        self._pending_tool_start.pop(idx, None)
                 events.append(ModelToolCallBlockStopEvent.create(
                     request_id=request_id,
                     block_index=idx,
@@ -319,16 +360,36 @@ class StreamBlockAccumulator:
                 )
             acc = {"id": "", "name": "", "arguments": ""}
             self._tool_accumulators[idx] = acc
-            events.append(ModelToolCallBlockStartEvent.create(
-                request_id=request_id,
-                block_index=idx,
-                tool_call_id=chunk.get("id") or "",
-                tool_name=chunk.get("name") or "",
-            ))
+            chunk_id = chunk.get("id") or ""
+            if chunk_id:
+                events.append(ModelToolCallBlockStartEvent.create(
+                    request_id=request_id,
+                    block_index=idx,
+                    tool_call_id=chunk_id,
+                    tool_name=chunk.get("name") or "",
+                ))
+            else:
+                # Defer StartEvent until id is known.
+                self._pending_tool_start[idx] = {
+                    "tool_name": chunk.get("name") or "",
+                }
         else:
             acc = self._tool_accumulators[idx]
 
         acc = self._tool_accumulators[idx]
+
+        # Flush a deferred StartEvent if the id arrived in this delta chunk.
+        if idx in self._pending_tool_start:
+            chunk_id = chunk.get("id") or ""
+            if chunk_id:
+                meta = self._pending_tool_start.pop(idx)
+                events.append(ModelToolCallBlockStartEvent.create(
+                    request_id=request_id,
+                    block_index=idx,
+                    tool_call_id=chunk_id,
+                    tool_name=meta.get("tool_name") or chunk.get("name") or "",
+                ))
+
         events.append(ModelToolCallBlockDeltaEvent.create(
             request_id=request_id,
             block_index=idx,
@@ -340,6 +401,24 @@ class StreamBlockAccumulator:
 
         part: ContentPart | None = None
         if chunk.get("is_end"):
+            # Last chance to flush a deferred StartEvent — the accumulator
+            # has the canonical id by now (set via _add_tool_delta above).
+            if idx in self._pending_tool_start:
+                acc_id = acc.get("id") or ""
+                if acc_id:
+                    meta = self._pending_tool_start.pop(idx)
+                    events.append(ModelToolCallBlockStartEvent.create(
+                        request_id=request_id,
+                        block_index=idx,
+                        tool_call_id=acc_id,
+                        tool_name=meta.get("tool_name") or acc.get("name") or "",
+                    ))
+                else:
+                    # No id ever arrived — drop the pending start; downstream
+                    # would have nothing meaningful to key on. Logged via the
+                    # absence of any block_start event.
+                    self._pending_tool_start.pop(idx, None)
+
             part = self._build_tool_part(acc)
             events.append(ModelToolCallBlockStopEvent.create(
                 request_id=request_id,
