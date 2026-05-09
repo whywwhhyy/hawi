@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 
 from hawi.agent import AutoCompactConfig, HawiAgent
-from hawi.agent.context import AgentContext
+from hawi.agent.context import AgentContext, ContextUsageSnapshot
 from hawi.events import Event, EventBus
 from hawi.models import Model
 from hawi.models.message import DeltaPart, Message, MessageRequest, MessageResponse
@@ -146,6 +146,30 @@ def test_context_usage_snapshot_reports_context_ratio() -> None:
     assert snapshot.source == "estimate"
 
 
+def test_context_usage_snapshot_round_trips_in_context_snapshot() -> None:
+    context = AgentContext()
+    context.set_context_usage(
+        ContextUsageSnapshot(
+            used_tokens=500,
+            max_context_tokens=1000,
+            usage_ratio=0.5,
+            remaining_tokens=500,
+            source="provider_usage",
+        )
+    )
+
+    restored = AgentContext()
+    restored.load_snapshot(context.snapshot())
+
+    assert restored.context_usage_snapshot() == ContextUsageSnapshot(
+        used_tokens=500,
+        max_context_tokens=1000,
+        usage_ratio=0.5,
+        remaining_tokens=500,
+        source="provider_usage",
+    )
+
+
 def test_model_metadata_uses_normalized_provider_context_tokens() -> None:
     events: list[Event] = []
     bus = EventBus()
@@ -163,6 +187,13 @@ def test_model_metadata_uses_normalized_provider_context_tokens() -> None:
     assert metadata.context_tokens == 60
     assert metadata.context_ratio == 0.6
     assert metadata.context_source == "provider_usage"
+    assert agent.context.context_usage_snapshot() == ContextUsageSnapshot(
+        used_tokens=60,
+        max_context_tokens=100,
+        usage_ratio=0.6,
+        remaining_tokens=40,
+        source="provider_usage",
+    )
 
 
 @pytest.mark.asyncio

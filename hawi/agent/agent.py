@@ -1791,6 +1791,20 @@ class HawiAgent:
                         )
                     else:
                         metadata_context_ratio = None
+                metadata_remaining_tokens = (
+                    max(0, context_usage.max_context_tokens - metadata_context_tokens)
+                    if context_usage.max_context_tokens is not None
+                    else None
+                )
+                self._context.set_context_usage(
+                    ContextUsageSnapshot(
+                        used_tokens=metadata_context_tokens,
+                        max_context_tokens=context_usage.max_context_tokens,
+                        usage_ratio=metadata_context_ratio,
+                        remaining_tokens=metadata_remaining_tokens,
+                        source=metadata_context_source,
+                    )
+                )
                 await self._emit_event(
                     ModelMetadataEvent.create(
                         request_id=request_id,

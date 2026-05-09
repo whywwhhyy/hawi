@@ -253,6 +253,7 @@ class AgentContext:
     cache_point: CachePoint | None = None
     cache_tool_definitions: CachePoint | None = None
     auto_cache_static_prefix: CachePoint | None = None
+    context_usage: ContextUsageSnapshot | None = None
 
     # Historical compaction audit records. These are intentionally kept out of
     # model-visible context and only used for debugging/persistence.
@@ -484,6 +485,14 @@ class AgentContext:
             usage_ratio=min(1.0, used_tokens / max_context_tokens),
             remaining_tokens=max(0, max_context_tokens - used_tokens),
         )
+
+    def set_context_usage(self, snapshot: ContextUsageSnapshot | None) -> None:
+        """Store the most recent context usage metadata for session restore."""
+        self.context_usage = snapshot
+
+    def context_usage_snapshot(self) -> ContextUsageSnapshot | None:
+        """Return the last persisted context usage metadata, if any."""
+        return self.context_usage
 
     def add_message(self, message: Message) -> None:
         """Append a message to the conversation.
@@ -794,6 +803,7 @@ class AgentContext:
     def clear(self) -> None:
         """Clear all messages (preserve tools and system_prompt)."""
         self.messages.clear()
+        self.context_usage = None
 
     def copy(self) -> AgentContext:
         """Create a deep copy of the context.
@@ -808,6 +818,7 @@ class AgentContext:
             cache_point=deepcopy(self.cache_point),
             cache_tool_definitions=deepcopy(self.cache_tool_definitions),
             auto_cache_static_prefix=deepcopy(self.auto_cache_static_prefix),
+            context_usage=deepcopy(self.context_usage),
             compaction_records=deepcopy(self.compaction_records),
         )
         return copied
@@ -848,6 +859,9 @@ class AgentContext:
             "cache_point": self.cache_point,
             "cache_tool_definitions": self.cache_tool_definitions,
             "auto_cache_static_prefix": self.auto_cache_static_prefix,
+            "context_usage": (
+                self.context_usage.to_dict() if self.context_usage is not None else None
+            ),
             "messages": self.messages,
             "compaction_records": [
                 record.to_dict() for record in self.compaction_records
@@ -884,6 +898,9 @@ class AgentContext:
         self.auto_cache_static_prefix = normalize_cache_point(
             data.get("auto_cache_static_prefix")
         )
+        self.context_usage = self._context_usage_from_snapshot(
+            data.get("context_usage")
+        )
         self.compaction_records = [
             ContextCompactionRecord(
                 summary=record.get("summary", ""),
@@ -905,6 +922,33 @@ class AgentContext:
             )
             for entry in data.get("pending_tool_calls", [])
         }
+
+    @staticmethod
+    def _context_usage_from_snapshot(value: Any) -> ContextUsageSnapshot | None:
+        if not isinstance(value, dict):
+            return None
+        used_tokens = value.get("used_tokens")
+        if not isinstance(used_tokens, int):
+            return None
+        max_context_tokens = value.get("max_context_tokens")
+        if not isinstance(max_context_tokens, int):
+            max_context_tokens = None
+        usage_ratio = value.get("usage_ratio")
+        if not isinstance(usage_ratio, (int, float)):
+            usage_ratio = None
+        remaining_tokens = value.get("remaining_tokens")
+        if not isinstance(remaining_tokens, int):
+            remaining_tokens = None
+        source = value.get("source")
+        if source not in {"estimate", "provider_usage"}:
+            source = "estimate"
+        return ContextUsageSnapshot(
+            used_tokens=used_tokens,
+            max_context_tokens=max_context_tokens,
+            usage_ratio=float(usage_ratio) if usage_ratio is not None else None,
+            remaining_tokens=remaining_tokens,
+            source=cast(Literal["estimate", "provider_usage"], source),
+        )
 
     def _save_json(self, path: Path) -> None:
         """Save context as JSON for complete state restoration."""

@@ -48,6 +48,8 @@ class DummyAgent:
     def __init__(self) -> None:
         self.context = self
         self.model_name = ""
+        self.loaded_steer: list[Any] | None = None
+        self.loaded_runtime: dict[str, Any] | None = None
 
     def clear(self) -> None:
         self.cleared = True
@@ -57,6 +59,12 @@ class DummyAgent:
 
     def set_model(self, model_name: str) -> None:
         self.model_name = model_name
+
+    def load_steer(self, data: list[Any]) -> None:
+        self.loaded_steer = data
+
+    def load_runtime(self, data: dict[str, Any]) -> None:
+        self.loaded_runtime = data
 
 
 class DummyScheduler:
@@ -136,6 +144,11 @@ class DummySessionManager:
     def load_session(self, session_id: str) -> None:
         self.loaded = session_id
         self.current_session_id = session_id
+
+    def new_session(self, name: str | None = None) -> str:
+        self.new_session_name = name
+        self.current_session_id = "new-session"
+        return self.current_session_id
 
 
 class SimpleTool(AgentTool):
@@ -283,6 +296,34 @@ async def test_session_load_ack_includes_message_history() -> None:
     assert payload["command"] == "session_load"
     assert payload["session_id"] == "saved-session"
     assert payload["message_history"][0]["content"][0]["text"] == "saved"
+
+
+@pytest.mark.asyncio
+async def test_session_new_resets_live_state_without_materializing_history() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    scheduler = DummyScheduler()
+    sm = DummySessionManager()
+    runtime._scheduler = scheduler  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_new","id":"new",'
+            '"payload":{"name":"fresh"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_new"
+    assert payload["session_id"] == "new-session"
+    assert sm.new_session_name == "fresh"
+    assert scheduler.agent.cleared is True
+    assert scheduler.agent.loaded_steer == []
+    assert scheduler.agent.loaded_runtime["current_tool_calls"] == []
 
 
 def test_status_payload_includes_queue_messages() -> None:

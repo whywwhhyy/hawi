@@ -226,11 +226,9 @@ class CoreRuntime:
             scheduler,
             event_bus=getattr(scheduler.agent, "_event_bus", None),
         )
-        # Auto-create an initial session so every boundary event from now on
-        # actually persists. Users can later switch to a different session
-        # via the GUI; the manifest's name defaults to "session-<id>" and is
-        # rename-able through ``session_new`` (with a name) or future rename
-        # commands.
+        # Auto-create an initial in-memory session id. SessionManager writes it
+        # to disk lazily once the conversation has a user-visible message, so
+        # startup and empty "New" clicks do not leave blank sessions behind.
         try:
             self._session_manager.new_session()
         except Exception:
@@ -644,9 +642,31 @@ class CoreRuntime:
         command: CoreCommand,
     ) -> None:
         sm = self._require_session_manager()
+        scheduler = self._require_scheduler()
+        if not scheduler._executor.is_idle:
+            await client.send(
+                make_error(
+                    "Agent is running. Create a new session when the scheduler is idle.",
+                    request_id=command.id,
+                    code="busy",
+                )
+            )
+            return
         name = command.payload.get("name")
         if name is not None and not isinstance(name, str):
             raise ValueError("'session_new.payload.name' must be a string when present")
+        scheduler.agent.context.clear()
+        scheduler.clear_all_queues()
+        scheduler.agent.load_steer([])
+        scheduler.agent.load_runtime(
+            {
+                "version": 1,
+                "current_tool_calls": [],
+                "interrupted_tool_call_ids": [],
+                "last_unsent_tool_results": [],
+                "last_interrupt_reason": None,
+            }
+        )
         session_id = sm.new_session(name=name)
         await client.send(
             make_ack(
@@ -667,6 +687,7 @@ class CoreRuntime:
             raise ValueError("'session_load.payload.session_id' must be a non-empty string")
         sm.load_session(session_id)
         message_history = sm.read_message_history(session_id)
+        context_usage = self._agent_context_usage()
         await client.send(
             make_ack(
                 "session_load",
@@ -674,6 +695,7 @@ class CoreRuntime:
                 payload={
                     "session_id": session_id,
                     "message_history": message_history,
+                    "context_usage": context_usage,
                 },
             )
         )
@@ -691,6 +713,7 @@ class CoreRuntime:
             )
         sm.switch_to(session_id)
         message_history = sm.read_message_history(session_id)
+        context_usage = self._agent_context_usage()
         await client.send(
             make_ack(
                 "session_switch",
@@ -698,6 +721,7 @@ class CoreRuntime:
                 payload={
                     "session_id": session_id,
                     "message_history": message_history,
+                    "context_usage": context_usage,
                 },
             )
         )
@@ -746,6 +770,7 @@ class CoreRuntime:
         requested_session_id = self._optional_session_id(command)
         session_id = requested_session_id or sm.current_session_id
         message_history = sm.read_message_history(requested_session_id)
+        context_usage = self._agent_context_usage() if requested_session_id is None else None
         await client.send(
             make_ack(
                 "session_history",
@@ -753,6 +778,7 @@ class CoreRuntime:
                 payload={
                     "session_id": session_id,
                     "message_history": message_history,
+                    "context_usage": context_usage,
                 },
             )
         )
@@ -1010,6 +1036,13 @@ class CoreRuntime:
     def _agent_context_usage(self) -> dict[str, Any] | None:
         if self._scheduler is None:
             return None
+        context = getattr(self._scheduler.agent, "context", None)
+        saved_getter = getattr(context, "context_usage_snapshot", None)
+        if callable(saved_getter):
+            saved_snapshot = saved_getter()
+            to_dict = getattr(saved_snapshot, "to_dict", None)
+            if callable(to_dict):
+                return to_json_safe(to_dict())
         getter = getattr(self._scheduler.agent, "context_usage", None)
         if not callable(getter):
             return None

@@ -1,4 +1,7 @@
 :root {
+  --layer-topbar: 10;
+  --layer-popover: 20;
+  --layer-modal: 100;
   color: #1d2428;
   background: #f6f7f7;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -17,8 +20,8 @@ body {
 
 body {
   margin: 0;
-  min-width: 900px;
-  min-height: 620px;
+  min-width: 1080px;
+  min-height: 660px;
 }
 
 button,
@@ -62,12 +65,18 @@ button:disabled {
   gap: 8px;
 }
 
+.topbar {
+  position: relative;
+  z-index: var(--layer-topbar);
+}
+
 .status-strip {
   display: flex;
   align-items: center;
   min-width: 0;
-  flex: 1;
-  overflow: hidden;
+  flex: 0 1 auto;
+  margin-right: auto;
+  overflow: visible;
   border: 1px solid #d7dcdd;
   background: #ffffff;
 }
@@ -96,21 +105,37 @@ button:disabled {
 }
 
 .priority-status {
+  position: relative;
+  padding: 0;
   border: 0;
   border-right: 1px solid #d7dcdd;
   background: transparent;
   color: inherit;
 }
 
-.priority-status span {
+.priority-status-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.priority-status-trigger span {
   color: #49575d;
 }
 
-.priority-status strong {
+.priority-status-trigger strong {
   color: #286352;
 }
 
-.priority-status:hover,
+.priority-status:hover .priority-status-trigger,
 .priority-status.active {
   background: #edf7f3;
 }
@@ -156,22 +181,39 @@ button:disabled {
 
 .session-status {
   position: relative;
+  flex: 0 0 auto;
   justify-content: flex-start;
-  min-width: 278px;
+  min-width: 0;
   gap: 7px;
   border-right: 0;
   font-size: 12px;
 }
 
-.session-status > span {
+.session-trigger {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 34px;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.session-trigger > span {
   color: #49575d;
 }
 
-.session-status > strong {
+.session-trigger > strong {
   color: #176b5d;
 }
 
-.session-status > small {
+.session-trigger > small {
   max-width: 64px;
   color: #69777d;
   overflow: hidden;
@@ -202,9 +244,14 @@ button:disabled {
   background: #eef6f3;
 }
 
+.mini-button.icon-only {
+  width: 24px;
+  padding: 0;
+}
+
 .session-popover {
   position: absolute;
-  z-index: 20;
+  z-index: var(--layer-popover);
   top: calc(100% + 6px);
   right: 6px;
   width: 280px;
@@ -330,10 +377,6 @@ button:disabled {
   gap: 6px;
 }
 
-.workspace-row.with-queue-sidebar {
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px) minmax(300px, 360px);
-}
-
 .chat-panel {
   min-height: 0;
   overflow: auto;
@@ -345,35 +388,34 @@ button:disabled {
   user-select: text;
 }
 
-.queue-sidebar {
+.queue-popover {
+  position: absolute;
+  z-index: var(--layer-popover);
+  top: calc(100% + 6px);
+  left: 6px;
   display: flex;
   flex-direction: column;
+  width: 300px;
+  max-height: 380px;
   min-width: 0;
-  min-height: 0;
   overflow: hidden;
   border: 1px solid #d7dcdd;
   background: #ffffff;
+  box-shadow: 0 10px 28px rgba(27, 45, 54, 0.16);
 }
 
-.queue-sidebar-head {
+.queue-popover > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-height: 34px;
-  padding: 0 8px 0 10px;
+  padding: 0 10px;
   border-bottom: 1px solid #dfe4e5;
   color: #3a474d;
   font-size: 12px;
 }
 
-.queue-sidebar-head div {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  gap: 7px;
-}
-
-.queue-sidebar-head strong {
+.queue-popover > header strong {
   color: #176b5d;
 }
 
@@ -419,7 +461,7 @@ button:disabled {
 .queue-message-list {
   display: grid;
   gap: 7px;
-  max-height: 100%;
+  max-height: 136px;
   overflow: auto;
   scrollbar-gutter: stable;
 }
@@ -1264,7 +1306,7 @@ button:disabled {
   display: grid;
   place-items: center;
   background: rgba(17, 24, 29, 0.28);
-  z-index: 20;
+  z-index: var(--layer-modal);
 }
 
 .modal {

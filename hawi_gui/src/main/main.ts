@@ -20,12 +20,16 @@ let inspectPayload: InspectPayload | null = null;
 let config: PersistedConfig | null = null;
 let core: CoreProcess | null = null;
 
+const MIN_CONTENT_WIDTH = 1080;
+const MIN_CONTENT_HEIGHT = 660;
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1160,
     height: 780,
-    minWidth: 920,
-    minHeight: 640,
+    minWidth: MIN_CONTENT_WIDTH,
+    minHeight: MIN_CONTENT_HEIGHT,
+    useContentSize: true,
     title: "Hawi",
     backgroundColor: "#f7f8f8",
     webPreferences: {

@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, FileText, FolderOpen, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, ChevronDown, ChevronRight, FileText, Plug, Plus, RotateCcw, Send, Square, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
@@ -60,9 +60,9 @@ const MESSAGE_INPUT_MAX_ROWS = 5;
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const queueLabels: Record<QueueKind, string> = {
-  normal: "普通队列",
-  high_prio: "高优合并",
-  urgent: "紧急打断"
+  normal: "普通",
+  high_prio: "优先",
+  urgent: "紧急"
 };
 
 const userMessageTypeLabels = {
@@ -75,9 +75,8 @@ export function renderPriorityStatusText(
   queueLengths: Record<QueueKind, number>,
   queueMessages?: Record<QueueKind, QueueMessageState[]>
 ): string {
-  const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
-  const highMergedCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
-  return `打断 ${urgentStatus} · 合并 ${highMergedCount} · 队列 ${normalQueueCount(queueLengths, queueMessages)}`;
+  const highPriorityCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
+  return `优先 ${highPriorityCount} · 队列 ${normalQueueCount(queueLengths, queueMessages)}`;
 }
 
 function hasHighPriorityWork(
@@ -102,7 +101,7 @@ export default function App() {
   const [queue, setQueue] = useState<QueueKind>("high_prio");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
-  const [queueSidebarOpen, setQueueSidebarOpen] = useState(false);
+  const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -110,6 +109,9 @@ export default function App() {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const configRef = useRef<PersistedConfig | null>(null);
+  const pendingSystemPromptConfigRef = useRef<PersistedConfig | null>(null);
+  const applyingSystemPromptRef = useRef(false);
   const followTailRef = useRef(true);
   const selectingChatRef = useRef(false);
   const userScrollIntentRef = useRef(false);
@@ -145,6 +147,10 @@ export default function App() {
     if (!metadata) return;
     void initializeSessionState();
   }, [metadata]);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   useBrowserLayoutEffect(() => {
     keepChatTailVisible();
@@ -299,7 +305,10 @@ export default function App() {
     dispatch({
       version: VERSION,
       type: "gui.load_session_history",
-      payload: { message_history: Array.isArray(payload.message_history) ? payload.message_history : [] }
+      payload: {
+        message_history: Array.isArray(payload.message_history) ? payload.message_history : [],
+        context_usage: payload.context_usage
+      }
     });
     followTailRef.current = true;
   }
@@ -418,17 +427,30 @@ export default function App() {
     await sendCommand("clear_context", {});
   }
 
-  async function applySystemPrompt() {
-    if (!config) return;
-    await sendCommand("set_system_prompt", { system_prompt: config.systemPrompt });
-    await saveAndSet(config);
-  }
+  function applySystemPrompt(nextConfig: PersistedConfig) {
+    pendingSystemPromptConfigRef.current = nextConfig;
+    if (applyingSystemPromptRef.current) return;
+    applyingSystemPromptRef.current = true;
 
-  const [systemPromptApplied, setSystemPromptApplied] = useState(false);
-  async function handleApplySystemPrompt() {
-    await applySystemPrompt();
-    setSystemPromptApplied(true);
-    setTimeout(() => setSystemPromptApplied(false), 1500);
+    void (async () => {
+      try {
+        while (pendingSystemPromptConfigRef.current) {
+          const pending = pendingSystemPromptConfigRef.current;
+          pendingSystemPromptConfigRef.current = null;
+          await sendCommand("set_system_prompt", { system_prompt: pending.systemPrompt });
+          try {
+            const saved = await window.hawi.saveConfig(pending);
+            if (configRef.current?.systemPrompt === pending.systemPrompt) {
+              setConfig(saved);
+            }
+          } catch (error) {
+            dispatch(errorFrame(error));
+          }
+        }
+      } finally {
+        applyingSystemPromptRef.current = false;
+      }
+    })();
   }
 
   async function selectModel(modelName: string) {
@@ -461,13 +483,15 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="status-strip">
-          <StatusCell label="Scheduler" value={state.schedulerState} />
-          <StatusCell label="Agent" value={state.agentState} />
+          <StatusCell
+            value={combinedRunState(state.schedulerState, state.agentState)}
+            title={`Scheduler: ${state.schedulerState} · Executor: ${state.agentState}`}
+          />
           <PriorityStatusCell
             queueLengths={state.queueLengths}
             queueMessages={state.queueMessages}
-            open={queueSidebarOpen}
-            onToggle={() => setQueueSidebarOpen((value) => !value)}
+            open={queuePopoverOpen}
+            onToggle={() => setQueuePopoverOpen((value) => !value)}
           />
           <ContextUsageCell usage={state.contextUsage} />
           <SessionStatusCell
@@ -476,7 +500,7 @@ export default function App() {
             currentSessionId={currentSessionId}
             open={sessionDialogOpen}
             busy={sessionBusy}
-            onToggleLoad={openSessionDialog}
+            onToggle={openSessionDialog}
             onSelect={loadSession}
             onNew={newSession}
           />
@@ -496,23 +520,17 @@ export default function App() {
           rows={1}
           value={config.systemPrompt}
           disabled={systemPromptLocked}
-          title={systemPromptLocked ? "清空消息后可编辑" : "System Prompt"}
+          title={systemPromptLocked ? "当前会话已有消息，System Prompt 已锁定" : "System Prompt"}
           onChange={(event) => {
             resizeTextareaToRows(event.currentTarget, SYSTEM_PROMPT_MAX_ROWS);
-            setConfig({ ...config, systemPrompt: event.target.value });
+            const nextConfig = { ...config, systemPrompt: event.target.value };
+            setConfig(nextConfig);
+            applySystemPrompt(nextConfig);
           }}
         />
-        <button
-          className="tool-button"
-          title="应用系统提示"
-          disabled={systemPromptLocked || systemPromptApplied}
-          onClick={handleApplySystemPrompt}
-        >
-          <Check size={17} /> {systemPromptApplied ? "已应用" : "应用"}
-        </button>
       </section>
 
-      <section className={`workspace-row ${queueSidebarOpen ? "with-queue-sidebar" : ""}`}>
+      <section className="workspace-row">
         <main
           className="chat-panel"
           ref={chatRef}
@@ -530,13 +548,6 @@ export default function App() {
               <ChatBubble node={node} key={node.id} />
             ))}
         </main>
-        {queueSidebarOpen && (
-          <QueueSidebar
-            queueLengths={state.queueLengths}
-            queueMessages={state.queueMessages}
-            onClose={() => setQueueSidebarOpen(false)}
-          />
-        )}
         <PluginPreviewPanel
           artifacts={state.artifacts}
           artifactOrder={state.artifactOrder}
@@ -561,9 +572,6 @@ export default function App() {
             {queueLabels[key]}
           </button>
         ))}
-        <button className="icon-button" title="清空上下文和屏幕" onClick={clearConversation}>
-          <Trash2 size={17} />
-        </button>
         <label className="debug-toggle">
           <input
             type="checkbox"
@@ -576,7 +584,7 @@ export default function App() {
           />
           Debug
         </label>
-        <button className="icon-button" title="重启 core" onClick={() => restartWith(config)}>
+        <button className="icon-button" title="重启 Core 进程并应用当前配置" onClick={() => restartWith(config)}>
           <RotateCcw size={17} />
         </button>
       </section>
@@ -634,13 +642,28 @@ export default function App() {
   );
 }
 
-function StatusCell({ label, value }: { label: string; value: string }) {
+function StatusCell({ value, title }: { value: string; title?: string }) {
   return (
-    <div className={`status-cell state-${value.toLowerCase()}`}>
-      <span>{label}</span>
+    <div className={`status-cell state-${value.toLowerCase()}`} title={title}>
       <strong>{value}</strong>
     </div>
   );
+}
+
+function combinedRunState(schedulerState: string, agentState: string): string {
+  if (agentState === "INTERRUPTING" || schedulerState === "INTERRUPTING") {
+    return "INTERRUPTING";
+  }
+  if (agentState === "RUNNING" || schedulerState === "RUNNING") {
+    return "RUNNING";
+  }
+  if (agentState === "READY" || schedulerState === "READY") {
+    return "READY";
+  }
+  if (agentState === "STOPPED" || schedulerState === "STOPPED") {
+    return "STOPPED";
+  }
+  return "IDLE";
 }
 
 function PriorityStatusCell({
@@ -654,23 +677,29 @@ function PriorityStatusCell({
   open: boolean;
   onToggle: () => void;
 }) {
-  const urgentStatus = queueLengths.urgent > 0 ? "待打断" : "无";
-  const highMergedCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
+  const highPriorityCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
   const normalCount = normalQueueCount(queueLengths, queueMessages);
 
   return (
-    <button
-      type="button"
-      className={`priority-status ${open ? "active" : ""}`}
-      title="紧急消息直接打断当前运行；高优消息合并为一次 steer；普通消息进入队列。"
-      aria-label={renderPriorityStatusText(queueLengths, queueMessages)}
-      aria-pressed={open}
-      onClick={onToggle}
-    >
-      <span>打断 <strong>{urgentStatus}</strong></span>
-      <span>合并 <strong>{highMergedCount}</strong></span>
-      <span>队列 <strong>{normalCount}</strong></span>
-    </button>
+    <div className={`priority-status ${open ? "active" : ""}`}>
+      <button
+        type="button"
+        className="priority-status-trigger"
+        title="优先消息会作为 steer 处理；普通消息进入队列。"
+        aria-label={renderPriorityStatusText(queueLengths, queueMessages)}
+        aria-pressed={open}
+        onClick={onToggle}
+      >
+        <span>优先 <strong>{highPriorityCount}</strong></span>
+        <span>队列 <strong>{normalCount}</strong></span>
+      </button>
+      {open && (
+        <QueuePopover
+          queueLengths={queueLengths}
+          queueMessages={queueMessages}
+        />
+      )}
+    </div>
   );
 }
 
@@ -679,15 +708,15 @@ function ContextUsageCell({ usage }: { usage?: ContextUsageState }) {
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(ratio * 100)}%`;
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
-  const source = usage?.source === "provider_usage" ? "provider" : usage?.source === "estimate" ? "estimated" : "unknown";
+  const usageLabel = `${usage?.source === "estimate" ? "~" : ""}${used}/${max}`;
   return (
-    <div className="context-status" title={`Context ${used}/${max} (${source})`}>
-      <span><Activity size={14} /> Context</span>
+    <div className="context-status" title={`Context ${usageLabel}`}>
+      <span>Context</span>
       <strong>{percent}</strong>
       <div className="context-meter" aria-hidden="true">
         <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
       </div>
-      <small>{used}/{max} · {source}</small>
+      <small>{usageLabel}</small>
     </div>
   );
 }
@@ -698,7 +727,7 @@ function SessionStatusCell({
   currentSessionId,
   open,
   busy,
-  onToggleLoad,
+  onToggle,
   onSelect,
   onNew
 }: {
@@ -707,7 +736,7 @@ function SessionStatusCell({
   currentSessionId: string | null;
   open: boolean;
   busy: boolean;
-  onToggleLoad: () => void;
+  onToggle: () => void;
   onSelect: (sessionId: string) => void;
   onNew: () => void;
 }) {
@@ -719,24 +748,29 @@ function SessionStatusCell({
 
   return (
     <div className={`session-status ${open ? "active" : ""}`}>
-      <span>Session</span>
-      <strong>{messageCount}</strong>
-      <small>{currentSessionId ? shortSessionId(currentSessionId) : "-"}</small>
       <button
-        className="mini-button"
-        title="加载 Session"
+        type="button"
+        className="session-trigger"
+        title="切换 Session"
         disabled={busy}
-        onClick={onToggleLoad}
+        onClick={onToggle}
       >
-        <FolderOpen size={14} /> Load
+        <span>Session</span>
+        <strong>{messageCount}</strong>
+        <small>{currentSessionId ? shortSessionId(currentSessionId) : "-"}</small>
       </button>
       <button
-        className="mini-button"
+        type="button"
+        className="mini-button icon-only"
         title="新建 Session"
+        aria-label="新建 Session"
         disabled={busy}
-        onClick={onNew}
+        onClick={(event) => {
+          event.stopPropagation();
+          onNew();
+        }}
       >
-        <Plus size={14} /> New
+        <Plus size={15} />
       </button>
       {open && (
         <div className="session-popover">
@@ -765,27 +799,20 @@ function SessionStatusCell({
   );
 }
 
-function QueueSidebar({
+function QueuePopover({
   queueLengths,
-  queueMessages,
-  onClose
+  queueMessages
 }: {
   queueLengths: Record<QueueKind, number>;
   queueMessages: Record<QueueKind, QueueMessageState[]>;
-  onClose: () => void;
 }) {
   const normalCount = normalQueueCount(queueLengths, queueMessages);
   const total = (hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0) + normalCount;
   return (
-    <aside className="queue-sidebar">
-      <header className="queue-sidebar-head">
-        <div>
-          <span>待处理消息</span>
-          <strong>{total}</strong>
-        </div>
-        <button className="icon-button" title="隐藏队列侧栏" onClick={onClose}>
-          <X size={16} />
-        </button>
+    <div className="queue-popover">
+      <header>
+        <span>待处理消息</span>
+        <strong>{total}</strong>
       </header>
       <QueueMessageGroup
         kind="high_prio"
@@ -797,7 +824,7 @@ function QueueSidebar({
         length={normalCount}
         messages={queueMessages.normal}
       />
-    </aside>
+    </div>
   );
 }
 
@@ -812,7 +839,7 @@ function QueueMessageGroup({
 }) {
   const displayCount = kind === "high_prio" ? (length > 0 ? 1 : 0) : length;
   const mergeNote = kind === "high_prio" && messages.length > 1
-    ? `已合并 ${messages.length} 条`
+    ? `优先消息 ${messages.length} 条`
     : "";
   return (
     <section className="queue-group">
@@ -1458,8 +1485,8 @@ export function thinkingExcerpt(value: string, maxChars = 120): string {
 function compactNumber(value: number): string {
   if (!Number.isFinite(value)) return "-";
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(value) >= 1000) return `${Math.round(value / 1000)}k`;
-  return `${(value / 1000).toFixed(1)}k`;
+  if (Math.abs(value) >= 1000) return `${Math.round(value / 1000)}K`;
+  return `${(value / 1000).toFixed(1)}K`;
 }
 
 function formatQueueTimestamp(value?: number): string | null {

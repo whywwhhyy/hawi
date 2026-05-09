@@ -20,15 +20,15 @@ describe("thinkingExcerpt", () => {
 });
 
 describe("renderPriorityStatusText", () => {
-  it("describes urgent as interruption, high priority as a merged slot, and normal as queue length", () => {
-    expect(renderPriorityStatusText({ urgent: 1, high_prio: 3, normal: 4 })).toBe("打断 待打断 · 合并 1 · 队列 4");
+  it("describes high priority as a priority slot and normal as queue length", () => {
+    expect(renderPriorityStatusText({ urgent: 1, high_prio: 3, normal: 4 })).toBe("优先 1 · 队列 4");
   });
 
-  it("shows empty interruption and merge states", () => {
-    expect(renderPriorityStatusText({ urgent: 0, high_prio: 0, normal: 0 })).toBe("打断 无 · 合并 0 · 队列 0");
+  it("shows empty priority and queue states", () => {
+    expect(renderPriorityStatusText({ urgent: 0, high_prio: 0, normal: 0 })).toBe("优先 0 · 队列 0");
   });
 
-  it("counts pending high priority previews as a merged slot", () => {
+  it("counts pending high priority previews as a priority slot", () => {
     expect(renderPriorityStatusText(
       { urgent: 0, high_prio: 0, normal: 2 },
       {
@@ -36,7 +36,7 @@ describe("renderPriorityStatusText", () => {
         high_prio: [{ id: "steer-1", queue: "high_prio", contentPreview: "steer" }],
         normal: []
       }
-    )).toBe("打断 无 · 合并 1 · 队列 2");
+    )).toBe("优先 1 · 队列 2");
   });
 
   it("counts pending normal previews as ordinary queue work", () => {
@@ -47,7 +47,7 @@ describe("renderPriorityStatusText", () => {
         high_prio: [],
         normal: [{ id: "steer-plain", queue: "normal", contentPreview: "plain" }]
       }
-    )).toBe("打断 无 · 合并 0 · 队列 1");
+    )).toBe("优先 0 · 队列 1");
   });
 });
 

@@ -173,6 +173,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "gui.load_session_history": {
       const history = normalizeSessionHistory(payload.message_history);
+      const contextUsage = parseStatusContextUsage(payload.context_usage);
       return {
         ...state,
         nodes: sessionHistoryNodes(history),
@@ -180,6 +181,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         toolNodeByCallId: {},
         activeRunId: undefined,
         metadataLines: [],
+        contextUsage,
         debugLines: [],
         errors: [],
         artifacts: {},

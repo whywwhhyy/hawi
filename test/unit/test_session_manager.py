@@ -281,15 +281,20 @@ class TestSessionWriter:
 
 
 class TestSessionManager:
-    def test_new_session_creates_layout(self, stub_setup) -> None:
+    def test_new_session_is_lazy(self, stub_setup) -> None:
         sm, _, _ = stub_setup
         sid = sm.new_session(name="alpha")
         sd = layout.session_dir(sm._root, sid)
-        assert sd.is_dir()
-        assert layout.manifest_path(sd).exists()
-        manifest = json.loads(layout.manifest_path(sd).read_text())
-        assert manifest["session_id"] == sid
-        assert manifest["name"] == "alpha"
+        assert sm.current_session_id == sid
+        assert not sd.exists()
+        assert sm.list_sessions() == []
+
+    def test_save_now_skips_empty_session(self, stub_setup) -> None:
+        sm, _, _ = stub_setup
+        sid = sm.new_session(name="empty")
+        sm.save_now()
+        assert not layout.session_dir(sm._root, sid).exists()
+        assert sm.list_sessions() == []
 
     def test_save_now_round_trip(self, session_root: Path) -> None:
         agent = _StubAgent()
@@ -319,21 +324,39 @@ class TestSessionManager:
             sm2.detach()
 
     def test_list_sessions_returns_metas(self, stub_setup) -> None:
-        sm, _, _ = stub_setup
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("message A")
         a = sm.new_session(name="A")
         sm.save_now()
+        agent.context.clear()
+        agent.context.add_user_message("message B")
         b = sm.new_session(name="B")
         sm.save_now()
         ids = {m.session_id for m in sm.list_sessions()}
         assert {a, b}.issubset(ids)
 
     def test_delete_removes_directory(self, stub_setup) -> None:
-        sm, _, _ = stub_setup
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("delete me")
         sid = sm.new_session()
+        sm.save_now()
         sd = layout.session_dir(sm._root, sid)
         assert sd.exists()
         sm.delete_session(sid)
         assert not sd.exists()
+
+    def test_switch_to_does_not_persist_empty_previous(self, stub_setup) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("target")
+        target = sm.new_session(name="target")
+        sm.save_now()
+
+        agent.context.clear()
+        empty = sm.new_session(name="empty")
+        sm.switch_to(target)
+
+        assert not layout.session_dir(sm._root, empty).exists()
+        assert layout.session_dir(sm._root, target).exists()
 
     def test_load_recovers_interrupted_tool_calls(self, session_root: Path) -> None:
         """A session saved mid-tool-call must come back with synthetic
@@ -387,6 +410,14 @@ class TestSessionManager:
         try:
             sid = sm.new_session()
             from hawi.events import AgentRunStartEvent
+            agent.event_bus.publish(
+                AgentMessageAddedEvent.create(
+                    run_id="r1",
+                    role="user",
+                    content=[{"type": "text", "text": "visible"}],
+                    metadata={"display_message_type": "normal"},
+                )
+            )
             agent.event_bus.publish(AgentRunStartEvent.create(run_id="r1"))
             # SessionManager subscribes blocking, so capture runs in-line.
             # Wait for the writer thread to flush.

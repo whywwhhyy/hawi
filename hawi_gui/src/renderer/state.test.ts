@@ -48,7 +48,13 @@ describe("core event reducer", () => {
           ],
           metadata: null
         }
-      ]
+      ],
+      context_usage: {
+        used_tokens: 42,
+        max_context_tokens: 1000,
+        usage_ratio: 0.042,
+        source: "provider_usage"
+      }
     }));
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent"]);
@@ -56,6 +62,26 @@ describe("core event reducer", () => {
     expect(state.nodes[1]).toMatchObject({ content: "thinking", complete: true });
     expect(state.nodes[2]).toMatchObject({ content: "answer", complete: true });
     expect(state.sessionMessageCount).toBe(2);
+    expect(state.contextUsage).toEqual({
+      usedTokens: 42,
+      maxContextTokens: 1000,
+      ratio: 0.042,
+      source: "provider_usage"
+    });
+  });
+
+  it("clears stale context usage when loading a session without usage", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      context_tokens: 900,
+      max_context_tokens: 1000,
+      context_ratio: 0.9,
+      context_source: "provider_usage"
+    }));
+
+    state = reduceCoreEvent(state, frame("gui.load_session_history", { message_history: [] }));
+
+    expect(state.contextUsage).toBeUndefined();
   });
 
   it("counts one assistant message across thinking and answer deltas", () => {

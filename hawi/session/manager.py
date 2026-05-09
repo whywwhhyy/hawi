@@ -103,6 +103,8 @@ class SessionManager:
         self._event_bus: EventBus | None = None
         self._session_id: str | None = None
         self._session_name: str | None = None
+        self._session_created_at: str | None = None
+        self._session_has_visible_messages = False
         self._exit_hook_registered = False
         self._subscribed_event_types: tuple[str, ...] = ()
 
@@ -163,29 +165,18 @@ class SessionManager:
     # --- session API -----------------------------------------------------
 
     def new_session(self, name: str | None = None) -> str:
-        """Create an empty session directory and make it the current session."""
+        """Create an in-memory session and make it current.
+
+        The session is materialized on disk lazily, once it has at least one
+        user-visible message. This keeps empty "New" clicks and startup
+        placeholders out of the session directory.
+        """
         session_id = uuid.uuid4().hex[:12]
         with self._lock:
             self._session_id = session_id
             self._session_name = name or session_id
-            session_dir = layout.session_dir(self._root, session_id)
-            layout.ensure_session_layout(session_dir)
-            now = datetime.now().isoformat()
-            manifest = {
-                "version": layout.MANIFEST_VERSION,
-                "session_id": session_id,
-                "name": self._session_name,
-                "created_at": now,
-                "updated_at": now,
-                "last_checkpoint_event": None,
-                "components_present": [],
-                "active_plugins": self._active_plugin_names(),
-            }
-            layout.atomic_write_text(
-                layout.manifest_path(session_dir),
-                json.dumps(manifest, ensure_ascii=False, indent=2),
-                fsync=True,
-            )
+            self._session_created_at = datetime.now().isoformat()
+            self._session_has_visible_messages = False
         return session_id
 
     @property
@@ -207,6 +198,8 @@ class SessionManager:
                 data = json.loads(mp.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 logger.warning("skipping unreadable session manifest %s", mp)
+                continue
+            if not self._session_dir_has_visible_messages(child):
                 continue
             out.append(
                 SessionMeta(
@@ -233,6 +226,9 @@ class SessionManager:
             self._session_id = session_id
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self._session_name = manifest.get("name", session_id)
+            self._session_created_at = (
+                manifest.get("created_at") or datetime.now().isoformat()
+            )
 
             loaded: list[str] = []
 
@@ -290,6 +286,9 @@ class SessionManager:
                         session_id=session_id, components_loaded=loaded
                     )
                 )
+            self._session_has_visible_messages = self._session_dir_has_visible_messages(
+                session_dir
+            )
 
     def read_message_history(
         self,
@@ -332,6 +331,9 @@ class SessionManager:
         """Capture all components synchronously, enqueue + wait for the writer."""
         if self._session_id is None:
             return
+        if not self._current_session_has_visible_messages():
+            self._remove_current_session_dir_if_empty()
+            return
         snapshots, manifest_patch = self._capture_all("save_now")
         job = WriteJob(
             session_dir=layout.session_dir(self._root, self._session_id),
@@ -365,6 +367,17 @@ class SessionManager:
         components = EVENT_ROUTING.get(event.type)
         if not components:
             return
+        message_history_entries: list[dict[str, Any]] = []
+        if event.type == "agent.message_added":
+            entry = self._message_history_entry(event)
+            if entry is not None:
+                message_history_entries.append(entry)
+                self._session_has_visible_messages = True
+        if (
+            not message_history_entries
+            and not self._current_session_has_visible_messages()
+        ):
+            return
         try:
             snapshots, manifest_patch = self._capture(event.type, components)
         except Exception:
@@ -373,11 +386,6 @@ class SessionManager:
                 event.type,
             )
             return
-        message_history_entries: list[dict[str, Any]] = []
-        if event.type == "agent.message_added":
-            entry = self._message_history_entry(event)
-            if entry is not None:
-                message_history_entries.append(entry)
         component_names = set(components)
         if message_history_entries:
             component_names.add(layout.COMPONENT_MESSAGE_HISTORY)
@@ -458,6 +466,7 @@ class SessionManager:
         manifest_patch = {
             "session_id": self._session_id,
             "name": self._session_name or self._session_id,
+            "created_at": self._session_created_at or datetime.now().isoformat(),
             "last_checkpoint_event": trigger,
             "active_plugins": self._active_plugin_names(),
         }
@@ -470,7 +479,11 @@ class SessionManager:
         session — the relevant state is already on disk.
         """
         try:
-            if self._session_id is not None and self._agent is not None:
+            if (
+                self._session_id is not None
+                and self._agent is not None
+                and self._current_session_has_visible_messages()
+            ):
                 snapshots, manifest_patch = self._capture_all("exit")
                 job = WriteJob(
                     session_dir=layout.session_dir(self._root, self._session_id),
@@ -480,6 +493,8 @@ class SessionManager:
                     component_set_key="final_flush",
                 )
                 self._writer.submit(job)
+            elif self._session_id is not None:
+                self._remove_current_session_dir_if_empty()
         except Exception:
             logger.exception("session final flush capture failed")
         finally:
@@ -490,6 +505,70 @@ class SessionManager:
                 logger.exception("session writer shutdown raised")
 
     # --- helpers ---------------------------------------------------------
+
+    def _current_session_has_visible_messages(self) -> bool:
+        if self._session_has_visible_messages:
+            return True
+        if self._agent is not None and self._context_has_visible_messages():
+            return True
+        if self._session_id is None:
+            return False
+        session_dir = layout.session_dir(self._root, self._session_id)
+        return self._session_dir_has_visible_messages(session_dir)
+
+    def _context_has_visible_messages(self) -> bool:
+        if self._agent is None:
+            return False
+        context = getattr(self._agent, "context", None)
+        messages = getattr(context, "messages", None)
+        if not isinstance(messages, list):
+            return False
+        return self._messages_have_visible_entries(messages)
+
+    def _session_dir_has_visible_messages(self, session_dir: Path) -> bool:
+        history_path = layout.message_history_path(session_dir)
+        try:
+            if history_path.exists() and layout.read_jsonl(history_path):
+                return True
+        except (OSError, json.JSONDecodeError):
+            logger.warning("could not inspect message history %s", history_path)
+
+        ctx_path = layout.context_path(session_dir)
+        if not ctx_path.exists():
+            return False
+        try:
+            ctx_data = json.loads(ctx_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.warning("could not inspect context snapshot %s", ctx_path)
+            return False
+        messages = ctx_data.get("messages")
+        return isinstance(messages, list) and self._messages_have_visible_entries(
+            messages
+        )
+
+    def _remove_current_session_dir_if_empty(self) -> None:
+        if self._session_id is None:
+            return
+        session_dir = layout.session_dir(self._root, self._session_id)
+        if session_dir.exists() and not self._session_dir_has_visible_messages(
+            session_dir
+        ):
+            layout.remove_session_dir(session_dir)
+
+    @classmethod
+    def _messages_have_visible_entries(cls, messages: list[Any]) -> bool:
+        return any(cls._message_is_visible_entry(message) for message in messages)
+
+    @classmethod
+    def _message_is_visible_entry(cls, message: Any) -> bool:
+        if not isinstance(message, dict):
+            return False
+        if message.get("role") not in {"user", "assistant", "tool"}:
+            return False
+        content = message.get("content")
+        if not isinstance(content, list) or not content:
+            return False
+        return cls._should_persist_message(message.get("metadata"))
 
     def _scheduler_queue_manager(self) -> Any:
         if self._scheduler is None:
