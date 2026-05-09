@@ -18,8 +18,30 @@ export function resolveEnvPaths(): EnvPaths {
   const workspaceRoot = resolveWorkspaceRoot();
   const configPath = path.join(workspaceRoot, ".hawi", "node_gui.json");
   const backendLogPath = path.join(workspaceRoot, ".hawi", "hawi-core.log");
-  const uvCommand = process.platform === "win32" ? "uv.cmd" : "uv";
+  const uvCommand = resolveUvCommand();
   return { repoRoot, guiRoot, workspaceRoot, configPath, backendLogPath, uvCommand };
+}
+
+export function resolveUvCommand(): string {
+  const override = process.env.HAWI_GUI_UV_COMMAND?.trim();
+  if (override) {
+    return override;
+  }
+  return resolveCommandOnPath("uv") ?? "uv";
+}
+
+export function resolveCommandOnPath(command: string, pathValue = process.env.PATH ?? process.env.Path ?? ""): string | null {
+  const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
+  const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  for (const entry of pathEntries) {
+    for (const extension of extensions) {
+      const candidate = path.join(entry, `${command}${extension}`);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
 }
 
 export function resolveWorkspaceRoot(): string {
@@ -46,10 +68,26 @@ export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCo
     encoding: "utf-8",
     env: process.env
   });
+  if (result.error) {
+    throw new Error(`Failed to launch ${uvCommand}: ${result.error.message}`);
+  }
   if (result.status !== 0) {
-    throw new Error(result.stderr || "Failed to inspect hawi-core metadata");
+    throw new Error(formatInspectError(result.status, result.stderr, result.stdout));
   }
   return JSON.parse(result.stdout) as InspectPayload;
+}
+
+function formatInspectError(status: number | null, stderr: string | Buffer | null, stdout: string | Buffer | null): string {
+  const details = [`Failed to inspect hawi-core metadata (exit ${status ?? "unknown"}).`];
+  const stderrText = stderr?.toString().trim();
+  const stdoutText = stdout?.toString().trim();
+  if (stderrText) {
+    details.push(`stderr: ${stderrText}`);
+  }
+  if (stdoutText) {
+    details.push(`stdout: ${stdoutText}`);
+  }
+  return details.join("\n");
 }
 
 export function loadConfig(configPath: string, metadata: InspectPayload): PersistedConfig {

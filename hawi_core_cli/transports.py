@@ -245,12 +245,15 @@ async def run_websocket(
 
 
 async def _stdin_reader() -> asyncio.StreamReader:
+    if sys.platform == "win32":
+        return _ThreadedStdinReader()
+
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
     loop = asyncio.get_running_loop()
     try:
         await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-    except (AttributeError, NotImplementedError):
+    except (AttributeError, NotImplementedError, OSError):
         return _ThreadedStdinReader()
     return reader
 

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import hawi_core_cli.transports as transports
 from hawi_core_cli.protocol import VERSION, make_ack, make_frame
 from hawi_core_cli.runtime import CoreRuntime, parse_extra_tool_parameter, parse_extra_tool_parameters
 from hawi_core_cli.transports import QueuedJsonClient, run_tcp, run_websocket
@@ -371,6 +372,29 @@ class CapturingQueuedClient(QueuedJsonClient):
 
     async def _close_transport(self) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_stdin_reader_uses_threaded_reader_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transports.sys, "platform", "win32")
+
+    reader = await transports._stdin_reader()
+
+    assert isinstance(reader, transports._ThreadedStdinReader)
+
+
+@pytest.mark.asyncio
+async def test_stdin_reader_falls_back_when_connect_read_pipe_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeLoop:
+        async def connect_read_pipe(self, *_: Any) -> None:
+            raise OSError("pipe unavailable")
+
+    monkeypatch.setattr(transports.sys, "platform", "linux")
+    monkeypatch.setattr(transports.asyncio, "get_running_loop", lambda: FakeLoop())
+
+    reader = await transports._stdin_reader()
+
+    assert isinstance(reader, transports._ThreadedStdinReader)
 
 
 @pytest.mark.asyncio
