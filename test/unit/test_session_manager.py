@@ -426,6 +426,55 @@ class TestSessionManager:
         finally:
             sm.detach()
 
+    def test_tool_result_message_persisted(self, session_root: Path) -> None:
+        """A role=tool message_added event must land in message_history.jsonl.
+
+        Regression: prior to this fix, only user/assistant messages emitted
+        AgentMessageAddedEvent, so tool results never got persisted and
+        re-loading a session with tools showed only text/thinking blocks.
+        """
+        agent = _StubAgent()
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            # First emit a user message so the session is "non-empty" and
+            # subsequent checkpoints fire (manager skips empty sessions).
+            agent.event_bus.publish(
+                AgentMessageAddedEvent.create(
+                    run_id="r1",
+                    role="user",
+                    content=[{"type": "text", "text": "do something"}],
+                )
+            )
+            agent.event_bus.publish(
+                AgentMessageAddedEvent.create(
+                    run_id="r1",
+                    role="tool",
+                    content=[
+                        {
+                            "type": "tool_result",
+                            "tool_call_id": "call_abc",
+                            "content": [{"type": "text", "text": "tool says hi"}],
+                            "is_error": False,
+                        }
+                    ],
+                )
+            )
+            sm._writer.wait_idle(timeout=2.0)
+            entries = sm.read_message_history(sid)
+            tool_entries = [e for e in entries if e["role"] == "tool"]
+            assert len(tool_entries) == 1, (
+                f"expected 1 tool record, got entries={entries}"
+            )
+            part = tool_entries[0]["content"][0]
+            assert part["type"] == "tool_result"
+            assert part["tool_call_id"] == "call_abc"
+            assert part["is_error"] is False
+        finally:
+            sm.detach()
+
     def test_message_added_appends_visible_history_only(self, session_root: Path) -> None:
         agent = _StubAgent()
         scheduler = _StubScheduler()

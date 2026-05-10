@@ -1252,7 +1252,12 @@ class HawiAgent:
         cache_point: CachePoint | dict[str, Any] | bool | None = None,
         cache_point_source: str | None = None,
     ) -> list[MaterializedSteerMessage]:
-        """Add a tool result and materialize one matching pending input as steer."""
+        """Add a tool result and materialize one matching pending input as steer.
+
+        Note: callers in async contexts should also fire
+        ``AgentMessageAddedEvent`` for role=tool so the SessionManager
+        persists the tool message. See ``_emit_tool_result_message_event``.
+        """
         tool_result_content = self._normalize_content_parts(content)
         self._context.add_tool_result(
             tool_call_id=tool_call_id,
@@ -1265,6 +1270,35 @@ class HawiAgent:
         if materialize_pending_steer:
             return self._materialize_pending_steer_for_tool_results([tool_call_id])
         return []
+
+    async def _emit_tool_result_message_event(
+        self,
+        *,
+        run_id: str,
+        tool_call_id: str,
+        content: str | list[ContentPart],
+        is_error: bool,
+        event_bus: EventBus | None,
+    ) -> None:
+        """Emit AgentMessageAddedEvent for a tool result so it persists in
+        message_history.jsonl. cache_point markers are transport hints and
+        are intentionally excluded from the displayed/persisted content."""
+        normalized = self._normalize_content_parts(content)
+        await self._emit_event(
+            AgentMessageAddedEvent.create(
+                run_id=run_id,
+                role="tool",
+                content=[
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": tool_call_id,
+                        "content": normalized,
+                        "is_error": is_error,
+                    }
+                ],
+            ),
+            event_bus,
+        )
 
     def _materialize_pending_steer_for_tool_results(
         self,
@@ -2554,6 +2588,13 @@ class HawiAgent:
                 cache_point=getattr(result, "cache_point", None),
                 cache_point_source=getattr(result, "cache_point_source", None),
             )
+            await self._emit_tool_result_message_event(
+                run_id=state.run_id,
+                tool_call_id=tool_call_id,
+                content=result_content,
+                is_error=not result.success,
+                event_bus=event_bus,
+            )
             await self._emit_materialized_steer_events(
                 state.run_id,
                 materialized_messages,
@@ -2653,6 +2694,13 @@ class HawiAgent:
                 is_error=not result.success,
                 cache_point=getattr(result, "cache_point", None),
                 cache_point_source=getattr(result, "cache_point_source", None),
+            )
+            await self._emit_tool_result_message_event(
+                run_id="audit",
+                tool_call_id=pending.tool_call_id,
+                content=result_content,
+                is_error=not result.success,
+                event_bus=event_bus,
             )
             await self._emit_materialized_steer_events(
                 "audit",

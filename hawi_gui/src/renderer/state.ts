@@ -504,11 +504,18 @@ function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
 }
 
 function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
-  return history.flatMap((record, index) => {
+  const nodes: ChatNode[] = [];
+  // Track tool nodes by tool_call_id so a subsequent tool record can fill in
+  // the result. Tool calls are emitted as nodes at the position of the
+  // assistant record that issued them; tool results update the existing
+  // node's status + resultPreview rather than producing a new node.
+  const toolNodesByCallId = new Map<string, ChatNode>();
+
+  history.forEach((record, index) => {
     const baseId = `${record.runId}-${index}`;
     if (record.role === "user") {
       const queue = normalizeQueue(record.metadata?.queue ?? "normal");
-      return [{
+      nodes.push({
         id: userMessageNodeId(optionalString(record.metadata?.message_id) ?? `history-${baseId}`),
         kind: "user",
         queue,
@@ -517,10 +524,10 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           queue
         ),
         content: historyContentText(record.content)
-      }];
+      });
+      return;
     }
     if (record.role === "assistant") {
-      const nodes: ChatNode[] = [];
       const reasoning = historyReasoningText(record.content);
       const answer = historyAssistantText(record.content);
       if (reasoning) {
@@ -539,10 +546,60 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           complete: true
         });
       }
-      return nodes;
+      // Emit one tool node per tool_call in the assistant's content.
+      // Status starts as "running" — replaced by "success"/"fail" when the
+      // matching tool record is encountered. Tools that never got a result
+      // (e.g., session ended mid-call) keep status="running".
+      const toolCalls = record.content
+        .filter(isRecord)
+        .filter((part) => part.type === "tool_call");
+      toolCalls.forEach((part, toolIndex) => {
+        const toolCallId = optionalString(part.id) ?? "";
+        const name = optionalString(part.name) ?? "tool";
+        const args = part.arguments ?? part.args;
+        const argsRaw = isRecord(args) || Array.isArray(args)
+          ? JSON.stringify(args)
+          : optionalString(args) ?? "";
+        const node: ChatNode = {
+          id: nodeId("tool-history", `${baseId}-${toolIndex}`),
+          kind: "tool",
+          content: "",
+          tool: {
+            runId: record.runId,
+            toolCallId,
+            name,
+            status: "running",
+            argsRaw,
+            argsState: "complete",
+            arguments: isRecord(args) || Array.isArray(args) ? args : undefined,
+            resultPreview: ""
+          }
+        };
+        nodes.push(node);
+        if (toolCallId) {
+          toolNodesByCallId.set(toolCallId, node);
+        }
+      });
+      return;
     }
+    // role === "tool"
     const result = historyToolResult(record.content);
-    return [{
+    const existing = result.toolCallId
+      ? toolNodesByCallId.get(result.toolCallId)
+      : undefined;
+    if (existing && existing.tool) {
+      // Pair with the tool_call node already emitted above.
+      existing.tool = {
+        ...existing.tool,
+        status: result.isError ? "fail" : "success",
+        resultPreview: truncate(result.text)
+      };
+      return;
+    }
+    // Fallback: orphan tool result with no matching tool_call (shouldn't
+    // happen with well-formed history, but render it standalone so the
+    // user sees the data rather than silently dropping it).
+    nodes.push({
       id: nodeId("tool-history", baseId),
       kind: "tool",
       content: "",
@@ -555,22 +612,15 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         argsState: "complete",
         resultPreview: truncate(result.text)
       }
-    }];
+    });
   });
+  return nodes;
 }
 
 function historyAssistantText(content: unknown[]): string {
-  const text = historyContentText(content, { includeReasoning: false });
-  if (text) return text;
-  const toolCalls = content
-    .filter(isRecord)
-    .filter((part) => part.type === "tool_call")
-    .map((part) => {
-      const name = optionalString(part.name) ?? "tool";
-      const id = optionalString(part.id);
-      return id ? `Tool call: ${name} (${id})` : `Tool call: ${name}`;
-    });
-  return toolCalls.join("\n");
+  // Only render text/steer content here. tool_call blocks are extracted
+  // separately by sessionHistoryNodes and rendered as tool nodes.
+  return historyContentText(content, { includeReasoning: false });
 }
 
 function historyReasoningText(content: unknown[]): string {
