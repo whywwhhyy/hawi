@@ -21,6 +21,7 @@ from hawi.tool import AgentTool, ToolResult
 class FakeClient:
     id: str = "client"
     authenticated: bool = False
+    negotiated_caps: set[str] = field(default_factory=set)
     sent: list[dict[str, Any]] = field(default_factory=list)
     closed: bool = False
 

@@ -62,11 +62,7 @@ def discover_gateways() -> None:
     returning one). Errors are logged but do not abort startup — a missing
     optional gateway should not break the engine.
     """
-    try:
-        eps = entry_points(group="hawi_engine.gateways")
-    except TypeError:
-        # Older API: entry_points() returns a dict
-        eps = entry_points().get("hawi_engine.gateways", [])
+    eps = entry_points(group="hawi_engine.gateways")
 
     for ep in eps:
         try:

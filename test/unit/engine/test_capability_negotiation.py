@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from hawi_engine.protocol import VERSION, parse_frame
+from hawi_engine.protocol import VERSION
 from hawi_engine.runtime import SERVER_CAPS, CoreRuntime
 
 
