@@ -33,6 +33,9 @@ import hawi.plugin as plugin
 from hawi.tool import ToolResult
 from hawi.plugin.resource import HawiResource, ResourceContent
 from hawi.plugin.resource.implementations import HawiDynamicResource
+from hawi.utils.config_loader import ConfigLoaderError, load_config_file
+
+CONFIG_SUFFIXES = {".json", ".yaml", ".yml", ".toml"}
 
 from .client import MCPClient, MCPClientPool
 
@@ -83,7 +86,7 @@ class MCPPlugin(HawiPlugin):
                     "type": "string",
                     "title": "MCP Config Path",
                     "default": ".hawi/mcp/config.json",
-                    "description": "Path to MCP JSON config file containing mcpServers.",
+                    "description": "Path to MCP config file containing mcpServers.",
                 }
             },
             "required": ["config_path"],
@@ -97,7 +100,7 @@ class MCPPlugin(HawiPlugin):
         }
 
     def set_config_path(self, config_path: str | None) -> None:
-        """Set MCP JSON config path used by connect()."""
+        """Set MCP config path used by connect()."""
         self._config_path = config_path
 
     def add_stdio_server(
@@ -219,10 +222,10 @@ class MCPPlugin(HawiPlugin):
         }
         ```
 
-        也支持从默认路径加载: ".hawi/mcp/*.json"
+        也支持从默认路径加载: ".hawi/mcp/*.(json|yaml|yml|toml)"
 
         Args:
-            path: JSON 文件路径。如果为 None，则从默认路径 ".hawi/mcp/" 加载所有 JSON 文件。
+            path: 配置文件路径。如果为 None，则从默认路径 ".hawi/mcp/" 加载所有支持的配置文件。
 
         示例:
             # 从指定文件加载
@@ -231,24 +234,20 @@ class MCPPlugin(HawiPlugin):
             # 从默认路径加载所有配置
             plugin.load_from_json()
         """
-        import json
-
         if path is None:
-            # 从默认路径加载所有 JSON 文件
+            # 从默认路径加载所有支持的配置文件
             default_dir = Path(".hawi/mcp")
             if default_dir.exists():
-                for json_file in default_dir.glob("*.json"):
-                    self._load_json_file(json_file)
+                for config_file in sorted(default_dir.iterdir()):
+                    if config_file.suffix.lower() in CONFIG_SUFFIXES:
+                        self._load_config_file(config_file)
         else:
             # 从指定文件加载
-            self._load_json_file(Path(path))
+            self._load_config_file(Path(path))
 
-    def _load_json_file(self, file_path: Path) -> None:
-        """从单个 JSON 文件加载配置"""
-        import json
-
-        with open(file_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+    def _load_config_file(self, file_path: Path) -> None:
+        """从单个结构化配置文件加载配置"""
+        config = load_config_file(file_path)
 
         mcp_servers = config.get("mcpServers", {})
         if not mcp_servers:
@@ -298,6 +297,9 @@ class MCPPlugin(HawiPlugin):
                 self.load_from_json(str(config_file))
             except json.JSONDecodeError as exc:
                 raise ValueError(f"Invalid MCP config JSON: {config_file}") from exc
+            except ConfigLoaderError as exc:
+                label = "JSON" if config_file.suffix.lower() == ".json" else "file"
+                raise ValueError(f"Invalid MCP config {label}: {config_file}") from exc
             except Exception as exc:
                 raise RuntimeError(f"Failed to load MCP config: {config_file}: {exc}") from exc
 

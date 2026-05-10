@@ -35,6 +35,7 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel
 
 from hawi.models.model import Model
+from hawi.utils.config_loader import ConfigLoaderError, load_config_file
 
 __all__ = [
     "ModelRegistry",
@@ -648,13 +649,6 @@ class ModelRegistry:
             key: value
             steer_merge_mode: tool_result_assistant_template_and_user_message
         """
-        try:
-            import yaml
-        except ImportError:
-            raise ImportError(
-                "PyYAML is required to load config files. Install with: pip install pyyaml"
-            )
-
         path = Path(path)
         if not path.exists():
             if not quiet:
@@ -662,10 +656,9 @@ class ModelRegistry:
             return
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-        except yaml.YAMLError as e:
-            raise ValueError(f"Invalid YAML in {path}: {e}")
+            data = load_config_file(path)
+        except ConfigLoaderError as e:
+            raise ValueError(f"Invalid model config in {path}: {e}") from e
 
         # 递归替换环境变量
         data = self._substitute_env_vars(data)

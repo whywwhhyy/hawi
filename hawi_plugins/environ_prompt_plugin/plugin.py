@@ -31,6 +31,13 @@ from hawi.plugin import (
     before_conversation,
     before_session,
 )
+from hawi.utils.config_loader import (
+    Config,
+    ConfigLoader,
+    ConfigLoaderError,
+    deep_merge,
+    load_config_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +84,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
 # Config file search paths (first match wins)
 # ---------------------------------------------------------------------------
 
-CONFIG_FILENAME = "environ_prompt.yaml"
-CONFIG_CANDIDATES = [
-    Path(".hawi") / CONFIG_FILENAME,       # project-local
-    Path.home() / ".hawi" / CONFIG_FILENAME,  # user-global
+CONFIG_FILENAMES = (
+    "environ_prompt.yaml",
+    "environ_prompt.yml",
+    "environ_prompt.json",
+    "environ_prompt.toml",
+)
+CONFIG_DIRS = [
+    Path(".hawi"),       # project-local
+    Path.home() / ".hawi",  # user-global
 ]
 DEFAULT_PROJECT_STEERING_FILENAMES = ["AGENTS.md", "CLAUDE.md"]
 DEFAULT_PROJECT_ROOT_MARKERS = [".git", ".hawi"]
@@ -130,32 +142,38 @@ class EnvironPromptPlugin(HawiPlugin):
 
     @staticmethod
     def _load_config(config_path: str | None = None) -> dict[str, Any]:
-        """Load configuration from YAML/JSON file with three-level priority.
+        """Load configuration from structured config files.
 
         1. **User-specified path** — if *config_path* is given and the file
            exists, load it.
-        2. **Default search paths** — otherwise search
-           ``.hawi/environ_prompt.yaml`` then ``~/.hawi/environ_prompt.yaml``.
+        2. **Default search paths** — otherwise load and merge
+           ``environ_prompt.(yaml|yml|json|toml)`` under ``.hawi`` and
+           ``~/.hawi``.
         3. **Built-in defaults** — if neither exists, return a copy of
            :attr:`DEFAULT_CONFIG`.
         """
-        candidates: list[Path] = []
         if config_path:
-            candidates.append(Path(config_path))
-        candidates.extend(CONFIG_CANDIDATES)
-        for candidate in candidates:
-            resolved = candidate.resolve()
+            resolved = Path(config_path).expanduser().resolve()
             if resolved.is_file():
                 try:
-                    return _parse_yaml_config(resolved)
-                except Exception:
+                    return Config(deep_merge(DEFAULT_CONFIG, load_config_file(resolved))).data
+                except ConfigLoaderError:
                     logger.exception(
                         "Failed to parse environ prompt config from %s; "
                         "falling back to defaults",
                         resolved,
                     )
-                    break
-        return deepcopy(DEFAULT_CONFIG)
+                    return deepcopy(DEFAULT_CONFIG)
+        try:
+            return ConfigLoader(CONFIG_FILENAMES).load_from_directory_chain(
+                CONFIG_DIRS,
+                defaults=DEFAULT_CONFIG,
+            ).data
+        except ConfigLoaderError:
+            logger.exception(
+                "Failed to parse environ prompt config; falling back to defaults"
+            )
+            return deepcopy(DEFAULT_CONFIG)
 
     # ------------------------------------------------------------------
     # GUI registration metadata (optional)
@@ -171,10 +189,10 @@ class EnvironPromptPlugin(HawiPlugin):
                     "title": "Config Path",
                     "default": "",
                     "description":
-                        "Path to environ_prompt config file (YAML or JSON). "
-                        "When empty, searches .hawi/environ_prompt.yaml then "
-                        "~/.hawi/environ_prompt.yaml before falling back to "
-                        "built-in defaults.",
+                        "Path to environ_prompt config file "
+                        "(YAML, JSON, or TOML). When empty, searches "
+                        ".hawi and ~/.hawi before falling back to built-in "
+                        "defaults.",
                 },
             },
             "additionalProperties": False,
@@ -321,26 +339,6 @@ class EnvironPromptPlugin(HawiPlugin):
 # ===================================================================
 # Internal helpers
 # ===================================================================
-
-
-def _parse_yaml_config(path: Path) -> dict[str, Any]:
-    """Parse a YAML config file, falling back to JSON if PyYAML is absent."""
-    try:
-        import yaml  # type: ignore[import-not-found]
-    except ImportError:
-        try:
-            import json
-
-            with path.open("r", encoding="utf-8") as fh:
-                return dict(json.load(fh))
-        except Exception:
-            raise
-    else:
-        with path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        if not isinstance(data, dict):
-            raise ValueError("Config root must be a mapping")
-        return dict(data)
 
 
 def _stamp_environ_block(body: str) -> str:

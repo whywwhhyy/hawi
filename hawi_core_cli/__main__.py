@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 import warnings
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from hawi.models import model_registry
+from hawi.utils.config_loader import load_config_file
 
 from .init import prepare_hawi_dir
 from .runtime import (
@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--plugin-config",
         default=None,
-        help="JSON file containing plugin config object keyed by plugin name",
+        help="JSON/YAML/TOML file containing plugin config object keyed by plugin name",
     )
     parser.add_argument(
         "--status-interval",
@@ -256,9 +256,9 @@ def parse_plugins(raw: str) -> list[str]:
 def load_plugin_config(path: str | None) -> dict[str, dict[str, Any]]:
     if not path:
         return {}
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = load_config_file(Path(path))
     if not isinstance(data, dict):
-        raise RuntimeError("--plugin-config must point to a JSON object")
+        raise RuntimeError("--plugin-config must point to a config object")
     return {
         str(name): dict(cfg) if isinstance(cfg, dict) else {}
         for name, cfg in data.items()

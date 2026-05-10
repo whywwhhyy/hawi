@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from hawi.utils.config_loader import load_config_file, save_config_file
 from hawi_plugins.workflow_plugin.models import Workflow
 
 logger = logging.getLogger(__name__)
@@ -38,17 +39,12 @@ def save_workflow(workflow: Workflow) -> str:
         The absolute path to the saved file.
 
     Raises:
-        ImportError: If ``yaml`` is not installed (install PyYAML).
         OSError: If the file cannot be written.
     """
-    import yaml
-
     data = workflow.to_dict()
     path = _workflow_path(workflow.name)
 
-    with open(path, "w", encoding="utf-8") as fh:
-        yaml.safe_dump(data, fh, default_flow_style=False, allow_unicode=True,
-                       sort_keys=False)
+    save_config_file(path, data)
 
     logger.info("Workflow '%s' saved to %s", workflow.name, path)
     return str(path)
@@ -64,20 +60,13 @@ def load_workflow(name: str) -> Workflow:
         The deserialized Workflow.
 
     Raises:
-        ImportError: If ``yaml`` is not installed.
         FileNotFoundError: If no workflow with this name exists.
     """
-    import yaml
-
     path = _workflow_path(name)
     if not path.exists():
         raise FileNotFoundError(f"Workflow '{name}' not found at {path}")
 
-    with open(path, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
-
-    if not isinstance(data, dict):
-        raise ValueError(f"Invalid workflow file: {path} (not a mapping)")
+    data = load_config_file(path)
 
     return Workflow.from_dict(data)
 
