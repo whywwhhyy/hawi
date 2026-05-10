@@ -10,7 +10,7 @@ from hawi.models.usage import usage_total
 
 from .protocol import make_error, make_frame, to_json_safe
 
-TOOL_CALL_DESCRIPTION_PARAMETER = "tool_call_description"
+TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose"
 
 
 class SemanticEventMapper:
@@ -204,7 +204,7 @@ class SemanticEventMapper:
                 "tool_name": tool_name,
                 "arguments": {},
                 "run_id": self._active_run_id or "",
-                "tool_call_description": "",
+                "tool_call_purpose": "",
             }
             return [
                 make_frame(
@@ -214,7 +214,7 @@ class SemanticEventMapper:
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
                         "status": "pending",
-                        "tool_call_description": "",
+                        "tool_call_purpose": "",
                     },
                 )
             ]
@@ -241,7 +241,7 @@ class SemanticEventMapper:
                 return []
             tool_name = str(getattr(event, "tool_name", ""))
             raw_arguments = getattr(event, "arguments", {})
-            tool_call_description = self._tool_call_description(raw_arguments)
+            tool_call_purpose = self._tool_call_purpose(raw_arguments)
             arguments = self._visible_tool_arguments(raw_arguments)
             self._active_tool_calls.setdefault(
                 tool_call_id,
@@ -250,7 +250,7 @@ class SemanticEventMapper:
                 {
                     "tool_name": tool_name,
                     "arguments": arguments,
-                    "tool_call_description": tool_call_description,
+                    "tool_call_purpose": tool_call_purpose,
                 }
             )
             return [
@@ -260,7 +260,7 @@ class SemanticEventMapper:
                         "run_id": self._active_run_id or "",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
-                        "tool_call_description": tool_call_description,
+                        "tool_call_purpose": tool_call_purpose,
                         "arguments": arguments,
                     },
                 )
@@ -274,7 +274,7 @@ class SemanticEventMapper:
                     "run_id": getattr(event, "run_id", self._active_run_id or ""),
                     "tool_name": getattr(event, "tool_name", ""),
                     "arguments": self._visible_tool_arguments(getattr(event, "arguments", {})),
-                    "tool_call_description": self._tool_call_description(
+                    "tool_call_purpose": self._tool_call_purpose(
                         getattr(event, "arguments", {})
                     ),
                 },
@@ -283,7 +283,7 @@ class SemanticEventMapper:
                     "run_id": getattr(event, "run_id", self._active_run_id or ""),
                     "tool_name": getattr(event, "tool_name", ""),
                     "arguments": self._visible_tool_arguments(getattr(event, "arguments", {})),
-                    "tool_call_description": self._tool_call_description(
+                    "tool_call_purpose": self._tool_call_purpose(
                         getattr(event, "arguments", {})
                     ),
                 }
@@ -297,8 +297,8 @@ class SemanticEventMapper:
                         "tool_call_id": tool_call_id,
                         "tool_name": call_info.get("tool_name", ""),
                         "status": "running",
-                        "tool_call_description": call_info.get(
-                            "tool_call_description",
+                        "tool_call_purpose": call_info.get(
+                            "tool_call_purpose",
                             "",
                         ),
                         "arguments": call_info.get("arguments", {}),
@@ -315,7 +315,7 @@ class SemanticEventMapper:
                     {
                         "run_id": getattr(event, "run_id", self._active_run_id or ""),
                         "tool_call_id": tool_call_id,
-                        "tool_call_description": call_info.get("tool_call_description", ""),
+                        "tool_call_purpose": call_info.get("tool_call_purpose", ""),
                         "part": getattr(event, "part", ""),
                         "part_index": getattr(event, "part_index", 0),
                         "is_final": getattr(event, "is_final", False),
@@ -342,7 +342,7 @@ class SemanticEventMapper:
                         "run_id": call_info.get("run_id", getattr(event, "run_id", "")),
                         "tool_call_id": tool_call_id,
                         "tool_name": call_info.get("tool_name", ""),
-                        "tool_call_description": call_info.get("tool_call_description", ""),
+                        "tool_call_purpose": call_info.get("tool_call_purpose", ""),
                         "success": getattr(event, "success", False),
                         "output": to_json_safe(output),
                         "error": error,
@@ -460,10 +460,10 @@ class SemanticEventMapper:
         }
 
     @staticmethod
-    def _tool_call_description(arguments: Any) -> str:
+    def _tool_call_purpose(arguments: Any) -> str:
         if not isinstance(arguments, dict):
             return ""
-        value = arguments.get(TOOL_CALL_DESCRIPTION_PARAMETER)
+        value = arguments.get(TOOL_CALL_PURPOSE_PARAMETER)
         if value is None:
             return ""
         if isinstance(value, str):
@@ -474,10 +474,10 @@ class SemanticEventMapper:
     def _visible_tool_arguments(arguments: Any) -> Any:
         if not isinstance(arguments, dict):
             return to_json_safe(arguments)
-        if TOOL_CALL_DESCRIPTION_PARAMETER not in arguments:
+        if TOOL_CALL_PURPOSE_PARAMETER not in arguments:
             return to_json_safe(arguments)
         visible = dict(arguments)
-        visible.pop(TOOL_CALL_DESCRIPTION_PARAMETER, None)
+        visible.pop(TOOL_CALL_PURPOSE_PARAMETER, None)
         return to_json_safe(visible)
 
     @staticmethod

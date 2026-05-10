@@ -22,6 +22,7 @@ from hawi.models.message import (
     ToolDefinition,
     ToolCallPart,
     ToolResultPart,
+    cache_point_part,
     get_content_cache_point,
     normalize_cache_point,
 )
@@ -545,6 +546,8 @@ class AgentContext:
         tool_call_id: str,
         content: str | list[ContentPart],
         is_error: bool = False,
+        cache_point: CachePoint | dict[str, Any] | bool | None = None,
+        cache_point_source: str | None = None,
     ) -> None:
         """Add a tool result message.
 
@@ -552,6 +555,9 @@ class AgentContext:
             tool_call_id: ID of the tool call
             content: Result content
             is_error: Whether this is an error result
+            cache_point: Optional provider-neutral cache point marker to attach
+                to the tool result block.
+            cache_point_source: Optional metadata source for later cleanup.
         """
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
@@ -564,12 +570,47 @@ class AgentContext:
             "is_error": is_error,
         }
 
+        message_content: list[ContentPart] = [tool_result_part]
+        if cache_point is not None and cache_point is not False:
+            marker = cache_point_part(cache_point)
+            if cache_point_source:
+                marker["metadata"] = {"source": cache_point_source}  # type: ignore[typeddict-unknown-key]
+            message_content.append(marker)
+
         self.messages.append({
             "role": "tool",
-            "content": [tool_result_part],
+            "content": message_content,
             "name": None,
             "metadata": None,
         })
+
+    def remove_cache_points(self, *, source: str) -> int:
+        """Remove cache point markers previously tagged with ``source``."""
+        removed = 0
+        for message in self.messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            message_removed = 0
+            filtered: list[Any] = []
+            for part in content:
+                if self._is_cache_point_from_source(part, source):
+                    message_removed += 1
+                    removed += 1
+                    continue
+                filtered.append(part)
+            if message_removed:
+                message["content"] = filtered
+        return removed
+
+    @staticmethod
+    def _is_cache_point_from_source(part: Any, source: str) -> bool:
+        if not isinstance(part, dict):
+            return False
+        if part.get("type") not in {"cache_point", "cache_control"}:
+            return False
+        metadata = part.get("metadata")
+        return isinstance(metadata, dict) and metadata.get("source") == source
 
     def replace_tool_result_content(
         self,

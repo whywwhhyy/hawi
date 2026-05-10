@@ -427,9 +427,9 @@ def test_status_payload_includes_queue_messages() -> None:
 
 
 def test_parse_extra_tool_parameter() -> None:
-    parameter = parse_extra_tool_parameter(["tool_call_description", "str", "Describe the call"])
+    parameter = parse_extra_tool_parameter(["tool_call_purpose", "str", "Describe the call"])
 
-    assert parameter.name == "tool_call_description"
+    assert parameter.name == "tool_call_purpose"
     assert parameter.description == "Describe the call"
     assert parameter.schema == {"type": "string"}
 
@@ -475,7 +475,7 @@ def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
     runtime = CoreRuntime(
         model_name="test-model",
         extra_tool_parameters=[
-            parse_extra_tool_parameter(["tool_call_description", "str", "Describe the call"]),
+            parse_extra_tool_parameter(["tool_call_purpose", "str", "Describe the call"]),
             parse_extra_tool_parameter(["priority", "int", "Priority from 1 to 5"]),
         ],
     )
@@ -486,12 +486,12 @@ def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
     schema = agent.plugins.get_tool_definitions()[0]["schema"]
     description = agent.plugins.get_tool_definitions()[0]["description"]
 
-    assert schema["properties"]["tool_call_description"]["type"] == "string"
-    assert schema["properties"]["tool_call_description"]["description"] == "Describe the call"
+    assert schema["properties"]["tool_call_purpose"]["type"] == "string"
+    assert schema["properties"]["tool_call_purpose"]["description"] == "Describe the call"
     assert schema["properties"]["priority"]["type"] == "integer"
-    assert schema["required"] == ["value", "tool_call_description", "priority"]
+    assert schema["required"] == ["value", "tool_call_purpose", "priority"]
     assert "Injected framework parameters" in description
-    assert "- tool_call_description (string, required): Describe the call" in description
+    assert "- tool_call_purpose (string, required): Describe the call" in description
     assert "- priority (integer, required): Priority from 1 to 5" in description
 
 

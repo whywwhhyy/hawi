@@ -6,15 +6,32 @@ from hawi.agent.context import AgentContext
 from hawi.events import Event, EventBus
 from hawi.plugin import HookContext
 from hawi_plugins.plan_plugin import PlanPlugin
-from hawi_plugins.plan_plugin.plugin import PLAN_PROMPT_BEGIN, PLAN_REMINDER_BEGIN
+from hawi_plugins.plan_plugin.plugin import (
+    PLAN_COMPLETION_CACHE_POINT_SOURCE,
+    PLAN_PROMPT_BEGIN,
+    PLAN_REMINDER_BEGIN,
+)
+
+
+def add_plan_item(
+    plugin: PlanPlugin,
+    content: str,
+    *,
+    parent_id: str | None = None,
+    completion_mode: str | None = None,
+):
+    item: dict[str, str] = {"content": content}
+    if completion_mode is not None:
+        item["completion_mode"] = completion_mode
+    return plugin.add_plan_items(items=[item], parent_id=parent_id)
 
 
 def test_plan_items_support_tree_and_recursive_completion() -> None:
     plugin = PlanPlugin()
 
-    root = plugin.add_plan_item("Prepare release")
+    root = add_plan_item(plugin, "Prepare release")
     assert root.success is True
-    child = plugin.add_plan_item("Run tests", parent_id="P1")
+    child = add_plan_item(plugin, "Run tests", parent_id="P1")
     assert child.success is True
 
     listed = plugin.list_plan_items()
@@ -40,9 +57,9 @@ def test_plan_items_support_tree_and_recursive_completion() -> None:
 
 def test_parent_completion_fails_with_unfinished_children_without_mark_all() -> None:
     plugin = PlanPlugin()
-    plugin.add_plan_item("Prepare release")
-    plugin.add_plan_item("Run tests", parent_id="P1")
-    plugin.add_plan_item("Tag release", parent_id="P1")
+    add_plan_item(plugin, "Prepare release")
+    add_plan_item(plugin, "Run tests", parent_id="P1")
+    add_plan_item(plugin, "Tag release", parent_id="P1")
 
     result = plugin.complete_plan_item("P1")
 
@@ -59,9 +76,9 @@ def test_parent_completion_fails_with_unfinished_children_without_mark_all() -> 
 
 def test_mark_all_children_completes_parent_and_descendants() -> None:
     plugin = PlanPlugin()
-    plugin.add_plan_item("Prepare release")
-    plugin.add_plan_item("Run tests", parent_id="P1")
-    plugin.add_plan_item("Tag release", parent_id="P1")
+    add_plan_item(plugin, "Prepare release")
+    add_plan_item(plugin, "Run tests", parent_id="P1")
+    add_plan_item(plugin, "Tag release", parent_id="P1")
 
     result = plugin.complete_plan_item("P1", mark_all_children=True)
 
@@ -70,21 +87,22 @@ def test_mark_all_children_completes_parent_and_descendants() -> None:
     assert "`P1` Prepare release" in result.output
     assert "`P2` Run tests" in result.output
     assert "`P3` Tag release" in result.output
+    assert "Also completed by mark_all_children" in result.output
     assert "Pending items: 0" in result.output
     listed = plugin.list_plan_items()
     assert isinstance(listed.output, dict)
     assert listed.output["pending_count"] == 0
 
 
-def test_default_kind_is_exploratory_and_does_not_auto_complete_parent() -> None:
+def test_default_completion_mode_auto_completes_parent() -> None:
     plugin = PlanPlugin()
-    plugin.add_plan_item("Prepare release")
-    plugin.add_plan_item("Run tests", parent_id="P1")
-    plugin.add_plan_item("Tag release", parent_id="P1")
+    add_plan_item(plugin, "Prepare release")
+    add_plan_item(plugin, "Run tests", parent_id="P1")
+    add_plan_item(plugin, "Tag release", parent_id="P1")
 
     listed = plugin.list_plan_items()
     assert isinstance(listed.output, dict)
-    assert listed.output["flat_items"][0]["kind"] == "exploratory"
+    assert listed.output["flat_items"][0]["completion_mode"] == "auto_complete"
 
     first = plugin.complete_plan_item("P2")
     assert first.success is True
@@ -99,17 +117,16 @@ def test_default_kind_is_exploratory_and_does_not_auto_complete_parent() -> None
     output = second.output
     assert isinstance(output, str)
     assert "`P3` Tag release" in output
-    assert "Pending items: 1" in output
-    assert "Parent review required" in output
     assert "`P1` Prepare release" in output
-    assert "exploratory" in output
+    assert "Pending items: 0" in output
+    assert "Parent review required" not in output
 
 
-def test_determinate_parent_auto_completes_when_children_done() -> None:
+def test_manual_mark_parent_requires_review_when_children_done() -> None:
     plugin = PlanPlugin()
-    plugin.add_plan_item("Prepare release", kind="determinate")
-    plugin.add_plan_item("Run tests", parent_id="P1")
-    plugin.add_plan_item("Tag release", parent_id="P1")
+    add_plan_item(plugin, "Prepare release", completion_mode="manual_mark")
+    add_plan_item(plugin, "Run tests", parent_id="P1")
+    add_plan_item(plugin, "Tag release", parent_id="P1")
 
     plugin.complete_plan_item("P2")
     final = plugin.complete_plan_item("P3")
@@ -118,20 +135,21 @@ def test_determinate_parent_auto_completes_when_children_done() -> None:
     assert isinstance(output, str)
     assert "`P3` Tag release" in output
     assert "`P1` Prepare release" in output
-    assert "Parent review required" not in output
-    assert "Pending items: 0" in output
+    assert "Parent review required" in output
+    assert "manual_mark" in output
+    assert "Pending items: 1" in output
 
 
-def test_determinate_chain_stops_at_exploratory_ancestor() -> None:
+def test_auto_completion_chain_stops_at_manual_mark_ancestor() -> None:
     plugin = PlanPlugin()
-    plugin.add_plan_item(
+    plugin.add_plan_items(
         items=[
             {
-                "content": "Top exploratory",
+                "content": "Top manual mark",
+                "completion_mode": "manual_mark",
                 "children": [
                     {
-                        "content": "Mid determinate",
-                        "kind": "determinate",
+                        "content": "Mid auto complete",
                         "children": [{"content": "Leaf"}],
                     }
                 ],
@@ -144,13 +162,13 @@ def test_determinate_chain_stops_at_exploratory_ancestor() -> None:
     output = result.output
     assert isinstance(output, str)
     assert "`P3` Leaf" in output
-    assert "`P2` Mid determinate" in output
+    assert "`P2` Mid auto complete" in output
     assert "Parent review required" in output
-    assert "`P1` Top exploratory" in output
+    assert "`P1` Top manual mark" in output
     assert "Pending items: 1" in output
 
 
-def test_auto_completion_emits_events_only_for_determinate_parents() -> None:
+def test_auto_completion_emits_events_only_for_auto_complete_parents() -> None:
     bus = EventBus()
     received: list[Event] = []
     bus.subscribe_blocking(received.append)
@@ -159,9 +177,9 @@ def test_auto_completion_emits_events_only_for_determinate_parents() -> None:
     plugin.bind_event_bus(bus)
 
     try:
-        plugin.add_plan_item("Parent", kind="determinate")
-        plugin.add_plan_item("Child A", parent_id="P1")
-        plugin.add_plan_item("Child B", parent_id="P1")
+        add_plan_item(plugin, "Parent", completion_mode="auto_complete")
+        add_plan_item(plugin, "Child A", parent_id="P1")
+        add_plan_item(plugin, "Child B", parent_id="P1")
         plugin.complete_plan_item("P2")
         plugin.complete_plan_item("P3")
     finally:
@@ -177,41 +195,32 @@ def test_auto_completion_emits_events_only_for_determinate_parents() -> None:
     assert completed_ids == ["P2", "P3", "P1"]
 
 
-def test_add_plan_item_rejects_invalid_kind() -> None:
+def test_add_plan_items_rejects_invalid_completion_mode() -> None:
     plugin = PlanPlugin()
-    result = plugin.add_plan_item("Task", kind="urgent")
+    result = add_plan_item(plugin, "Task", completion_mode="urgent")
     assert result.success is False
-    assert "kind" in result.error
+    assert "completion_mode" in result.error
 
-    tree_result = plugin.add_plan_item(
-        items=[{"content": "Root", "kind": "weird"}]
+    tree_result = plugin.add_plan_items(
+        items=[{"content": "Root", "completion_mode": "weird"}]
     )
     assert tree_result.success is False
-    assert "kind" in tree_result.error
+    assert "completion_mode" in tree_result.error
 
 
-def test_add_plan_item_rejects_top_level_kind_with_items() -> None:
-    plugin = PlanPlugin()
-    result = plugin.add_plan_item(
-        items=[{"content": "Root"}], kind="determinate"
-    )
-    assert result.success is False
-    assert "tree mode" in result.error.lower() or "kind" in result.error
-
-
-def test_add_plan_item_rejects_unknown_parent() -> None:
+def test_add_plan_items_rejects_unknown_parent() -> None:
     plugin = PlanPlugin()
 
-    result = plugin.add_plan_item("Nested", parent_id="missing")
+    result = add_plan_item(plugin, "Nested", parent_id="missing")
 
     assert result.success is False
     assert "Unknown parent" in result.error
 
 
-def test_add_plan_item_can_create_entire_plan_tree() -> None:
+def test_add_plan_items_can_create_entire_plan_tree() -> None:
     plugin = PlanPlugin()
 
-    result = plugin.add_plan_item(
+    result = plugin.add_plan_items(
         items=[
             {
                 "content": "Implement feature",
@@ -239,9 +248,15 @@ def test_add_plan_item_can_create_entire_plan_tree() -> None:
     assert tree[1]["content"] == "Run tests"
 
 
-def test_add_plan_item_tool_accepts_tree_items_argument() -> None:
+def test_add_plan_items_tool_accepts_tree_items_argument() -> None:
     plugin = PlanPlugin()
-    add_tool = next(tool for tool in plugin.tools if tool.name == "add_plan_item")
+    add_tool = next(tool for tool in plugin.tools if tool.name == "add_plan_items")
+    schema = add_tool.parameters_schema
+
+    assert schema["required"] == ["items"]
+    assert "items" in schema["properties"]
+    assert "content" not in schema["properties"]
+    assert "completion_mode" not in schema["properties"]
 
     result = add_tool.invoke(
         {"items": [{"content": "Root", "children": [{"content": "Child"}]}]}
@@ -252,10 +267,10 @@ def test_add_plan_item_tool_accepts_tree_items_argument() -> None:
     assert result.output["pending_count"] == 2
 
 
-def test_add_plan_item_tree_rejects_invalid_nodes_without_partial_insert() -> None:
+def test_add_plan_items_tree_rejects_invalid_nodes_without_partial_insert() -> None:
     plugin = PlanPlugin()
 
-    result = plugin.add_plan_item(
+    result = plugin.add_plan_items(
         items=[
             {"content": "Valid"},
             {"content": "", "children": [{"content": "Would be partial"}]},
@@ -278,7 +293,7 @@ def test_plan_update_emits_plugin_events_for_gui() -> None:
     plugin.bind_event_bus(bus)
 
     try:
-        plugin.add_plan_item("Write implementation")
+        add_plan_item(plugin, "Write implementation")
         plugin.complete_plan_item("P1")
     finally:
         bus.close(wait=True, timeout=2)
@@ -311,7 +326,7 @@ def test_after_conversation_reinvokes_when_plan_is_unfinished() -> None:
     bus.subscribe_blocking(received.append)
     plugin = PlanPlugin()
     plugin.bind_event_bus(bus)
-    plugin.add_plan_item("Finish the task")
+    add_plan_item(plugin, "Finish the task")
 
     try:
         result = plugin.notify_unfinished_plan(
@@ -326,14 +341,14 @@ def test_after_conversation_reinvokes_when_plan_is_unfinished() -> None:
     assert result.message is not None
     reminder = str(result.message)
     assert PLAN_REMINDER_BEGIN in reminder
-    assert "origin: automatic runtime reminder, not a human user message" in reminder
+    assert "PLANPLUGIN AUTOMATIC REMINDER - NOT A HUMAN USER MESSAGE" in reminder
     assert "Finish the task" in reminder
     assert any(event.type == "plugin.message" for event in received)
 
 
 def test_after_conversation_does_not_reinvoke_when_done_or_paused() -> None:
     plugin = PlanPlugin()
-    plugin.add_plan_item("Done item")
+    add_plan_item(plugin, "Done item")
     plugin.complete_plan_item("all")
 
     result = plugin.notify_unfinished_plan(
@@ -342,7 +357,7 @@ def test_after_conversation_does_not_reinvoke_when_done_or_paused() -> None:
     )
     assert result is None
 
-    plugin.add_plan_item("Deferred item")
+    add_plan_item(plugin, "Deferred item")
     paused = plugin.plan_control("pause", "Waiting on external input")
     assert paused.success is True
     assert isinstance(paused.output, dict)
@@ -368,6 +383,35 @@ def test_after_conversation_does_not_reinvoke_when_done_or_paused() -> None:
     assert result.action == "reinvoke"
 
 
+def test_update_plan_items_can_park_and_reopen_items() -> None:
+    plugin = PlanPlugin()
+    add_plan_item(plugin, "Wait for vendor")
+
+    blocked = plugin.update_plan_items(
+        "P1",
+        status="blocked",
+        reason="Need vendor answer.",
+    )
+
+    assert blocked.success is True
+    assert isinstance(blocked.output, dict)
+    assert blocked.output["pending_count"] == 0
+    assert blocked.output["updated"][0]["status"] == "blocked"
+    assert blocked.output["updated"][0]["status_reason"] == "Need vendor answer."
+    assert plugin.notify_unfinished_plan(
+        SimpleNamespace(),
+        HookContext(run_id="run-blocked", iteration=1),
+    ) is None
+
+    reopened = plugin.update_plan_items("P1", status="open", reason="Vendor replied.")
+
+    assert reopened.success is True
+    assert isinstance(reopened.output, dict)
+    assert reopened.output["pending_count"] == 1
+    assert reopened.output["updated"][0]["status"] == "open"
+    assert reopened.output["updated"][0]["completed"] is False
+
+
 def test_plan_prompt_injection_is_idempotent() -> None:
     plugin = PlanPlugin()
     agent = SimpleNamespace(
@@ -391,23 +435,24 @@ def test_plan_prompt_injection_is_idempotent() -> None:
     ]
     assert len(plan_prompts) == 1
     assert "parent_id" in plan_prompts[0]["text"]
-    assert "whole plan tree" in plan_prompts[0]["text"]
-    assert "items=[{content, children, kind}]" in plan_prompts[0]["text"]
-    assert "exploratory" in plan_prompts[0]["text"]
-    assert "determinate" in plan_prompts[0]["text"]
+    assert "add one item or a tree" in plan_prompts[0]["text"]
+    assert "items=[{content, children, completion_mode}]" in plan_prompts[0]["text"]
+    assert "auto_complete" in plan_prompts[0]["text"]
+    assert "manual_mark" in plan_prompts[0]["text"]
     assert "parent_review_required" in plan_prompts[0]["text"]
     assert "not a request to create a plan file" in plan_prompts[0]["text"]
-    assert "Do not create, edit, or store plan.md" in plan_prompts[0]["text"]
+    assert "Do not create plan.md" in plan_prompts[0]["text"]
     assert "plan_control" in plan_prompts[0]["text"]
+    assert "update_plan_items" in plan_prompts[0]["text"]
     assert "mark_all_children" in plan_prompts[0]["text"]
-    assert "handoff_notes" in plan_prompts[0]["text"]
-    assert "action='abandon'" in plan_prompts[0]["text"]
-    assert "Pass query to search folded contexts by keyword" in plan_prompts[0]["text"]
-    assert "Use max_chars to limit" in plan_prompts[0]["text"]
-    assert "message_start/message_end" in plan_prompts[0]["text"]
+    assert "fold_context" in plan_prompts[0]["text"]
+    assert "action='clear'" not in plan_prompts[0]["text"]
+    assert "clear discards" in plan_prompts[0]["text"]
+    assert "recall_completed_task" in plan_prompts[0]["text"]
+    assert "Context folding is disabled" in plan_prompts[0]["text"]
     assert PLAN_REMINDER_BEGIN in plan_prompts[0]["text"]
     assert "not human-user messages" in plan_prompts[0]["text"]
-    assert "may appear in the conversation as user-role messages" in plan_prompts[0]["text"]
+    assert "user-role channel" in plan_prompts[0]["text"]
     assert "cancel_plan_notification" not in plan_prompts[0]["text"]
 
 
@@ -422,24 +467,29 @@ def test_plan_control_validates_pause_reason_and_action() -> None:
     assert invalid.success is False
     assert "pause" in invalid.error
     assert "continue" in invalid.error
-    assert "abandon" in invalid.error
+    assert "clear" in invalid.error
 
 
 def test_plan_control_tool_replaces_cancel_notification_tool() -> None:
     plugin = PlanPlugin()
     tool_names = {tool.name for tool in plugin.tools}
 
+    assert "add_plan_items" in tool_names
+    assert "add_plan_item" not in tool_names
+    assert "recall_completed_task" in tool_names
+    assert "read_completed_task_context" not in tool_names
+    assert "update_plan_items" in tool_names
     assert "plan_control" in tool_names
     assert "cancel_plan_notification" not in tool_names
 
 
-def test_plan_control_abandon_clears_current_plan() -> None:
+def test_plan_control_clear_clears_current_plan() -> None:
     plugin = PlanPlugin()
-    plugin.add_plan_item("Prepare release")
-    plugin.add_plan_item("Run tests", parent_id="P1")
+    add_plan_item(plugin, "Prepare release")
+    add_plan_item(plugin, "Run tests", parent_id="P1")
     plugin.plan_control("pause", "Need to stop this plan.")
 
-    result = plugin.plan_control("abandon", "Wrong task.")
+    result = plugin.plan_control("clear", "Wrong task.")
 
     assert result.success is True
     assert isinstance(result.output, dict)
@@ -448,12 +498,12 @@ def test_plan_control_abandon_clears_current_plan() -> None:
     assert result.output["pending_count"] == 0
     assert result.output["plan_paused"] is False
     assert result.output["pause_reason"] == ""
-    assert result.output["abandon_reason"] == "Wrong task."
-    assert [item["id"] for item in result.output["abandoned_items"]] == ["P1", "P2"]
+    assert result.output["clear_reason"] == "Wrong task."
+    assert [item["id"] for item in result.output["cleared_items"]] == ["P1", "P2"]
 
-    new_item = plugin.add_plan_item("New plan")
+    new_item = add_plan_item(plugin, "New plan")
     assert isinstance(new_item.output, dict)
-    assert new_item.output["item"]["id"] == "P1"
+    assert new_item.output["items"][0]["id"] == "P1"
 
 
 def test_complete_plan_tool_schema_uses_mark_all_children() -> None:
@@ -461,15 +511,17 @@ def test_complete_plan_tool_schema_uses_mark_all_children() -> None:
     tool = next(tool for tool in plugin.tools if tool.name == "complete_plan_item")
 
     assert "mark_all_children" in tool.parameters_schema["properties"]
+    assert "item_ids" in tool.parameters_schema["properties"]
+    assert "fold_context" in tool.parameters_schema["properties"]
     assert "handoff_notes" in tool.parameters_schema["properties"]
-    assert "complete_children" not in tool.parameters_schema["properties"]
+    assert "required" not in tool.parameters_schema
 
 
-def test_context_folding_requires_summary_when_enabled() -> None:
+def test_context_folding_requires_summary_when_fold_context_requested() -> None:
     plugin = PlanPlugin(fold_completed_tasks=True)
-    plugin.add_plan_item("Implement feature")
+    add_plan_item(plugin, "Implement feature")
 
-    result = plugin.complete_plan_item("P1")
+    result = plugin.complete_plan_item("P1", fold_context=True)
 
     assert result.success is False
     assert "summary is required" in result.error
@@ -477,14 +529,36 @@ def test_context_folding_requires_summary_when_enabled() -> None:
     assert isinstance(listed.output, dict)
     assert listed.output["flat_items"][0]["completed"] is False
 
-    missing_handoff = plugin.complete_plan_item("P1", summary="Implementation is done.")
+    missing_handoff = plugin.complete_plan_item(
+        "P1",
+        fold_context=True,
+        summary="Implementation is done.",
+    )
     assert missing_handoff.success is False
     assert "handoff_notes is required" in missing_handoff.error
+
+    without_folding = plugin.complete_plan_item("P1")
+    assert without_folding.success is True
+
+
+def test_fold_context_requires_plugin_folding_enabled() -> None:
+    plugin = PlanPlugin(fold_completed_tasks=False)
+    add_plan_item(plugin, "Implement feature")
+
+    result = plugin.complete_plan_item(
+        "P1",
+        fold_context=True,
+        summary="Implementation is done.",
+        handoff_notes="No lasting notes.",
+    )
+
+    assert result.success is False
+    assert "fold_context requires" in result.error
 
 
 def test_complete_plan_item_folds_context_and_can_read_it() -> None:
     plugin = PlanPlugin(fold_completed_tasks=True)
-    plugin.add_plan_item("Implement feature")
+    add_plan_item(plugin, "Implement feature")
     context = AgentContext(
         messages=[
             {
@@ -536,6 +610,7 @@ def test_complete_plan_item_folds_context_and_can_read_it() -> None:
 
     result = plugin.complete_plan_item(
         "P1",
+        fold_context=True,
         summary="Backend implementation is done.",
         handoff_notes="Remember the new API shape.",
         ctx=SimpleNamespace(context=context),
@@ -553,13 +628,13 @@ def test_complete_plan_item_folds_context_and_can_read_it() -> None:
     assert "1. user: Please implement the feature." in result.output
     assert "2. assistant: tool call `read_file` - Read a source file" in result.output
     assert "3. assistant: I changed the backend." in result.output
-    assert 'read_completed_task_context(task_id="P1", message_start=1, message_end=3)' in result.output
+    assert 'recall_completed_task(item_id="P1", message_start=1, message_end=3)' in result.output
     assert "Task summary:" in result.output
     assert "Backend implementation is done." in result.output
     assert "Information for later tasks:" in result.output
     assert "Remember the new API shape." in result.output
 
-    read = plugin.read_completed_task_context("P1")
+    read = plugin.recall_completed_task("P1")
     assert read.success is True
     assert isinstance(read.output, dict)
     assert read.output["summary"] == "Backend implementation is done."
@@ -567,8 +642,8 @@ def test_complete_plan_item_folds_context_and_can_read_it() -> None:
     assert "Please implement the feature." in read.output["transcript"]
     assert "I changed the backend." in read.output["transcript"]
 
-    ranged = plugin.read_completed_task_context(
-        task_id="P1",
+    ranged = plugin.recall_completed_task(
+        item_id="P1",
         message_start=2,
         message_end=2,
     )
@@ -582,14 +657,14 @@ def test_complete_plan_item_folds_context_and_can_read_it() -> None:
     assert "description=Read a source file" in ranged.output["transcript"]
     assert "Please implement the feature." not in ranged.output["transcript"]
 
-    limited = plugin.read_completed_task_context("P1", max_chars=80)
+    limited = plugin.recall_completed_task("P1", max_chars=80)
     assert limited.success is True
     assert isinstance(limited.output, dict)
     assert limited.output["mode"] == "read"
     assert limited.output["truncated"] is True
     assert len(limited.output["transcript"]) <= 80
 
-    search = plugin.read_completed_task_context(
+    search = plugin.recall_completed_task(
         query="backend",
         max_chars=60,
         context_chars=20,
@@ -605,16 +680,196 @@ def test_complete_plan_item_folds_context_and_can_read_it() -> None:
     assert "backend" in search.output["matches"][0]["snippet"].lower()
 
 
-def test_read_completed_task_context_tool_schema_supports_search_and_limits() -> None:
+def test_complete_plan_item_accepts_multiple_item_ids_with_one_fold_record() -> None:
     plugin = PlanPlugin(fold_completed_tasks=True)
-    tool = next(tool for tool in plugin.tools if tool.name == "read_completed_task_context")
+    add_plan_item(plugin, "Collect official docs")
+    add_plan_item(plugin, "Collect papers")
+    context = AgentContext(
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Collect both sources."}],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-complete-batch",
+                        "name": "complete_plan_item",
+                        "arguments": {
+                            "item_ids": ["P1", "P2"],
+                            "summary": "Both source collections are done.",
+                            "handoff_notes": "Use the saved source notes.",
+                        },
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+        ]
+    )
+    plugin._active_completion_tool_call_id = "call-complete-batch"
+
+    result = plugin.complete_plan_item(
+        item_ids=["P1", "P2"],
+        fold_context=True,
+        summary="Both source collections are done.",
+        handoff_notes="Use the saved source notes.",
+        ctx=SimpleNamespace(context=context),
+    )
+
+    assert result.success is True
+    assert isinstance(result.output, str)
+    assert "`P1` Collect official docs" in result.output
+    assert "`P2` Collect papers" in result.output
+    assert len(plugin._fold_records) == 1
+    record = plugin._fold_records[0]
+    assert record.completed_item_ids == ["P1", "P2"]
+    assert record.item_id == "P1"
+
+    read_second = plugin.recall_completed_task("P2")
+    assert read_second.success is True
+    assert isinstance(read_second.output, dict)
+    assert read_second.output["fold_id"] == "PF1"
+    assert read_second.output["completed_item_ids"] == ["P1", "P2"]
+
+
+def test_consecutive_folded_completions_reference_previous_fold() -> None:
+    plugin = PlanPlugin(fold_completed_tasks=True)
+    add_plan_item(plugin, "First task")
+    add_plan_item(plugin, "Second task")
+    context = AgentContext(
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Do both tasks."}],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-first",
+                        "name": "complete_plan_item",
+                        "arguments": {
+                            "item_id": "P1",
+                            "fold_context": True,
+                            "summary": "First task done.",
+                            "handoff_notes": "Shared details are in this fold.",
+                        },
+                    },
+                    {
+                        "type": "tool_call",
+                        "id": "call-second",
+                        "name": "complete_plan_item",
+                        "arguments": {
+                            "item_id": "P2",
+                            "fold_context": True,
+                            "summary": "Second task done.",
+                            "handoff_notes": "Use the same shared details.",
+                        },
+                    },
+                ],
+                "name": None,
+                "metadata": None,
+            },
+        ]
+    )
+
+    plugin._active_completion_tool_call_id = "call-first"
+    first = plugin.complete_plan_item(
+        "P1",
+        fold_context=True,
+        summary="First task done.",
+        handoff_notes="Shared details are in this fold.",
+        ctx=SimpleNamespace(context=context),
+    )
+    assert first.success is True
+    assert len(plugin._fold_records) == 1
+
+    plugin._active_completion_tool_call_id = "call-second"
+    second = plugin.complete_plan_item(
+        "P2",
+        fold_context=True,
+        summary="Second task done.",
+        handoff_notes="Use the same shared details.",
+        ctx=SimpleNamespace(context=context),
+    )
+
+    assert second.success is True
+    assert len(plugin._fold_records) == 1
+    assert plugin._fold_records[0].completed_item_ids == ["P1", "P2"]
+    assert isinstance(second.output, str)
+    assert "Refer to `PF1`" in second.output
+
+
+def test_complete_plan_item_creates_single_plan_cache_point_marker() -> None:
+    plugin = PlanPlugin()
+    add_plan_item(plugin, "First task")
+    add_plan_item(plugin, "Second task")
+    context = AgentContext(
+        messages=[
+            {
+                "role": "tool",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-first",
+                        "content": [{"type": "text", "text": "P1 completed."}],
+                        "is_error": False,
+                    },
+                    {
+                        "type": "cache_point",
+                        "cache_point": {"type": "ephemeral"},
+                        "metadata": {"source": PLAN_COMPLETION_CACHE_POINT_SOURCE},
+                    },
+                    {
+                        "type": "cache_point",
+                        "cache_point": {"type": "ephemeral"},
+                        "metadata": {"source": "other"},
+                    },
+                ],
+                "name": None,
+                "metadata": None,
+            }
+        ]
+    )
+
+    result = plugin.complete_plan_item("P1", ctx=SimpleNamespace(context=context))
+
+    assert result.success is True
+    assert result.cache_point is True
+    assert result.cache_point_source == PLAN_COMPLETION_CACHE_POINT_SOURCE
+    assert [
+        part.get("metadata", {}).get("source")
+        for part in context.messages[0]["content"]
+        if isinstance(part, dict) and part.get("type") == "cache_point"
+    ] == ["other"]
+
+    context.add_tool_result(
+        "call-current",
+        str(result.output),
+        cache_point=result.cache_point,
+        cache_point_source=result.cache_point_source,
+    )
+    marker = context.messages[-1]["content"][-1]
+    assert marker["type"] == "cache_point"
+    assert marker["metadata"]["source"] == PLAN_COMPLETION_CACHE_POINT_SOURCE
+
+
+def test_recall_completed_task_tool_schema_supports_search_and_limits() -> None:
+    plugin = PlanPlugin(fold_completed_tasks=True)
+    tool = next(tool for tool in plugin.tools if tool.name == "recall_completed_task")
     properties = tool.parameters_schema["properties"]
 
     assert "query" in properties
-    assert "task_id" in properties
     assert "message_start" in properties
     assert "message_end" in properties
-    assert "message_range" in properties
     assert "case_sensitive" in properties
     assert "max_matches" in properties
     assert "context_chars" in properties
@@ -623,8 +878,8 @@ def test_read_completed_task_context_tool_schema_supports_search_and_limits() ->
 
 def test_context_folding_preserves_previous_completion_marker() -> None:
     plugin = PlanPlugin(fold_completed_tasks=True)
-    plugin.add_plan_item("First task")
-    plugin.add_plan_item("Second task")
+    add_plan_item(plugin, "First task")
+    add_plan_item(plugin, "Second task")
     context = AgentContext(
         messages=[
             {
@@ -686,6 +941,7 @@ def test_context_folding_preserves_previous_completion_marker() -> None:
 
     result = plugin.complete_plan_item(
         "P2",
+        fold_context=True,
         summary="Second task done.",
         handoff_notes="Remember the follow-up detail.",
         ctx=SimpleNamespace(context=context),
@@ -699,7 +955,7 @@ def test_context_folding_preserves_previous_completion_marker() -> None:
     ]
     assert context.messages[0]["content"][0]["id"] == "call-first"
     assert context.messages[2]["content"][0]["id"] == "call-second"
-    read = plugin.read_completed_task_context("P2")
+    read = plugin.recall_completed_task("P2")
     assert isinstance(read.output, dict)
     assert "Now do the second task." in read.output["transcript"]
 

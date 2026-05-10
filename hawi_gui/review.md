@@ -199,7 +199,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 5. **折叠动画**：CSSTransition 配合 `grid-template-rows: 1fr ↔ 0fr` 实现平滑折叠
 6. **`prefers-reduced-motion`**：尊重用户系统设置
 7. **Thinking 自动折叠**：完成思考后自动折叠，并保留 excerpt 预览
-8. **工具描述分离**：`tool_call_description` 注入参数与业务参数分离展示
+8. **工具描述分离**：`tool_call_purpose` 注入参数与业务参数分离展示
 9. **测试**：reducer 纯函数测试充分，覆盖了流式参数、thinking 折叠、工具结果等边界情况
 10. **NDJSON 解析**：`parseNdjsonChunk` 跨 chunk 拼包处理正确
 

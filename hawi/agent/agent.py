@@ -1249,6 +1249,8 @@ class HawiAgent:
         *,
         is_error: bool = False,
         materialize_pending_steer: bool = True,
+        cache_point: CachePoint | dict[str, Any] | bool | None = None,
+        cache_point_source: str | None = None,
     ) -> list[MaterializedSteerMessage]:
         """Add a tool result and materialize one matching pending input as steer."""
         tool_result_content = self._normalize_content_parts(content)
@@ -1256,6 +1258,8 @@ class HawiAgent:
             tool_call_id=tool_call_id,
             content=tool_result_content,
             is_error=is_error,
+            cache_point=cache_point,
+            cache_point_source=cache_point_source,
         )
 
         if materialize_pending_steer:
@@ -2547,6 +2551,8 @@ class HawiAgent:
                 content=result_content,
                 is_error=not result.success,
                 materialize_pending_steer=materialize_pending_steer,
+                cache_point=getattr(result, "cache_point", None),
+                cache_point_source=getattr(result, "cache_point_source", None),
             )
             await self._emit_materialized_steer_events(
                 state.run_id,
@@ -2645,6 +2651,8 @@ class HawiAgent:
                 tool_call_id=pending.tool_call_id,
                 content=result_content,
                 is_error=not result.success,
+                cache_point=getattr(result, "cache_point", None),
+                cache_point_source=getattr(result, "cache_point_source", None),
             )
             await self._emit_materialized_steer_events(
                 "audit",

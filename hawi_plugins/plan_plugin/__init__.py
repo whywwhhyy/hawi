@@ -1,4 +1,5 @@
-from .engine import PlanEngine, PlanEngineResult, PlanFoldRecord, PlanItem
+from .engine import PlanEngine
+from .models import PlanEngineResult, PlanFoldRecord, PlanItem
 from .plugin import PlanPlugin
 
 __all__ = [

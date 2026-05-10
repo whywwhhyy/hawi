@@ -26,10 +26,20 @@ class ToolResult:
         error: The error message (if any)
     """
 
-    def __init__(self, success: bool, output: ToolOutput | None = None, error: str = "") -> None:
+    def __init__(
+        self,
+        success: bool,
+        output: ToolOutput | None = None,
+        error: str = "",
+        *,
+        cache_point: Any = None,
+        cache_point_source: str | None = None,
+    ) -> None:
         self.success = success
         self.output = output
         self.error = error
+        self.cache_point = cache_point
+        self.cache_point_source = cache_point_source
 
     def __getitem__(self, key: str) -> Any:
         """Support dict-like access for backward compatibility."""

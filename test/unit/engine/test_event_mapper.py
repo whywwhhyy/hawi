@@ -249,7 +249,7 @@ def test_mapper_emits_tool_events_and_result() -> None:
     assert result[0]["payload"]["output"] == {"answer": 4}
 
 
-def test_mapper_extracts_tool_call_description_from_arguments() -> None:
+def test_mapper_extracts_tool_call_purpose_from_arguments() -> None:
     mapper = SemanticEventMapper()
     mapper.map(AgentRunStartEvent.create("run-described"))
     mapper.map(ModelToolCallBlockStartEvent.create("req-described", 0, "tc-described", "read"))
@@ -262,12 +262,12 @@ def test_mapper_extracts_tool_call_description_from_arguments() -> None:
             "read",
             {
                 "path": "notes.md",
-                "tool_call_description": "Read the current design notes.",
+                "tool_call_purpose": "Read the current design notes.",
             },
         )
     )
 
-    assert stop[0]["payload"]["tool_call_description"] == "Read the current design notes."
+    assert stop[0]["payload"]["tool_call_purpose"] == "Read the current design notes."
     assert stop[0]["payload"]["arguments"] == {"path": "notes.md"}
 
     result = mapper.map(
@@ -280,7 +280,7 @@ def test_mapper_extracts_tool_call_description_from_arguments() -> None:
             ToolResult(success=True, output="ok"),
         )
     )
-    assert result[0]["payload"]["tool_call_description"] == "Read the current design notes."
+    assert result[0]["payload"]["tool_call_purpose"] == "Read the current design notes."
 
 
 def test_mapper_marks_full_tool_argument_snapshot() -> None:

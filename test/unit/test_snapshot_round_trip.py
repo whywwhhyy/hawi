@@ -127,7 +127,7 @@ class TestQueueManagerSnapshot:
 class TestPlanPluginState:
     def test_plan_state_round_trip(self) -> None:
         p = PlanPlugin(fold_completed_tasks=True)
-        p._engine.add_plan_item(content="root task")
+        p._engine.add_plan_items(items=[{"content": "root task"}])
         state = p.save_state()
         encoded = json.dumps(state)
         p2 = PlanPlugin()

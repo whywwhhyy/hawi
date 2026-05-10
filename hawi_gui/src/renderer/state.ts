@@ -1,6 +1,6 @@
 import type { CoreFrame, PluginArtifactPayload, QueueKind } from "../shared/protocol";
 
-const TOOL_CALL_DESCRIPTION_PARAMETER = "tool_call_description";
+const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 const MAX_RESULT_PREVIEW_LENGTH = 1200;
 
@@ -272,7 +272,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       if (existingNodeId) {
         return updateNode(completedState, existingNodeId, (node) => {
           if (!node.tool) return node;
-          const description = optionalString(payload.tool_call_description)
+          const description = optionalToolPurpose(payload)
             ?? argumentInfo?.description
             ?? node.tool.description;
           return {
@@ -296,7 +296,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         runId,
         toolCallId,
         name: String(payload.tool_name ?? "pending"),
-        description: optionalString(payload.tool_call_description),
+        description: optionalToolPurpose(payload),
         status,
         argsRaw: "",
         argsState: argumentInfo ? "complete" : "pending",
@@ -344,7 +344,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => {
         const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
         const argumentInfo = hasArguments ? splitToolArguments(payload.arguments) : undefined;
-        const description = optionalString(payload.tool_call_description)
+        const description = optionalToolPurpose(payload)
           ?? argumentInfo?.description
           ?? tool.description;
         return {
@@ -364,7 +364,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           ...tool,
           status: payload.success === false ? "fail" : "success",
           name: String(payload.tool_name || tool.name),
-          description: optionalString(payload.tool_call_description) ?? tool.description,
+          description: optionalToolPurpose(payload) ?? tool.description,
           resultPreview: payload.is_part === true
             ? truncate(tool.resultPreview + text)
             : truncate(text || tool.resultPreview),
@@ -807,7 +807,7 @@ function updateToolResult(
     runId,
     toolCallId,
     name: String(payload.tool_name || "unknown"),
-    description: optionalString(payload.tool_call_description),
+    description: optionalToolPurpose(payload),
     status: "running",
     argsRaw: "",
     argsState: "complete",
@@ -1263,13 +1263,20 @@ function formatToolValue(value: unknown): string {
 }
 
 function splitToolArguments(value: unknown): { arguments: unknown; description?: string } {
-  if (!isRecord(value) || !(TOOL_CALL_DESCRIPTION_PARAMETER in value)) {
+  if (
+    !isRecord(value)
+    || !(TOOL_CALL_PURPOSE_PARAMETER in value)
+  ) {
     return { arguments: value };
   }
-  const description = optionalString(value[TOOL_CALL_DESCRIPTION_PARAMETER]);
+  const description = optionalString(value[TOOL_CALL_PURPOSE_PARAMETER]);
   const visible = { ...value };
-  delete visible[TOOL_CALL_DESCRIPTION_PARAMETER];
+  delete visible[TOOL_CALL_PURPOSE_PARAMETER];
   return { arguments: visible, description };
+}
+
+function optionalToolPurpose(payload: Record<string, unknown>): string | undefined {
+  return optionalString(payload.tool_call_purpose);
 }
 
 function optionalString(value: unknown): string | undefined {

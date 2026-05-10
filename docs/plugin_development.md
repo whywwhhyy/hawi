@@ -289,14 +289,14 @@ class SearchPlugin(HawiPlugin):
 
 ### 工具参数注入
 
-框架支持在工具 schema 中注入框架参数（如 `tool_call_description`）：
+框架支持在工具 schema 中注入框架参数（如 `tool_call_purpose`）：
 
 ```python
 # 在 runtime.py 中注册
 agent.plugins.add_tool_parameter_injection(
     ToolParameterInjection(
-        name="tool_call_description",
-        schema={"type": "string", "description": "说明为什么要调用此工具"},
+        name="tool_call_purpose",
+        schema={"type": "string", "description": "说明本次工具调用的目的；允许与其他调用重复"},
         required=True,
     )
 )

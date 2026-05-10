@@ -54,9 +54,9 @@ export class CoreProcess {
       "--plugin-config",
       pluginConfigPath,
       "--extra-tool-parameter",
-      "tool_call_description",
+      "tool_call_purpose",
       "str",
-      "用一句话说明为什么要调用这个工具，显示在工具标题旁边。",
+      "用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。",
       "--log-file",
       this.backendLogPath
     ];
