@@ -11,7 +11,6 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .protocol import json_dumps, make_error
-from .runtime import CoreRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +21,7 @@ class QueuedJsonClient(ABC):
     def __init__(self, *, queue_max: int = 100, client_id: str | None = None) -> None:
         self.id = client_id or uuid.uuid4().hex[:12]
         self.authenticated = False
+        self.negotiated_caps: set[str] = set()
         self._outbound: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(
             maxsize=queue_max
         )
@@ -131,134 +131,3 @@ class WebSocketJsonClient(QueuedJsonClient):
     async def _close_transport(self) -> None:
         with contextlib.suppress(Exception):
             await self._websocket.close()
-
-
-async def run_stdio(runtime: CoreRuntime, *, queue_max: int = 100) -> None:
-    """Run the stdio NDJSON transport."""
-    client = StdIoClient(queue_max=queue_max, client_id="stdio")
-    await client.start()
-    await runtime.register_client(client)
-
-    reader = await _stdin_reader()
-
-    async def read_loop() -> None:
-        while not runtime.is_shutdown_requested:
-            line = await reader.readline()
-            if not line:
-                break
-            await runtime.handle_frame(client, line)
-
-    reader_task = asyncio.create_task(read_loop())
-    shutdown_task = asyncio.create_task(runtime.wait_shutdown())
-    done, pending = await asyncio.wait(
-        {reader_task, shutdown_task},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    await asyncio.gather(*done, return_exceptions=True)
-    await runtime.unregister_client(client)
-    await client.close()
-    if not runtime.is_shutdown_requested:
-        await runtime.stop()
-
-
-async def run_tcp(
-    runtime: CoreRuntime,
-    *,
-    host: str,
-    port: int,
-    queue_max: int = 100,
-) -> None:
-    """Run the TCP NDJSON transport."""
-    clients: set[TcpJsonClient] = set()
-
-    async def handle_client(
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        client = TcpJsonClient(writer, queue_max=queue_max)
-        clients.add(client)
-        await client.start()
-        await runtime.register_client(client)
-        try:
-            while not runtime.is_shutdown_requested:
-                line = await reader.readline()
-                if not line:
-                    break
-                await runtime.handle_frame(client, line)
-        finally:
-            await runtime.unregister_client(client)
-            clients.discard(client)
-            await client.close()
-
-    server = await asyncio.start_server(handle_client, host, port)
-    sockets = ", ".join(str(sock.getsockname()) for sock in (server.sockets or []))
-    logger.info("Hawi core TCP transport listening on %s", sockets)
-    async with server:
-        await runtime.wait_shutdown()
-    for client in list(clients):
-        await client.close()
-
-
-async def run_websocket(
-    runtime: CoreRuntime,
-    *,
-    host: str,
-    port: int,
-    queue_max: int = 100,
-) -> None:
-    """Run the WebSocket JSON-message transport."""
-    try:
-        from websockets.asyncio.server import serve
-    except ImportError as exc:
-        raise RuntimeError(
-            "The websocket transport requires websockets>=15.0. "
-            "Install project dependencies with `uv sync`."
-        ) from exc
-
-    clients: set[WebSocketJsonClient] = set()
-
-    async def handle_client(websocket: Any) -> None:
-        client = WebSocketJsonClient(websocket, queue_max=queue_max)
-        clients.add(client)
-        await client.start()
-        await runtime.register_client(client)
-        try:
-            async for raw in websocket:
-                await runtime.handle_frame(client, raw)
-                if runtime.is_shutdown_requested:
-                    break
-        finally:
-            await runtime.unregister_client(client)
-            clients.discard(client)
-            await client.close()
-
-    async with serve(handle_client, host, port) as server:
-        sockets = ", ".join(str(sock.getsockname()) for sock in (server.sockets or []))
-        logger.info("Hawi core WebSocket transport listening on %s", sockets)
-        await runtime.wait_shutdown()
-
-    for client in list(clients):
-        await client.close()
-
-
-async def _stdin_reader() -> asyncio.StreamReader:
-    if sys.platform == "win32":
-        return _ThreadedStdinReader()
-
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-    except (AttributeError, NotImplementedError, OSError):
-        return _ThreadedStdinReader()
-    return reader
-
-
-class _ThreadedStdinReader:
-    async def readline(self) -> bytes:
-        line = await asyncio.to_thread(sys.stdin.buffer.readline)
-        return line

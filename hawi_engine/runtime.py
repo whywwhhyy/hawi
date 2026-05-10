@@ -71,6 +71,9 @@ PLUGIN_LABELS = {
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+SERVER_CAPS: frozenset[str] = frozenset()
+"""Capabilities the server advertises during hello negotiation. Plans 3-5 grow this set."""
+
 
 @dataclass(frozen=True)
 class ExtraToolParameter:
@@ -151,6 +154,7 @@ class RuntimeClient(Protocol):
 
     id: str
     authenticated: bool
+    negotiated_caps: set[str]
 
     async def send(self, frame: dict[str, Any]) -> None:
         """Queue a frame for this client."""
@@ -433,13 +437,34 @@ class CoreRuntime:
                     )
                 )
                 return
+
+        client_caps_raw = command.payload.get("client_caps", [])
+        if not isinstance(client_caps_raw, list) or not all(
+            isinstance(c, str) for c in client_caps_raw
+        ):
+            await client.send(
+                make_error(
+                    "'hello.payload.client_caps' must be a list of strings.",
+                    request_id=command.id,
+                    code="bad_request",
+                )
+            )
+            return
+        client_caps = set(client_caps_raw)
+        negotiated = client_caps & SERVER_CAPS
+        client.negotiated_caps = negotiated
+
         was_authenticated = client.authenticated
         client.authenticated = True
         await client.send(
             make_ack(
                 "hello",
                 request_id=command.id,
-                payload={"authenticated": True},
+                payload={
+                    "authenticated": True,
+                    "server_caps": sorted(SERVER_CAPS),
+                    "negotiated": sorted(negotiated),
+                },
             )
         )
         if not was_authenticated:

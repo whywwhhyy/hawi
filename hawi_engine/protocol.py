@@ -1,4 +1,28 @@
-"""Stable JSON protocol for the Hawi core process."""
+"""Stable JSON protocol for the Hawi core process.
+
+Wire envelope (unchanged across plans):
+    {"version": "hawi.core.v1", "type": <str>, "id": <str|null>, "payload": <obj>}
+
+Hello payload (added in Plan 2 — capability negotiation, additive only):
+    {
+        "token": <optional str, when --token is set>,
+        "client_caps": <optional list[str]>  # capabilities the client wishes to use
+    }
+
+Hello ack payload (added in Plan 2):
+    {
+        "command": "hello",
+        "ok": true,
+        "authenticated": true,
+        "server_caps": <list[str]>,   # full set the server speaks (sorted)
+        "negotiated": <list[str]>     # client_caps & server_caps (sorted)
+    }
+
+Old clients that omit `client_caps` get an empty `negotiated` set; old servers
+that don't return `server_caps`/`negotiated` are simply ignored by future-aware
+clients. SERVER_CAPS lives in `hawi_engine.runtime` and is empty in Plan 2;
+Plans 3-5 add concrete capability strings (`tlv_v1`, `binary_frames`, etc.).
+"""
 
 from __future__ import annotations
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 from dataclasses import dataclass, field
@@ -8,10 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import hawi_engine.transports as transports
+import hawi_engine.builtin_gateways as builtin_gateways
 from hawi_engine.protocol import VERSION, make_ack, make_frame
 from hawi_engine.runtime import CoreRuntime, parse_extra_tool_parameter, parse_extra_tool_parameters
-from hawi_engine.transports import QueuedJsonClient, run_tcp, run_websocket
+from hawi_engine.transports import QueuedJsonClient
 from hawi.agent import HawiAgent
 from hawi.tool import AgentTool, ToolResult
 
@@ -546,11 +547,11 @@ class CapturingQueuedClient(QueuedJsonClient):
 
 @pytest.mark.asyncio
 async def test_stdin_reader_uses_threaded_reader_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(transports.sys, "platform", "win32")
+    monkeypatch.setattr(builtin_gateways.sys, "platform", "win32")
 
-    reader = await transports._stdin_reader()
+    reader = await builtin_gateways._stdin_reader()
 
-    assert isinstance(reader, transports._ThreadedStdinReader)
+    assert isinstance(reader, builtin_gateways._ThreadedStdinReader)
 
 
 @pytest.mark.asyncio
@@ -559,12 +560,12 @@ async def test_stdin_reader_falls_back_when_connect_read_pipe_fails(monkeypatch:
         async def connect_read_pipe(self, *_: Any) -> None:
             raise OSError("pipe unavailable")
 
-    monkeypatch.setattr(transports.sys, "platform", "linux")
-    monkeypatch.setattr(transports.asyncio, "get_running_loop", lambda: FakeLoop())
+    monkeypatch.setattr(builtin_gateways.sys, "platform", "linux")
+    monkeypatch.setattr(builtin_gateways.asyncio, "get_running_loop", lambda: FakeLoop())
 
-    reader = await transports._stdin_reader()
+    reader = await builtin_gateways._stdin_reader()
 
-    assert isinstance(reader, transports._ThreadedStdinReader)
+    assert isinstance(reader, builtin_gateways._ThreadedStdinReader)
 
 
 @pytest.mark.asyncio
@@ -627,8 +628,11 @@ async def _connect_tcp_with_retry(port: int) -> tuple[asyncio.StreamReader, asyn
 @pytest.mark.asyncio
 async def test_tcp_transport_smoke(unused_tcp_port: int) -> None:
     runtime = FakeTransportRuntime()
+    args = argparse.Namespace(
+        host="127.0.0.1", port=unused_tcp_port, outbound_queue_size=10
+    )
     server_task = asyncio.create_task(
-        run_tcp(runtime, host="127.0.0.1", port=unused_tcp_port, queue_max=10)  # type: ignore[arg-type]
+        builtin_gateways.TcpGateway().serve(runtime, args)  # type: ignore[arg-type]
     )
     reader, writer = await _connect_tcp_with_retry(unused_tcp_port)
 
@@ -679,8 +683,11 @@ async def _connect_websocket_with_retry(port: int) -> Any:
 @pytest.mark.asyncio
 async def test_websocket_transport_smoke(unused_tcp_port: int) -> None:
     runtime = FakeTransportRuntime()
+    args = argparse.Namespace(
+        host="127.0.0.1", port=unused_tcp_port, outbound_queue_size=10
+    )
     server_task = asyncio.create_task(
-        run_websocket(runtime, host="127.0.0.1", port=unused_tcp_port, queue_max=10)  # type: ignore[arg-type]
+        builtin_gateways.WebSocketGateway().serve(runtime, args)  # type: ignore[arg-type]
     )
     websocket = await _connect_websocket_with_retry(unused_tcp_port)
 

@@ -23,7 +23,8 @@ from .runtime import (
 )
 from .inspect import build_inspect_payload
 from .protocol import json_dumps
-from .transports import run_stdio, run_tcp, run_websocket
+from .gateway import GATEWAY_REGISTRY, discover_gateways
+from . import builtin_gateways  # noqa: F401  side-effect import: registers built-in gateways
 
 warnings.filterwarnings(
     "ignore",
@@ -80,14 +81,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print GUI metadata JSON and exit",
     )
+    discover_gateways()
+    parser.add_argument(
+        "--gateway",
+        choices=sorted(GATEWAY_REGISTRY.keys()),
+        default="stdio",
+        help="Gateway to use (built-in: stdio, tcp, websocket; plus any installed plugins)",
+    )
+    # Backward-compat alias for one release. Maps onto the same dest.
     parser.add_argument(
         "--transport",
-        choices=["stdio", "tcp", "websocket"],
-        default="stdio",
-        help="Protocol transport to use",
+        choices=sorted(GATEWAY_REGISTRY.keys()),
+        default=None,
+        dest="transport",
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument("--host", default="127.0.0.1", help="Host for tcp/websocket")
-    parser.add_argument("--port", type=int, default=None, help="Port for tcp/websocket")
+    parser.add_argument("--host", default="127.0.0.1", help="Host for tcp/websocket gateways")
+    parser.add_argument("--port", type=int, default=None, help="Port for tcp/websocket gateways")
+
+    # Let each gateway register its own args.
+    for gateway in GATEWAY_REGISTRY.values():
+        gateway.register_args(parser)
     parser.add_argument(
         "--token",
         default=None,
@@ -227,24 +241,11 @@ async def async_main(args: argparse.Namespace) -> None:
     )
     await runtime.start()
 
-    if args.transport == "stdio":
-        await run_stdio(runtime, queue_max=args.outbound_queue_size)
-    elif args.transport == "tcp":
-        await run_tcp(
-            runtime,
-            host=args.host,
-            port=args.port if args.port is not None else 8765,
-            queue_max=args.outbound_queue_size,
-        )
-    elif args.transport == "websocket":
-        await run_websocket(
-            runtime,
-            host=args.host,
-            port=args.port if args.port is not None else 8766,
-            queue_max=args.outbound_queue_size,
-        )
-    else:
-        raise RuntimeError(f"Unsupported transport: {args.transport}")
+    gateway_name = args.transport if args.transport else args.gateway
+    gateway = GATEWAY_REGISTRY.get(gateway_name)
+    if gateway is None:
+        raise RuntimeError(f"Unsupported gateway: {gateway_name}")
+    await gateway.serve(runtime, args)
 
 
 def parse_plugins(raw: str) -> list[str]:
