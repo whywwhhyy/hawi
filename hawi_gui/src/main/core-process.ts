@@ -42,7 +42,7 @@ export class CoreProcess {
       "run",
       "--project",
       this.repoRoot,
-      "hawi-core",
+      "hawi-engine",
       "--model",
       nextConfig.modelName,
       "--transport",
@@ -76,7 +76,7 @@ export class CoreProcess {
       const wasCurrent = this.child === child;
       if (wasCurrent) {
         this.child = null;
-        const error = new Error(`hawi-core exited (${code ?? "null"} ${signal ?? ""})`);
+        const error = new Error(`hawi-engine exited (${code ?? "null"} ${signal ?? ""})`);
         for (const pending of this.pending.values()) {
           pending.reject(error);
         }
@@ -98,7 +98,7 @@ export class CoreProcess {
       return;
     }
     this.child = null;
-    const error = new Error("hawi-core was stopped");
+    const error = new Error("hawi-engine was stopped");
     for (const pending of this.pending.values()) {
       pending.reject(error);
     }
@@ -122,7 +122,7 @@ export class CoreProcess {
 
   sendCommand(type: CoreCommandType, payload: Record<string, unknown>, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS): Promise<CoreFrame> {
     if (!this.child || !this.child.stdin.writable) {
-      return Promise.reject(new Error("hawi-core is not running"));
+      return Promise.reject(new Error("hawi-engine is not running"));
     }
     const id = this.nextId();
     const frame: CoreCommand = {

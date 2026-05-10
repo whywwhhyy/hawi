@@ -1,4 +1,4 @@
-"""Command entry point for `hawi-core`."""
+"""Command entry point for `hawi-engine`."""
 
 from __future__ import annotations
 
@@ -41,13 +41,13 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        print(f"hawi-core: {exc}", file=sys.stderr)
+        print(f"hawi-engine: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="hawi-core",
+        prog="hawi-engine",
         description="Run Hawi as an always-on JSON protocol core process.",
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -169,7 +169,7 @@ def configure_logging(args: argparse.Namespace) -> None:
 
     logging.basicConfig(level=logging.DEBUG, handlers=handlers, force=True)
     if args.log_file:
-        logging.getLogger(__name__).info("Writing hawi-core backend log to %s", args.log_file)
+        logging.getLogger(__name__).info("Writing hawi-engine backend log to %s", args.log_file)
 
 
 async def async_main(args: argparse.Namespace) -> None:
@@ -209,7 +209,7 @@ async def async_main(args: argparse.Namespace) -> None:
         raise RuntimeError(
             f"No model configurations available. Loaded configs: {loaded_text}. "
             "Create ~/.hawi/models.yaml, ./.hawi/models.yaml, ./models.yaml, "
-            "pass --models-config PATH, or run `hawi-core init`."
+            "pass --models-config PATH, or run `hawi-engine init`."
         )
 
     selected_plugins = parse_plugins(args.plugins)

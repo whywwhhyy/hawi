@@ -20,7 +20,7 @@ from hawi.events import (
 )
 from hawi.models.message import DeltaPart, TokenUsage
 from hawi.tool.types import ToolResult
-from hawi_core_cli.event_mapper import SemanticEventMapper
+from hawi_engine.event_mapper import SemanticEventMapper
 
 
 def test_mapper_only_logs_high_priority_message_on_enqueue() -> None:

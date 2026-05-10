@@ -36,7 +36,7 @@ where = ["."]
 include = ["hawi*"]
 
 [tool.setuptools.package-data]
-hawi_core_cli = [
+hawi_engine = [
     "templates/hawi_template/.hawi/*",
     "templates/hawi_template/.hawi/**/*",
 ]
@@ -51,7 +51,7 @@ filterwarnings = [
 ]
 
 [project.scripts]
-hawi-core = "hawi_core_cli.__main__:main"
+hawi-engine = "hawi_engine.__main__:main"
 
 [build-system]
 requires = ["setuptools>=61"]

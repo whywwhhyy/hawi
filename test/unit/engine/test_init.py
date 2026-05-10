@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from hawi.models.registry import ModelRegistry
-from hawi_core_cli.__main__ import build_parser
-from hawi_core_cli.init import prepare_hawi_dir, render_template_text
+from hawi_engine.__main__ import build_parser
+from hawi_engine.init import prepare_hawi_dir, render_template_text
 
 
 def test_parser_accepts_optional_hawi_dir() -> None:

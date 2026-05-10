@@ -73,7 +73,7 @@ __all__ = ["MyPlugin"]
 
 ### 1. 定义插件 Key 常量
 
-在 `hawi_core_cli/runtime.py` 中添加：
+在 `hawi_engine/runtime.py` 中添加：
 
 ```python
 # === 第 1 步：定义 key 常量 ===
@@ -109,7 +109,7 @@ async def _create_plugins(self, selected_plugins, plugin_configs):
 
 ### 3. 注册到 GUI 目录
 
-在 `hawi_core_cli/inspect.py` 中添加：
+在 `hawi_engine/inspect.py` 中添加：
 
 ```python
 from .runtime import (
@@ -633,7 +633,7 @@ agent.plugins.unmask_tool("dangerous_tool")
 | `hawi/plugin/decorators.py` | Hook 装饰器定义 |
 | `hawi/plugin/types.py` | 类型别名 |
 | `hawi/plugin/manager.py` | `PluginManager` + 动态管理 |
-| `hawi_core_cli/runtime.py` | 插件创建 + 注册 |
-| `hawi_core_cli/inspect.py` | GUI 插件目录 |
+| `hawi_engine/runtime.py` | 插件创建 + 注册 |
+| `hawi_engine/inspect.py` | GUI 插件目录 |
 | `hawi/agent/agent.py` | Agent 执行流程（Hook 调用位置） |
 | `hawi/agent/context.py` | `AgentContext`（消息管理） |

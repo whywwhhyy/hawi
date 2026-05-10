@@ -217,7 +217,7 @@ PlainPrinter           # 纯文本逐行输出
 ```
 
 ```text
-hawi_gui/src/main      # Electron 主进程，启动 hawi-core
+hawi_gui/src/main      # Electron 主进程，启动 hawi-engine
 hawi_gui/src/preload   # IPC preload bridge
 hawi_gui/src/renderer  # React 聊天界面
 hawi_gui/src/shared    # GUI/Core 协议类型

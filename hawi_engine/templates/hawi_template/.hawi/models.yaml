@@ -5,7 +5,7 @@
 #
 # Example:
 #   export DEEPSEEK_API_KEY="sk-..."
-#   hawi-core --model deepseek/deepseek-chat
+#   hawi-engine --model deepseek/deepseek-chat
 
 providers:
   - name: deepseek

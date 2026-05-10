@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import hawi_core_cli.transports as transports
-from hawi_core_cli.protocol import VERSION, make_ack, make_frame
-from hawi_core_cli.runtime import CoreRuntime, parse_extra_tool_parameter, parse_extra_tool_parameters
-from hawi_core_cli.transports import QueuedJsonClient, run_tcp, run_websocket
+import hawi_engine.transports as transports
+from hawi_engine.protocol import VERSION, make_ack, make_frame
+from hawi_engine.runtime import CoreRuntime, parse_extra_tool_parameter, parse_extra_tool_parameters
+from hawi_engine.transports import QueuedJsonClient, run_tcp, run_websocket
 from hawi.agent import HawiAgent
 from hawi.tool import AgentTool, ToolResult
 
@@ -442,7 +442,7 @@ def test_parse_extra_tool_parameter_allows_colons_in_description() -> None:
 
 
 def test_parser_accepts_space_separated_extra_tool_parameters() -> None:
-    from hawi_core_cli.__main__ import build_parser
+    from hawi_engine.__main__ import build_parser
 
     args = build_parser().parse_args([
         "--model",

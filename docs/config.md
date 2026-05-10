@@ -114,16 +114,16 @@ model = model_registry.create_model("my-custom-model")
 
 ### 快速初始化
 
-`hawi-core` 提供初始化命令，用来生成可直接编辑的 `.hawi/` 模板。默认把内置模板复制到当前目录的 `./.hawi/`，已存在的文件会保持不变：
+`hawi-engine` 提供初始化命令，用来生成可直接编辑的 `.hawi/` 模板。默认把内置模板复制到当前目录的 `./.hawi/`，已存在的文件会保持不变：
 
 ```bash
-hawi-core init
+hawi-engine init
 ```
 
 如果已经有现成的 Hawi 配置目录，也可以显式传入；只要目录存在，命令不会修改里面的内容：
 
 ```bash
-hawi-core init ./.hawi
+hawi-engine init ./.hawi
 ```
 
 ### 查看已加载的配置

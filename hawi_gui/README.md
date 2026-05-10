@@ -30,18 +30,18 @@ npm start
 
 ## Log Management
 
-The backend writes logs to `.hawi/hawi-core.log`. These logs can grow large over time.
+The backend writes logs to `.hawi/hawi-engine.log`. These logs can grow large over time.
 
 To truncate the log manually:
 
 ```bash
-truncate -s 0 .hawi/hawi-core.log
+truncate -s 0 .hawi/hawi-engine.log
 ```
 
 Or add a cron job (macOS/Linux) to rotate logs weekly:
 
 ```bash
-0 0 * * 0 truncate -s 0 /path/to/hawi_gui/.hawi/hawi-core.log
+0 0 * * 0 truncate -s 0 /path/to/hawi_gui/.hawi/hawi-engine.log
 ```
 
 The log file is excluded from git via `.gitignore`.

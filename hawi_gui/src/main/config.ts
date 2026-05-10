@@ -17,7 +17,7 @@ export function resolveEnvPaths(): EnvPaths {
   const guiRoot = path.join(repoRoot, "hawi_gui");
   const workspaceRoot = resolveWorkspaceRoot();
   const configPath = path.join(workspaceRoot, ".hawi", "node_gui.json");
-  const backendLogPath = path.join(workspaceRoot, ".hawi", "hawi-core.log");
+  const backendLogPath = path.join(workspaceRoot, ".hawi", "hawi-engine.log");
   const uvCommand = resolveUvCommand();
   return { repoRoot, guiRoot, workspaceRoot, configPath, backendLogPath, uvCommand };
 }
@@ -63,7 +63,7 @@ export function parseArgValue(name: string): string | null {
 }
 
 export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCommand: string): InspectPayload {
-  const result = spawnSync(uvCommand, ["run", "--project", repoRoot, "hawi-core", "--inspect"], {
+  const result = spawnSync(uvCommand, ["run", "--project", repoRoot, "hawi-engine", "--inspect"], {
     cwd: workspaceRoot,
     encoding: "utf-8",
     env: process.env
@@ -78,7 +78,7 @@ export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCo
 }
 
 function formatInspectError(status: number | null, stderr: string | Buffer | null, stdout: string | Buffer | null): string {
-  const details = [`Failed to inspect hawi-core metadata (exit ${status ?? "unknown"}).`];
+  const details = [`Failed to inspect hawi-engine metadata (exit ${status ?? "unknown"}).`];
   const stderrText = stderr?.toString().trim();
   const stdoutText = stdout?.toString().trim();
   if (stderrText) {

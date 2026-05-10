@@ -1,4 +1,4 @@
-"""Environment initialization helpers for ``hawi-core``."""
+"""Environment initialization helpers for ``hawi-engine``."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def prepare_hawi_dir(
     destination_root = Path.cwd().resolve()
     config_dir = destination_root / HAWI_DIR_NAME
     values = _template_values(destination_root, config_dir)
-    template_root = files("hawi_core_cli").joinpath("templates", template_name)
+    template_root = files("hawi_engine").joinpath("templates", template_name)
     if not template_root.is_dir():
         raise FileNotFoundError(f"Hawi init template not found: {template_name}")
 

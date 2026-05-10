@@ -105,7 +105,7 @@ function registerIpc(): void {
 
   ipcMain.handle("core:command", async (_event, type: CoreCommandType, payload: Record<string, unknown>) => {
     if (!core) {
-      throw new Error("hawi-core is not initialized");
+      throw new Error("hawi-engine is not initialized");
     }
     return core.sendCommand(type, payload);
   });
