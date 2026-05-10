@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, ChevronDown, ChevronRight, FileText, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, CheckCircle2, ChevronDown, ChevronRight, Circle, FileText, LoaderCircle, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
@@ -76,7 +76,7 @@ export function renderPriorityStatusText(
   queueMessages?: Record<QueueKind, QueueMessageState[]>
 ): string {
   const highPriorityCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
-  return `优先 ${highPriorityCount} · 队列 ${normalQueueCount(queueLengths, queueMessages)}`;
+  return `优先 ${highPriorityCount} · 普通 ${normalQueueCount(queueLengths, queueMessages)}`;
 }
 
 function hasHighPriorityWork(
@@ -662,11 +662,21 @@ export default function App() {
 }
 
 function StatusCell({ value, title }: { value: string; title?: string }) {
+  const icon = statusIconForRunState(value);
+  const showLabel = value !== "RUNNING";
   return (
     <div className={`status-cell state-${value.toLowerCase()}`} title={title}>
-      <strong>{value}</strong>
+      <span className="status-icon" aria-hidden="true">{icon}</span>
+      {showLabel && <strong>{value}</strong>}
     </div>
   );
+}
+
+function statusIconForRunState(value: string): ReactNode {
+  if (value === "RUNNING") return <LoaderCircle size={15} />;
+  if (value === "INTERRUPTING") return <RotateCcw size={15} />;
+  if (value === "STOPPED") return <Circle size={15} />;
+  return <CheckCircle2 size={15} />;
 }
 
 function combinedRunState(schedulerState: string, agentState: string): string {
@@ -710,7 +720,7 @@ function PriorityStatusCell({
         onClick={onToggle}
       >
         <span>优先 <strong>{highPriorityCount}</strong></span>
-        <span>队列 <strong>{normalCount}</strong></span>
+        <span>普通 <strong>{normalCount}</strong></span>
       </button>
       {open && (
         <QueuePopover
@@ -936,13 +946,38 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   if (node.kind === "thinking") {
     return <ThinkingBubble node={node} />;
   }
+  return <MessageBubble node={node} />;
+});
+
+const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) {
+  const [collapsed, setCollapsed] = useState(false);
   const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
+  const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
+  const receiving = node.kind === "agent" && node.complete === false;
+  const toggleCollapsed = () => setCollapsed((value) => !value);
+
   return (
-    <article className={`bubble ${node.kind}`}>
-      <div className="bubble-head">
-        <span>{node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind)}</span>
+    <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""}`}>
+      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+        <span>{label}</span>
+        <span className="message-actions">
+          {receiving && <LiveSpinner title="正在接收消息" />}
+          <button
+            className="thinking-toggle message-toggle"
+            title={collapsed ? "展开消息" : "折叠消息"}
+            aria-expanded={!collapsed}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCollapsed();
+            }}
+          >
+            {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        </span>
       </div>
-      <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
+        <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+      </div>
     </article>
   );
 });
@@ -960,6 +995,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
   const [collapsed, setCollapsed] = useState(() => node.complete === true);
   const autoCollapsedRef = useRef(node.complete === true);
   const html = renderMarkdown(node.content);
+  const receiving = node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
 
   useEffect(() => {
@@ -973,17 +1009,20 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
     <article className={`bubble thinking ${collapsed ? "collapsed" : ""}`}>
       <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
         <span><Brain size={15} /> Thinking</span>
-        <button
-          className="thinking-toggle"
-          title={collapsed ? "展开思考内容" : "折叠思考内容"}
-          aria-expanded={!collapsed}
-          onClick={(event) => {
-            event.stopPropagation();
-            toggleCollapsed();
-          }}
-        >
-          {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-        </button>
+        <span className="message-actions">
+          {receiving && <LiveSpinner title="正在接收思考内容" />}
+          <button
+            className="thinking-toggle"
+            title={collapsed ? "展开思考内容" : "折叠思考内容"}
+            aria-expanded={!collapsed}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCollapsed();
+            }}
+          >
+            {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        </span>
       </div>
       <div className={`collapsible-body thinking-body ${collapsed ? "is-collapsed" : ""}`} aria-hidden={collapsed}>
         <div className="collapsible-body-inner">
@@ -1000,6 +1039,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
 const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   const tool = node.tool!;
   const completed = tool.status === "success" || tool.status === "fail";
+  const running = tool.status === "running";
   const [collapsed, setCollapsed] = useState(() => completed);
   const autoCollapsedRef = useRef(completed);
   const hasStructuredArguments = tool.arguments !== undefined;
@@ -1020,7 +1060,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           {tool.description && <span className="tool-description">{tool.description}</span>}
         </span>
         <span className="tool-actions">
-          <strong>{tool.status}</strong>
+          {running ? <LiveSpinner title="工具运行中" /> : <strong>{tool.status}</strong>}
           <button
             className="thinking-toggle tool-toggle"
             title={collapsed ? "展开工具调用" : "折叠工具调用"}
@@ -1057,6 +1097,14 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
     </article>
   );
 });
+
+function LiveSpinner({ title }: { title: string }) {
+  return (
+    <span className="live-spinner" title={title} aria-label={title} role="status">
+      <LoaderCircle size={15} />
+    </span>
+  );
+}
 
 function ToolProgress({ progress, compact }: { progress: ToolProgressState; compact: boolean }) {
   const percent = progress.progress == null ? null : Math.round(progress.progress * 100);

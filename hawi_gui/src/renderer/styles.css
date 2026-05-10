@@ -95,13 +95,58 @@ button:disabled {
   white-space: nowrap;
 }
 
+.status-cell {
+  width: 104px;
+  flex: 0 0 104px;
+  padding: 0 10px;
+  text-align: center;
+}
+
 .status-cell strong {
-  color: #286352;
+  color: #34464c;
+}
+
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: #6f8480;
+}
+
+.state-ready .status-icon,
+.state-idle .status-icon {
+  color: #5d8177;
+}
+
+.state-running .status-icon {
+  color: #a37a3d;
+  animation: status-spin 920ms linear infinite;
+}
+
+.state-interrupting .status-icon {
+  color: #9a7461;
+  animation: status-spin 1280ms linear infinite;
+}
+
+.state-stopped .status-icon {
+  color: #839094;
 }
 
 .state-running strong,
 .state-interrupting strong {
-  color: #a15f00;
+  color: #7a6548;
+}
+
+.state-stopped strong {
+  color: #6f7b80;
+}
+
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .priority-status {
@@ -737,9 +782,11 @@ button:disabled {
 }
 
 .bubble {
+  --bubble-border-color: #d8ddde;
+  position: relative;
   max-width: 860px;
   margin: 0 0 10px 0;
-  border: 1px solid #d8ddde;
+  border: 1px solid var(--bubble-border-color);
   border-radius: 8px;
   background: #fbfcfc;
   user-select: text;
@@ -747,13 +794,32 @@ button:disabled {
 }
 
 .bubble.user {
+  --bubble-border-color: #c9ddd5;
   margin-left: auto;
   background: #eef7f3;
-  border-color: #c9ddd5;
 }
 
 .bubble.agent {
   background: #ffffff;
+}
+
+.bubble.message::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 2;
+  border: 1px solid var(--bubble-border-color);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.bubble.message > * {
+  position: relative;
+  z-index: 1;
+}
+
+.bubble.message-collapsed .bubble-head {
+  border-bottom-color: #edf0f1;
 }
 
 .bubble.thinking {
@@ -827,7 +893,10 @@ button:disabled {
 }
 
 .tool-actions {
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
+  gap: 4px;
 }
 
 .bubble.tool.pending .tool-actions strong {
@@ -848,6 +917,28 @@ button:disabled {
 
 .tool-toggle {
   margin-left: 2px;
+}
+
+.message-toggle {
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.message-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.live-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: #7f8f8b;
+  animation: status-spin 920ms linear infinite;
 }
 
 .thinking-toggle {
@@ -897,6 +988,36 @@ button:disabled {
   overflow: hidden;
 }
 
+.message-body {
+  position: relative;
+  max-height: 70vh;
+  overflow: hidden;
+  transition: max-height 190ms ease;
+}
+
+.message-body.is-collapsed {
+  max-height: calc(1.48em * 10 + 20px);
+}
+
+.message-body.is-collapsed::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.44)),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0), #ffffff 88%);
+}
+
+.bubble.user .message-body.is-collapsed::after {
+  background:
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.36), rgba(255, 255, 255, 0.36)),
+    linear-gradient(to bottom, rgba(238, 247, 243, 0), #eef7f3 88%);
+}
+
 .thinking-summary {
   max-height: 0;
   padding: 0 12px;
@@ -942,9 +1063,13 @@ button:disabled {
   .bubble-head,
   .collapsible-body,
   .collapsible-body.is-collapsed,
+  .message-body,
   .thinking-summary,
-  .thinking-summary.is-visible {
+  .thinking-summary.is-visible,
+  .status-icon,
+  .live-spinner {
     transition: none;
+    animation: none;
   }
 }
 

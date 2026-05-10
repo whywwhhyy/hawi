@@ -247,7 +247,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "run.stop": {
       const runId = String(payload.run_id ?? "");
-      const completedState = completeThinkingForRun(state, runId);
+      const completedState = completeOpenRunNodesForRun(state, runId);
       const nextRuns = { ...completedState.runs };
       delete nextRuns[runId];
       return {
@@ -263,7 +263,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "tool.call_start": {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
-      const completedState = completeThinkingForRun(state, runId);
+      const completedState = completeOpenRunNodesForRun(state, runId);
       const toolCallId = String(payload.tool_call_id ?? "");
       const status = normalizeToolStatus(payload.status, "running");
       const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
@@ -754,12 +754,30 @@ function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinkin
 }
 
 function completeThinkingForRun(state: AppState, runId: string): AppState {
-  const thinkingNodeId = state.runs[runId]?.thinkingNodeId;
-  if (!thinkingNodeId) {
+  return completeRunNodeForRun(state, runId, "thinkingNodeId", "thinking");
+}
+
+function completeOpenRunNodesForRun(state: AppState, runId: string): AppState {
+  return completeRunNodeForRun(
+    completeRunNodeForRun(state, runId, "thinkingNodeId", "thinking"),
+    runId,
+    "agentNodeId",
+    "agent"
+  );
+}
+
+function completeRunNodeForRun(
+  state: AppState,
+  runId: string,
+  key: "agentNodeId" | "thinkingNodeId",
+  kind: "agent" | "thinking"
+): AppState {
+  const nodeIdForRun = state.runs[runId]?.[key];
+  if (!nodeIdForRun) {
     return state;
   }
-  const updated = updateNode(state, thinkingNodeId, (node) => (
-    node.kind === "thinking" ? { ...node, complete: true } : node
+  const updated = updateNode(state, nodeIdForRun, (node) => (
+    node.kind === kind ? { ...node, complete: true } : node
   ));
   return {
     ...updated,
@@ -767,7 +785,7 @@ function completeThinkingForRun(state: AppState, runId: string): AppState {
       ...updated.runs,
       [runId]: {
         ...(updated.runs[runId] ?? {}),
-        thinkingNodeId: undefined
+        [key]: undefined
       }
     }
   };

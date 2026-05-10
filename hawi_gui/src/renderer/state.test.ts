@@ -127,7 +127,9 @@ describe("core event reducer", () => {
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent", "tool", "agent"]);
     expect(state.nodes[1].content).toBe("before");
+    expect(state.nodes[1].complete).toBe(true);
     expect(state.nodes[3].content).toBe("after");
+    expect(state.nodes[3].complete).toBe(false);
   });
 
   it("does not create an empty agent node when a tool appears first", () => {
@@ -173,6 +175,16 @@ describe("core event reducer", () => {
     state = reduceCoreEvent(state, frame("run.stop", { run_id: "run-stop-thinking", stop_reason: "end_turn" }));
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "divider"]);
+    expect(state.nodes[1].complete).toBe(true);
+  });
+
+  it("marks agent messages complete when run stops", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-stop-agent", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-stop-agent", delta: "answer" }));
+    state = reduceCoreEvent(state, frame("run.stop", { run_id: "run-stop-agent", stop_reason: "end_turn" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent", "divider"]);
     expect(state.nodes[1].complete).toBe(true);
   });
 
