@@ -14,7 +14,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from .gateway import Gateway, register_gateway
-from .protocol import json_dumps, make_error
+from .protocol import make_error
 from .tlv import (
     DEFAULT_MAX_FRAME_SIZE,
     TYPE_BINARY_BLOB,

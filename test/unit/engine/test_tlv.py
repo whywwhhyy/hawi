@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import io
 
 import pytest
 
 from hawi_engine.tlv import (
     DEFAULT_MAX_FRAME_SIZE,
-    TYPE_BINARY_BLOB,
     TYPE_JSON_FRAME,
     FrameTooLargeError,
     UnexpectedEOFError,
@@ -94,7 +92,7 @@ async def test_read_frame_skips_unknown_type():
     unknown = encode_frame(0x42, b"opaque")
     body2 = b'{"b":2}'
     reader = await _bytes_reader(encode_frame(TYPE_JSON_FRAME, body1) + unknown + encode_frame(TYPE_JSON_FRAME, body2))
-    t1, v1 = await read_frame(reader)
-    t2, v2 = await read_frame(reader)
-    t3, v3 = await read_frame(reader)
+    t1, _ = await read_frame(reader)
+    t2, _ = await read_frame(reader)
+    t3, _ = await read_frame(reader)
     assert (t1, t2, t3) == (TYPE_JSON_FRAME, 0x42, TYPE_JSON_FRAME)
