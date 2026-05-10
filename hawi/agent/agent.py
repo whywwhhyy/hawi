@@ -7,7 +7,6 @@ tool execution, and plugin hooks for agent workflows.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 import json
 import os
@@ -40,7 +39,7 @@ from hawi.models.usage import (
 from hawi.plugin import HawiPlugin
 from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
-from hawi.tool.types import AgentTool, ToolParameterInjectionContext, ToolResult
+from hawi.tool.types import AgentTool, ToolResult
 
 from hawi.errors import (
     AgentErrorType,
@@ -50,8 +49,6 @@ from hawi.errors import (
     ModelError,
     ContextLengthError,
     MaxIterationsError,
-    ToolNotFoundError,
-    ToolExecutionError,
 )
 from hawi.events import (
     Event,
@@ -62,8 +59,6 @@ from hawi.events import (
     AgentMessageAddedEvent,
     AgentRunStartEvent,
     AgentRunStopEvent,
-    AgentToolCallEvent,
-    AgentToolResultPartEvent,
     AgentToolResultEvent,
     ModelErrorEvent,
     ModelRetryEvent,
@@ -82,6 +77,7 @@ from .context import (
 )
 from .result import AgentRunResult, ToolCallRecord
 from .stream_accumulator import StreamBlockAccumulator
+from .tool_executor import PreparedToolArguments, ToolExecutor
 
 
 
@@ -142,15 +138,6 @@ class _ExecutionState:
     error: HawiError | str | None = None
     should_stop: bool = False
     run_id: str = ""
-
-
-@dataclass
-class _PreparedToolArguments:
-    """Arguments split into tool-visible and framework-visible parts."""
-
-    tool_arguments: dict[str, Any]
-    injected_arguments: dict[str, Any] = field(default_factory=dict)
-    short_circuit_result: ToolResult | None = None
 
 
 @dataclass
@@ -1640,6 +1627,20 @@ class HawiAgent:
 
         return event
 
+    def _create_tool_executor(self) -> ToolExecutor:
+        """Build a tool executor bound to the agent's current runtime state."""
+        return ToolExecutor(
+            agent=self,
+            plugin_manager=self._plugin_manager,
+            context=self._context,
+            emit_event=self._emit_event,
+            render_tool_result=self._tool_result_content,
+            add_tool_result=self._add_tool_result_with_pending_steer,
+            emit_tool_result_message=self._emit_tool_result_message_event,
+            emit_materialized_steer_events=self._emit_materialized_steer_events,
+            current_tool_calls=self._current_tool_calls,
+        )
+
     async def _execute(
         self,
         message: str | list[ContentPart] | None,
@@ -1993,64 +1994,20 @@ class HawiAgent:
                     )
                     break
 
-                # Execute tool calls
-                active_batch_tool_calls = [
-                    tc for tc in tool_calls if tc not in self._current_tool_calls
-                ]
-                completed_tool_call_ids: list[str] = []
-                completed_tool_records: list[ToolCallRecord] = []
-                self._current_tool_calls.extend(active_batch_tool_calls)
-                try:
-                    for tc in tool_calls:
-                        # Check for interrupt before executing tool
-                        if self._check_interrupt():
-                            # Interrupted - stop processing remaining tools
-                            break
+                # Execute tool calls through the executor in model order.
+                # Calls in one assistant turn may depend on earlier calls.
+                tool_batch = await self._create_tool_executor().execute_batch(
+                    tool_calls,
+                    run_id=run_id,
+                    iteration=state.iteration,
+                    event_bus=event_bus,
+                    is_interrupted=self._check_interrupt,
+                    materialize_pending_steer=True,
+                )
+                state.tool_calls.extend(tool_batch.records)
 
-                        if tc in self._current_tool_calls:
-                            self._current_tool_calls.remove(tc)
-                        self._current_tool_calls.insert(0, tc)
-                        record = await self._execute_tool(
-                            tc,
-                            state,
-                            event_bus=event_bus,
-                            materialize_pending_steer=False,
-                        )
-                        state.tool_calls.append(record)
-                        completed_tool_call_ids.append(record.tool_call_id)
-                        completed_tool_records.append(record)
-                        await self._emit_event(
-                            AgentToolResultEvent.create(
-                                run_id=run_id,
-                                tool_call_id=record.tool_call_id,
-                                success=record.result.success,
-                                result_preview=str(record.result.output),
-                                duration_ms=record.duration_ms,
-                                result_obj=record.result,
-                            ),
-                            event_bus,
-                        )
-                        if tc in self._current_tool_calls:
-                            self._current_tool_calls.remove(tc)
-                finally:
-                    for tc in active_batch_tool_calls:
-                        if tc in self._current_tool_calls:
-                            self._current_tool_calls.remove(tc)
-
-                if completed_tool_records:
-                    self._mark_tool_results_unsent(completed_tool_records)
-
-                if completed_tool_call_ids and not self._check_interrupt():
-                    materialized_messages = (
-                        self._materialize_pending_steer_for_tool_results(
-                            completed_tool_call_ids
-                        )
-                    )
-                    await self._emit_materialized_steer_events(
-                        run_id,
-                        materialized_messages,
-                        event_bus,
-                    )
+                if tool_batch.records:
+                    self._mark_tool_results_unsent(tool_batch.records)
 
                 # Check if execution was interrupted
                 if self._check_interrupt():
@@ -2396,95 +2353,27 @@ class HawiAgent:
         tool_call_id: str,
         state: _ExecutionState,
         run_injection_handlers: bool,
-    ) -> _PreparedToolArguments:
-        """Validate and strip framework-injected parameters before tool calls."""
-        tool_arguments = dict(arguments)
-        injections = self._plugin_manager.get_tool_parameter_injections(tool)
-        if not injections:
-            return _PreparedToolArguments(tool_arguments=tool_arguments)
-
-        from hawi.tool._utils import validate_parameters
-
-        injected_schema: dict[str, Any] = {
-            "type": "object",
-            "properties": {
-                injection.name: injection.schema_copy()
-                for injection in injections
-            },
-        }
-        required = [injection.name for injection in injections if injection.required]
-        if required:
-            injected_schema["required"] = required
-
-        is_valid, errors = validate_parameters(arguments, injected_schema)
-        if not is_valid:
-            return _PreparedToolArguments(
-                tool_arguments=tool_arguments,
-                short_circuit_result=ToolResult(
-                    success=False,
-                    error=f"Injected parameter validation failed: {'; '.join(errors)}",
-                ),
-            )
-
-        injected_arguments: dict[str, Any] = {}
-        for injection in injections:
-            if injection.name in tool_arguments:
-                injected_arguments[injection.name] = tool_arguments.pop(injection.name)
-
-        prepared = _PreparedToolArguments(
-            tool_arguments=tool_arguments,
-            injected_arguments=injected_arguments,
-        )
-        if not run_injection_handlers:
-            return prepared
-
-        handler_context = ToolParameterInjectionContext(
-            agent=self,
-            tool=tool,
-            tool_name=tool.name,
+    ) -> PreparedToolArguments:
+        """Compatibility wrapper around :class:`ToolExecutor` argument prep."""
+        return await self._create_tool_executor().prepare_tool_arguments(
+            tool,
+            arguments,
             tool_call_id=tool_call_id,
             run_id=state.run_id,
             iteration=state.iteration,
-            arguments=dict(arguments),
-            injected_arguments=dict(injected_arguments),
+            run_injection_handlers=run_injection_handlers,
         )
-
-        for injection in injections:
-            if injection.name not in injected_arguments or injection.handler is None:
-                continue
-            try:
-                handler_result = injection.handler(
-                    handler_context,
-                    injected_arguments[injection.name],
-                )
-                if inspect.isawaitable(handler_result):
-                    handler_result = await handler_result
-            except Exception as e:
-                prepared.short_circuit_result = ToolResult(
-                    success=False,
-                    error=(
-                        "Injected parameter handler failed: "
-                        f"{type(e).__name__}: {e}"
-                    ),
-                )
-                break
-            if isinstance(handler_result, ToolResult):
-                prepared.short_circuit_result = handler_result
-                break
-
-        return prepared
 
     def _inject_tool_runtime_context(
         self,
         tool: AgentTool,
         tool_arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        """Inject Hawi's runtime tool-call context into tool-visible arguments."""
-        prepared = dict(tool_arguments)
-        context_param = getattr(tool, "context", None)
-        if context_param and self._context.tool_call_context:
-            prepared[context_param] = self._context.tool_call_context
-        return prepared
+        """Compatibility wrapper for runtime context injection."""
+        return self._create_tool_executor().inject_tool_runtime_context(
+            tool,
+            tool_arguments,
+        )
 
     async def _execute_tool(
         self,
@@ -2494,182 +2383,13 @@ class HawiAgent:
         event_bus: EventBus | None = None,
         materialize_pending_steer: bool = True,
     ) -> ToolCallRecord:
-        """Execute a single tool call."""
-        tool_name = tool_call["name"]
-        arguments = tool_call["arguments"]
-        tool_call_id = tool_call["id"]
-
-        start_time = time.time()
-
-        await self._emit_event(
-            AgentToolCallEvent.create(
-                run_id=state.run_id,
-                tool_name=tool_name,
-                arguments=arguments,
-                tool_call_id=tool_call_id,
-            ),
-            event_bus,
-        )
-
-        # Find tool early so hook context can include the tool object
-        tool = self._plugin_manager.get_tool(tool_name)
-        audit_pending = False
-
-        # before_tool_calling hook
-        _before_ctx = HookContext(
+        """Compatibility wrapper around :class:`ToolExecutor` single-call run."""
+        return await self._create_tool_executor().execute_call(
+            tool_call,
             run_id=state.run_id,
             iteration=state.iteration,
-            tool_call_id=tool_call_id,
-            tool=tool,
-        )
-        _hr = await self._invoke_before_tool_calling(tool_name, arguments, _before_ctx)
-        if _hr and _hr.action == "skip":
-            result = _hr.tool_result or ToolResult(success=False, error="Hook skipped tool without providing a result")
-        elif tool is None:
-            err = ToolNotFoundError(f"Tool '{tool_name}' not found")
-            result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
-        else:
-            prepared = await self._prepare_tool_arguments(
-                tool,
-                arguments,
-                tool_call_id=tool_call_id,
-                state=state,
-                run_injection_handlers=True,
-            )
-            if prepared.short_circuit_result is not None:
-                result = prepared.short_circuit_result
-            elif getattr(tool, "audit", False):
-                # Audit mode: cache the raw tool call for review. Injected
-                # parameters stay visible to the reviewer but are stripped on
-                # approval before the real tool runs.
-                self._context._add_pending_tool_call(tool_call_id, tool_name, arguments)
-                audit_pending = True
-                result = ToolResult(
-                    success=True,
-                    output=f"[AUDIT PENDING] Tool '{tool_name}' has been submitted for review. "
-                           f"Use review_pending_tools() to check status and approve/reject."
-                )
-            else:
-                # Prepare arguments with runtime context injection if needed
-                tool_arguments = self._inject_tool_runtime_context(
-                    tool,
-                    prepared.tool_arguments,
-                )
-
-                try:
-                    # Validate parameters before execution
-                    is_valid, errors = tool.validate_parameters(tool_arguments)
-                    if not is_valid:
-                        result = ToolResult(
-                            success=False,
-                            error=f"Parameter validation failed: {'; '.join(errors)}"
-                        )
-                    else:
-                        # Call arun and check if result is async generator
-                        owner = self._plugin_manager.get_tool_owner(tool_name)
-                        event_scope = (
-                            owner.plugin_event_context(
-                                run_id=state.run_id,
-                                tool_call_id=tool_call_id,
-                                tool_name=tool_name,
-                                iteration=state.iteration,
-                            )
-                            if owner is not None
-                            else contextlib.nullcontext()
-                        )
-                        with event_scope:
-                            raw_result = await tool.arun(**tool_arguments)
-
-                            # Check if result is async generator (async tool streaming)
-                            if inspect.isasyncgen(raw_result):
-                                # Async generator: stream results part by part
-                                parts: list[str] = []
-                                # Type cast to AsyncGenerator for iteration
-                                from typing import cast
-                                async_gen = cast(AsyncGenerator[Any, None], raw_result)
-                                async for part in async_gen:
-                                    parts.append(str(part))
-                                    # Emit partial result event
-                                    await self._emit_event(
-                                        AgentToolResultPartEvent.create(
-                                            run_id=state.run_id,
-                                            tool_call_id=tool_call_id,
-                                            part=str(part),
-                                            part_index=len(parts) - 1,
-                                            is_final=False,
-                                        ),
-                                        self._event_bus,
-                                    )
-                                # Final part event
-                                await self._emit_event(
-                                    AgentToolResultPartEvent.create(
-                                        run_id=state.run_id,
-                                        tool_call_id=tool_call_id,
-                                        part="",
-                                        part_index=len(parts),
-                                        is_final=True,
-                                    ),
-                                    self._event_bus,
-                                )
-                                # Combine all parts as final result
-                                full_output = "".join(parts)
-                                result = ToolResult(success=True, output=full_output)
-                            else:
-                                # Normal result: wrap in ToolResult
-                                if isinstance(raw_result, ToolResult):
-                                    result = raw_result
-                                else:
-                                    result = ToolResult(success=True, output=raw_result)
-                except Exception as e:
-                    # 包装为 ToolExecutionError，保留原始异常
-                    err = ToolExecutionError(f"Tool '{tool_name}' execution failed: {e}", details={"original": e})
-                    # All errors return to model as string (per design requirement)
-                    result = ToolResult(success=False, error=f"{err.__class__.__name__}: {err.message}")
-
-        duration_ms = (time.time() - start_time) * 1000
-
-        # after_tool_calling hook
-        await self._invoke_after_tool_calling(
-            tool_name, arguments, result,
-            HookContext(
-                run_id=state.run_id,
-                iteration=state.iteration,
-                tool_call_id=tool_call_id,
-                tool=tool,
-                duration_ms=duration_ms,
-            ),
-        )
-
-        # Add tool result to context (unless audit pending - will be added after approval)
-        if not audit_pending:
-            result_content = self._tool_result_content(result)
-            materialized_messages = self._add_tool_result_with_pending_steer(
-                tool_call_id=tool_call_id,
-                content=result_content,
-                is_error=not result.success,
-                materialize_pending_steer=materialize_pending_steer,
-                cache_point=getattr(result, "cache_point", None),
-                cache_point_source=getattr(result, "cache_point_source", None),
-            )
-            await self._emit_tool_result_message_event(
-                run_id=state.run_id,
-                tool_call_id=tool_call_id,
-                content=result_content,
-                is_error=not result.success,
-                event_bus=event_bus,
-            )
-            await self._emit_materialized_steer_events(
-                state.run_id,
-                materialized_messages,
-                event_bus,
-            )
-
-        return ToolCallRecord(
-            tool_name=tool_name,
-            arguments=arguments,
-            result=result,
-            duration_ms=duration_ms,
-            tool_call_id=tool_call_id,
+            event_bus=event_bus,
+            materialize_pending_steer=materialize_pending_steer,
         )
 
     def review_pending_tools(self) -> list[dict[str, Any]]:
@@ -2708,82 +2428,24 @@ class HawiAgent:
         """
         approved, _ = self._context.audit_pending_tool_calls(approve=tool_call_ids, reject=[])
         records: list[ToolCallRecord] = []
+        executor = self._create_tool_executor()
 
         for pending in approved:
-            # Execute the approved tool
-            tool = self._plugin_manager.get_tool(pending.tool_name)
-            if tool is None:
-                result = ToolResult(
-                    success=False,
-                    error=f"Tool '{pending.tool_name}' not found during approval execution"
-                )
-            else:
-                prepared = await self._prepare_tool_arguments(
-                    tool,
-                    pending.arguments,
-                    tool_call_id=pending.tool_call_id,
-                    state=_ExecutionState(run_id="audit", iteration=0),
-                    run_injection_handlers=False,
-                )
-                if prepared.short_circuit_result is not None:
-                    result = prepared.short_circuit_result
-                else:
-                    # Prepare arguments with runtime context injection if needed
-                    tool_arguments = self._inject_tool_runtime_context(
-                        tool,
-                        prepared.tool_arguments,
-                    )
-
-                    try:
-                        result = await tool.ainvoke(tool_arguments)
-                    except Exception as e:
-                        result = ToolResult(success=False, error=f"{type(e).__name__}: {e}")
-
-            # Create record
-            record = ToolCallRecord(
-                tool_name=pending.tool_name,
-                arguments=pending.arguments,
-                result=result,
-                duration_ms=0.0,  # Could track actual execution time if needed
-                tool_call_id=pending.tool_call_id,
+            tool_call: ToolCallPart = {
+                "type": "tool_call",
+                "id": pending.tool_call_id,
+                "name": pending.tool_name,
+                "arguments": pending.arguments,
+            }
+            record = await executor.execute_call(
+                tool_call,
+                run_id="audit",
+                iteration=0,
+                event_bus=event_bus,
+                run_injection_handlers=False,
+                audit_action="execute",
             )
             records.append(record)
-
-            # Add tool result to context
-            result_content = self._tool_result_content(result)
-            materialized_messages = self._add_tool_result_with_pending_steer(
-                tool_call_id=pending.tool_call_id,
-                content=result_content,
-                is_error=not result.success,
-                cache_point=getattr(result, "cache_point", None),
-                cache_point_source=getattr(result, "cache_point_source", None),
-            )
-            await self._emit_tool_result_message_event(
-                run_id="audit",
-                tool_call_id=pending.tool_call_id,
-                content=result_content,
-                is_error=not result.success,
-                event_bus=event_bus,
-            )
-            await self._emit_materialized_steer_events(
-                "audit",
-                materialized_messages,
-                event_bus,
-            )
-
-            # Emit event if event bus provided
-            if event_bus is not None:
-                await self._emit_event(
-                    AgentToolResultEvent.create(
-                        run_id="audit",
-                        tool_call_id=record.tool_call_id,
-                        success=record.result.success,
-                        result_preview=str(record.result.output)[:100],
-                        duration_ms=record.duration_ms,
-                        result_obj=record.result,
-                    ),
-                    event_bus,
-                )
 
         if records:
             self._mark_tool_results_unsent(records)

@@ -17,6 +17,7 @@ from .context import (
     ToolCallContext,
 )
 from .result import AgentRunResult, ToolCallRecord
+from .tool_executor import ToolExecutionBatchResult, ToolExecutor
 from .subagent import (
     SubAgentError,
     SubAgentHandle,
@@ -59,6 +60,8 @@ __all__ = [
     # Result
     "AgentRunResult",
     "ToolCallRecord",
+    "ToolExecutor",
+    "ToolExecutionBatchResult",
     # Subagents
     "SubAgentError",
     "SubAgentHandle",
