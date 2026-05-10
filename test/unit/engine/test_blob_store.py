@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import time
 from pathlib import Path
 
 import pytest
@@ -87,7 +86,7 @@ async def test_lru_evicts_unreferenced_blobs(store: BlobStore):
         body = bytes([i]) * 200
         bid = await store.upload_init(direction="inbound", sha256=_hash(body), size=200, mime=None)
         await store.upload_chunk(bid, 0, body)
-        info = await store.upload_finalize(bid)
+        await store.upload_finalize(bid)
         await store.release(bid)  # ref_count=0 after release
         bids.append(bid)
         # Tiny sleep so last_access timestamps order naturally

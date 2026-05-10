@@ -13,7 +13,6 @@ read/modify/write sequences (LRU eviction + insert).
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import hashlib
 import logging
@@ -23,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
-from .sandbox import Direction, blob_id_to_relpath, resolve_blob_path, validate_blob_id
+from .sandbox import Direction, resolve_blob_path, validate_blob_id
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +117,11 @@ class BlobStore:
             await asyncio.to_thread(self._conn.close)
             self._conn = None
 
+    def _db(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise RuntimeError("BlobStore is not started; call await start() first")
+        return self._conn
+
     # ----- Upload --------------------------------------------------------
 
     async def upload_init(
@@ -143,7 +147,7 @@ class BlobStore:
         async with self._lock:
             now = time.time()
             await asyncio.to_thread(
-                self._conn.execute,
+                self._db().execute,
                 "INSERT INTO blobs (blob_id, sha256, direction, size, mime, last_access, ref_count, created_at, finalized)"
                 " VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)",
                 (blob_id, sha256, direction, size, mime, now, now),
@@ -203,7 +207,7 @@ class BlobStore:
                 await asyncio.to_thread(path.unlink, missing_ok=True)
                 await asyncio.to_thread(_rmdir_if_empty, path.parent)
                 await asyncio.to_thread(
-                    self._conn.execute, "DELETE FROM blobs WHERE blob_id = ?", (blob_id,)
+                    self._db().execute, "DELETE FROM blobs WHERE blob_id = ?", (blob_id,)
                 )
                 raise Sha256Mismatch(
                     f"declared sha256={declared_sha[:8]}...,size={declared_size}; "
@@ -215,13 +219,13 @@ class BlobStore:
 
             now = time.time()
             await asyncio.to_thread(
-                self._conn.execute,
+                self._db().execute,
                 "UPDATE blobs SET finalized = 1, ref_count = 1, last_access = ? WHERE blob_id = ?",
                 (now, blob_id),
             )
 
             row = await asyncio.to_thread(
-                self._conn.execute,
+                self._db().execute,
                 "SELECT blob_id, sha256, direction, size, mime, ref_count FROM blobs WHERE blob_id = ?",
                 (blob_id,),
             )
@@ -232,7 +236,7 @@ class BlobStore:
 
     async def has(self, *, sha256: str, direction: Direction) -> Optional[str]:
         cur = await asyncio.to_thread(
-            self._conn.execute,
+            self._db().execute,
             "SELECT blob_id FROM blobs WHERE sha256 = ? AND direction = ? AND finalized = 1 LIMIT 1",
             (sha256, direction),
         )
@@ -245,7 +249,7 @@ class BlobStore:
         """Yield (seq, chunk_bytes) for the blob. Updates last_access."""
         validate_blob_id(blob_id)
         cur = await asyncio.to_thread(
-            self._conn.execute,
+            self._db().execute,
             "SELECT direction FROM blobs WHERE blob_id = ? AND finalized = 1",
             (blob_id,),
         )
@@ -275,7 +279,7 @@ class BlobStore:
 
         # Update last_access (tracking purpose; ignore concurrency races, latest wins)
         await asyncio.to_thread(
-            self._conn.execute,
+            self._db().execute,
             "UPDATE blobs SET last_access = ? WHERE blob_id = ?",
             (time.time(), blob_id),
         )
@@ -288,12 +292,12 @@ class BlobStore:
         validate_blob_id(blob_id)
         async with self._lock:
             await asyncio.to_thread(
-                self._conn.execute,
+                self._db().execute,
                 "UPDATE blobs SET ref_count = MAX(ref_count - 1, 0) WHERE blob_id = ?",
                 (blob_id,),
             )
             cur = await asyncio.to_thread(
-                self._conn.execute,
+                self._db().execute,
                 "SELECT ref_count FROM blobs WHERE blob_id = ?",
                 (blob_id,),
             )
@@ -306,7 +310,7 @@ class BlobStore:
 
     async def _get_unfinalized(self, blob_id: str) -> Optional[dict]:
         cur = await asyncio.to_thread(
-            self._conn.execute,
+            self._db().execute,
             "SELECT blob_id, sha256, direction, size, mime, finalized FROM blobs WHERE blob_id = ?",
             (blob_id,),
         )
@@ -325,7 +329,7 @@ class BlobStore:
         decide if we have room.
         """
         cur = await asyncio.to_thread(
-            self._conn.execute,
+            self._db().execute,
             "SELECT COALESCE(SUM(size), 0) FROM blobs WHERE direction = ? AND finalized = 1",
             (direction,),
         )
@@ -337,7 +341,7 @@ class BlobStore:
 
         # Try to evict oldest unreferenced (ref_count = 0) until we fit.
         cur = await asyncio.to_thread(
-            self._conn.execute,
+            self._db().execute,
             "SELECT blob_id, size FROM blobs"
             " WHERE direction = ? AND finalized = 1 AND ref_count = 0"
             " ORDER BY last_access ASC",
@@ -361,7 +365,7 @@ class BlobStore:
 
         for blob_id in evicted_ids:
             cur = await asyncio.to_thread(
-                self._conn.execute,
+                self._db().execute,
                 "SELECT direction FROM blobs WHERE blob_id = ?",
                 (blob_id,),
             )
@@ -372,6 +376,6 @@ class BlobStore:
             await asyncio.to_thread(path.unlink, missing_ok=True)
             await asyncio.to_thread(_rmdir_if_empty, path.parent)
             await asyncio.to_thread(
-                self._conn.execute, "DELETE FROM blobs WHERE blob_id = ?", (blob_id,)
+                self._db().execute, "DELETE FROM blobs WHERE blob_id = ?", (blob_id,)
             )
         logger.info("Evicted %d blob(s) from %s, freed %d bytes", len(evicted_ids), direction, freed)
