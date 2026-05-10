@@ -229,6 +229,7 @@ class ModelRegistry:
             properties: provider创建Model时附带的参数
             quiet: 是否静默（不输出覆盖警告）
         """
+        self._auto_load_needed = False
         provider = ModelProviderConfig(
             name=name,
             adapter=adapter,
@@ -298,6 +299,7 @@ class ModelRegistry:
             quiet: 是否静默（不输出覆盖警告）
         """
         provider, model_id = self._split_model_name(name)
+        self._auto_load_needed = False
 
         is_wildcard = self._is_wildcard_model_config_name(name)
         if not is_wildcard and name in self._model_config_overrides and not quiet:

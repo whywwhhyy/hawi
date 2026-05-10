@@ -306,6 +306,39 @@ class TestModelConfigOverride:
         assert config.max_context_tokens == 64_000
         assert registry.has_model("siliconflow/Pro/deepseek-ai/DeepSeek-V3.2")
 
+    def test_explicit_registration_suppresses_default_auto_load(self, tmp_path):
+        """Programmatic test configs should not merge user/project auto configs."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        config_dir = tmp_path / ".hawi"
+        config_dir.mkdir()
+        (config_dir / "models.yaml").write_text("""
+providers:
+  - name: openai
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: auto-key
+      max_context_tokens: 131072
+""")
+
+        registry.register_provider(
+            "openai",
+            "OpenAIModel",
+            ["gpt-4"],
+            {"api_key": "explicit-key", "max_context_tokens": 32_000},
+            quiet=True,
+        )
+
+        with patch("hawi.models.registry.Path.cwd", return_value=tmp_path):
+            config = registry.get_model_config("openai/gpt-4")
+
+        assert config is not None
+        assert config.properties["api_key"] == "explicit-key"
+        assert config.max_context_tokens == 32_000
+
     def test_wildcard_model_configs_merge_in_registration_order(self):
         """Multiple wildcard matches should merge in registration order."""
         registry = ModelRegistry()
