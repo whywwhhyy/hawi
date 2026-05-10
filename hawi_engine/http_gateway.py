@@ -12,6 +12,7 @@ import collections
 import contextlib
 import logging
 import uuid
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from .gateway import Gateway, register_gateway
@@ -104,7 +105,7 @@ class HttpGatewayClient(QueuedJsonClient):
 
     def iter_buffer_since(
         self, last_seq: int
-    ) -> "collections.abc.Iterator[tuple[int, dict[str, Any]]]":
+    ) -> Iterator[tuple[int, dict[str, Any]]]:
         """Yield buffered (seq, frame) pairs with seq > last_seq, in order."""
         for seq, frame in self._ring:
             if seq > last_seq:
@@ -214,7 +215,7 @@ class HttpGateway(Gateway):
                 "payload": payload,
             }
             fut = await client.expect_response(hello_id)
-            await runtime.handle_frame(client, hello_frame)
+            await runtime.handle_frame(client, json_dumps(hello_frame))
             try:
                 response = await asyncio.wait_for(fut, timeout=5.0)
             except asyncio.TimeoutError:
@@ -243,7 +244,7 @@ class HttpGateway(Gateway):
                 body = {**body, "id": request_id}
 
             fut = await client.expect_response(request_id)
-            await runtime.handle_frame(client, body)
+            await runtime.handle_frame(client, json_dumps(body))
             try:
                 response_frame = await asyncio.wait_for(fut, timeout=30.0)
             except asyncio.TimeoutError:
@@ -329,7 +330,7 @@ class HttpGateway(Gateway):
             return response
 
         async def ws_events(request: "web.Request") -> "web.WebSocketResponse":
-            client, is_new = await _resolve_client(request)
+            client, _is_new = await _resolve_client(request)
             await _maybe_synthesize_hello(request, client)
 
             ws = web.WebSocketResponse()
