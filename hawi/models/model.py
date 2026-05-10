@@ -10,6 +10,9 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
+import json
+import math
+
 from typing import Any, AsyncGenerator, ClassVar, Iterator, List, Literal, cast, overload
 
 from hawi.models.message import (
@@ -30,7 +33,29 @@ from hawi.models.message import (
 )
 from hawi.errors import ConfigurationError, ModelError
 
-__all__ = ["Model", "DelegateModel", "DeltaPart", "BalanceInfo", "ProviderRequest", "ProviderResponse", "ModelParams", "BalanceDetails", "ModelError"]
+TokenEstimateMethod = Literal[
+    "provider_count",
+    "provider_tokenize",
+    "local_tokenizer",
+    "heuristic",
+    "unsupported",
+]
+TokenEstimateConfidence = Literal["exact", "approximate", "unsupported"]
+
+__all__ = [
+    "Model",
+    "DelegateModel",
+    "DeltaPart",
+    "BalanceInfo",
+    "ProviderRequest",
+    "ProviderResponse",
+    "ModelParams",
+    "BalanceDetails",
+    "TokenEstimate",
+    "TokenEstimateMethod",
+    "TokenEstimateConfidence",
+    "ModelError",
+]
 
 STEER_ASSISTANT_ACK_TEXT = (
     "The user is sending a new steering message, I'll reply to it and "
@@ -77,6 +102,43 @@ class BalanceInfo:
         return (
             f"BalanceInfo({self.currency}: "
             f"available={self.available_balance:.4f})"
+        )
+
+
+@dataclass
+class TokenEstimate:
+    """Estimated token cost for a provider-ready model request.
+
+    ``provider_count`` is the preferred method because providers count the same
+    chat/message request shape that will be billed. Tokenizer and heuristic
+    estimates can be useful for UI budgeting, but should be treated as
+    approximate because providers may add hidden formatting tokens.
+    """
+
+    input_tokens: int | None = None
+    context_tokens: int | None = None
+    total_tokens: int | None = None
+    method: TokenEstimateMethod = "unsupported"
+    confidence: TokenEstimateConfidence = "unsupported"
+    provider: str | None = None
+    model_id: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def unsupported(
+        cls,
+        *,
+        provider: str | None = None,
+        model_id: str | None = None,
+        reason: str | None = None,
+    ) -> "TokenEstimate":
+        details = {"reason": reason} if reason else {}
+        return cls(
+            method="unsupported",
+            confidence="unsupported",
+            provider=provider,
+            model_id=model_id,
+            details=details,
         )
 
 
@@ -201,6 +263,30 @@ class Model(ABC):
             return self._stream_impl(request)
         return self._invoke_impl(request)
 
+    def estimate_tokens(
+        self,
+        messages: list[Message],
+        *,
+        system: str | List[ContentPart] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = None,
+        **kwargs,
+    ) -> TokenEstimate:
+        """Estimate input/context tokens for a model request.
+
+        Providers with official count endpoints should override
+        :meth:`_estimate_tokens_impl`. The default implementation returns a
+        low-confidence heuristic, useful for UI context meters but not billing.
+        """
+        if getattr(self, '_async_only', False):
+            raise RuntimeError(
+                "This model was obtained with async_only=True and can only be used for async calls. "
+                "Please use aestimate_tokens(), or obtain the model with async_only=False."
+            )
+
+        request = self._build_request(messages, system, tools, tool_choice, kwargs)
+        return self._estimate_tokens_impl(request)
+
     # ==========================================================================
     # 公共 API - 异步方法
     # ==========================================================================
@@ -237,6 +323,19 @@ class Model(ABC):
         else:
             async for delta in self._ainvoke_impl(request):
                 yield delta
+
+    async def aestimate_tokens(
+        self,
+        messages: list[Message],
+        *,
+        system: str | List[ContentPart] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = None,
+        **kwargs,
+    ) -> TokenEstimate:
+        """Async version of :meth:`estimate_tokens`."""
+        request = self._build_request(messages, system, tools, tool_choice, kwargs)
+        return await self._aestimate_tokens_impl(request)
 
     # ==========================================================================
     # 请求/响应转换 - 子类必须实现
@@ -295,6 +394,25 @@ class Model(ABC):
         """同步流式实现（默认不支持）"""
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
 
+    def _estimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        """Estimate token usage for one prepared request.
+
+        The base implementation intentionally does not claim provider accuracy.
+        It serializes the normalized request shape and uses a rough character
+        heuristic so callers can still show a best-effort context meter.
+        """
+        return self._heuristic_token_estimate(request)
+
+    async def _aestimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        """Async token estimate implementation."""
+        return self._estimate_tokens_impl(request)
+
     async def _astream_impl(
         self,
         request: MessageRequest,
@@ -314,6 +432,31 @@ class Model(ABC):
         # Subclasses should override this method
         raise NotImplementedError(f"{self.__class__.__name__} does not support async streaming")
         yield  # Make this an async generator
+
+    def _heuristic_token_estimate(
+        self,
+        request: MessageRequest,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> TokenEstimate:
+        payload = request.model_dump(exclude_none=True, mode="json")
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        # A deliberately conservative approximation for mixed English/CJK JSON
+        # request payloads. Provider-specific adapters should replace this with
+        # official count APIs whenever possible.
+        ascii_chars = sum(1 for char in serialized if ord(char) < 128)
+        non_ascii_chars = len(serialized) - ascii_chars
+        input_tokens = max(1, math.ceil(ascii_chars / 4 + non_ascii_chars / 2))
+        return TokenEstimate(
+            input_tokens=input_tokens,
+            context_tokens=input_tokens,
+            total_tokens=input_tokens,
+            method="heuristic",
+            confidence="approximate",
+            provider=self.__class__.__name__,
+            model_id=self.model_id,
+            details={"serialized_chars": len(serialized), **(details or {})},
+        )
 
     # ==========================================================================
     # 内部工具方法
@@ -721,6 +864,12 @@ class DelegateModel(Model):
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         return self._delegate._stream_impl(request)
+
+    def _estimate_tokens_impl(self, request: MessageRequest) -> TokenEstimate:
+        return self._delegate._estimate_tokens_impl(request)
+
+    async def _aestimate_tokens_impl(self, request: MessageRequest) -> TokenEstimate:
+        return await self._delegate._aestimate_tokens_impl(request)
 
     async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         async for delta in self._delegate._astream_impl(request):

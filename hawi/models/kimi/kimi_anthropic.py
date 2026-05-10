@@ -14,12 +14,14 @@ import logging
 from typing import Any
 
 from hawi.models.anthropic import AnthropicModel
-from hawi.models.message import MessageResponse
+from hawi.models.message import MessageRequest, MessageResponse
+from hawi.models.openai._converters import prepare_request
+from ._token_estimate import KimiTokenEstimateMixin
 
 logger = logging.getLogger(__name__)
 
 
-class KimiAnthropicModel(AnthropicModel):
+class KimiAnthropicModel(KimiTokenEstimateMixin, AnthropicModel):
     """
     Kimi Anthropic API 兼容模型
 
@@ -42,11 +44,13 @@ class KimiAnthropicModel(AnthropicModel):
         model_id: str = "kimi-k2.5",
         api_key: str | None = None,
         base_url: str = "https://api.kimi.com/coding/",
+        token_estimate_base_url: str | None = "https://api.moonshot.cn/v1",
         thinking_budget: int | None = 8000,
         max_output_tokens: int | None = None,
         **params,
     ):
         """初始化 Kimi Anthropic 模型"""
+        self.token_estimate_base_url = token_estimate_base_url
         thinking_enabled = bool(thinking_budget)
         include_reasoning_in_context = params.pop(
             "include_reasoning_in_context",
@@ -82,6 +86,16 @@ class KimiAnthropicModel(AnthropicModel):
                 logger.debug("Detected citations in response: %s", block["citations"])
 
         return super()._parse_response_impl(response)
+
+    def _prepare_kimi_token_estimate_request(
+        self,
+        request: MessageRequest,
+    ) -> dict[str, Any]:
+        return prepare_request(
+            request=request,
+            model_id=self.model_id,
+            params=self._get_params(),
+        )
 
     def _serialize_content_block(self, block: dict[str, Any]) -> dict[str, Any]:
         """序列化内容块，处理 citations"""

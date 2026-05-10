@@ -17,6 +17,7 @@ from hawi.models import DeltaPart
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
 from hawi.models import MessageRequest
+from ._token_estimate import KimiTokenEstimateMixin
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ KIMI_K25_FIXED_PARAMS = {
 }
 
 
-class KimiOpenAIModel(OpenAIModel):
+class KimiOpenAIModel(KimiTokenEstimateMixin, OpenAIModel):
     """
     Kimi/Moonshot OpenAI API 兼容模型
 

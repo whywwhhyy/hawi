@@ -21,6 +21,9 @@ from .model import (
     ModelParams,
     ProviderRequest,
     ProviderResponse,
+    TokenEstimate,
+    TokenEstimateConfidence,
+    TokenEstimateMethod,
 )
 from .message import (
     AudioPart,
@@ -136,6 +139,9 @@ __all__ = [
     "ProviderResponse",
     "ModelParams",
     "BalanceDetails",
+    "TokenEstimate",
+    "TokenEstimateConfidence",
+    "TokenEstimateMethod",
     # Message types
     "Message",
     "MessageRequest",

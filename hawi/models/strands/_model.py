@@ -29,6 +29,7 @@ from hawi.models import (
     DeltaThinkingPart,
     DeltaToolCallPart,
     DeltaFinishPart,
+    TokenEstimate,
 )
 from hawi.models.usage import normalize_strands_usage
 
@@ -270,6 +271,90 @@ class StrandsModel(Model):
                 else:
                     # Brief yield, allow other tasks to run
                     time.sleep(0.001)
+
+    def _estimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        strands_request = self._prepare_request_impl(request)
+
+        for method_name in ("estimate_tokens", "count_tokens"):
+            method = getattr(self.strands_model, method_name, None)
+            if callable(method):
+                result = method(**strands_request)
+                return self._coerce_token_estimate(result, method_name)
+
+        estimate = self._heuristic_token_estimate(
+            request,
+            details={"strands_model": type(self.strands_model).__name__},
+        )
+        estimate.provider = "strands"
+        estimate.details["provider_count_endpoint"] = "depends_on_underlying_strands_model"
+        return estimate
+
+    async def _aestimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        strands_request = self._prepare_request_impl(request)
+
+        for method_name in ("aestimate_tokens", "acount_tokens"):
+            method = getattr(self.strands_model, method_name, None)
+            if callable(method):
+                result = await method(**strands_request)
+                return self._coerce_token_estimate(result, method_name)
+
+        return self._estimate_tokens_impl(request)
+
+    def _coerce_token_estimate(
+        self,
+        result: Any,
+        method_name: str,
+    ) -> TokenEstimate:
+        if isinstance(result, TokenEstimate):
+            if result.provider is None:
+                result.provider = "strands"
+            if result.model_id is None:
+                result.model_id = self.model_id
+            result.details.setdefault("strands_method", method_name)
+            return result
+
+        if isinstance(result, int):
+            tokens = result
+            details: dict[str, Any] = {"raw_result": result}
+        elif isinstance(result, dict):
+            tokens = (
+                result.get("input_tokens")
+                or result.get("context_tokens")
+                or result.get("total_tokens")
+                or result.get("tokens")
+                or 0
+            )
+            details = dict(result)
+        else:
+            tokens = (
+                getattr(result, "input_tokens", None)
+                or getattr(result, "context_tokens", None)
+                or getattr(result, "total_tokens", None)
+                or getattr(result, "tokens", None)
+                or 0
+            )
+            details = {
+                "raw_result_type": type(result).__name__,
+                "strands_method": method_name,
+            }
+
+        tokens = int(tokens or 0)
+        return TokenEstimate(
+            input_tokens=tokens,
+            context_tokens=tokens,
+            total_tokens=tokens,
+            method="provider_count",
+            confidence="exact" if tokens > 0 else "approximate",
+            provider="strands",
+            model_id=self.model_id,
+            details={"strands_method": method_name, **details},
+        )
 
     async def _ainvoke_impl(
         self,

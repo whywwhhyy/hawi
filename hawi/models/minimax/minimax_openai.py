@@ -11,6 +11,7 @@ import re
 from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
+from hawi.models import TokenEstimate
 from hawi.models.openai import OpenAIModel
 from hawi.models.openai._streaming import StreamProcessor
 from hawi.models.openai._model import _convert_openai_error as _base_convert_openai_error
@@ -151,6 +152,16 @@ class MiniMaxOpenAIModel(OpenAIModel):
             if converted is not e:
                 raise converted from e
             raise
+
+    def _estimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        estimate = super()._estimate_tokens_impl(request)
+        estimate.provider = "minimax"
+        estimate.details["provider_count_endpoint"] = "not_available_in_official_docs"
+        estimate.details["recommended_exact_source"] = "response.usage"
+        return estimate
 
     async def _ainvoke_impl(self, request: MessageRequest):
         """异步非流式调用 - 包装父类实现并处理 MiniMax 特定错误"""

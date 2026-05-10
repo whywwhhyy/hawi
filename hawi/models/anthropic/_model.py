@@ -21,6 +21,7 @@ from hawi.models import (
     TextPart,
     ToolCallPart,
     ReasoningPart,
+    TokenEstimate,
 )
 from hawi.models.usage import normalize_anthropic_usage
 from hawi.errors import (
@@ -45,6 +46,20 @@ from ._streaming import (
 from ._utils import convert_cache_point, convert_system_prompt, map_stop_reason
 
 logger = logging.getLogger(__name__)
+
+_COUNT_TOKENS_REQUEST_KEYS = {
+    "model",
+    "messages",
+    "system",
+    "tools",
+    "tool_choice",
+    "thinking",
+    "output_config",
+    "output_format",
+    "extra_body",
+    "extra_headers",
+    "extra_query",
+}
 
 
 def _append_anthropic_message(
@@ -674,6 +689,79 @@ class AnthropicModel(Model):
             if converted is not e:
                 raise converted from e
             raise
+
+    def _estimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        """Estimate request tokens using Anthropic's count_tokens endpoint."""
+        if needs_async_conversion(
+            request.messages, self.enable_image_download
+        ):
+            try:
+                return asyncio.run(self._aestimate_tokens_impl(request))
+            except Exception as e:
+                converted = _convert_anthropic_error(e)
+                if converted is not e:
+                    raise converted from e
+                raise
+
+        req = self._prepare_count_tokens_request(
+            self._prepare_request_sync(request)
+        )
+        try:
+            response = self.client.messages.count_tokens(**req)
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+
+        return self._parse_count_tokens_response(response)
+
+    async def _aestimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        """Async token estimate using Anthropic's count_tokens endpoint."""
+        req = self._prepare_count_tokens_request(
+            await self._prepare_request_async(request)
+        )
+        try:
+            response = await self.async_client.messages.count_tokens(**req)
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        return self._parse_count_tokens_response(response)
+
+    def _prepare_count_tokens_request(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in request.items()
+            if key in _COUNT_TOKENS_REQUEST_KEYS
+        }
+
+    def _parse_count_tokens_response(self, response: Any) -> TokenEstimate:
+        data = response.model_dump() if hasattr(response, "model_dump") else {}
+        input_tokens = getattr(response, "input_tokens", None)
+        if input_tokens is None and isinstance(data, dict):
+            input_tokens = data.get("input_tokens")
+        input_tokens = int(input_tokens or 0)
+        return TokenEstimate(
+            input_tokens=input_tokens,
+            context_tokens=input_tokens,
+            total_tokens=input_tokens,
+            method="provider_count",
+            confidence="exact",
+            provider="anthropic",
+            model_id=self.model_id,
+            details=data if isinstance(data, dict) else {},
+        )
 
     async def _async_invoke_impl(
         self,

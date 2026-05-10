@@ -25,6 +25,7 @@ import httpx
 from hawi.models.openai import OpenAIModel
 from hawi.models import DeltaPart, MessageRequest
 from hawi.models import BalanceInfo
+from ._token_estimate import DeepSeekTokenEstimateMixin
 from ._adaptive_reasoning import (
     awith_empty_reasoning_delta_if_missing,
     is_reasoning_model,
@@ -54,7 +55,7 @@ ERROR_REASONER_PARAMS = {
 UNSUPPORTED_REASONER_FEATURES: set[str] = set()
 
 
-class DeepSeekOpenAIModel(OpenAIModel):
+class DeepSeekOpenAIModel(DeepSeekTokenEstimateMixin, OpenAIModel):
     """
     DeepSeek OpenAI API 兼容模型
 

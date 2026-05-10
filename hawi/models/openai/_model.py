@@ -26,6 +26,7 @@ from hawi.models import (
     TextPart,
     ToolCallPart,
     ReasoningPart,
+    TokenEstimate,
 )
 from hawi.errors import (
     NetworkError,
@@ -602,6 +603,16 @@ class OpenAIModel(Model):
             if converted is not e:
                 raise converted from e
             raise
+
+    def _estimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        estimate = super()._estimate_tokens_impl(request)
+        estimate.provider = "openai_compatible"
+        estimate.details["provider_count_endpoint"] = "not_available_in_official_docs"
+        estimate.details["recommended_exact_source"] = "response.usage"
+        return estimate
 
     def _prepare_stream_request(self, request: MessageRequest) -> dict[str, Any]:
         """准备流式请求的通用配置

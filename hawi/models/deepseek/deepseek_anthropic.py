@@ -19,6 +19,7 @@ from typing import Any
 
 from hawi.models.anthropic import AnthropicModel
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
+from ._token_estimate import DeepSeekTokenEstimateMixin
 from ._adaptive_reasoning import (
     awith_empty_reasoning_delta_if_missing,
     ensure_reasoning_part,
@@ -54,7 +55,7 @@ ERROR_REASONER_PARAMS = {
 UNSUPPORTED_REASONER_FEATURES: set[str] = set()
 
 
-class DeepSeekAnthropicModel(AnthropicModel):
+class DeepSeekAnthropicModel(DeepSeekTokenEstimateMixin, AnthropicModel):
     """
     DeepSeek Anthropic API 兼容模型
 

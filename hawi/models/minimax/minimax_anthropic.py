@@ -25,6 +25,7 @@ from anthropic.types import (
     RedactedThinkingBlock,
 )
 
+from hawi.models import TokenEstimate
 from hawi.models.anthropic import AnthropicModel
 from hawi.models.anthropic._streaming import (
     _AnthropicStreamHandler,
@@ -276,6 +277,22 @@ class MiniMaxAnthropicModel(AnthropicModel):
                 del req[param]
         
         return req
+
+    def _estimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        estimate = self._heuristic_token_estimate(request)
+        estimate.provider = "minimax"
+        estimate.details["provider_count_endpoint"] = "not_available_in_official_docs"
+        estimate.details["recommended_exact_source"] = "response.usage"
+        return estimate
+
+    async def _aestimate_tokens_impl(
+        self,
+        request: MessageRequest,
+    ) -> TokenEstimate:
+        return self._estimate_tokens_impl(request)
 
     def _stream_impl(self, request: MessageRequest) -> Iterator[DeltaPart]:
         """同步流式调用 - 使用 MiniMax 专属的 handler"""
