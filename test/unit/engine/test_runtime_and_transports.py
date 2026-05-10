@@ -14,7 +14,8 @@ from hawi_engine.protocol import VERSION, make_ack, make_frame
 from hawi_engine.runtime import CoreRuntime, load_model_configs, parse_extra_tool_parameter, parse_extra_tool_parameters
 from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
-from hawi.agent import HawiAgent
+from hawi.agent import HawiAgent, HawiScheduler
+from hawi.session import SessionManager
 from hawi.tool import AgentTool, ToolResult
 
 
@@ -390,6 +391,68 @@ async def test_session_new_resets_live_state_without_materializing_history() -> 
     assert scheduler.agent.cleared is True
     assert scheduler.agent.loaded_steer == []
     assert scheduler.agent.loaded_runtime["current_tool_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_session_switch_after_scheduler_replace_uses_live_event_bus(tmp_path) -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None, status_interval=60)
+    client = FakeClient(authenticated=True)
+    runtime._loop = asyncio.get_running_loop()
+
+    old_scheduler = HawiScheduler(HawiAgent(model=MagicMock()))
+    old_task = asyncio.create_task(asyncio.Event().wait())
+    runtime._scheduler = old_scheduler
+    runtime._scheduler_task = old_task
+    runtime._plugins = []
+
+    sm = SessionManager(root=tmp_path / "sessions")
+    sm.attach(old_scheduler.agent, old_scheduler, event_bus=old_scheduler.agent.event_bus)
+    runtime._session_manager = sm
+
+    current_session_id = sm.new_session(name="current")
+    old_scheduler.agent.context.add_user_message("current")
+    sm.save_now()
+
+    old_scheduler.agent.context.clear()
+    saved_session_id = sm.new_session(name="saved")
+    old_scheduler.agent.context.add_user_message("saved")
+    sm.save_now()
+
+    sm.load_session(current_session_id)
+
+    new_scheduler = HawiScheduler(HawiAgent(model=MagicMock()))
+    new_task = asyncio.create_task(asyncio.Event().wait())
+
+    async def build_scheduler(**_: Any) -> tuple[HawiScheduler, asyncio.Task, list[Any]]:
+        return new_scheduler, new_task, []
+
+    runtime._build_scheduler = build_scheduler  # type: ignore[method-assign]
+
+    try:
+        await runtime._replace_scheduler(
+            model_name="test-model",
+            selected_plugins=[],
+            plugin_configs={},
+            preserve_context=old_scheduler.agent.context.copy(),
+        )
+
+        await runtime.handle_frame(
+            client,
+            (
+                '{"version":"%s","type":"session_switch","id":"switch",'
+                '"payload":{"session_id":"%s"}}'
+            )
+            % (VERSION, saved_session_id),
+        )
+
+        assert client.sent[-1]["type"] == "ack"
+        assert client.sent[-1]["payload"]["command"] == "session_switch"
+        assert client.sent[-1]["payload"]["session_id"] == saved_session_id
+    finally:
+        sm.detach()
+        await runtime._stop_scheduler(runtime._scheduler, runtime._scheduler_task, [])
+        runtime._scheduler = None
+        runtime._scheduler_task = None
 
 
 def test_status_payload_includes_queue_messages() -> None:

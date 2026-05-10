@@ -838,12 +838,21 @@ class CoreRuntime:
             plugin_configs=plugin_configs,
             context_to_restore=preserve_context,
         )
+        session_manager = self._session_manager
+        if session_manager is not None:
+            session_manager.detach()
         await self._stop_scheduler(self._scheduler, self._scheduler_task, self._plugins)
         self._scheduler = new_scheduler
         self._scheduler_task = new_task
         self._plugins = new_plugins
         self._selected_plugins = list(selected_plugins)
         self._plugin_configs = {name: dict(cfg) for name, cfg in plugin_configs.items()}
+        if session_manager is not None:
+            session_manager.attach(
+                new_scheduler.agent,
+                new_scheduler,
+                event_bus=getattr(new_scheduler.agent, "_event_bus", None),
+            )
         self.emit(make_frame("core.ready", self._ready_payload()))
 
     async def _build_scheduler(

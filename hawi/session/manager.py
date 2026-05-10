@@ -129,8 +129,7 @@ class SessionManager:
                 agent, "event_bus", None
             )
             self._event_bus = bus
-            if self._writer._event_bus is None and bus is not None:
-                self._writer._event_bus = bus
+            self._writer._event_bus = bus
 
             if self._writer_owned:
                 self._writer.start()
@@ -154,6 +153,7 @@ class SessionManager:
                     logger.debug("failed to unsubscribe", exc_info=True)
             self._subscribed_event_types = ()
             self._event_bus = None
+            self._writer._event_bus = None
             self._agent = None
             self._scheduler = None
             if self._exit_hook_registered:
