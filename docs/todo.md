@@ -15,7 +15,7 @@
     - [ ] `AgentContext` 提供按 id / tag 查询、折叠、删除、替换的 API
     - [ ] 明确哪些 metadata 会进入模型上下文，哪些仅用于运行时/GUI/插件
 
-- [ ] 还需要提供持久化机制，确保 agent 可以做到不管什么时候 crash 再拉起来都可以恢复 session
+- [x] 还需要提供持久化机制，确保 agent 可以做到不管什么时候 crash 再拉起来都可以恢复 session
     - [x] `AgentContext.save/load` 已支持 JSON 保存/恢复 messages、system prompt、cache 配置、compaction records
     - [x] core runtime 在切换插件时已支持 preserve context
     - [x] 持久化 scheduler 队列：urgent / high_prio / normal（`MessageQueueManager.snapshot/load_snapshot`，`event_bus` 引用 rebind）
@@ -24,8 +24,12 @@
     - [x] 持久化插件状态：PlanPlugin、WorkflowPlugin、PythonInterpreterPlugin 已实现 `save_state/load_state`；ShellPlugin 因 command 本质短暂不持久化
     - [x] 持久化当前 run / tool call 的恢复策略：统一在重启时给未完成 tool call 填合成 error result（复用 `_recover_unanswered_tool_calls`）
     - [x] 增加原子 checkpoint 与 crash recovery 测试（`test_session_manager.py`、`test_snapshot_round_trip.py`）
+    - [x] 完整可见消息历史增量持久化：新消息产生时发送给 SessionManager；不需要展示给用户的消息不持久化到 `message_history`
+    - [x] SessionManager 提供读取当前/指定 session 完整历史事件的接口，供 GUI 加载聊天窗口
+    - [x] `AgentContext` 持久化 `context_usage`，切换 session 后 GUI Context 区跟随恢复
     - [x] core protocol 增加 session_list / new / load / switch / delete / save_now 命令
-    - [ ] GUI Renderer 增加 session 列表与切换 UI（protocol 已就绪，仅缺 React 侧）
+    - [x] GUI Renderer 增加 Session 区：消息数、当前 session id、列表弹框、切换、新建、删除非当前 session
+    - [x] 空 session 懒写盘：启动/New/切换空会话不会物化目录
     - [x] SessionManager 异步写盘 + ExitHandler 优先级保证最后 flush（`EXIT_PRIORITY_SESSION_FLUSH`）
 
 - [ ] 先设计 subagent 顶层 API：作为 multi-agent workflow 与插件编排的基础原语
@@ -165,7 +169,7 @@
     - [x] LLM 像人一样搜索：FileSystemPlugin / ShellPlugin 已提供 grep、glob、shell 等低层能力
     - [x] 高/中/低层工具组合：shell、filesystem、web、workflow、plan 已初步覆盖
     - [ ] 小模型任务分级：读大文件、网页解析、git 历史、summary、状态文案等交给 cheap model
-    - [ ] `CLAUDE.md` / `AGENTS.md` 风格的项目记忆文件自动加载与作用域规则
+    - [x] `CLAUDE.md` / `AGENTS.md` 风格的 project steering 文件自动加载与作用域规则（EnvironPromptPlugin）
     - [ ] 系统提示词结构化：XML tags、Markdown 分区、good/bad examples、流程化算法
     - [ ] Task/sub-agent 工具：允许主 agent 派生一个 clone 处理子问题，并限制递归深度；优先服务“多模型计划收敛”工作流
     - [ ] 为高频工具补充更详细 prompt、示例和失败处理策略

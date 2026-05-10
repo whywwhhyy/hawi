@@ -550,13 +550,14 @@ def safe_check(self, agent, tool_name, arguments, ctx):
 这是插件系统的完整参考实现，展示了：
 
 1. ✅ **配置文件读取** — 从 `.hawi/environ_prompt.yaml` 读取配置
-2. ✅ **System prompt 注入** — 使用 `@before_session` 一次性注入 session 级环境信息
+2. ✅ **System prompt 注入** — 使用 `@before_session` 一次性注入 session 级环境信息和项目记忆文件
 3. ✅ **User prompt 注入** — 使用 `@before_conversation` 在用户消息前插入动态环境信息
 4. ✅ **内容标记** — 使用 `<hawi-environ>` 标记和声明文字区分框架注入
 5. ✅ **文件变更追踪** — 追踪上一次注入时间戳，报告修改的文件
 6. ✅ **配置灵活性** — 每个特性可独立开关，支持自定义文本和文件引用
 7. ✅ **GUI 集成** — 已注册到 GUI 插件目录
 8. ✅ **Clone 支持** — 正确复制运行时状态
+9. ✅ **Project steering** — 按配置文件名顺序选择 `AGENTS.md` / `CLAUDE.md`，并按目录 scope 从外到内生效
 
 ### 关键代码片段
 
@@ -577,6 +578,8 @@ class EnvironPromptPlugin(HawiPlugin):
         parts = []
         if config.get("include_session_info", True):
             parts.append(self._format_session_info())
+        if config.get("include_project_steering", True):
+            parts.append(self._format_project_steering())
         # ... 追加到 system_prompt
 
     @before_conversation

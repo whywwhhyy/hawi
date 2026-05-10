@@ -10,6 +10,17 @@ system_prompt:
   enabled: true
   # 是否注入 session 级环境信息（启动日期、OS、时区、硬件等）
   include_session_info: true
+  # 是否自动加载 AGENTS.md / CLAUDE.md 风格的项目 steering 文件
+  include_project_steering: true
+  # 项目 steering 文件作用域：
+  # - 从当前工作目录向上找到最近的项目根目录（默认看 .git / .hawi）
+  # - 按 filenames 顺序逐个寻找；命中一个文件名后，只加载该文件名并停止查找后续文件名
+  # - 对命中的文件名，只加载项目根目录到当前工作目录路径上的 steering 文件
+  # - 外层 scope 先注入，内层 scope 后注入；冲突时内层更具体
+  project_steering:
+    filenames: ["AGENTS.md", "CLAUDE.md"]
+    project_root_markers: [".git", ".hawi"]
+    max_file_bytes: 65536
   # 自定义文本，直接注入到 system prompt
   text: ""
   # 要读取内容并注入的文件列表

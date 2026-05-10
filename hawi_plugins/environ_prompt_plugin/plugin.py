@@ -4,7 +4,8 @@ This plugin reads a YAML config file from ``.hawi/environ_prompt.yaml``
 (or falls back to hardcoded defaults) and enriches the conversation with:
 
 - **System prompt** (one-time at session start): session start date, OS
-  platform, timezone, hardware info, and user-specified text/file content.
+  platform, timezone, hardware info, project steering files, and
+  user-specified text/file content.
 - **User prompt** (before each user message): current working directory,
   files modified since the last user prompt, and user-specified text/file
   content.
@@ -20,6 +21,7 @@ import logging
 import os
 import platform
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "system_prompt": {
         "enabled": True,
         "include_session_info": True,
+        "include_project_steering": True,
+        "project_steering": {
+            "filenames": ["AGENTS.md", "CLAUDE.md"],
+            "project_root_markers": [".git", ".hawi"],
+            "max_file_bytes": 65536,
+        },
         "text": "",
         "files": [],
     },
@@ -74,6 +82,8 @@ CONFIG_CANDIDATES = [
     Path(".hawi") / CONFIG_FILENAME,       # project-local
     Path.home() / ".hawi" / CONFIG_FILENAME,  # user-global
 ]
+DEFAULT_PROJECT_STEERING_FILENAMES = ["AGENTS.md", "CLAUDE.md"]
+DEFAULT_PROJECT_ROOT_MARKERS = [".git", ".hawi"]
 
 
 # ===================================================================
@@ -90,7 +100,8 @@ class EnvironPromptPlugin(HawiPlugin):
 
     **System-prompt injection** (``before_session`` hook, runs once):
         Appends session-level metadata (start date, platform, timezone,
-        hardware info) and any user-specified static text or file content
+        hardware info), scoped project steering files (``AGENTS.md`` /
+        ``CLAUDE.md``), and any user-specified static text or file content
         to ``agent.context.system_prompt``.
 
     **User-prompt injection** (``before_conversation`` hook, per turn):
@@ -144,7 +155,7 @@ class EnvironPromptPlugin(HawiPlugin):
                         resolved,
                     )
                     break
-        return dict(DEFAULT_CONFIG)  # shallow copy is sufficient here
+        return deepcopy(DEFAULT_CONFIG)
 
     # ------------------------------------------------------------------
     # GUI registration metadata (optional)
@@ -178,7 +189,8 @@ class EnvironPromptPlugin(HawiPlugin):
     # ------------------------------------------------------------------
 
     def clone(self) -> EnvironPromptPlugin:
-        new = EnvironPromptPlugin()
+        new = EnvironPromptPlugin.__new__(EnvironPromptPlugin)
+        new._config = deepcopy(self._config)
         # Copy runtime state that matters for the cloned agent
         new._last_prompt_ts = self._last_prompt_ts
         new._session_started = self._session_started
@@ -199,6 +211,9 @@ class EnvironPromptPlugin(HawiPlugin):
             return
         self._session_started = True
 
+        if not self._config.get("enabled", True):
+            return
+
         cfg = (self._config.get("system_prompt") or {})
         if not cfg.get("enabled", True):
             return
@@ -208,6 +223,12 @@ class EnvironPromptPlugin(HawiPlugin):
         # -- session-level information ---------------------------------
         if cfg.get("include_session_info", True):
             parts.append(_format_session_info())
+
+        # -- scoped project steering files ------------------------------
+        if cfg.get("include_project_steering", True):
+            steering = _format_project_steering(cfg.get("project_steering"))
+            if steering:
+                parts.append(steering)
 
         # -- user-specified static text --------------------------------
         text = cfg.get("text")
@@ -248,6 +269,9 @@ class EnvironPromptPlugin(HawiPlugin):
     ) -> None:
         """Insert a user-role message with dynamic env info before the
         actual user message in the conversation context."""
+        if not self._config.get("enabled", True):
+            return
+
         cfg = (self._config.get("user_prompt") or {})
         if not cfg.get("enabled", True):
             return
@@ -387,6 +411,154 @@ def _format_session_info() -> str:
         lines.append(f"Hostname: {node}")
 
     return "Session environment:\n" + "\n".join(f"  {line}" for line in lines)
+
+
+def _format_project_steering(raw_cfg: Any) -> str | None:
+    """Return scoped project steering files for the current working directory.
+
+    Scope rules:
+    - The project root is the nearest ancestor containing a configured marker
+      such as ``.git`` or ``.hawi``. When no marker exists, CWD is the root.
+    - A steering file applies to the directory tree rooted at its parent
+      directory.
+    - Filenames are priority-ordered. The first filename with any match on
+      the project-root-to-CWD scope chain is selected; later filenames are
+      ignored.
+    - For the selected filename, broader scopes are emitted first; more
+      specific scopes appear later and should take precedence when guidance
+      conflicts.
+    """
+    cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
+    try:
+        cwd = Path.cwd().resolve()
+    except Exception:
+        return None
+
+    filenames = _config_string_list(
+        cfg.get("filenames"),
+        DEFAULT_PROJECT_STEERING_FILENAMES,
+    )
+    if not filenames:
+        return None
+
+    markers = _config_string_list(
+        cfg.get("project_root_markers"),
+        DEFAULT_PROJECT_ROOT_MARKERS,
+    )
+    max_file_bytes = _positive_int(cfg.get("max_file_bytes"), 65536)
+    project_root = _find_project_root(cwd, markers)
+    scope_dirs = _scope_dirs(project_root, cwd)
+
+    selected_filename: str | None = None
+    entries: list[str] = []
+    for filename in filenames:
+        next_entries: list[str] = []
+        for directory in scope_dirs:
+            path = directory / filename
+            if not path.is_file():
+                continue
+            content = _read_project_steering_file(path, max_file_bytes)
+            if content is None or not content.strip():
+                continue
+            try:
+                rel_path = path.relative_to(project_root)
+            except ValueError:
+                rel_path = path
+            next_entries.append(
+                "\n".join(
+                    [
+                        f"### {filename}",
+                        f"Scope: {directory}",
+                        f"Path: {rel_path}",
+                        "```markdown",
+                        content.rstrip("\n"),
+                        "```",
+                    ]
+                )
+            )
+        if next_entries:
+            selected_filename = filename
+            entries = next_entries
+            break
+
+    if not entries:
+        return None
+
+    header = (
+        "Project steering files (auto-loaded from AGENTS.md / CLAUDE.md style "
+        f"files). Selected filename: {selected_filename}. Each file applies "
+        "only to paths under its Scope. Broader scopes appear first; when "
+        "instructions conflict, prefer the later, more specific scope."
+    )
+    return header + "\n\n" + "\n\n".join(entries)
+
+
+def _find_project_root(start: Path, markers: list[str]) -> Path:
+    """Return the nearest ancestor containing a project root marker."""
+    for directory in [start, *start.parents]:
+        if any((directory / marker).exists() for marker in markers):
+            return directory
+    return start
+
+
+def _scope_dirs(project_root: Path, cwd: Path) -> list[Path]:
+    """Return directories from project root to CWD, inclusive."""
+    try:
+        rel = cwd.relative_to(project_root)
+    except ValueError:
+        return [cwd]
+    dirs = [project_root]
+    current = project_root
+    for part in rel.parts:
+        current = current / part
+        dirs.append(current)
+    return dirs
+
+
+def _read_project_steering_file(path: Path, max_file_bytes: int) -> str | None:
+    """Read a project steering file, truncating large files safely."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        logger.exception("EnvironPromptPlugin: failed to read steering file %s", path)
+        return None
+
+    truncated = len(data) > max_file_bytes
+    data = data[:max_file_bytes]
+    text = data.decode("utf-8", errors="replace")
+    if truncated:
+        text = (
+            text.rstrip("\n")
+            + f"\n\n[Truncated by EnvironPromptPlugin at {max_file_bytes} bytes.]"
+        )
+    return text
+
+
+def _config_string_list(value: Any, default: list[str]) -> list[str]:
+    """Return a list of non-empty strings from config."""
+    if value is None:
+        return list(default)
+    if not isinstance(value, list):
+        return list(default)
+    items = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if stripped:
+            items.append(stripped)
+    return items
+
+
+def _positive_int(value: Any, default: int) -> int:
+    """Return a positive integer config value."""
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _format_cwd() -> str:
