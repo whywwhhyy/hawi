@@ -8,6 +8,7 @@
 
 export const TYPE_JSON_FRAME = 0x01;
 export const TYPE_BINARY_BLOB = 0x02;
+export const DEFAULT_MAX_FRAME_SIZE = 16 * 1024 * 1024;
 const HEADER_LEN = 5;
 
 export function encodeFrame(typeByte: number, value: Uint8Array): Buffer {
@@ -32,6 +33,8 @@ export function encodeJsonFrame(obj: unknown): Buffer {
 export class TLVDecoder {
   private buf: Buffer = Buffer.alloc(0);
 
+  constructor(private readonly maxFrameSize = DEFAULT_MAX_FRAME_SIZE) {}
+
   push(chunk: Buffer): Array<{ typeByte: number; value: Buffer }> {
     this.buf = this.buf.length === 0 ? chunk : Buffer.concat([this.buf, chunk]);
     const out: Array<{ typeByte: number; value: Buffer }> = [];
@@ -39,6 +42,9 @@ export class TLVDecoder {
     while (this.buf.length >= HEADER_LEN) {
       const typeByte = this.buf.readUInt8(0);
       const length = this.buf.readUInt32BE(1);
+      if (length > this.maxFrameSize) {
+        throw new RangeError(`frame length ${length} exceeds max frame size ${this.maxFrameSize}`);
+      }
       const total = HEADER_LEN + length;
       if (this.buf.length < total) break;
 

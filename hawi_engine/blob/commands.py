@@ -74,6 +74,8 @@ async def _handle_upload_chunk(client, command: CoreCommand, store: BlobStore) -
         raise ValueError("payload.blob_id must be a string")
     if not isinstance(seq, int):
         raise ValueError("payload.seq must be an integer")
+    if seq < 0:
+        raise ValueError("payload.seq must be >= 0")
     if not isinstance(data_b64, str):
         raise ValueError("payload.data_b64 must be a base64 string")
     try:
@@ -132,13 +134,35 @@ async def _handle_fetch(client, command: CoreCommand, store: BlobStore) -> None:
         raise ValueError("payload.blob_id must be a string")
     if chunk_size is not None and not isinstance(chunk_size, int):
         raise ValueError("payload.chunk_size must be an integer or null")
+    if chunk_size is not None and chunk_size <= 0:
+        raise ValueError("payload.chunk_size must be > 0")
 
-    # Send an initial ack so the client knows the fetch was accepted
+    chunks = store.fetch_chunks(blob_id, chunk_size=chunk_size)
+    try:
+        first_chunk = await anext(chunks)
+    except StopAsyncIteration:
+        first_chunk = None
+
+    # Send an initial ack only after validating that the blob exists and the
+    # chunking parameters are usable.
     await client.send(
         make_ack("blob.fetch", request_id=command.id, payload={"blob_id": blob_id})
     )
 
-    async for seq, chunk in store.fetch_chunks(blob_id, chunk_size=chunk_size):
+    if first_chunk is not None:
+        seq, chunk = first_chunk
+        await client.send(
+            make_frame(
+                "blob.chunk",
+                {
+                    "blob_id": blob_id,
+                    "seq": seq,
+                    "data_b64": base64.b64encode(chunk).decode("ascii"),
+                },
+            )
+        )
+
+    async for seq, chunk in chunks:
         await client.send(
             make_frame(
                 "blob.chunk",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TLVDecoder, TYPE_JSON_FRAME, encodeFrame, encodeJsonFrame } from "./tlv";
+import { TLVDecoder, TYPE_BINARY_BLOB, TYPE_JSON_FRAME, encodeFrame, encodeJsonFrame } from "./tlv";
 
 describe("tlv", () => {
   it("encodes a JSON frame with the canonical layout", () => {
@@ -50,5 +50,30 @@ describe("tlv", () => {
     expect(out).toHaveLength(2);
     expect(out[0].typeByte).toBe(TYPE_JSON_FRAME);
     expect(out[1].typeByte).toBe(0x42);
+  });
+
+  it("matches Python TLV vectors including empty and binary frames", () => {
+    const decoder = new TLVDecoder();
+    const emptyJson = encodeFrame(TYPE_JSON_FRAME, Buffer.alloc(0));
+    const binary = encodeFrame(TYPE_BINARY_BLOB, Buffer.from("abc", "utf-8"));
+
+    expect(emptyJson).toEqual(Buffer.from([0x01, 0x00, 0x00, 0x00, 0x00]));
+    expect(binary).toEqual(Buffer.from([0x02, 0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0x63]));
+
+    const out = decoder.push(Buffer.concat([emptyJson, binary]));
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ typeByte: TYPE_JSON_FRAME });
+    expect(out[0].value).toHaveLength(0);
+    expect(out[1].typeByte).toBe(TYPE_BINARY_BLOB);
+    expect(out[1].value.toString("utf-8")).toBe("abc");
+  });
+
+  it("rejects oversized declared frames", () => {
+    const decoder = new TLVDecoder(8);
+    const headerOnly = Buffer.alloc(5);
+    headerOnly.writeUInt8(TYPE_JSON_FRAME, 0);
+    headerOnly.writeUInt32BE(9, 1);
+
+    expect(() => decoder.push(headerOnly)).toThrow(RangeError);
   });
 });

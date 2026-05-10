@@ -45,6 +45,34 @@ async def test_translate_stream_drops_unknown_types():
     assert lines == ['{"keep":1}', '{"keep":2}']
 
 
+async def test_translate_stream_reports_oversized_to_stderr(capsys):
+    sink = io.StringIO()
+    reader = asyncio.StreamReader()
+    reader.feed_data(encode_frame(TYPE_JSON_FRAME, b'{"too":"large"}'))
+    reader.feed_eof()
+
+    await translate_stream(reader, sink, max_size=4)
+
+    captured = capsys.readouterr()
+    assert sink.getvalue() == ""
+    assert "tlv2ndjson:" in captured.err
+    assert "exceeds max_size" in captured.err
+
+
+async def test_translate_stream_reports_truncated_frame_to_stderr(capsys):
+    sink = io.StringIO()
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"\x01\x00\x00\x00\x05hi")
+    reader.feed_eof()
+
+    await translate_stream(reader, sink)
+
+    captured = capsys.readouterr()
+    assert sink.getvalue() == ""
+    assert "tlv2ndjson:" in captured.err
+    assert "mid-body" in captured.err
+
+
 def test_cli_entry_point_exists():
     """`tlv2ndjson` should be installed as a console script."""
     result = subprocess.run(

@@ -145,6 +145,43 @@ async def http_engine(tmp_path):
             await serve_task
 
 
+@pytest.fixture
+async def http_engine_with_token():
+    """HTTP gateway wired to a runtime stub that requires Bearer auth."""
+    from hawi_engine.http_gateway import HttpGateway
+
+    runtime = _MinimalTestRuntime(
+        token="secret",
+        server_caps={"last_event_id", "tlv_v1"},
+    )
+    port = _free_port()
+    args = argparse.Namespace(
+        host="127.0.0.1",
+        port=port,
+        outbound_queue_size=100,
+        http_ring_buffer_size=16,
+    )
+    gateway = HttpGateway()
+    serve_task = asyncio.create_task(gateway.serve(runtime, args))
+    for _ in range(40):
+        try:
+            r, w = await asyncio.open_connection("127.0.0.1", port)
+            w.close()
+            await w.wait_closed()
+            break
+        except OSError:
+            await asyncio.sleep(0.05)
+    else:
+        raise RuntimeError("HTTP gateway did not start")
+    try:
+        yield port, runtime
+    finally:
+        runtime.request_shutdown()
+        serve_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await serve_task
+
+
 class _MinimalTestRuntime:
     """Minimal CoreRuntime stand-in for HTTP gateway tests.
 
@@ -153,9 +190,17 @@ class _MinimalTestRuntime:
     requirement) and replies to ping with pong. Exposes emit() to push events.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        token: str | None = None,
+        server_caps: set[str] | None = None,
+    ) -> None:
         self._shutdown = asyncio.Event()
         self._clients: set = set()
+        self._token = token
+        self._server_caps = server_caps or set()
+        self.hello_payloads: list[dict] = []
 
     @property
     def is_shutdown_requested(self) -> bool:
@@ -186,15 +231,29 @@ class _MinimalTestRuntime:
             )
 
         if command.type == "hello":
+            self.hello_payloads.append(dict(command.payload))
+            if self._token is not None and command.payload.get("token") != self._token:
+                from hawi_engine.protocol import make_error
+                await client.send(
+                    make_error(
+                        "Invalid authentication token.",
+                        request_id=command.id,
+                        code="unauthorized",
+                    )
+                )
+                return
+            client_caps = set(command.payload.get("client_caps") or [])
+            negotiated = sorted(client_caps & self._server_caps)
             client.authenticated = True
+            client.negotiated_caps = set(negotiated)
             await client.send(
                 make_ack(
                     "hello",
                     request_id=command.id,
                     payload={
                         "authenticated": True,
-                        "server_caps": [],
-                        "negotiated": [],
+                        "server_caps": sorted(self._server_caps),
+                        "negotiated": negotiated,
                     },
                 )
             )
@@ -242,6 +301,66 @@ async def test_post_rpc_returns_ack_and_sets_cookie(http_engine):
             assert "hawi_client_id" in resp.cookies
 
 
+async def test_http_rpc_rejects_missing_or_bad_bearer_token(http_engine_with_token):
+    port, runtime = http_engine_with_token
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        for headers in ({}, {"Authorization": "Bearer wrong"}):
+            async with session.post(
+                f"http://127.0.0.1:{port}/rpc",
+                json={"version": "hawi.core.v1", "type": "ping", "id": "p1", "payload": {}},
+                headers=headers,
+            ) as resp:
+                assert resp.status == 401
+                await resp.read()
+
+    assert runtime.hello_payloads == [
+        {"client_caps": []},
+        {"client_caps": [], "token": "wrong"},
+    ]
+    assert all(not client._pending for client in runtime._clients)
+
+
+async def test_http_rpc_with_bearer_auth_synthesizes_hello_and_negotiates_caps(http_engine_with_token):
+    port, runtime = http_engine_with_token
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{port}/rpc",
+            json={"version": "hawi.core.v1", "type": "ping", "id": "p1", "payload": {}},
+            headers={
+                "Authorization": "Bearer secret",
+                "X-Hawi-Client-Caps": "tlv_v1,last_event_id,unknown",
+            },
+        ) as resp:
+            assert resp.status == 200
+            body = await resp.json()
+            assert body["type"] == "pong"
+            assert body["id"] == "p1"
+
+    assert runtime.hello_payloads == [
+        {
+            "client_caps": ["tlv_v1", "last_event_id", "unknown"],
+            "token": "secret",
+        }
+    ]
+    client = next(iter(runtime._clients))
+    assert client.authenticated is True
+    assert client.negotiated_caps == {"tlv_v1", "last_event_id"}
+
+
+async def test_http_events_rejects_missing_bearer_token(http_engine_with_token):
+    port, _ = http_engine_with_token
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"http://127.0.0.1:{port}/events") as resp:
+            assert resp.status == 401
+            await resp.read()
+
+
 async def test_sse_streams_events(http_engine):
     port, runtime = http_engine
     import aiohttp
@@ -278,6 +397,64 @@ async def test_ws_upgrade_streams_events(http_engine):
             data = msg.json()
             assert data["seq"] == 1
             assert data["frame"]["payload"]["msg"] == "hello-ws"
+
+
+async def test_ws_resume_replays_missed_events(http_engine):
+    port, runtime = http_engine
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{port}/rpc",
+            json={"version": "hawi.core.v1", "type": "ping", "id": "p1", "payload": {}},
+        ) as resp:
+            client_id = resp.headers["X-Hawi-Client-Id"]
+            await resp.read()
+
+        for i in range(1, 5):
+            runtime.emit({"version": "hawi.core.v1", "type": "debug.info",
+                          "id": None, "ts": 0, "payload": {"i": i}})
+        await asyncio.sleep(0.1)
+
+        async with session.ws_connect(
+            f"http://127.0.0.1:{port}/events",
+            headers={"Last-Event-ID": "2", "X-Hawi-Client-Id": client_id},
+        ) as ws:
+            msg3 = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            msg4 = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            data3 = msg3.json()
+            data4 = msg4.json()
+            assert data3["seq"] == 3
+            assert data3["frame"]["payload"]["i"] == 3
+            assert data4["seq"] == 4
+            assert data4["frame"]["payload"]["i"] == 4
+
+
+async def test_ws_emits_gap_when_buffer_evicted(http_engine):
+    port, runtime = http_engine
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{port}/rpc",
+            json={"version": "hawi.core.v1", "type": "ping", "id": "p1", "payload": {}},
+        ) as resp:
+            client_id = resp.headers["X-Hawi-Client-Id"]
+            await resp.read()
+
+        for i in range(25):
+            runtime.emit({"version": "hawi.core.v1", "type": "debug.info",
+                          "id": None, "ts": 0, "payload": {"i": i}})
+        await asyncio.sleep(0.1)
+
+        async with session.ws_connect(
+            f"http://127.0.0.1:{port}/events",
+            headers={"Last-Event-ID": "1", "X-Hawi-Client-Id": client_id},
+        ) as ws:
+            msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            data = msg.json()
+            assert data["event"] == "gap"
+            assert "oldest_seq" in data
 
 
 async def test_sse_resume_replays_missed_events(http_engine):

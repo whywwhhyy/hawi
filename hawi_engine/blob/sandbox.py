@@ -53,7 +53,12 @@ def resolve_blob_path(sandbox_root: Path, direction: str, blob_id: str) -> Path:
     if direction not in _VALID_DIRECTIONS:
         raise SandboxViolation(f"unknown direction: {direction!r}")
     relpath = blob_id_to_relpath(blob_id)
+    root = sandbox_root.resolve()
     direction_root = (sandbox_root / direction).resolve()
+    if not direction_root.is_relative_to(root):
+        raise SandboxViolation(
+            f"direction root escapes sandbox: {direction_root} not under {root}"
+        )
     candidate = (direction_root / relpath).resolve()
     if not candidate.is_relative_to(direction_root):
         raise SandboxViolation(

@@ -683,6 +683,85 @@ async def test_tcp_transport_smoke(unused_tcp_port: int) -> None:
             await asyncio.gather(server_task, return_exceptions=True)
 
 
+@pytest.mark.asyncio
+async def test_tcp_gateway_rejects_oversized_frame_and_closes(unused_tcp_port: int) -> None:
+    runtime = FakeTransportRuntime()
+    args = argparse.Namespace(
+        host="127.0.0.1",
+        port=unused_tcp_port,
+        outbound_queue_size=10,
+        max_frame_size=8,
+    )
+    server_task = asyncio.create_task(
+        builtin_gateways.TcpGateway().serve(runtime, args)  # type: ignore[arg-type]
+    )
+    reader, writer = await _connect_tcp_with_retry(unused_tcp_port)
+
+    try:
+        ready = await _recv_tlv(reader)
+        assert ready["type"] == "core.ready"
+
+        writer.write(encode_frame(TYPE_JSON_FRAME, b"x" * 9))
+        await writer.drain()
+
+        err = await _recv_tlv(reader)
+        assert err["type"] == "error"
+        assert err["payload"]["code"] == "frame_too_large"
+
+        result = await asyncio.wait_for(read_frame(reader), timeout=2)
+        assert result is None
+        for _ in range(20):
+            if not runtime.clients:
+                break
+            await asyncio.sleep(0.01)
+        assert runtime.clients == set()
+    finally:
+        runtime._shutdown.set()
+        writer.close()
+        await writer.wait_closed()
+        if not server_task.done():
+            await asyncio.gather(server_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_tcp_gateway_discards_binary_and_unknown_frames_then_continues(unused_tcp_port: int) -> None:
+    from hawi_engine.tlv import TYPE_BINARY_BLOB
+
+    runtime = FakeTransportRuntime()
+    args = argparse.Namespace(
+        host="127.0.0.1",
+        port=unused_tcp_port,
+        outbound_queue_size=10,
+        max_frame_size=16 * 1024 * 1024,
+    )
+    server_task = asyncio.create_task(
+        builtin_gateways.TcpGateway().serve(runtime, args)  # type: ignore[arg-type]
+    )
+    reader, writer = await _connect_tcp_with_retry(unused_tcp_port)
+
+    try:
+        ready = await _recv_tlv(reader)
+        assert ready["type"] == "core.ready"
+
+        writer.write(encode_frame(TYPE_BINARY_BLOB, b"opaque"))
+        writer.write(encode_frame(0x42, b"future"))
+        await writer.drain()
+
+        await _send_tlv(
+            writer,
+            b'{"version":"hawi.core.v1","type":"ping","id":"ping-after-unknown","payload":{}}',
+        )
+        pong = await _recv_tlv(reader)
+        assert pong["type"] == "pong"
+        assert pong["id"] == "ping-after-unknown"
+    finally:
+        runtime._shutdown.set()
+        writer.close()
+        await writer.wait_closed()
+        if not server_task.done():
+            await asyncio.gather(server_task, return_exceptions=True)
+
+
 # Plan 4 removed the standalone WebSocketGateway. The HTTP gateway's WS-upgrade
 # path now provides the WebSocket carrier; see test_http_gateway.py for
 # WS-upgrade integration coverage.

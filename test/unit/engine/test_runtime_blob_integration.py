@@ -1,0 +1,154 @@
+"""Runtime-level coverage for the blob protocol wiring."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from hawi_engine.blob.store import BlobStore
+from hawi_engine.protocol import VERSION
+from hawi_engine.runtime import CoreRuntime
+
+
+@dataclass(eq=False)
+class _Client:
+    id: str = "client"
+    authenticated: bool = True
+    negotiated_caps: set[str] = field(default_factory=set)
+    sent: list[dict[str, Any]] = field(default_factory=list)
+
+    async def send(self, frame: dict[str, Any]) -> None:
+        self.sent.append(frame)
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture
+async def blob_store(tmp_path: Path) -> BlobStore:
+    store = BlobStore(root=tmp_path / ".hawi" / "blobs", quota_bytes=4096, chunk_size=8)
+    await store.start()
+    yield store
+    await store.close()
+
+
+def _frame(command_type: str, request_id: str, payload: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "version": VERSION,
+            "type": command_type,
+            "id": request_id,
+            "payload": payload,
+        }
+    )
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+async def test_hello_advertises_blob_v1_only_when_store_enabled(blob_store: BlobStore) -> None:
+    disabled = CoreRuntime(model_name="test-model", token=None)
+    disabled_client = _Client(authenticated=False)
+
+    await disabled.handle_frame(
+        disabled_client,
+        _frame("hello", "h-disabled", {"client_caps": ["blob_v1", "tlv_v1"]}),
+    )
+
+    disabled_ack = next(f for f in disabled_client.sent if f["type"] == "ack")
+    assert "blob_v1" not in disabled_ack["payload"]["server_caps"]
+    assert disabled_ack["payload"]["negotiated"] == ["tlv_v1"]
+
+    enabled = CoreRuntime(model_name="test-model", token=None, blob_store=blob_store)
+    enabled_client = _Client(authenticated=False)
+
+    await enabled.handle_frame(
+        enabled_client,
+        _frame("hello", "h-enabled", {"client_caps": ["blob_v1", "tlv_v1"]}),
+    )
+
+    enabled_ack = next(f for f in enabled_client.sent if f["type"] == "ack")
+    assert "blob_v1" in enabled_ack["payload"]["server_caps"]
+    assert enabled_ack["payload"]["negotiated"] == ["blob_v1", "tlv_v1"]
+    assert enabled_client.negotiated_caps == {"blob_v1", "tlv_v1"}
+
+
+async def test_runtime_rejects_blob_command_when_store_disabled() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = _Client(authenticated=True)
+
+    await runtime.handle_frame(
+        client,
+        _frame("blob.has", "has-1", {"direction": "inbound", "sha256": "0" * 64}),
+    )
+
+    assert client.sent[-1]["type"] == "error"
+    assert client.sent[-1]["id"] == "has-1"
+    assert client.sent[-1]["payload"]["code"] == "blob_disabled"
+
+
+async def test_runtime_dispatches_blob_upload_fetch_roundtrip(blob_store: BlobStore) -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None, blob_store=blob_store)
+    client = _Client(authenticated=True)
+    body = b"runtime blob bytes"
+    sha = _sha(body)
+
+    await runtime.handle_frame(
+        client,
+        _frame(
+            "blob.upload_init",
+            "init-1",
+            {"direction": "inbound", "sha256": sha, "size": len(body), "mime": None},
+        ),
+    )
+    init_ack = next(f for f in client.sent if f["id"] == "init-1" and f["type"] == "ack")
+    blob_id = init_ack["payload"]["blob_id"]
+
+    await runtime.handle_frame(
+        client,
+        _frame(
+            "blob.upload_chunk",
+            "chunk-1",
+            {
+                "blob_id": blob_id,
+                "seq": 0,
+                "data_b64": base64.b64encode(body).decode("ascii"),
+            },
+        ),
+    )
+    await runtime.handle_frame(
+        client,
+        _frame("blob.upload_finalize", "finalize-1", {"blob_id": blob_id}),
+    )
+    await runtime.handle_frame(
+        client,
+        _frame("blob.fetch", "fetch-1", {"blob_id": blob_id, "chunk_size": 5}),
+    )
+
+    fetch_ack = next(f for f in client.sent if f["id"] == "fetch-1" and f["type"] == "ack")
+    chunks = [f for f in client.sent if f["type"] == "blob.chunk"]
+    complete = next(f for f in client.sent if f["type"] == "blob.complete")
+
+    assert fetch_ack["payload"]["blob_id"] == blob_id
+    assert b"".join(base64.b64decode(c["payload"]["data_b64"]) for c in chunks) == body
+    assert complete["payload"]["blob_id"] == blob_id
+
+
+async def test_runtime_blob_command_requires_authentication(blob_store: BlobStore) -> None:
+    runtime = CoreRuntime(model_name="test-model", token="secret", blob_store=blob_store)
+    client = _Client(authenticated=False)
+
+    await runtime.handle_frame(
+        client,
+        _frame("blob.has", "has-1", {"direction": "inbound", "sha256": "0" * 64}),
+    )
+
+    assert client.sent[-1]["type"] == "error"
+    assert client.sent[-1]["payload"]["code"] == "unauthenticated"

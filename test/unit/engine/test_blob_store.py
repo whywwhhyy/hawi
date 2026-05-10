@@ -14,6 +14,7 @@ from hawi_engine.blob.store import (
     QuotaExceeded,
     Sha256Mismatch,
 )
+from hawi_engine.blob.sandbox import resolve_blob_path
 
 
 @pytest.fixture
@@ -26,6 +27,26 @@ async def store(tmp_path: Path) -> BlobStore:
 
 def _hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+async def _put_blob(
+    store: BlobStore,
+    body: bytes,
+    *,
+    direction: str = "inbound",
+    release: bool = False,
+) -> str:
+    bid = await store.upload_init(
+        direction=direction,  # type: ignore[arg-type]
+        sha256=_hash(body),
+        size=len(body),
+        mime=None,
+    )
+    await store.upload_chunk(bid, seq=0, data=body)
+    await store.upload_finalize(bid)
+    if release:
+        await store.release(bid)
+    return bid
 
 
 async def test_upload_finalize_fetch_roundtrip(store: BlobStore):
@@ -42,6 +63,19 @@ async def test_upload_finalize_fetch_roundtrip(store: BlobStore):
         chunks.append((seq, chunk))
     assembled = b"".join(c for _, c in sorted(chunks))
     assert assembled == body
+
+
+async def test_zero_byte_blob_roundtrip(store: BlobStore):
+    bid = await store.upload_init(direction="inbound", sha256=_hash(b""), size=0, mime=None)
+    info = await store.upload_finalize(bid)
+
+    chunks = []
+    async for item in store.fetch_chunks(bid):
+        chunks.append(item)
+
+    assert info.size == 0
+    assert info.sha256 == _hash(b"")
+    assert chunks == []
 
 
 async def test_finalize_rejects_sha256_mismatch(store: BlobStore):
@@ -68,6 +102,13 @@ async def test_has_finds_by_sha256(store: BlobStore):
     assert missing is None
 
 
+async def test_has_ignores_unfinalized_blob(store: BlobStore):
+    body = b"pending"
+    await store.upload_init(direction="inbound", sha256=_hash(body), size=len(body), mime=None)
+
+    assert await store.has(sha256=_hash(body), direction="inbound") is None
+
+
 async def test_release_decrements_ref_count(store: BlobStore):
     body = b"x"
     bid = await store.upload_init(direction="inbound", sha256=_hash(body), size=1, mime=None)
@@ -76,6 +117,36 @@ async def test_release_decrements_ref_count(store: BlobStore):
     assert info.ref_count == 1
     new_rc = await store.release(bid)
     assert new_rc == 0
+
+
+async def test_release_is_floored_at_zero(store: BlobStore):
+    bid = await _put_blob(store, b"x")
+
+    assert await store.release(bid) == 0
+    assert await store.release(bid) == 0
+
+
+async def test_release_unknown_blob_raises(store: BlobStore):
+    with pytest.raises(BlobNotFound):
+        await store.release("0" * 64)
+
+
+async def test_release_unfinalized_blob_raises(store: BlobStore):
+    bid = await store.upload_init(direction="inbound", sha256=_hash(b"x"), size=1, mime=None)
+
+    with pytest.raises(BlobNotFound):
+        await store.release(bid)
+
+
+async def test_upload_chunk_rejects_after_finalize(store: BlobStore):
+    bid = await _put_blob(store, b"stable")
+    path = resolve_blob_path(store.root, "inbound", bid)
+    before = path.read_bytes()
+
+    with pytest.raises(BlobNotFound):
+        await store.upload_chunk(bid, seq=1, data=b"mutation")
+
+    assert path.read_bytes() == before
 
 
 async def test_lru_evicts_unreferenced_blobs(store: BlobStore):
@@ -105,6 +176,35 @@ async def test_lru_evicts_unreferenced_blobs(store: BlobStore):
     assert (await store.has(sha256=_hash(body), direction="inbound")) == bid_new
 
 
+async def test_lru_uses_last_access_not_creation_order(store: BlobStore):
+    bid_a = await _put_blob(store, b"a" * 300, release=True)
+    await asyncio.sleep(0.005)
+    bid_b = await _put_blob(store, b"b" * 300, release=True)
+    await asyncio.sleep(0.005)
+    bid_c = await _put_blob(store, b"c" * 300, release=True)
+
+    # Promote A so quota pressure evicts B, the oldest unreferenced blob.
+    async for _ in store.fetch_chunks(bid_a):
+        pass
+    await asyncio.sleep(0.005)
+    bid_d = await _put_blob(store, b"d" * 300, release=True)
+
+    assert await store.has(sha256=_hash(b"a" * 300), direction="inbound") == bid_a
+    assert await store.has(sha256=_hash(b"b" * 300), direction="inbound") is None
+    assert await store.has(sha256=_hash(b"c" * 300), direction="inbound") == bid_c
+    assert await store.has(sha256=_hash(b"d" * 300), direction="inbound") == bid_d
+
+
+async def test_quota_is_per_direction(store: BlobStore):
+    for i in range(5):
+        await _put_blob(store, bytes([i]) * 200, direction="inbound")
+
+    outbound_body = b"out" * 100
+    outbound_id = await _put_blob(store, outbound_body, direction="outbound")
+
+    assert await store.has(sha256=_hash(outbound_body), direction="outbound") == outbound_id
+
+
 async def test_quota_exceeded_when_referenced(store: BlobStore):
     """If all blobs are referenced (ref_count > 0), eviction can't free space; raise."""
     bids = []
@@ -121,9 +221,33 @@ async def test_quota_exceeded_when_referenced(store: BlobStore):
     await store.upload_chunk(bid6, 0, body)
     with pytest.raises(QuotaExceeded):
         await store.upload_finalize(bid6)
+    assert not resolve_blob_path(store.root, "inbound", bid6).exists()
+    assert await store.has(sha256=_hash(body), direction="inbound") is None
+    with pytest.raises(BlobNotFound):
+        async for _ in store.fetch_chunks(bid6):
+            pass
 
 
 async def test_fetch_unknown_blob_raises(store: BlobStore):
     with pytest.raises(BlobNotFound):
         async for _ in store.fetch_chunks("0" * 64):
             pass
+
+
+async def test_fetch_rejects_invalid_chunk_size(store: BlobStore):
+    bid = await _put_blob(store, b"chunk-size")
+
+    with pytest.raises(ValueError):
+        async for _ in store.fetch_chunks(bid, chunk_size=0):
+            pass
+
+
+async def test_upload_init_rejects_invalid_direction_without_files(store: BlobStore):
+    with pytest.raises(ValueError):
+        await store.upload_init(
+            direction="sideways",  # type: ignore[arg-type]
+            sha256=_hash(b"x"),
+            size=1,
+            mime=None,
+        )
+    assert not (store.root / "sideways").exists()

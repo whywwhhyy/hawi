@@ -39,6 +39,9 @@ class Sha256Mismatch(ValueError):
     pass
 
 
+_VALID_DIRECTIONS: frozenset[str] = frozenset({"inbound", "outbound"})
+
+
 @dataclasses.dataclass(frozen=True)
 class BlobInfo:
     blob_id: str
@@ -138,6 +141,8 @@ class BlobStore:
         that distinct uploads of the same content can coexist as separate
         staging files until finalization.
         """
+        if direction not in _VALID_DIRECTIONS:
+            raise ValueError("direction must be 'inbound' or 'outbound'")
         if size < 0:
             raise ValueError("size must be >= 0")
         if not isinstance(sha256, str) or len(sha256) != 64 or not all(c in "0123456789abcdef" for c in sha256):
@@ -155,6 +160,7 @@ class BlobStore:
         # Pre-create the staging path's parent dir
         path = resolve_blob_path(self.root, direction, blob_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(path.touch, exist_ok=False)
         return blob_id
 
     async def upload_chunk(self, blob_id: str, seq: int, data: bytes) -> None:
@@ -165,6 +171,8 @@ class BlobStore:
         retransmit support but currently only validated as monotonic-non-decreasing.
         """
         validate_blob_id(blob_id)
+        if seq < 0:
+            raise ValueError("seq must be >= 0")
         info = await self._get_unfinalized(blob_id)
         if info is None:
             raise BlobNotFound(blob_id)
@@ -215,7 +223,15 @@ class BlobStore:
                 )
 
             # Quota check + LRU eviction in same critical section
-            await self._evict_to_fit(direction, needed_bytes=actual_size, exclude_blob_id=blob_id)
+            try:
+                await self._evict_to_fit(direction, needed_bytes=actual_size, exclude_blob_id=blob_id)
+            except QuotaExceeded:
+                await asyncio.to_thread(path.unlink, missing_ok=True)
+                await asyncio.to_thread(_rmdir_if_empty, path.parent)
+                await asyncio.to_thread(
+                    self._db().execute, "DELETE FROM blobs WHERE blob_id = ?", (blob_id,)
+                )
+                raise
 
             now = time.time()
             await asyncio.to_thread(
@@ -235,6 +251,10 @@ class BlobStore:
     # ----- Read ---------------------------------------------------------
 
     async def has(self, *, sha256: str, direction: Direction) -> Optional[str]:
+        if direction not in _VALID_DIRECTIONS:
+            raise ValueError("direction must be 'inbound' or 'outbound'")
+        if not isinstance(sha256, str) or len(sha256) != 64 or not all(c in "0123456789abcdef" for c in sha256):
+            raise ValueError("sha256 must be 64 lowercase hex chars")
         cur = await asyncio.to_thread(
             self._db().execute,
             "SELECT blob_id FROM blobs WHERE sha256 = ? AND direction = ? AND finalized = 1 LIMIT 1",
@@ -248,6 +268,8 @@ class BlobStore:
     ) -> AsyncIterator[tuple[int, bytes]]:
         """Yield (seq, chunk_bytes) for the blob. Updates last_access."""
         validate_blob_id(blob_id)
+        if chunk_size is not None and chunk_size <= 0:
+            raise ValueError("chunk_size must be > 0")
         cur = await asyncio.to_thread(
             self._db().execute,
             "SELECT direction FROM blobs WHERE blob_id = ? AND finalized = 1",
@@ -293,12 +315,12 @@ class BlobStore:
         async with self._lock:
             await asyncio.to_thread(
                 self._db().execute,
-                "UPDATE blobs SET ref_count = MAX(ref_count - 1, 0) WHERE blob_id = ?",
+                "UPDATE blobs SET ref_count = MAX(ref_count - 1, 0) WHERE blob_id = ? AND finalized = 1",
                 (blob_id,),
             )
             cur = await asyncio.to_thread(
                 self._db().execute,
-                "SELECT ref_count FROM blobs WHERE blob_id = ?",
+                "SELECT ref_count FROM blobs WHERE blob_id = ? AND finalized = 1",
                 (blob_id,),
             )
             row = cur.fetchone()
@@ -311,7 +333,7 @@ class BlobStore:
     async def _get_unfinalized(self, blob_id: str) -> Optional[dict]:
         cur = await asyncio.to_thread(
             self._db().execute,
-            "SELECT blob_id, sha256, direction, size, mime, finalized FROM blobs WHERE blob_id = ?",
+            "SELECT blob_id, sha256, direction, size, mime, finalized FROM blobs WHERE blob_id = ? AND finalized = 0",
             (blob_id,),
         )
         row = cur.fetchone()

@@ -66,5 +66,16 @@ def test_resolve_blob_path_rejects_unknown_direction(tmp_path):
         resolve_blob_path(sandbox_root, "sideways", "a" * 64)  # type: ignore[arg-type]
 
 
+def test_resolve_blob_path_rejects_direction_symlink_escape(tmp_path):
+    sandbox_root = tmp_path / ".hawi" / "blobs"
+    outside = tmp_path / "outside"
+    outside.mkdir(parents=True)
+    sandbox_root.mkdir(parents=True)
+    (sandbox_root / "inbound").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SandboxViolation):
+        resolve_blob_path(sandbox_root, "inbound", "a" * 64)
+
+
 def test_direction_literal_values():
     assert Direction.__args__ == ("inbound", "outbound")  # type: ignore[attr-defined]
