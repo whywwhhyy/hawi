@@ -21,6 +21,21 @@ from hawi.tool import ToolParameterInjection
 from .blob import BlobStore
 from .blob.commands import dispatch_blob_command
 from .event_mapper import SemanticEventMapper
+from .plugin_registry import (
+    KNOWN_PLUGINS,
+    PLUGIN_LABELS,
+    PLUGIN_ENVIRON_PROMPT,
+    PLUGIN_FILESYSTEM,
+    PLUGIN_MCP,
+    PLUGIN_PLAN,
+    PLUGIN_PYTHON_INTERPRETER,
+    PLUGIN_SHELL,
+    PLUGIN_SKILLS,
+    PLUGIN_SUBAGENT,
+    PLUGIN_WEB,
+    PLUGIN_WORKFLOW,
+    create_plugin,
+)
 from .protocol import (
     CoreCommand,
     ProtocolError,
@@ -36,40 +51,6 @@ logger = logging.getLogger(__name__)
 QueueKind = Literal["normal", "high_prio", "urgent"]
 
 DEFAULT_SYSTEM_PROMPT = "你是Hawi，一个通用agent"
-
-PLUGIN_FILESYSTEM = "filesystem"
-PLUGIN_SHELL = "shell"
-PLUGIN_WEB = "web"
-PLUGIN_SKILLS = "skills"
-PLUGIN_PYTHON_INTERPRETER = "python_interpreter"
-PLUGIN_MCP = "mcp"
-PLUGIN_PLAN = "plan"
-PLUGIN_WORKFLOW = "workflow"
-PLUGIN_ENVIRON_PROMPT = "environ_prompt"
-
-KNOWN_PLUGINS = {
-    PLUGIN_FILESYSTEM,
-    PLUGIN_SHELL,
-    PLUGIN_WEB,
-    PLUGIN_SKILLS,
-    PLUGIN_PYTHON_INTERPRETER,
-    PLUGIN_MCP,
-    PLUGIN_PLAN,
-    PLUGIN_WORKFLOW,
-    PLUGIN_ENVIRON_PROMPT,
-}
-
-PLUGIN_LABELS = {
-    PLUGIN_FILESYSTEM: "FileSystemPlugin",
-    PLUGIN_SHELL: "ShellPlugin",
-    PLUGIN_WEB: "WebPlugin",
-    PLUGIN_SKILLS: "SkillsPlugin",
-    PLUGIN_PYTHON_INTERPRETER: "PythonInterpreterPlugin",
-    PLUGIN_MCP: "MCPPlugin",
-    PLUGIN_PLAN: "PlanPlugin",
-    PLUGIN_WORKFLOW: "WorkflowPlugin",
-    PLUGIN_ENVIRON_PROMPT: "EnvironPromptPlugin",
-}
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -949,58 +930,7 @@ class CoreRuntime:
         plugins: list[Any] = []
         for plugin_key in selected_plugins:
             cfg = dict(plugin_configs.get(plugin_key, {}))
-            plugin: Any
-            if plugin_key == PLUGIN_FILESYSTEM:
-                from hawi_plugins.filesystem_plugin import FileSystemPlugin
-
-                plugin = FileSystemPlugin()
-            elif plugin_key == PLUGIN_SHELL:
-                from hawi_plugins.shell_plugin import ShellPlugin
-
-                plugin = ShellPlugin()
-            elif plugin_key == PLUGIN_WEB:
-                from hawi_plugins.web import WebPlugin
-
-                plugin = WebPlugin()
-            elif plugin_key == PLUGIN_SKILLS:
-                from hawi_plugins.skills_plugin import SkillsPlugin
-
-                skills_dir = str(cfg.get("skills_dir") or ".skills")
-                plugin = SkillsPlugin(skills_dir=skills_dir)
-            elif plugin_key == PLUGIN_PYTHON_INTERPRETER:
-                from hawi_plugins.python_interpreter import PythonInterpreterPlugin
-
-                work_dir_raw = cfg.get("work_dir")
-                work_dir = str(work_dir_raw).strip() if isinstance(work_dir_raw, str) else None
-                plugin = PythonInterpreterPlugin(
-                    work_dir=work_dir or None,
-                    print_execution=bool(cfg.get("print_execution", False)),
-                )
-            elif plugin_key == PLUGIN_MCP:
-                from hawi_plugins.mcp_plugin import MCPPlugin
-
-                config_path = str(cfg.get("config_path") or "").strip()
-                if not config_path:
-                    raise ValueError("MCP plugin requires 'config_path'.")
-                plugin = MCPPlugin(config_path=config_path)
-                await plugin.connect()
-            elif plugin_key == PLUGIN_PLAN:
-                from hawi_plugins.plan_plugin import PlanPlugin
-
-                plugin = PlanPlugin(
-                    fold_completed_tasks=bool(cfg.get("fold_completed_tasks", False))
-                )
-            elif plugin_key == PLUGIN_WORKFLOW:
-                from hawi_plugins.workflow_plugin import WorkflowPlugin
-
-                plugin = WorkflowPlugin()
-            elif plugin_key == PLUGIN_ENVIRON_PROMPT:
-                from hawi_plugins.environ_prompt_plugin import EnvironPromptPlugin
-
-                config_path = str(cfg.get("config_path") or "").strip() or None
-                plugin = EnvironPromptPlugin(config_path=config_path)
-            else:
-                raise ValueError(f"Unknown plugin key: {plugin_key}")
+            plugin = await create_plugin(plugin_key, cfg)
             if hasattr(plugin, "bind_plugin_identity"):
                 plugin.bind_plugin_identity(
                     plugin_id=plugin_key,

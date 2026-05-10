@@ -17,6 +17,16 @@ from .context import (
     ToolCallContext,
 )
 from .result import AgentRunResult, ToolCallRecord
+from .subagent import (
+    SubAgentError,
+    SubAgentHandle,
+    SubAgentLimits,
+    SubAgentLifecycleState,
+    SubAgentManager,
+    SubAgentPluginPolicy,
+    SubAgentSpec,
+    SubAgentStatus,
+)
 
 # Re-export scheduler classes
 from .scheduler import (
@@ -49,6 +59,15 @@ __all__ = [
     # Result
     "AgentRunResult",
     "ToolCallRecord",
+    # Subagents
+    "SubAgentError",
+    "SubAgentHandle",
+    "SubAgentLimits",
+    "SubAgentLifecycleState",
+    "SubAgentManager",
+    "SubAgentPluginPolicy",
+    "SubAgentSpec",
+    "SubAgentStatus",
     # Scheduler
     "HawiScheduler",
     "SchedulerError",

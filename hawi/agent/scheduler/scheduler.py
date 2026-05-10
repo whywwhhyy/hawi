@@ -127,6 +127,21 @@ class HawiScheduler:
         """Get current scheduler state."""
         return self._state
 
+    @property
+    def executor_state(self) -> SchedulerState:
+        """Get the current executor state."""
+        return self._executor.state
+
+    @property
+    def executor_is_idle(self) -> bool:
+        """Whether the underlying executor is idle."""
+        return self._executor.is_idle
+
+    @property
+    def last_result(self) -> AgentRunResult | None:
+        """Return the last completed agent result, if any."""
+        return self._executor.last_result
+
     def set_model_error_hook(self, hook: ModelErrorHook) -> None:
         """Set model error handling hook."""
         self._model_error_hook = hook

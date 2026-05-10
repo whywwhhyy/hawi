@@ -325,6 +325,11 @@ class HawiAgent:
         # snapshot_runtime() to capture run_id and iteration.
         self._active_execution_state: _ExecutionState | None = None
 
+        # Core sub-agent lifecycle manager. Imported lazily to avoid module
+        # cycles with the scheduler package during HawiAgent import.
+        from .subagent import SubAgentManager
+        self._subagents = SubAgentManager(self)
+
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
         return defaultdict(ModelErrorStopPolicy, {
@@ -336,6 +341,11 @@ class HawiAgent:
     def plugins(self) -> PluginManager:
         """Get the plugin manager for accessing and modifying plugins/tools/hooks."""
         return self._plugin_manager
+
+    @property
+    def subagents(self):
+        """Get the sub-agent lifecycle manager."""
+        return self._subagents
 
     @property
     def context(self) -> AgentContext:
@@ -359,6 +369,16 @@ class HawiAgent:
             context: New context to use
         """
         self._context = context
+        self._context.tool_call_context = ToolCallContext(agent=self)
+
+    def set_system_prompt(self, system_prompt: str | list[ContentPart] | None) -> None:
+        """Replace the agent system prompt and keep clone defaults in sync."""
+        if system_prompt is None:
+            self._context.system_prompt = None
+            self._system_prompt = None
+            return
+        self._context.set_system_prompt(system_prompt)
+        self._system_prompt = self._context.get_system_prompt()
 
     def set_model(self, model: Model | str) -> None:
         """Replace the default model for this agent.
@@ -439,6 +459,49 @@ class HawiAgent:
             New HawiAgent instance with copied state
         """
         return self.clone()
+
+    async def spawn_subagent(self, *args: Any, **kwargs: Any):
+        """Create a managed sub-agent via :attr:`subagents`."""
+        return await self._subagents.spawn(*args, **kwargs)
+
+    def send_subagent_input(
+        self,
+        subagent_id: str,
+        message: str | list[ContentPart],
+        queue: Literal["normal", "high_prio", "urgent"] = "normal",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Send a message to a managed sub-agent."""
+        return self._subagents.send(
+            subagent_id,
+            message,
+            queue=queue,
+            metadata=metadata,
+        )
+
+    def read_subagent(
+        self,
+        subagent_id: str,
+        *,
+        view: Literal["status", "summary", "events", "context_tail"] = "summary",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Read a controlled view of a managed sub-agent."""
+        return self._subagents.read(subagent_id, view=view, limit=limit)
+
+    async def close_subagent(
+        self,
+        subagent_id: str,
+        *,
+        reason: str = "closed",
+        interrupt: bool = True,
+    ):
+        """Close a managed sub-agent."""
+        return await self._subagents.close(
+            subagent_id,
+            reason=reason,
+            interrupt=interrupt,
+        )
 
     @staticmethod
     def _normalize_auto_compact(

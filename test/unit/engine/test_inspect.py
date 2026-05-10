@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from hawi_engine.inspect import build_inspect_payload
+from hawi_engine.plugin_registry import KNOWN_PLUGINS
 
 
 def test_inspect_payload_contains_models_and_plugin_catalog() -> None:
@@ -16,16 +17,7 @@ def test_inspect_payload_contains_models_and_plugin_catalog() -> None:
     assert isinstance(payload["models"], list)
     assert payload["default_system_prompt"]
     catalog = payload["plugin_catalog"]
-    assert {item["key"] for item in catalog} >= {
-        "filesystem",
-        "shell",
-        "web",
-        "skills",
-        "python_interpreter",
-        "mcp",
-        "plan",
-        "workflow",
-    }
+    assert {item["key"] for item in catalog} == set(KNOWN_PLUGINS)
     assert all("schema" in item and "defaults" in item for item in catalog)
 
 

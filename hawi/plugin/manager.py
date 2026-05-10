@@ -78,7 +78,9 @@ class PluginManager:
     ) -> None:
         """Initialize PluginManager"""
         self._plugin_factories = plugin_factories or []
-        self._plugins: list[HawiPlugin] = [f() for f in self._plugin_factories] + (plugins or [])
+        factory_plugins = [f() for f in self._plugin_factories]
+        self._factory_plugin_count = len(factory_plugins)
+        self._plugins: list[HawiPlugin] = factory_plugins + (plugins or [])
 
         # Collect hooks from plugins (aggregate from PluginHooks TypedDict to list)
         self._hooks: dict[str, list[Callable[..., HookReturnType]]] = {}
@@ -105,6 +107,32 @@ class PluginManager:
     def get_plugins(self) -> list[HawiPlugin]:
         """Return all plugins (as a copy)."""
         return list(self._plugins)
+
+    def add_plugin(self, plugin: HawiPlugin) -> None:
+        """Add a plugin instance at runtime."""
+        self._plugins.append(plugin)
+        plugin.bind_event_bus(self._event_bus)
+        for hook_type, hook_fn in plugin.hooks.items():
+            if hook_fn:
+                self._hooks.setdefault(hook_type, []).append(
+                    cast(Callable[..., HookReturnType], hook_fn)
+                )
+        self._invalidate_cache()
+
+    def add_plugin_factory(self, factory: Callable[[], HawiPlugin]) -> HawiPlugin:
+        """Create and add a plugin from a factory at runtime."""
+        self._plugin_factories.append(factory)
+        plugin = factory()
+        self._plugins.insert(self._factory_plugin_count, plugin)
+        self._factory_plugin_count += 1
+        plugin.bind_event_bus(self._event_bus)
+        for hook_type, hook_fn in plugin.hooks.items():
+            if hook_fn:
+                self._hooks.setdefault(hook_type, []).append(
+                    cast(Callable[..., HookReturnType], hook_fn)
+                )
+        self._invalidate_cache()
+        return plugin
 
     def bind_event_bus(self, event_bus: Any | None) -> None:
         """Bind an event bus to all managed plugins that support plugin events."""
@@ -397,8 +425,9 @@ class PluginManager:
             A new PluginManager instance that is independent of the original.
         """
         # 1. Clone all plugins
-        cloned_plugins = [p.clone() for p in self._plugins]
-        for source, clone in zip(self._plugins, cloned_plugins):
+        explicit_plugins = self._plugins[self._factory_plugin_count:]
+        cloned_plugins = [p.clone() for p in explicit_plugins]
+        for source, clone in zip(explicit_plugins, cloned_plugins):
             clone.bind_plugin_identity(
                 plugin_id=getattr(source, "_plugin_id", None),
                 plugin_name=getattr(source, "_plugin_name", None),

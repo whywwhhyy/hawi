@@ -280,6 +280,17 @@ class TestPluginManagerClone:
         pm2 = pm.clone()
         assert pm2.is_masked("test_tool")
 
+    def test_clone_factory_plugins_without_duplicates(self):
+        class SimplePlugin(HawiPlugin):
+            pass
+
+        pm = PluginManager(plugin_factories=[SimplePlugin])
+        pm2 = pm.clone()
+
+        assert len(pm.get_plugins()) == 1
+        assert len(pm2.get_plugins()) == 1
+        assert pm2.get_plugins()[0] is not pm.get_plugins()[0]
+
 
 # =============================================================================
 # Mock Model for Agent Tests

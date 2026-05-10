@@ -32,26 +32,58 @@
     - [x] 空 session 懒写盘：启动/New/切换空会话不会物化目录
     - [x] SessionManager 异步写盘 + ExitHandler 优先级保证最后 flush（`EXIT_PRIORITY_SESSION_FLUSH`）
 
-- [ ] 先设计 subagent 顶层 API：作为 multi-agent workflow 与插件编排的基础原语
-    - [ ] subagent 首先是 core 级 API，而不是只给模型调用的 tool
-    - [ ] 基于顶层 API 再提供 tool wrapper，让 agent 可以通过工具创建/驱动 subagent
-    - [ ] 插件可以直接调用 subagent API；例如 WorkflowPlugin 用 subagent 做 gate review / reviewer，而不需要绕回模型工具调用
-    - [ ] 明确 API 形态：`spawn_subagent` / `send_subagent_input` / `read_subagent_result` / `close_subagent`，还是单个 `run_subagent`
-    - [ ] 明确 tool 形态：暴露完整 lifecycle tool set，还是只暴露 `run_subagent`
-    - [ ] 支持选择模型：继承主 agent、显式指定模型、按任务类型选择模型
-    - [ ] 支持 subagent 角色/模式：planner、reviewer、explorer、implementer、critic、summarizer
-    - [ ] 支持输入材料选择：完整上下文、摘要上下文、文件/artifact 引用、显式消息列表
-    - [ ] 支持上下文隔离：默认不共享可变上下文，只通过 artifact / message handoff 交换结果
-    - [ ] 支持工具权限配置：继承主 agent 工具、只读工具集、指定 allowlist、禁用危险工具
-    - [ ] 支持预算与边界：最大轮数、最大 token、最大时间、最大 tool call 数、递归深度限制
-    - [ ] 支持 ownership：声明 subagent 可读/可写的文件或模块范围，避免并行修改冲突
-    - [ ] 支持运行控制：interrupt、cancel、timeout、retry、resume
-    - [ ] 支持结果协议：纯文本、结构化 JSON、artifact id、diff、plan、review、signoff
-    - [ ] 支持事件映射：subagent run/tool/model 事件要能关联回 parent run 与 parent tool_call_id
-    - [ ] 支持持久化：subagent 状态、队列、artifact、未完成任务可恢复
-    - [ ] 支持审计：记录 prompt、输入材料、工具权限、模型、输出、用户确认
-    - [ ] 明确失败语义：subagent 失败时主 agent 是继续、重试、降级，还是请求用户确认
-    - [ ] 评估落点：Agent core 提供顶层 API，SubAgentPlugin 提供 tool wrapper，WorkflowPlugin 等插件直接复用 API
+- [ ] subagent 顶层 API：作为 multi-agent workflow 与插件编排的基础原语
+    - [x] 完成初版设计文档：`docs/subagents.md`
+    - [x] 明确原则：subagent 首先是 core 级 API，不只是模型调用的 tool
+    - [x] 明确 API 形态：`spawn` / `send` / `status` / `wait` / `interrupt` / `close`，`run_subagent` 仅作为便利包装
+    - [x] 明确 tool 形态：默认暴露克制的 4 个工具 `create_subagent` / `send_subagent_message` / `read_subagent` / `close_subagent`
+    - [x] 支持设计：fork 上下文创建 subagent
+    - [x] 支持设计：fresh 全新上下文创建 subagent
+    - [x] 支持设计：创建时配置插件、system prompt、工作目录、初始 plan/prompt、角色、预算、ownership、结果协议、metadata
+    - [x] 支持设计：后台 scheduler 运行引擎、状态查询、对话指导、生命周期管理
+    - [x] 新增 core types：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、`SubAgentManager`
+    - [x] `HawiAgent` 持有 `subagents` manager，并提供兼容代理方法
+    - [x] 实现 `fork` / `fresh` 创建路径、后台 `HawiScheduler` task、send/status/wait/interrupt/close
+    - [x] 实现角色默认 system prompt：general、planner、reviewer、explorer、implementer、critic、summarizer
+    - [x] 实现插件策略第一版：继承父插件、禁用继承、追加插件/工厂
+    - [x] 实现基础 limits：最大运行时间、最大递归深度、最大子 agent 数（tool call 数仍待 scheduler/tool budget 接入）
+    - [x] 实现最小事件转发：child events 以 `plugin.event` 关联 `subagent_id`
+    - [x] 新增 `SubAgentPlugin`，暴露 4 个 agent tools
+    - [x] engine/GUI 插件目录注册 `SubAgentPlugin`，GUI 插件弹窗可选择 subagent 工具
+    - [ ] 明确产品语义：subagent 默认服务一次性任务，但底层按可持续多轮 child session/thread 设计
+    - [ ] 引入 `SubAgentSession` 概念：parent session 下的 child session tree，独立 context、scheduler、event log、权限集、manifest
+    - [ ] 引入 `SubAgentTurn` 模型：每次 `send` 生成 `turn_id`，追踪 QUEUED/RUNNING/COMPLETED/FAILED/INTERRUPTED/CANCELLED
+    - [ ] 将 `send_subagent_message` 返回值升级为 `turn_id` + `message_id`，避免多轮时只依赖 `last_result`
+    - [ ] 增加 `wait_turn(subagent_id, turn_id)` / `read_subagent(view="turns")`，支持按轮次等待和查看结果
+    - [ ] 将 `WorkflowPlugin` 的 `SubAgentReviewer` 改为复用 core API
+    - [ ] 接入 SessionManager 持久化：`subagents.json` registry、child `manifest.json`、`context.json`、`turns.json`、`events.ndjson`、`runtime.json`
+    - [ ] 明确 subagent 恢复策略：idle/completed 可恢复继续对话；running 标记 interrupted/unknown；queued turn 可保留待用户/父 agent 重试
+    - [ ] 持久化 effective permissions 占位：记录权限来源、父权限继承与 overrides，后续接入权限机制
+    - [ ] 增加 core protocol 原生命令：`subagent_list` / `subagent_read` / `subagent_send` / `subagent_interrupt` / `subagent_close`
+    - [ ] 增加 engine 级事件族：`subagent.created` / `subagent.updated` / `subagent.turn_*` / `subagent.closed`，GUI 不长期依赖 `plugin.event`
+    - [ ] GUI MVP：主时间线显示 subagent card，侧边栏/抽屉展示状态、turns、events、context tail，并可 send/interrupt/close
+    - [ ] GUI 完整形态：Session 区支持 parent/child session tree，点击 subagent 进入 child chat view，breadcrumb 可返回 parent
+    - [ ] 设计 `ParentBridgePlugin`：child 可 `report_to_parent` / `ask_parent` / `yield_result`，第一版先用事件和最终结果，不阻塞主循环
+    - [ ] 将 `working_dir` 从 prompt 字段落到支持的插件运行时配置：filesystem/shell/python interpreter 等按 child 逻辑目录执行
+    - [ ] 落实 `result_contract`：text/json/review/diff/artifact 的校验、摘要和 artifact sink
+    - [x] 增加单元测试：fork/fresh 隔离、后台运行、status/read、tool wrapper schema
+    - [ ] 增加 interrupt/close 细粒度单元测试与超时取消测试
+
+- [ ] 权限机制：plugin 声明权限，agent 运行时持有权限集，并据此过滤/审查工具
+    - [ ] 设计权限模型：每个权限都有 stable id、scope、description、risk level、默认策略
+    - [ ] 权限策略枚举：`allow` / `deny` / `human_review` / `agent_review`
+    - [ ] `deny` 语义：对应工具或能力直接不出现在 agent tool definitions 中，模型不可见
+    - [ ] `human_review` 语义：暂未实现，第一阶段按 `deny` 处理；预留审批请求、审批记录、恢复执行接口
+    - [ ] `agent_review` 语义：暂未实现，第一阶段按 `allow` 处理；预留 reviewer agent/subagent 审查接口
+    - [ ] 每个 plugin 声明通用权限：例如 filesystem read/write、shell execute、network fetch、subagent spawn、credential access
+    - [ ] 每个 plugin 声明专属权限：plugin 自己的细粒度能力、资源、危险动作、外部系统 scope
+    - [ ] Agent 初始化时接收 runtime permission set，可由配置、GUI、session、subagent spec 合成
+    - [ ] PluginManager 根据 agent 权限集生成可见工具列表和 tool definitions
+    - [ ] 工具执行前二次校验权限，避免动态工具或旧上下文绕过 tool list 过滤
+    - [ ] 权限 metadata 进入审计：agent id/session id、plugin id、tool name、permission id、策略、review 结果
+    - [ ] 与 subagent 集成：`SubAgentPluginPolicy` 改为基于权限集，而不是长期依赖 tool allow/deny 字段
+    - [ ] 与 GUI 集成：展示 plugin 请求的权限、当前 agent 权限集、被隐藏/待审批能力
+    - [ ] 增加测试：permission 声明收集、deny 隐藏工具、执行前拒绝、human_review 按 deny、agent_review 按 allow
 
 - [ ] multi-agent 支持：保留多种可能性，先把可验证的模式沉淀成受控 workflow / tool
     - [ ] 明确设计原则：主循环仍保持可调试，multi-agent 不是默认执行架构
@@ -106,10 +138,12 @@
     - [x] `HawiPlugin` 已有 `plugin_id` / `plugin_name`
     - [x] `bind_plugin_identity()` 已支持 GUI/事件侧绑定插件身份
     - [x] `AgentTool` 已有 `tags`
+    - [x] engine 侧已有统一 `plugin_registry`，runtime 加载与 GUI inspect catalog 同源
     - [x] 动态工具 shadow plugin tool 时已有 warning
     - [x] framework injected parameter 已有冲突检查
     - [ ] plugin 级 `tags`
     - [ ] plugin manifest：id、name、tags、capabilities、config schema、resources
+    - [ ] 支持 Python entry points / 外部 manifest 自动发现第三方 plugin
     - [ ] plugin dependency / optional dependency 声明
     - [ ] plugin conflict 声明与加载前校验
     - [ ] 同名 hook / tool / resource 的冲突策略文档化
@@ -145,6 +179,14 @@
     - [x] 已统一使用 `HookContext`
     - [x] tool hooks 已能拿到 `tool_call_id` 与 `tool`
     - [x] after hooks 已能拿到 duration/error 等上下文
+
+- [ ] 扩展 plugin hook 体系（详见 [hook_system_extension.md](hook_system_extension.md)）
+    - [ ] Phase 0：修复 `before_tool_calling` 不消费 `abort` / `after_tool_calling` 完全丢弃返回值的现存 bug，workflow_plugin gate review 当前不生效
+    - [ ] Phase 1：HookContext 增字段 + `__match_args__` 锁定；`AgentMessageAddedEvent` 增 `source` / `message_id` / `message_index`；新增 `before_user_message` + `UserMessageDraft`
+    - [ ] Phase 2：新增 `HookResult.strip()` 用于安全拦截 + 不写入 history；显式化 `before_tool_calling` 中 `arguments` 原地修改契约
+    - [ ] Phase 3：compact 事务化（`before_compact` + `CompactDraft` + `after_compact`），依赖 message_id 一等公民项目先落地
+    - [ ] Phase 4：`on_interrupt` hook（python_interpreter 关子进程）+ `AgentModelErrorEvent` / `AgentToolErrorEvent` 观察事件
+    - 已拒绝（决策记录见扩展文档）：`before_tool_batch`、`route` / `name` 改写、`replace_request`、`inject_tool_call`、`continue_with` 合并 reinvoke、`on_message_added` 作为 hook、streaming token hook、`before_iteration` / `after_iteration`
 
 - [ ] tool result 导致爆上下文的时候，撤销 tool result 并且提示模型
     - [x] context-length retry 时已能截断最长的未发送 tool result
