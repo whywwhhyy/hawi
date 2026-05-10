@@ -1,6 +1,8 @@
-"""Built-in gateways: stdio, tcp, websocket.
+"""Built-in gateways: stdio, tcp.
 
 Each gateway is registered with `gateway.GATEWAY_REGISTRY` at import time.
+The HTTP gateway (`http`) lives in `hawi_engine.http_gateway`; its
+WS-upgrade path replaces the standalone WebSocket gateway removed in Plan 4.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from .gateway import Gateway, register_gateway
-from .transports import StdIoClient, TcpJsonClient, WebSocketJsonClient
+from .transports import StdIoClient, TcpJsonClient
 
 if TYPE_CHECKING:
     from .runtime import CoreRuntime
@@ -116,48 +118,5 @@ class TcpGateway(Gateway):
             await client.close()
 
 
-class WebSocketGateway(Gateway):
-    name = "websocket"
-
-    def register_args(self, parser: argparse.ArgumentParser) -> None:
-        return
-
-    async def serve(self, runtime: "CoreRuntime", args: argparse.Namespace) -> None:
-        try:
-            from websockets.asyncio.server import serve
-        except ImportError as exc:
-            raise RuntimeError(
-                "The websocket gateway requires websockets>=15.0. "
-                "Install project dependencies with `uv sync`."
-            ) from exc
-
-        clients: set[WebSocketJsonClient] = set()
-        port = args.port if args.port is not None else 8766
-
-        async def handle_client(websocket) -> None:
-            client = WebSocketJsonClient(websocket, queue_max=args.outbound_queue_size)
-            clients.add(client)
-            await client.start()
-            await runtime.register_client(client)
-            try:
-                async for raw in websocket:
-                    await runtime.handle_frame(client, raw)
-                    if runtime.is_shutdown_requested:
-                        break
-            finally:
-                await runtime.unregister_client(client)
-                clients.discard(client)
-                await client.close()
-
-        async with serve(handle_client, args.host, port) as server:
-            sockets = ", ".join(str(sock.getsockname()) for sock in (server.sockets or []))
-            logger.info("Hawi engine WebSocket gateway listening on %s", sockets)
-            await runtime.wait_shutdown()
-
-        for client in list(clients):
-            await client.close()
-
-
 register_gateway(StdioGateway())
 register_gateway(TcpGateway())
-register_gateway(WebSocketGateway())

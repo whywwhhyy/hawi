@@ -5,6 +5,7 @@ description = "AI Agent framework with model compatibility layers"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "aiohttp>=3.10",
     "anthropic>=0.77.0",
     "httpx[socks]>=0.28.1",
     "linkify-it-py>=2.0.3",
@@ -56,7 +57,7 @@ hawi-engine = "hawi_engine.__main__:main"
 [project.entry-points."hawi_engine.gateways"]
 stdio = "hawi_engine.builtin_gateways:StdioGateway"
 tcp = "hawi_engine.builtin_gateways:TcpGateway"
-websocket = "hawi_engine.builtin_gateways:WebSocketGateway"
+http = "hawi_engine.http_gateway:HttpGateway"
 
 [build-system]
 requires = ["setuptools>=61"]

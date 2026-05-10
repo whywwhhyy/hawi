@@ -25,6 +25,7 @@ from .inspect import build_inspect_payload
 from .protocol import json_dumps
 from .gateway import GATEWAY_REGISTRY, discover_gateways
 from . import builtin_gateways  # noqa: F401  side-effect import: registers built-in gateways
+from . import http_gateway  # noqa: F401  side-effect import: registers HttpGateway
 
 warnings.filterwarnings(
     "ignore",
@@ -86,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--gateway",
         choices=sorted(GATEWAY_REGISTRY.keys()),
         default="stdio",
-        help="Gateway to use (built-in: stdio, tcp, websocket; plus any installed plugins)",
+        help="Gateway to use (built-in: stdio, tcp, http; plus any installed plugins)",
     )
     # Backward-compat alias for one release. Maps onto the same dest.
     parser.add_argument(
@@ -96,8 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="transport",
         help=argparse.SUPPRESS,
     )
-    parser.add_argument("--host", default="127.0.0.1", help="Host for tcp/websocket gateways")
-    parser.add_argument("--port", type=int, default=None, help="Port for tcp/websocket gateways")
+    parser.add_argument("--host", default="127.0.0.1", help="Host for tcp/http gateways")
+    parser.add_argument("--port", type=int, default=None, help="Port for tcp/http gateways")
 
     # Let each gateway register its own args.
     for gateway in GATEWAY_REGISTRY.values():

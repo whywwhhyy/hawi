@@ -66,12 +66,18 @@ def test_discover_gateways_idempotent():
     """discover_gateways() can be called multiple times without raising."""
     from hawi_engine.gateway import discover_gateways
 
+    # Plan 4 replaced the standalone WebSocket gateway with HTTP+WS-upgrade.
+    # Side-effect import is required so http is registered before assertions.
+    from hawi_engine import builtin_gateways  # noqa: F401
+    from hawi_engine import http_gateway  # noqa: F401
+
     discover_gateways()
     discover_gateways()  # second call must not raise
     # Built-ins are still registered.
     assert "stdio" in GATEWAY_REGISTRY
     assert "tcp" in GATEWAY_REGISTRY
-    assert "websocket" in GATEWAY_REGISTRY
+    assert "http" in GATEWAY_REGISTRY
+    assert "websocket" not in GATEWAY_REGISTRY
 
 
 def test_discover_gateways_finds_builtins_via_entry_points():
@@ -79,4 +85,6 @@ def test_discover_gateways_finds_builtins_via_entry_points():
     from importlib.metadata import entry_points
     eps = entry_points(group="hawi_engine.gateways")
     names = {ep.name for ep in eps}
-    assert {"stdio", "tcp", "websocket"} <= names
+    # Plan 4: websocket entry-point removed, http added.
+    assert {"stdio", "tcp", "http"} <= names
+    assert "websocket" not in names

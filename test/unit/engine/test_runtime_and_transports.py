@@ -666,53 +666,6 @@ async def test_tcp_transport_smoke(unused_tcp_port: int) -> None:
             await asyncio.gather(server_task, return_exceptions=True)
 
 
-async def _connect_websocket_with_retry(port: int) -> Any:
-    from websockets.asyncio.client import connect
-
-    last_exc: Exception | None = None
-    uri = f"ws://127.0.0.1:{port}"
-    for _ in range(50):
-        try:
-            return await connect(uri)
-        except OSError as exc:
-            last_exc = exc
-            await asyncio.sleep(0.02)
-    assert last_exc is not None
-    raise last_exc
-
-
-@pytest.mark.asyncio
-async def test_websocket_transport_smoke(unused_tcp_port: int) -> None:
-    runtime = FakeTransportRuntime()
-    args = argparse.Namespace(
-        host="127.0.0.1", port=unused_tcp_port, outbound_queue_size=10
-    )
-    server_task = asyncio.create_task(
-        builtin_gateways.WebSocketGateway().serve(runtime, args)  # type: ignore[arg-type]
-    )
-    websocket = await _connect_websocket_with_retry(unused_tcp_port)
-
-    try:
-        ready = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2))
-        assert ready["type"] == "core.ready"
-
-        await websocket.send(
-            '{"version":"hawi.core.v1","type":"ping","id":"ping-ws","payload":{}}'
-        )
-        pong = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2))
-        assert pong["type"] == "pong"
-        assert pong["id"] == "ping-ws"
-
-        await websocket.send(
-            '{"version":"hawi.core.v1","type":"shutdown","id":"stop-ws","payload":{}}'
-        )
-        ack = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2))
-        assert ack["type"] == "ack"
-        assert ack["id"] == "stop-ws"
-
-        await asyncio.wait_for(server_task, timeout=2)
-    finally:
-        await websocket.close()
-        if not server_task.done():
-            server_task.cancel()
-            await asyncio.gather(server_task, return_exceptions=True)
+# Plan 4 removed the standalone WebSocketGateway. The HTTP gateway's WS-upgrade
+# path now provides the WebSocket carrier; see test_http_gateway.py for
+# WS-upgrade integration coverage.
