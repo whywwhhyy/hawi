@@ -159,6 +159,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Append backend debug logs to this file. Logs never go to stdout.",
     )
+    parser.add_argument(
+        "--blob-dir",
+        default=".hawi/blobs",
+        help="Directory under which inbound/ and outbound/ blob sandboxes live. Default '.hawi/blobs'.",
+    )
+    parser.add_argument(
+        "--blob-quota-mb",
+        type=int,
+        default=1024,
+        help="Per-direction quota in MiB. Default 1024 (1 GiB).",
+    )
+    parser.add_argument(
+        "--blob-disabled",
+        action="store_true",
+        help="Disable the blob store entirely. blob.* commands return blob_disabled errors.",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging to stderr")
     return parser
 
@@ -229,6 +245,16 @@ async def async_main(args: argparse.Namespace) -> None:
     selected_plugins = parse_plugins(args.plugins)
     plugin_configs = load_plugin_config(args.plugin_config)
     extra_tool_parameters = parse_extra_tool_parameters(args.extra_tool_parameter)
+
+    blob_store = None
+    if not args.blob_disabled:
+        from hawi_engine.blob import BlobStore
+
+        blob_store = BlobStore(
+            root=Path(args.blob_dir).expanduser().resolve(),
+            quota_bytes=args.blob_quota_mb * 1024 * 1024,
+        )
+
     runtime = CoreRuntime(
         model_name=args.model,
         system_prompt=args.system_prompt,
@@ -238,6 +264,7 @@ async def async_main(args: argparse.Namespace) -> None:
         max_context_tokens=args.max_context_tokens,
         token=token_from_arg_or_env(args.token),
         status_interval=args.status_interval,
+        blob_store=blob_store,
     )
     await runtime.start()
 

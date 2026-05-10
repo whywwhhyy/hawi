@@ -52,6 +52,13 @@ COMMAND_TYPES = {
     "session_delete",
     "session_save_now",
     "session_history",
+    "blob.upload_init",
+    "blob.upload_chunk",
+    "blob.upload_finalize",
+    "blob.has",
+    "blob.fetch",
+    "blob.release",
+    "blob.request_retransmit",
 }
 
 EVENT_TYPES = {
@@ -81,6 +88,8 @@ EVENT_TYPES = {
     "plugin.artifact.delta",
     "plugin.artifact.remove",
     "plugin.artifact.clear",
+    "blob.chunk",
+    "blob.complete",
 }
 
 

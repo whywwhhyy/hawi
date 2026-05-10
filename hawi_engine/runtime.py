@@ -18,6 +18,8 @@ from hawi.models import model_registry
 from hawi.session import SessionManager
 from hawi.tool import ToolParameterInjection
 
+from .blob import BlobStore
+from .blob.commands import dispatch_blob_command
 from .event_mapper import SemanticEventMapper
 from .protocol import (
     CoreCommand,
@@ -178,6 +180,7 @@ class CoreRuntime:
         token: str | None = None,
         status_interval: float = 0.3,
         broadcast_queue_size: int = 1000,
+        blob_store: BlobStore | None = None,
     ) -> None:
         self.model_name = model_name
         self.system_prompt = system_prompt
@@ -188,6 +191,7 @@ class CoreRuntime:
         self._extra_tool_parameters = list(extra_tool_parameters or [])
         self._max_context_tokens = max_context_tokens
         self._token = token
+        self._blob_store: BlobStore | None = blob_store
         self._status_interval = status_interval
 
         self._scheduler: HawiScheduler | None = None
@@ -215,6 +219,8 @@ class CoreRuntime:
         if self._started:
             return
         self._loop = asyncio.get_running_loop()
+        if self._blob_store is not None:
+            await self._blob_store.start()
         scheduler, scheduler_task, plugins = await self._build_scheduler(
             model_name=self.model_name,
             selected_plugins=self._selected_plugins,
@@ -273,6 +279,12 @@ class CoreRuntime:
         if self._broadcast_task and not self._broadcast_task.done():
             self._broadcast_task.cancel()
             await asyncio.gather(self._broadcast_task, return_exceptions=True)
+
+        if self._blob_store is not None:
+            try:
+                await self._blob_store.close()
+            except Exception:
+                logger.exception("blob store close failed during shutdown")
 
     async def wait_shutdown(self) -> None:
         await self._shutdown_requested.wait()
@@ -368,6 +380,17 @@ class CoreRuntime:
             elif command.type == "shutdown":
                 await client.send(make_ack("shutdown", request_id=command.id))
                 await self.stop()
+            elif command.type.startswith("blob."):
+                if self._blob_store is None:
+                    await client.send(
+                        make_error(
+                            "Blob store is disabled on this engine.",
+                            request_id=command.id,
+                            code="blob_disabled",
+                        )
+                    )
+                    return
+                await dispatch_blob_command(client, command, store=self._blob_store)
             else:
                 await client.send(
                     make_error(
@@ -451,7 +474,10 @@ class CoreRuntime:
             )
             return
         client_caps = set(client_caps_raw)
-        negotiated = client_caps & SERVER_CAPS
+        active_caps = set(SERVER_CAPS)
+        if self._blob_store is not None:
+            active_caps.add("blob_v1")
+        negotiated = client_caps & active_caps
         client.negotiated_caps = negotiated
 
         was_authenticated = client.authenticated
@@ -462,7 +488,7 @@ class CoreRuntime:
                 request_id=command.id,
                 payload={
                     "authenticated": True,
-                    "server_caps": sorted(SERVER_CAPS),
+                    "server_caps": sorted(active_caps),
                     "negotiated": sorted(negotiated),
                 },
             )
