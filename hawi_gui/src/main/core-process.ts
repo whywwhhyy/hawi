@@ -46,6 +46,7 @@ export class CoreProcess {
       "hawi-engine",
       "--model",
       nextConfig.modelName,
+      "--no-user-models",
       "--transport",
       "stdio",
       "--system-prompt",

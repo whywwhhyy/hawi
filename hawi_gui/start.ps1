@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$launchCwd = (Get-Location).Path
 
 $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if ($null -eq $npm) {
@@ -35,6 +36,10 @@ try {
     $startArgs = @($args)
     if ($startArgs.Count -eq 1 -and -not $startArgs[0].StartsWith("--")) {
         $startArgs = @("--model", $startArgs[0])
+    }
+
+    if ([string]::IsNullOrEmpty($env:HAWI_GUI_CWD)) {
+        $env:HAWI_GUI_CWD = $launchCwd
     }
 
     if ($startArgs.Count -gt 0) {

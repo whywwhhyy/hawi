@@ -63,7 +63,7 @@ export function parseArgValue(name: string): string | null {
 }
 
 export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCommand: string): InspectPayload {
-  const result = spawnSync(uvCommand, ["run", "--project", repoRoot, "hawi-engine", "--inspect"], {
+  const result = spawnSync(uvCommand, ["run", "--project", repoRoot, "hawi-engine", "--inspect", "--no-user-models"], {
     cwd: workspaceRoot,
     encoding: "utf-8",
     env: process.env

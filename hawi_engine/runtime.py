@@ -1113,14 +1113,25 @@ class CoreRuntime:
         return None
 
 
-def load_model_configs(extra_paths: list[str] | None = None) -> list[Path]:
+def load_model_configs(
+    extra_paths: list[str] | None = None,
+    *,
+    include_user: bool = True,
+) -> list[Path]:
     """Load model configs in core-cli order and return paths that existed."""
     loaded: list[Path] = []
-    candidates = [
-        Path.home() / ".hawi" / "models.yaml",
+    candidates = []
+    if include_user:
+        candidates.append(Path.home() / ".hawi" / "models.yaml")
+    else:
+        # ModelRegistry has its own lazy auto-loader for ~/.hawi and cwd configs.
+        # GUI/workspace-only callers need that suppressed before the first
+        # load_config/list_models call, otherwise user models leak back in.
+        model_registry._auto_load_needed = False  # type: ignore[attr-defined]
+    candidates.extend([
         Path.cwd() / ".hawi" / "models.yaml",
         Path.cwd() / "models.yaml",
-    ]
+    ])
     candidates.extend(Path(path) for path in (extra_paths or []))
 
     for path in candidates:

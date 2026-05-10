@@ -115,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extra models.yaml path. May be passed more than once.",
     )
     parser.add_argument(
+        "--no-user-models",
+        action="store_true",
+        help="Do not load ~/.hawi/models.yaml; use workspace and explicit model configs only.",
+    )
+    parser.add_argument(
         "--system-prompt",
         default=DEFAULT_SYSTEM_PROMPT,
         help="Initial system prompt",
@@ -226,7 +231,7 @@ async def async_main(args: argparse.Namespace) -> None:
             print(f"Hawi config directory already exists: {result.config_dir}")
         return
 
-    loaded = load_model_configs(args.models_config)
+    loaded = load_model_configs(args.models_config, include_user=not args.no_user_models)
     available = model_registry.list_models()
     if args.inspect:
         print(json_dumps(build_inspect_payload()))

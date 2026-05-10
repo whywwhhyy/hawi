@@ -11,7 +11,7 @@ import pytest
 
 import hawi_engine.builtin_gateways as builtin_gateways
 from hawi_engine.protocol import VERSION, make_ack, make_frame
-from hawi_engine.runtime import CoreRuntime, parse_extra_tool_parameter, parse_extra_tool_parameters
+from hawi_engine.runtime import CoreRuntime, load_model_configs, parse_extra_tool_parameter, parse_extra_tool_parameters
 from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
 from hawi.agent import HawiAgent
@@ -509,6 +509,34 @@ def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
     assert "Injected framework parameters" in description
     assert "- tool_call_purpose (string, required): Describe the call" in description
     assert "- priority (integer, required): Priority from 1 to 5" in description
+
+
+def test_load_model_configs_can_skip_user_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    home_config = home / ".hawi" / "models.yaml"
+    workspace_config = workspace / ".hawi" / "models.yaml"
+    root_config = workspace / "models.yaml"
+    for path in (home_config, workspace_config, root_config):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("providers: {}\n", encoding="utf-8")
+
+    loaded_paths: list[str] = []
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(
+        "hawi_engine.runtime.model_registry._auto_load_needed",
+        True,
+    )
+    monkeypatch.setattr(
+        "hawi_engine.runtime.model_registry.load_config",
+        lambda path, quiet=True: loaded_paths.append(str(path)),
+    )
+
+    loaded = load_model_configs(include_user=False)
+
+    assert loaded == [workspace_config, root_config]
+    assert loaded_paths == [str(workspace_config), str(root_config)]
 
 
 @pytest.mark.asyncio

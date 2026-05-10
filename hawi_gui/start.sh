@@ -2,6 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+launch_cwd="$PWD"
 cd "$script_dir"
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -15,6 +16,7 @@ if [[ ! -d node_modules ]]; then
 fi
 
 args=("$@")
+export HAWI_GUI_CWD="${HAWI_GUI_CWD:-$launch_cwd}"
 if [[ ${#args[@]} -eq 1 && "${args[0]}" != --* ]]; then
   args=(--model "${args[0]}")
 fi
