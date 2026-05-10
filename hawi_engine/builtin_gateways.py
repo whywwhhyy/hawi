@@ -14,6 +14,15 @@ import sys
 from typing import TYPE_CHECKING
 
 from .gateway import Gateway, register_gateway
+from .protocol import json_dumps, make_error
+from .tlv import (
+    DEFAULT_MAX_FRAME_SIZE,
+    TYPE_BINARY_BLOB,
+    TYPE_JSON_FRAME,
+    FrameTooLargeError,
+    UnexpectedEOFError,
+    read_frame,
+)
 from .transports import StdIoClient, TcpJsonClient
 
 if TYPE_CHECKING:
@@ -23,8 +32,22 @@ logger = logging.getLogger(__name__)
 
 
 class _ThreadedStdinReader:
-    async def readline(self) -> bytes:
-        return await asyncio.to_thread(sys.stdin.buffer.readline)
+    """asyncio.StreamReader-compatible byte reader using a worker thread.
+
+    Used on platforms where loop.connect_read_pipe(sys.stdin) fails (Windows,
+    some sandboxes). We only need the readexactly() shape that tlv.read_frame
+    consumes.
+    """
+
+    async def readexactly(self, n: int) -> bytes:
+        out = bytearray()
+        while len(out) < n:
+            chunk = await asyncio.to_thread(sys.stdin.buffer.read, n - len(out))
+            if not chunk:
+                # EOF; emulate StreamReader.readexactly's IncompleteReadError contract
+                raise asyncio.IncompleteReadError(bytes(out), n)
+            out.extend(chunk)
+        return bytes(out)
 
 
 async def _stdin_reader() -> "asyncio.StreamReader | _ThreadedStdinReader":
@@ -55,13 +78,35 @@ class StdioGateway(Gateway):
         await runtime.register_client(client)
 
         reader = await _stdin_reader()
+        max_size = getattr(args, "max_frame_size", DEFAULT_MAX_FRAME_SIZE)
 
         async def read_loop() -> None:
             while not runtime.is_shutdown_requested:
-                line = await reader.readline()
-                if not line:
+                try:
+                    result = await read_frame(reader, max_size=max_size)
+                except FrameTooLargeError as exc:
+                    await client.send(make_error(str(exc), code="frame_too_large"))
                     break
-                await runtime.handle_frame(client, line)
+                except UnexpectedEOFError:
+                    break
+                if result is None:
+                    break  # clean EOF
+                type_byte, value = result
+                if type_byte == TYPE_JSON_FRAME:
+                    await runtime.handle_frame(client, value)
+                elif type_byte == TYPE_BINARY_BLOB:
+                    # Reserved for Plan 5 blob fast-path. Plan 3 has no consumer;
+                    # log and discard so the stream stays in sync.
+                    logger.debug(
+                        "Discarded TYPE_BINARY_BLOB frame (%d bytes); blob support not implemented",
+                        len(value),
+                    )
+                else:
+                    logger.warning(
+                        "Discarded unknown TLV frame type 0x%02x (%d bytes)",
+                        type_byte,
+                        len(value),
+                    )
 
         reader_task = asyncio.create_task(read_loop())
         shutdown_task = asyncio.create_task(runtime.wait_shutdown())
@@ -89,6 +134,7 @@ class TcpGateway(Gateway):
     async def serve(self, runtime: "CoreRuntime", args: argparse.Namespace) -> None:
         clients: set[TcpJsonClient] = set()
         port = args.port if args.port is not None else 8765
+        max_size = getattr(args, "max_frame_size", DEFAULT_MAX_FRAME_SIZE)
 
         async def handle_client(
             reader: asyncio.StreamReader,
@@ -100,10 +146,26 @@ class TcpGateway(Gateway):
             await runtime.register_client(client)
             try:
                 while not runtime.is_shutdown_requested:
-                    line = await reader.readline()
-                    if not line:
+                    try:
+                        result = await read_frame(reader, max_size=max_size)
+                    except FrameTooLargeError as exc:
+                        await client.send(make_error(str(exc), code="frame_too_large"))
                         break
-                    await runtime.handle_frame(client, line)
+                    except UnexpectedEOFError:
+                        break
+                    if result is None:
+                        break
+                    type_byte, value = result
+                    if type_byte == TYPE_JSON_FRAME:
+                        await runtime.handle_frame(client, value)
+                    elif type_byte == TYPE_BINARY_BLOB:
+                        logger.debug(
+                            "Discarded TYPE_BINARY_BLOB frame on tcp; blob support not implemented"
+                        )
+                    else:
+                        logger.warning(
+                            "Discarded unknown TLV frame type 0x%02x on tcp", type_byte
+                        )
             finally:
                 await runtime.unregister_client(client)
                 clients.discard(client)

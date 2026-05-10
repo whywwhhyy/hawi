@@ -3,7 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CoreCommand, CoreCommandType, CoreFrame, InspectPayload, PersistedConfig } from "../shared/protocol";
-import { parseNdjsonChunk } from "../shared/protocol";
+import { VERSION } from "../shared/protocol";
+import { TLVDecoder, TYPE_JSON_FRAME, encodeJsonFrame } from "./tlv";
 
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 800;
 export const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
@@ -12,7 +13,7 @@ export type EmitToRenderer = (channel: string, payload: unknown) => void;
 
 export class CoreProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
-  private stdoutBuffer = "";
+  private decoder = new TLVDecoder();
   private pending = new Map<string, { resolve: (frame: CoreFrame) => void; reject: (error: Error) => void }>();
   private sequence = 0;
 
@@ -66,8 +67,8 @@ export class CoreProcess {
       env: process.env
     });
     this.child = child;
-    child.stdout.setEncoding("utf-8");
-    child.stdout.on("data", (chunk: string) => this.handleStdout(chunk));
+    this.decoder = new TLVDecoder();
+    child.stdout.on("data", (chunk: Buffer) => this.handleStdout(chunk));
     child.stderr.setEncoding("utf-8");
     child.stderr.on("data", (chunk: string) => {
       this.emitToRenderer("core:stderr", chunk);
@@ -148,20 +149,39 @@ export class CoreProcess {
   }
 
   private writeFrame(child: ChildProcessWithoutNullStreams | null, frame: CoreCommand): void {
-    child?.stdin.write(`${JSON.stringify(frame)}\n`, "utf-8");
+    child?.stdin.write(encodeJsonFrame(frame));
   }
 
-  private handleStdout(chunk: string): void {
-    const result = parseNdjsonChunk(this.stdoutBuffer, chunk);
-    this.stdoutBuffer = result.buffer;
-    for (const error of result.errors) {
-      this.emitToRenderer("core:event", {
-        version: "hawi.core.v1",
-        type: "error",
-        payload: { ok: false, code: "bad_frame", message: error }
-      });
-    }
-    for (const frame of result.frames) {
+  private handleStdout(chunk: Buffer): void {
+    for (const { typeByte, value } of this.decoder.push(chunk)) {
+      if (typeByte !== TYPE_JSON_FRAME) {
+        // Reserved (binary blob, etc.) — ignore in Plan 3.
+        continue;
+      }
+      let frame: CoreFrame;
+      try {
+        const parsed = JSON.parse(value.toString("utf-8")) as CoreFrame;
+        if (parsed.version !== VERSION || typeof parsed.type !== "string") {
+          this.emitToRenderer("core:event", {
+            version: VERSION,
+            type: "error",
+            payload: { ok: false, code: "bad_frame", message: `Invalid core frame: ${value.toString("utf-8")}` }
+          });
+          continue;
+        }
+        frame = parsed;
+      } catch (error) {
+        this.emitToRenderer("core:event", {
+          version: VERSION,
+          type: "error",
+          payload: {
+            ok: false,
+            code: "bad_frame",
+            message: error instanceof Error ? error.message : String(error)
+          }
+        });
+        continue;
+      }
       if (frame.id && this.pending.has(frame.id) && (frame.type === "ack" || frame.type === "error" || frame.type === "pong" || frame.type === "core.status")) {
         const pending = this.pending.get(frame.id);
         this.pending.delete(frame.id);

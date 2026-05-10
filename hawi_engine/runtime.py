@@ -73,7 +73,7 @@ PLUGIN_LABELS = {
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-SERVER_CAPS: frozenset[str] = frozenset({"last_event_id"})
+SERVER_CAPS: frozenset[str] = frozenset({"last_event_id", "tlv_v1"})
 """Capabilities the server advertises during hello negotiation. Plans 3-5 grow this set."""
 
 

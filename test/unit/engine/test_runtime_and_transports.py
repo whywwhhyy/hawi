@@ -12,9 +12,23 @@ import pytest
 import hawi_engine.builtin_gateways as builtin_gateways
 from hawi_engine.protocol import VERSION, make_ack, make_frame
 from hawi_engine.runtime import CoreRuntime, parse_extra_tool_parameter, parse_extra_tool_parameters
+from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
 from hawi.agent import HawiAgent
 from hawi.tool import AgentTool, ToolResult
+
+
+async def _send_tlv(writer: asyncio.StreamWriter, raw: bytes) -> None:
+    writer.write(encode_frame(TYPE_JSON_FRAME, raw))
+    await writer.drain()
+
+
+async def _recv_tlv(reader: asyncio.StreamReader, *, timeout: float = 2) -> dict[str, Any]:
+    result = await asyncio.wait_for(read_frame(reader), timeout=timeout)
+    assert result is not None, "stream closed"
+    type_byte, value = result
+    assert type_byte == TYPE_JSON_FRAME, f"expected JSON frame, got 0x{type_byte:02x}"
+    return json.loads(value.decode("utf-8"))
 
 
 @dataclass(eq=False)
@@ -630,7 +644,10 @@ async def _connect_tcp_with_retry(port: int) -> tuple[asyncio.StreamReader, asyn
 async def test_tcp_transport_smoke(unused_tcp_port: int) -> None:
     runtime = FakeTransportRuntime()
     args = argparse.Namespace(
-        host="127.0.0.1", port=unused_tcp_port, outbound_queue_size=10
+        host="127.0.0.1",
+        port=unused_tcp_port,
+        outbound_queue_size=10,
+        max_frame_size=16 * 1024 * 1024,
     )
     server_task = asyncio.create_task(
         builtin_gateways.TcpGateway().serve(runtime, args)  # type: ignore[arg-type]
@@ -638,22 +655,22 @@ async def test_tcp_transport_smoke(unused_tcp_port: int) -> None:
     reader, writer = await _connect_tcp_with_retry(unused_tcp_port)
 
     try:
-        ready = json.loads((await asyncio.wait_for(reader.readline(), timeout=2)).decode())
+        ready = await _recv_tlv(reader)
         assert ready["type"] == "core.ready"
 
-        writer.write(
-            b'{"version":"hawi.core.v1","type":"ping","id":"ping-1","payload":{}}\n'
+        await _send_tlv(
+            writer,
+            b'{"version":"hawi.core.v1","type":"ping","id":"ping-1","payload":{}}',
         )
-        await writer.drain()
-        pong = json.loads((await asyncio.wait_for(reader.readline(), timeout=2)).decode())
+        pong = await _recv_tlv(reader)
         assert pong["type"] == "pong"
         assert pong["id"] == "ping-1"
 
-        writer.write(
-            b'{"version":"hawi.core.v1","type":"shutdown","id":"stop-1","payload":{}}\n'
+        await _send_tlv(
+            writer,
+            b'{"version":"hawi.core.v1","type":"shutdown","id":"stop-1","payload":{}}',
         )
-        await writer.drain()
-        ack = json.loads((await asyncio.wait_for(reader.readline(), timeout=2)).decode())
+        ack = await _recv_tlv(reader)
         assert ack["type"] == "ack"
         assert ack["id"] == "stop-1"
 

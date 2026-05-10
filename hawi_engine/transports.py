@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .protocol import json_dumps, make_error
+from .tlv import TYPE_JSON_FRAME, encode_frame
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +93,9 @@ class QueuedJsonClient(ABC):
 
 class StdIoClient(QueuedJsonClient):
     async def _write_frame(self, frame: dict[str, Any]) -> None:
-        sys.stdout.write(json_dumps(frame) + "\n")
-        sys.stdout.flush()
+        body = json_dumps(frame).encode("utf-8")
+        sys.stdout.buffer.write(encode_frame(TYPE_JSON_FRAME, body))
+        sys.stdout.buffer.flush()
 
     async def _close_transport(self) -> None:
         return None
@@ -110,7 +112,8 @@ class TcpJsonClient(QueuedJsonClient):
         self._writer = writer
 
     async def _write_frame(self, frame: dict[str, Any]) -> None:
-        self._writer.write((json_dumps(frame) + "\n").encode("utf-8"))
+        body = json_dumps(frame).encode("utf-8")
+        self._writer.write(encode_frame(TYPE_JSON_FRAME, body))
         await self._writer.drain()
 
     async def _close_transport(self) -> None:

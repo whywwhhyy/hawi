@@ -53,6 +53,7 @@ filterwarnings = [
 
 [project.scripts]
 hawi-engine = "hawi_engine.__main__:main"
+tlv2ndjson = "hawi_engine.tlv2ndjson:main"
 
 [project.entry-points."hawi_engine.gateways"]
 stdio = "hawi_engine.builtin_gateways:StdioGateway"

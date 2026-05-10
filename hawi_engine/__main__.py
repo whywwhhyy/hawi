@@ -156,6 +156,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per-client outbound frame queue size",
     )
     parser.add_argument(
+        "--max-frame-size",
+        type=int,
+        default=16 * 1024 * 1024,
+        help="Max TLV frame body size in bytes (stdio/tcp only). Default 16 MiB.",
+    )
+    parser.add_argument(
         "--log-file",
         default=None,
         help="Append backend debug logs to this file. Logs never go to stdout.",

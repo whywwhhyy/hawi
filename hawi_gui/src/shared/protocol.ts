@@ -137,33 +137,6 @@ export function makeCommand<TPayload extends Record<string, unknown>>(
   };
 }
 
-export function parseNdjsonChunk(
-  buffer: string,
-  chunk: string
-): { frames: CoreFrame[]; buffer: string; errors: string[] } {
-  const lines = (buffer + chunk).split(/\r?\n/);
-  const nextBuffer = lines.pop() ?? "";
-  const frames: CoreFrame[] = [];
-  const errors: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as CoreFrame;
-      if (parsed.version !== VERSION || typeof parsed.type !== "string") {
-        errors.push(`Invalid core frame: ${trimmed}`);
-        continue;
-      }
-      frames.push(parsed);
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  return { frames, buffer: nextBuffer, errors };
-}
-
 export function cryptoId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
