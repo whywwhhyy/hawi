@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
+import App, { formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -78,6 +78,34 @@ describe("shouldInitializeSessionState", () => {
     expect(shouldInitializeSessionState(null)).toBe(false);
     expect(shouldInitializeSessionState(makeMetadata(false))).toBe(false);
     expect(shouldInitializeSessionState(makeMetadata(true))).toBe(true);
+  });
+});
+
+describe("sortSessionsByCreatedAt", () => {
+  it("uses creation time instead of last update time", () => {
+    const sessions = sortSessionsByCreatedAt([
+      {
+        session_id: "older-but-updated",
+        name: "older",
+        created_at: "2024-01-01T00:00:00",
+        updated_at: "2026-01-01T00:00:00",
+        last_checkpoint_event: null,
+        components_present: []
+      },
+      {
+        session_id: "newer",
+        name: "newer",
+        created_at: "2025-01-01T00:00:00",
+        updated_at: "2025-01-01T00:00:00",
+        last_checkpoint_event: null,
+        components_present: []
+      }
+    ]);
+
+    expect(sessions.map((session) => session.session_id)).toEqual([
+      "newer",
+      "older-but-updated"
+    ]);
   });
 });
 

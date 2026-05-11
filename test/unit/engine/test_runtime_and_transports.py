@@ -191,6 +191,17 @@ class DummySessionManager:
         self.current_session_id = "new-session"
         return self.current_session_id
 
+    def fork_session(
+        self,
+        session_id: str | None = None,
+        name: str | None = None,
+    ) -> str:
+        self.forked_from = session_id or self.current_session_id
+        self.fork_session_name = name
+        self.current_session_id = "forked-session"
+        self.histories["forked-session"] = list(self.histories[self.forked_from])
+        return self.current_session_id
+
     def delete_session(self, session_id: str) -> None:
         self.deleted.append(session_id)
         self.histories.pop(session_id, None)
@@ -433,6 +444,33 @@ async def test_session_new_resets_live_state_without_materializing_history() -> 
     assert scheduler.agent.cleared is True
     assert scheduler.agent.loaded_steer == []
     assert scheduler.agent.loaded_runtime["current_tool_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_session_fork_command_returns_forked_history() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    scheduler = DummyScheduler()
+    sm = DummySessionManager()
+    runtime._scheduler = scheduler  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_fork","id":"fork",'
+            '"payload":{"session_id":"saved-session","name":"copy"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_fork"
+    assert payload["session_id"] == "forked-session"
+    assert payload["forked_from_session_id"] == "saved-session"
+    assert payload["message_history"][0]["content"][0]["text"] == "saved"
+    assert sm.fork_session_name == "copy"
 
 
 @pytest.mark.asyncio

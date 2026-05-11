@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -34,6 +36,15 @@ from .markdown_export import (
     write_markdown_export_bundle,
 )
 from .message_history import message_history_entry_from_event, should_persist_message
+from .lock import (
+    SessionFileLock,
+    SessionLockInfo,
+    SessionLockedError,
+    SessionLockUnavailable,
+    make_lock_metadata,
+    probe_session_lock,
+    read_lock_owner,
+)
 from .writer import SessionWriter, WriteJob
 
 if TYPE_CHECKING:
@@ -75,6 +86,8 @@ class SessionMeta:
     updated_at: str
     last_checkpoint_event: str | None
     components_present: list[str]
+    locked: bool = False
+    lock_owner: dict[str, Any] | None = None
 
 
 class SessionManager:
@@ -111,6 +124,8 @@ class SessionManager:
         self._session_name: str | None = None
         self._session_created_at: str | None = None
         self._session_has_visible_messages = False
+        self._manager_id = uuid.uuid4().hex
+        self._session_lock: SessionFileLock | None = None
         self._exit_hook_registered = False
         self._subscribed_event_types: tuple[str, ...] = ()
 
@@ -168,6 +183,9 @@ class SessionManager:
                 self._exit_hook_registered = False
             if self._writer_owned:
                 self._writer.shutdown(timeout=5.0)
+            else:
+                self._writer.wait_idle(timeout=5.0)
+            self._release_current_session_lock()
 
     # --- session API -----------------------------------------------------
 
@@ -180,6 +198,8 @@ class SessionManager:
         """
         session_id = uuid.uuid4().hex[:12]
         with self._lock:
+            self._writer.wait_idle(timeout=10.0)
+            self._release_current_session_lock()
             self._session_id = session_id
             self._session_name = name or session_id
             self._session_created_at = datetime.now().isoformat()
@@ -197,6 +217,8 @@ class SessionManager:
         if not self._root.exists():
             return out
         for child in sorted(self._root.iterdir(), key=lambda p: p.name):
+            if child.name.startswith("."):
+                continue
             if not child.is_dir():
                 continue
             mp = layout.manifest_path(child)
@@ -209,6 +231,7 @@ class SessionManager:
                 continue
             if not self._session_dir_has_visible_messages(child):
                 continue
+            lock_info = self._session_lock_info(data.get("session_id", child.name))
             out.append(
                 SessionMeta(
                     session_id=data.get("session_id", child.name),
@@ -217,9 +240,11 @@ class SessionManager:
                     updated_at=data.get("updated_at", ""),
                     last_checkpoint_event=data.get("last_checkpoint_event"),
                     components_present=list(data.get("components_present", [])),
+                    locked=lock_info.locked,
+                    lock_owner=lock_info.owner if lock_info.locked else None,
                 )
             )
-        return out
+        return sorted(out, key=lambda m: _parse_iso_timestamp(m.created_at), reverse=True)
 
     def load_session(self, session_id: str) -> None:
         """Load a session's on-disk state into the attached agent."""
@@ -230,74 +255,100 @@ class SessionManager:
         if not manifest_path.exists():
             raise FileNotFoundError(f"session not found: {session_id}")
 
-        with self._lock:
-            self._session_id = session_id
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self._session_name = manifest.get("name", session_id)
-            self._session_created_at = (
-                manifest.get("created_at") or datetime.now().isoformat()
-            )
+        next_lock: SessionFileLock | None = None
+        previous_lock: SessionFileLock | None = None
+        previous_session_id = self._session_id
+        previous_session_name = self._session_name
+        previous_created_at = self._session_created_at
+        previous_has_visible_messages = self._session_has_visible_messages
+        try:
+            with self._lock:
+                if session_id != self._session_id:
+                    next_lock = self._acquire_session_lock(session_id)
+                    previous_lock = self._session_lock
+                else:
+                    self._ensure_current_session_lock()
 
-            loaded: list[str] = []
-
-            ctx_path = layout.context_path(session_dir)
-            if ctx_path.exists():
-                ctx_data = json.loads(ctx_path.read_text(encoding="utf-8"))
-                self._agent.context.load_snapshot(ctx_data)
-                loaded.append(layout.COMPONENT_CONTEXT)
-
-            queues_path = layout.queues_path(session_dir)
-            if queues_path.exists() and self._scheduler is not None:
-                queues_data = json.loads(queues_path.read_text(encoding="utf-8"))
-                qm = self._scheduler_queue_manager()
-                if qm is not None and "scheduler" in queues_data:
-                    qm.load_snapshot(queues_data["scheduler"])
-                    qm.rebind_event_bus(self._event_bus)
-                if "pending_steer_inputs" in queues_data:
-                    self._agent.load_steer(queues_data["pending_steer_inputs"])
-                loaded.append(layout.COMPONENT_QUEUES)
-
-            runtime_path = layout.runtime_path(session_dir)
-            if runtime_path.exists():
-                runtime_data = json.loads(runtime_path.read_text(encoding="utf-8"))
-                self._agent.load_runtime(runtime_data)
-                loaded.append(layout.COMPONENT_RUNTIME)
-
-            # Synthesize error tool results for any in-flight tool calls that
-            # were interrupted by the crash. Done at load time (not deferred to
-            # the next run) so the context is provider-valid immediately and
-            # GUI snapshots produced right after load show no orphan tool
-            # nodes. add_missing_tool_results scans messages directly and is
-            # idempotent.
-            recovered = self._agent.context.add_missing_tool_results(
-                "Tool call interrupted before completion (reason: session restored)."
-            )
-            if recovered:
-                # Clear runtime tool-call list — these are now "answered" with
-                # synthetic results; nothing live should pick them up.
-                self._agent._current_tool_calls = []
-                self._agent._last_unsent_tool_results = []
-                logger.info(
-                    "session %s load: recovered %d interrupted tool calls",
-                    session_id,
-                    len(recovered),
+                self._session_id = session_id
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                self._session_name = manifest.get("name", session_id)
+                self._session_created_at = (
+                    manifest.get("created_at") or datetime.now().isoformat()
                 )
 
-            plugins_dir = layout.plugins_dir(session_dir)
-            if plugins_dir.exists():
-                self._load_plugins(plugins_dir, manifest)
-                loaded.append(layout.COMPONENT_PLUGINS)
+                loaded: list[str] = []
 
-            if self._event_bus is not None:
-                self._event_bus.publish(
-                    SessionLoadedEvent.create(
-                        session_id=session_id, components_loaded=loaded
+                ctx_path = layout.context_path(session_dir)
+                if ctx_path.exists():
+                    ctx_data = json.loads(ctx_path.read_text(encoding="utf-8"))
+                    self._agent.context.load_snapshot(ctx_data)
+                    loaded.append(layout.COMPONENT_CONTEXT)
+
+                queues_path = layout.queues_path(session_dir)
+                if queues_path.exists() and self._scheduler is not None:
+                    queues_data = json.loads(queues_path.read_text(encoding="utf-8"))
+                    qm = self._scheduler_queue_manager()
+                    if qm is not None and "scheduler" in queues_data:
+                        qm.load_snapshot(queues_data["scheduler"])
+                        qm.rebind_event_bus(self._event_bus)
+                    if "pending_steer_inputs" in queues_data:
+                        self._agent.load_steer(queues_data["pending_steer_inputs"])
+                    loaded.append(layout.COMPONENT_QUEUES)
+
+                runtime_path = layout.runtime_path(session_dir)
+                if runtime_path.exists():
+                    runtime_data = json.loads(runtime_path.read_text(encoding="utf-8"))
+                    self._agent.load_runtime(runtime_data)
+                    loaded.append(layout.COMPONENT_RUNTIME)
+
+                # Synthesize error tool results for any in-flight tool calls that
+                # were interrupted by the crash. Done at load time (not deferred to
+                # the next run) so the context is provider-valid immediately and
+                # GUI snapshots produced right after load show no orphan tool
+                # nodes. add_missing_tool_results scans messages directly and is
+                # idempotent.
+                recovered = self._agent.context.add_missing_tool_results(
+                    "Tool call interrupted before completion (reason: session restored)."
+                )
+                if recovered:
+                    # Clear runtime tool-call list — these are now "answered" with
+                    # synthetic results; nothing live should pick them up.
+                    self._agent._current_tool_calls = []
+                    self._agent._last_unsent_tool_results = []
+                    logger.info(
+                        "session %s load: recovered %d interrupted tool calls",
+                        session_id,
+                        len(recovered),
                     )
+
+                plugins_dir = layout.plugins_dir(session_dir)
+                if plugins_dir.exists():
+                    self._load_plugins(plugins_dir, manifest)
+                    loaded.append(layout.COMPONENT_PLUGINS)
+
+                if self._event_bus is not None:
+                    self._event_bus.publish(
+                        SessionLoadedEvent.create(
+                            session_id=session_id, components_loaded=loaded
+                        )
+                    )
+                self._session_has_visible_messages = self._session_dir_has_visible_messages(
+                    session_dir
                 )
-            self._session_has_visible_messages = self._session_dir_has_visible_messages(
-                session_dir
-            )
-            self._configure_subagent_storage()
+                self._configure_subagent_storage()
+                if next_lock is not None:
+                    self._session_lock = next_lock
+                    if previous_lock is not None:
+                        previous_lock.release()
+                    next_lock = None
+        except Exception:
+            if next_lock is not None:
+                next_lock.release()
+            self._session_id = previous_session_id
+            self._session_name = previous_session_name
+            self._session_created_at = previous_created_at
+            self._session_has_visible_messages = previous_has_visible_messages
+            raise
 
     def read_message_history(
         self,
@@ -363,15 +414,74 @@ class SessionManager:
                 )
             )
 
+    def fork_session(self, session_id: str | None = None, name: str | None = None) -> str:
+        """Copy an existing session into a new unlocked session and load it.
+
+        The source session is treated as read-only and is deliberately not
+        locked, so a second Hawi engine can fork a session that another engine
+        is currently using instead of joining it.
+        """
+        source_id = session_id or self._session_id
+        if source_id is None:
+            raise RuntimeError("No session available to fork")
+        if self._session_id is not None:
+            self.save_now()
+
+        source_dir = layout.session_dir(self._root, source_id)
+        if not layout.manifest_path(source_dir).exists():
+            raise FileNotFoundError(f"session not found: {source_id}")
+
+        fork_id = self._new_unique_session_id()
+        fork_dir = layout.session_dir(self._root, fork_id)
+        temp_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{fork_id}.",
+                suffix=".fork",
+                dir=str(self._root),
+            )
+        )
+        try:
+            shutil.rmtree(temp_dir)
+            shutil.copytree(
+                source_dir,
+                temp_dir,
+                ignore=shutil.ignore_patterns(
+                    layout.SESSION_LOCK_FILENAME,
+                    "*.tmp",
+                ),
+            )
+            self._rewrite_fork_manifest(
+                temp_dir,
+                fork_id=fork_id,
+                source_id=source_id,
+                name=name,
+            )
+            temp_dir.rename(fork_dir)
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            shutil.rmtree(fork_dir, ignore_errors=True)
+            raise
+
+        self.load_session(fork_id)
+        return fork_id
+
     def delete_session(self, session_id: str) -> None:
         """Permanently delete a session directory.
 
         If the deleted session is currently active, the manager has no current
         session afterwards.
         """
+        delete_lock: SessionFileLock | None = None
+        if session_id != self._session_id:
+            session_dir = layout.session_dir(self._root, session_id)
+            if session_dir.exists():
+                delete_lock = self._acquire_session_lock(session_id)
         layout.remove_session_dir(layout.session_dir(self._root, session_id))
+        if delete_lock is not None:
+            delete_lock.release()
         with self._lock:
             if self._session_id == session_id:
+                self._release_current_session_lock()
                 self._session_id = None
                 self._session_name = None
 
@@ -382,6 +492,7 @@ class SessionManager:
         if not self._current_session_has_visible_messages():
             self._remove_current_session_dir_if_empty()
             return
+        self._ensure_current_session_lock()
         snapshots, manifest_patch = self._capture_all("save_now")
         job = WriteJob(
             session_dir=layout.session_dir(self._root, self._session_id),
@@ -427,6 +538,7 @@ class SessionManager:
         ):
             return
         try:
+            self._ensure_current_session_lock()
             snapshots, manifest_patch = self._capture(event.type, components)
         except Exception:
             logger.exception(
@@ -532,6 +644,7 @@ class SessionManager:
                 and self._agent is not None
                 and self._current_session_has_visible_messages()
             ):
+                self._ensure_current_session_lock()
                 snapshots, manifest_patch = self._capture_all("exit")
                 job = WriteJob(
                     session_dir=layout.session_dir(self._root, self._session_id),
@@ -549,10 +662,103 @@ class SessionManager:
             try:
                 if self._writer_owned:
                     self._writer.shutdown(timeout=5.0)
+                else:
+                    self._writer.wait_idle(timeout=5.0)
+                self._release_current_session_lock()
             except Exception:
                 logger.exception("session writer shutdown raised")
 
     # --- helpers ---------------------------------------------------------
+
+    def _new_unique_session_id(self) -> str:
+        while True:
+            session_id = uuid.uuid4().hex[:12]
+            if not layout.session_dir(self._root, session_id).exists():
+                return session_id
+
+    def _rewrite_fork_manifest(
+        self,
+        session_dir: Path,
+        *,
+        fork_id: str,
+        source_id: str,
+        name: str | None,
+    ) -> None:
+        manifest_path = layout.manifest_path(session_dir)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+        created_at = datetime.now().isoformat()
+        source_name = manifest.get("name") or source_id
+        manifest.update(
+            {
+                "version": layout.MANIFEST_VERSION,
+                "session_id": fork_id,
+                "name": name or f"{source_name} fork",
+                "created_at": created_at,
+                "updated_at": created_at,
+                "forked_from_session_id": source_id,
+                "forked_at": created_at,
+                "last_checkpoint_event": "session_fork",
+            }
+        )
+        layout.atomic_write_text(
+            manifest_path,
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+
+    def _session_lock_info(self, session_id: str) -> SessionLockInfo:
+        session_dir = layout.session_dir(self._root, session_id)
+        path = layout.session_lock_path(session_dir)
+        if (
+            self._session_lock is not None
+            and self._session_lock.path.resolve() == path.resolve()
+        ):
+            return SessionLockInfo(
+                locked=False,
+                owner=read_lock_owner(path),
+                owned_by_self=True,
+            )
+        return probe_session_lock(path, owner_token=self._manager_id)
+
+    def _acquire_session_lock(self, session_id: str) -> SessionFileLock:
+        session_dir = layout.session_dir(self._root, session_id)
+        lock_path = layout.session_lock_path(session_dir)
+        lock = SessionFileLock(
+            lock_path,
+            owner_token=self._manager_id,
+            metadata=make_lock_metadata(self._manager_id),
+        )
+        try:
+            return lock.acquire()
+        except SessionLockUnavailable as exc:
+            raise SessionLockedError(
+                session_id,
+                owner=read_lock_owner(lock_path),
+            ) from exc
+
+    def _ensure_current_session_lock(self) -> None:
+        if self._session_id is None:
+            return
+        session_dir = layout.session_dir(self._root, self._session_id)
+        lock_path = layout.session_lock_path(session_dir)
+        if (
+            self._session_lock is not None
+            and self._session_lock.path.resolve() == lock_path.resolve()
+        ):
+            return
+        previous_lock = self._session_lock
+        self._session_lock = self._acquire_session_lock(self._session_id)
+        if previous_lock is not None:
+            previous_lock.release()
+
+    def _release_current_session_lock(self) -> None:
+        lock = self._session_lock
+        self._session_lock = None
+        if lock is not None:
+            lock.release()
 
     def _current_session_has_visible_messages(self) -> bool:
         if self._session_has_visible_messages:
@@ -713,3 +919,12 @@ class SessionManager:
                 "agent; that plugin will start fresh",
                 missing,
             )
+
+
+def _parse_iso_timestamp(value: str | None) -> float:
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return 0.0

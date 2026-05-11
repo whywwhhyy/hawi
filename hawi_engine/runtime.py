@@ -15,7 +15,7 @@ from hawi.agent import AutoCompactConfig, HawiAgent, HawiScheduler
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.events import Event
 from hawi.models import model_registry
-from hawi.session import SessionManager
+from hawi.session import SessionLockedError, SessionManager
 from hawi.tool import ToolParameterInjection
 
 from .blob import BlobStore
@@ -348,6 +348,8 @@ class CoreRuntime:
                 await self._handle_session_list(client, command)
             elif command.type == "session_new":
                 await self._handle_session_new(client, command)
+            elif command.type == "session_fork":
+                await self._handle_session_fork(client, command)
             elif command.type == "session_load":
                 await self._handle_session_load(client, command)
             elif command.type == "session_switch":
@@ -382,6 +384,15 @@ class CoreRuntime:
                         code="unknown_command",
                     )
                 )
+        except SessionLockedError as exc:
+            await client.send(
+                make_error(
+                    str(exc),
+                    request_id=command.id,
+                    code="session_locked",
+                    details=exc.to_dict(),
+                )
+            )
         except Exception as exc:
             logger.exception("Command failed: %s", command.type)
             await client.send(
@@ -656,6 +667,8 @@ class CoreRuntime:
                 "updated_at": m.updated_at,
                 "last_checkpoint_event": m.last_checkpoint_event,
                 "components_present": m.components_present,
+                "locked": m.locked,
+                "lock_owner": m.lock_owner,
             }
             for m in sm.list_sessions()
         ]
@@ -707,6 +720,50 @@ class CoreRuntime:
                 "session_new",
                 request_id=command.id,
                 payload={"session_id": session_id, "name": name or session_id},
+            )
+        )
+
+    async def _handle_session_fork(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        scheduler = self._require_scheduler()
+        if not scheduler._executor.is_idle:
+            await client.send(
+                make_error(
+                    "Agent is running. Fork a session when the scheduler is idle.",
+                    request_id=command.id,
+                    code="busy",
+                )
+            )
+            return
+        source_session_id = command.payload.get("session_id")
+        if source_session_id is not None and (
+            not isinstance(source_session_id, str) or not source_session_id
+        ):
+            raise ValueError(
+                "'session_fork.payload.session_id' must be a non-empty string when present"
+            )
+        name = command.payload.get("name")
+        if name is not None and not isinstance(name, str):
+            raise ValueError("'session_fork.payload.name' must be a string when present")
+        forked_from = source_session_id or sm.current_session_id
+        session_id = sm.fork_session(session_id=source_session_id, name=name)
+        message_history = sm.read_message_history(session_id)
+        context_usage = self._agent_context_usage()
+        await client.send(
+            make_ack(
+                "session_fork",
+                request_id=command.id,
+                payload={
+                    "session_id": session_id,
+                    "forked_from_session_id": forked_from,
+                    "name": name or session_id,
+                    "message_history": message_history,
+                    "context_usage": context_usage,
+                },
             )
         )
 

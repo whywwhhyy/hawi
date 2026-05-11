@@ -15,12 +15,14 @@ Public surface:
 - :class:`SessionWriter` — daemon thread that performs atomic disk writes.
 """
 
+from .lock import SessionLockedError
 from .manager import SessionManager, SessionMeta
 from .writer import SessionWriter, WriteJob
 
 __all__ = [
     "SessionManager",
     "SessionMeta",
+    "SessionLockedError",
     "SessionWriter",
     "WriteJob",
 ]

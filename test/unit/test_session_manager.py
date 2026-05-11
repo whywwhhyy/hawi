@@ -17,8 +17,9 @@ import pytest
 from hawi.agent.context import AgentContext
 from hawi.agent.scheduler.queue import MessageQueueManager
 from hawi.events import AgentMessageAddedEvent, EventBus, SessionWriteFailedEvent
-from hawi.session import SessionManager, SessionWriter, WriteJob
+from hawi.session import SessionLockedError, SessionManager, SessionWriter, WriteJob
 from hawi.session import layout
+from hawi.session.lock import SessionFileLock, make_lock_metadata
 from hawi.utils.lifecycle import (
     EXIT_PRIORITY_NORMAL,
     EXIT_PRIORITY_PLUGIN_TEARDOWN,
@@ -334,6 +335,116 @@ class TestSessionManager:
         sm.save_now()
         ids = {m.session_id for m in sm.list_sessions()}
         assert {a, b}.issubset(ids)
+
+    def test_list_sessions_sorts_by_created_at(self, session_root: Path) -> None:
+        sm = SessionManager(root=session_root)
+        records = [
+            ("old-created", "2024-01-01T00:00:00", "2026-01-01T00:00:00"),
+            ("new-created", "2025-01-01T00:00:00", "2025-01-01T00:00:00"),
+        ]
+        for session_id, created_at, updated_at in records:
+            sd = layout.session_dir(session_root, session_id)
+            layout.ensure_session_layout(sd)
+            layout.append_jsonl(
+                layout.message_history_path(sd),
+                [
+                    {
+                        "version": 1,
+                        "run_id": "r1",
+                        "role": "user",
+                        "content": [{"type": "text", "text": session_id}],
+                        "metadata": None,
+                    }
+                ],
+                fsync=False,
+            )
+            layout.atomic_write_text(
+                layout.manifest_path(sd),
+                json.dumps(
+                    {
+                        "version": 1,
+                        "session_id": session_id,
+                        "name": session_id,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                    }
+                ),
+                fsync=False,
+            )
+
+        assert [m.session_id for m in sm.list_sessions()] == [
+            "new-created",
+            "old-created",
+        ]
+
+    def test_locked_session_rejects_second_loader(self, session_root: Path) -> None:
+        agent = _StubAgent()
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            agent.context.add_user_message("locked")
+            sid = sm.new_session(name="locked")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        external_lock = SessionFileLock(
+            layout.session_lock_path(layout.session_dir(session_root, sid)),
+            owner_token="external",
+            metadata=make_lock_metadata("external"),
+        ).acquire()
+        agent2 = _StubAgent()
+        scheduler2 = _StubScheduler()
+        sm2 = SessionManager(root=session_root)
+        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        try:
+            metas = {m.session_id: m for m in sm2.list_sessions()}
+            assert metas[sid].locked is True
+            with pytest.raises(SessionLockedError):
+                sm2.load_session(sid)
+        finally:
+            sm2.detach()
+            external_lock.release()
+
+    def test_locked_session_can_be_forked_by_second_manager(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            agent.context.add_user_message("fork source")
+            sid = sm.new_session(name="source")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        external_lock = SessionFileLock(
+            layout.session_lock_path(layout.session_dir(session_root, sid)),
+            owner_token="external",
+            metadata=make_lock_metadata("external"),
+        ).acquire()
+        agent2 = _StubAgent()
+        scheduler2 = _StubScheduler()
+        sm2 = SessionManager(root=session_root)
+        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        try:
+            forked = sm2.fork_session(sid, name="forked")
+
+            assert forked != sid
+            assert sm2.current_session_id == forked
+            assert agent2.context.messages[0]["content"][0]["text"] == "fork source"
+            fork_manifest = json.loads(
+                layout.manifest_path(layout.session_dir(session_root, forked)).read_text()
+            )
+            assert fork_manifest["forked_from_session_id"] == sid
+            assert sm.list_sessions()[0].session_id in {sid, forked}
+        finally:
+            sm2.detach()
+            external_lock.release()
 
     def test_delete_removes_directory(self, stub_setup) -> None:
         sm, agent, _ = stub_setup

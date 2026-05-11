@@ -30,6 +30,7 @@ DEFAULT_ROOT = Path("~/.hawi/sessions").expanduser()
 
 # Component file names (relative to a session directory).
 MANIFEST_FILENAME = "session.json"
+SESSION_LOCK_FILENAME = ".session.lock"
 CONTEXT_FILENAME = "context.json"
 MESSAGE_HISTORY_FILENAME = "message_history.jsonl"
 QUEUES_FILENAME = "queues.json"
@@ -63,6 +64,10 @@ def session_dir(root: Path, session_id: str) -> Path:
 
 def manifest_path(session_dir_: Path) -> Path:
     return session_dir_ / MANIFEST_FILENAME
+
+
+def session_lock_path(session_dir_: Path) -> Path:
+    return session_dir_ / SESSION_LOCK_FILENAME
 
 
 def context_path(session_dir_: Path) -> Path:

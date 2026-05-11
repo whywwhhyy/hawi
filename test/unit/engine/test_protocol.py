@@ -40,6 +40,22 @@ def test_parse_session_history_command() -> None:
     assert command.id == "history-1"
 
 
+def test_parse_session_fork_command() -> None:
+    command = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "session_fork",
+                "id": "fork-1",
+                "payload": {"session_id": "abc"},
+            }
+        )
+    )
+
+    assert command.type == "session_fork"
+    assert command.payload["session_id"] == "abc"
+
+
 def test_parse_rejects_unknown_command() -> None:
     with pytest.raises(ProtocolError, match="Unknown command"):
         parse_frame(json.dumps({"version": VERSION, "type": "wat"}))

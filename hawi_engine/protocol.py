@@ -47,6 +47,7 @@ COMMAND_TYPES = {
     "ping",
     "session_list",
     "session_new",
+    "session_fork",
     "session_load",
     "session_switch",
     "session_delete",

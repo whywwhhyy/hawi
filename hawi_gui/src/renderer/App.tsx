@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Copy, FileText, LoaderCircle, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Copy, FileText, GitFork, LoaderCircle, Lock, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
@@ -396,6 +396,21 @@ export default function App() {
     }
   }
 
+  async function forkSession(sessionId?: string) {
+    const sourceSessionId = sessionId || currentSessionId;
+    if (!sourceSessionId) return;
+    setSessionBusy(true);
+    try {
+      const frame = await sendCommand("session_fork", { session_id: sourceSessionId });
+      applySessionHistoryFromFrame(frame);
+      followTailRef.current = true;
+      await refreshSessions();
+      setSessionDialogOpen(false);
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
   async function saveAndSet(nextConfig: PersistedConfig) {
     const saved = await window.hawi.saveConfig(nextConfig);
     setConfig(saved);
@@ -562,6 +577,7 @@ export default function App() {
             onSelect={loadSession}
             onDelete={deleteSession}
             onNew={newSession}
+            onFork={forkSession}
           />
         </div>
         <button
@@ -807,7 +823,8 @@ function SessionStatusCell({
   onToggle,
   onSelect,
   onDelete,
-  onNew
+  onNew,
+  onFork
 }: {
   messageCount: number;
   sessions: SessionMetaPayload[];
@@ -818,12 +835,10 @@ function SessionStatusCell({
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onNew: () => void;
+  onFork: (sessionId?: string) => void;
 }) {
-  const sortedSessions = [...sessions].sort((a, b) => {
-    const left = Date.parse(a.updated_at || a.created_at || "");
-    const right = Date.parse(b.updated_at || b.created_at || "");
-    return (Number.isFinite(right) ? right : 0) - (Number.isFinite(left) ? left : 0);
-  });
+  const sortedSessions = sortSessionsByCreatedAt(sessions);
+  const canForkCurrent = Boolean(currentSessionId) && messageCount > 0;
 
   return (
     <div className={`session-status ${open ? "active" : ""}`}>
@@ -851,6 +866,19 @@ function SessionStatusCell({
       >
         <Plus size={15} />
       </button>
+      <button
+        type="button"
+        className="mini-button icon-only"
+        title="Fork 当前 Session"
+        aria-label="Fork 当前 Session"
+        disabled={busy || !canForkCurrent}
+        onClick={(event) => {
+          event.stopPropagation();
+          onFork(currentSessionId ?? undefined);
+        }}
+      >
+        <GitFork size={14} />
+      </button>
       {open && (
         <div className="session-popover">
           <header>
@@ -862,31 +890,48 @@ function SessionStatusCell({
               <div className="session-empty">No sessions</div>
             ) : sortedSessions.map((session) => {
               const isCurrent = session.session_id === currentSessionId;
+              const isLocked = session.locked === true && !isCurrent;
               return (
                 <div
                   key={session.session_id}
-                  className={`session-option ${isCurrent ? "current" : ""}`}
+                  className={`session-option ${isCurrent ? "current" : ""} ${isLocked ? "locked" : ""}`}
                 >
                   <button
                     type="button"
                     className="session-select"
-                    disabled={busy}
+                    title={isLocked ? "Session 正被其他 Hawi engine 使用，可 Fork 后继续" : "切换 Session"}
+                    disabled={busy || isLocked}
                     onClick={() => onSelect(session.session_id)}
                   >
-                    <span>{session.name || shortSessionId(session.session_id)}</span>
-                    <small>{formatSessionUpdatedAt(session.updated_at)}</small>
+                    <span>
+                      {isLocked && <Lock size={12} />}
+                      {session.name || shortSessionId(session.session_id)}
+                    </span>
+                    <small>{formatSessionTimestamp(session.created_at || session.updated_at)}</small>
                   </button>
                   {!isCurrent && (
-                    <button
-                      type="button"
-                      className="session-delete"
-                      title="删除 Session"
-                      aria-label={`删除 Session ${shortSessionId(session.session_id)}`}
-                      disabled={busy}
-                      onClick={() => onDelete(session.session_id)}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <div className="session-actions">
+                      <button
+                        type="button"
+                        className="session-action"
+                        title="Fork Session"
+                        aria-label={`Fork Session ${shortSessionId(session.session_id)}`}
+                        disabled={busy}
+                        onClick={() => onFork(session.session_id)}
+                      >
+                        <GitFork size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="session-delete"
+                        title={isLocked ? "Session 正被使用，不能删除" : "删除 Session"}
+                        aria-label={`删除 Session ${shortSessionId(session.session_id)}`}
+                        disabled={busy || isLocked}
+                        onClick={() => onDelete(session.session_id)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   )}
                 </div>
               );
@@ -1667,9 +1712,19 @@ function normalizeSessionList(value: unknown): SessionMetaPayload[] {
         : null,
       components_present: Array.isArray(item.components_present)
         ? item.components_present.map((entry) => String(entry))
-        : []
+        : [],
+      locked: item.locked === true,
+      lock_owner: isRecord(item.lock_owner) ? item.lock_owner : null
     }))
     .filter((item) => item.session_id);
+}
+
+export function sortSessionsByCreatedAt(sessions: SessionMetaPayload[]): SessionMetaPayload[] {
+  return [...sessions].sort((a, b) => {
+    const left = Date.parse(a.created_at || a.updated_at || "");
+    const right = Date.parse(b.created_at || b.updated_at || "");
+    return (Number.isFinite(right) ? right : 0) - (Number.isFinite(left) ? left : 0);
+  });
 }
 
 function optionalPayloadString(value: unknown): string | null {
@@ -1683,7 +1738,7 @@ function shortSessionId(value: string): string {
   return value.slice(0, 8);
 }
 
-function formatSessionUpdatedAt(value: string): string {
+function formatSessionTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "unknown";
   return date.toLocaleString([], {

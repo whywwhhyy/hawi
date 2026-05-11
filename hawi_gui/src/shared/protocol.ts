@@ -26,6 +26,7 @@ export type CoreCommandType =
   | "ping"
   | "session_list"
   | "session_new"
+  | "session_fork"
   | "session_load"
   | "session_switch"
   | "session_delete"
@@ -40,6 +41,8 @@ export interface SessionMetaPayload {
   updated_at: string;
   last_checkpoint_event: string | null;
   components_present: string[];
+  locked?: boolean;
+  lock_owner?: Record<string, unknown> | null;
 }
 
 export interface CoreFrame<TPayload = Record<string, unknown>> {
