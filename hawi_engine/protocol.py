@@ -80,6 +80,8 @@ EVENT_TYPES = {
     "tool.result",
     "model.metadata",
     "model.retry",
+    "agent.compact_start",
+    "agent.compact_stop",
     "agent.interrupt",
     "scheduler.interrupt",
     "debug.info",

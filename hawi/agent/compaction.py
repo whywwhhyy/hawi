@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Protocol, cast
+import time
+from typing import Literal, Protocol, cast
 
-from hawi.events import Event
+from hawi.events import (
+    AgentCompactStartEvent,
+    AgentCompactStopEvent,
+    Event,
+    EventBus,
+)
 from hawi.models import ContentPart, Model
 from hawi.models.message import Message
 
@@ -24,6 +30,12 @@ class CompactionOwner(Protocol):
     def has_active_tool_calls(self) -> bool: ...
 
     def _serialize_content_parts(self, content: list[ContentPart]) -> str: ...
+
+    async def _emit_event(
+        self,
+        event: Event,
+        event_bus: EventBus | None,
+    ) -> Event: ...
 
 
 class AgentCompactor:
@@ -55,6 +67,9 @@ class AgentCompactor:
         prompt: str | None = None,
         keep_last_messages: int | None = None,
         config: AutoCompactConfig | None = None,
+        event_bus: EventBus | None = None,
+        run_id: str | None = None,
+        mode: Literal["manual", "auto"] = "manual",
     ) -> ContextCompactionRecord | None:
         """Compact older context into a model-generated handoff summary."""
         owner = self._owner
@@ -67,22 +82,87 @@ class AgentCompactor:
         if owner._context.compaction_tail_start(keep_last) <= 0:
             return None
 
-        summary = await self._generate_compaction_summary(
-            model or owner._default_model,
-            prompt=prompt or cfg.prompt,
-            max_output_tokens=cfg.summary_max_output_tokens,
-            max_transcript_chars=cfg.max_transcript_chars,
+        tokens_before = owner._context.estimate_tokens()
+        message_count_before = len(owner._context.messages)
+        started_at = time.time()
+        await owner._emit_event(
+            AgentCompactStartEvent.create(
+                run_id=run_id,
+                mode=mode,
+                keep_last_messages=keep_last,
+                tokens_before=tokens_before,
+                message_count_before=message_count_before,
+            ),
+            event_bus,
         )
-        return owner._context.compact_with_summary(
-            summary,
-            keep_last=keep_last,
-            summary_prefix=cfg.summary_prefix,
+
+        try:
+            summary = await self._generate_compaction_summary(
+                model or owner._default_model,
+                prompt=prompt or cfg.prompt,
+                max_output_tokens=cfg.summary_max_output_tokens,
+                max_transcript_chars=cfg.max_transcript_chars,
+            )
+            record = owner._context.compact_with_summary(
+                summary,
+                keep_last=keep_last,
+                summary_prefix=cfg.summary_prefix,
+            )
+        except Exception as exc:
+            await owner._emit_event(
+                AgentCompactStopEvent.create(
+                    run_id=run_id,
+                    mode=mode,
+                    status="error",
+                    duration_ms=(time.time() - started_at) * 1000,
+                    tokens_before=tokens_before,
+                    tokens_after=owner._context.estimate_tokens(),
+                    message_count_before=message_count_before,
+                    message_count_after=len(owner._context.messages),
+                    error=str(exc),
+                ),
+                event_bus,
+            )
+            raise
+
+        if record is None:
+            await owner._emit_event(
+                AgentCompactStopEvent.create(
+                    run_id=run_id,
+                    mode=mode,
+                    status="skipped",
+                    duration_ms=(time.time() - started_at) * 1000,
+                    tokens_before=tokens_before,
+                    tokens_after=owner._context.estimate_tokens(),
+                    message_count_before=message_count_before,
+                    message_count_after=len(owner._context.messages),
+                ),
+                event_bus,
+            )
+            return None
+
+        await owner._emit_event(
+            AgentCompactStopEvent.create(
+                run_id=run_id,
+                mode=mode,
+                status="success",
+                duration_ms=(time.time() - started_at) * 1000,
+                tokens_before=record.tokens_before,
+                tokens_after=record.tokens_after,
+                message_count_before=message_count_before,
+                message_count_after=len(owner._context.messages),
+                replaced_message_count=len(record.replaced_messages),
+                kept_message_count=record.kept_messages,
+            ),
+            event_bus,
         )
+        return record
 
     async def _maybe_auto_compact(
         self,
         model: Model,
         state: _ExecutionState,
+        event_bus: EventBus | None = None,
     ) -> bool:
         """Run automatic compaction if the configured threshold is crossed."""
         owner = self._owner
@@ -96,7 +176,13 @@ class AgentCompactor:
         if owner._context.estimate_tokens() < cfg.token_limit():
             return False
 
-        record = await self.acompact(model=model, config=cfg)
+        record = await self.acompact(
+            model=model,
+            config=cfg,
+            event_bus=event_bus,
+            run_id=state.run_id,
+            mode="auto",
+        )
         if record is not None:
             state.iteration = max(state.iteration, 0)
         return record is not None

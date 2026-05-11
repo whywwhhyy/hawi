@@ -183,7 +183,7 @@ def test_model_metadata_uses_normalized_provider_context_tokens() -> None:
     finally:
         bus.close()
 
-    metadata = events[-1]
+    metadata = cast(Any, events[-1])
     assert metadata.context_tokens == 60
     assert metadata.context_ratio == 0.6
     assert metadata.context_source == "provider_usage"
@@ -199,8 +199,15 @@ def test_model_metadata_uses_normalized_provider_context_tokens() -> None:
 @pytest.mark.asyncio
 async def test_agent_auto_compacts_before_model_call() -> None:
     model = CompactingModel()
+    events: list[Event] = []
+    bus = EventBus()
+    bus.subscribe_blocking(
+        events.append,
+        event_types=["agent.compact_start", "agent.compact_stop"],
+    )
     agent = HawiAgent(
         model=model,
+        event_bus=bus,
         streaming=False,
         auto_compact=AutoCompactConfig(
             enabled=True,
@@ -213,7 +220,10 @@ async def test_agent_auto_compacts_before_model_call() -> None:
         agent.context.add_user_message(f"old message {idx} " + ("x" * 80))
         agent.context.add_assistant_message([{"type": "text", "text": "old answer"}])
 
-    result = await agent.arun("finish now")
+    try:
+        result = await agent.arun("finish now")
+    finally:
+        bus.close()
 
     assert result.text == "done"
     assert len(agent.context.compaction_records) == 1
@@ -224,6 +234,18 @@ async def test_agent_auto_compacts_before_model_call() -> None:
     # First model request is the summarization request; second is the actual run.
     assert len(model.requests) == 2
     assert len(model.requests[-1]) < 14
+    assert [event.type for event in events] == [
+        "agent.compact_start",
+        "agent.compact_stop",
+    ]
+    start = events[0]
+    stop = events[1]
+    assert getattr(start, "mode") == "auto"
+    assert getattr(stop, "mode") == "auto"
+    assert getattr(stop, "status") == "success"
+    assert getattr(start, "run_id") == getattr(stop, "run_id")
+    assert getattr(stop, "replaced_message_count") > 0
+    assert getattr(stop, "tokens_after") < getattr(stop, "tokens_before")
 
 
 @pytest.mark.asyncio

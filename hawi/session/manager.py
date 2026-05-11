@@ -71,6 +71,7 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
         layout.COMPONENT_PLUGINS,
     ),
     "agent.message_added": (layout.COMPONENT_CONTEXT,),
+    "agent.compact_stop": (layout.COMPONENT_CONTEXT,),
     "scheduler.enqueue": (layout.COMPONENT_QUEUES,),
     "scheduler.dequeue": (layout.COMPONENT_QUEUES,),
 }

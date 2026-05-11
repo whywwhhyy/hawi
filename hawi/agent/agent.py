@@ -654,8 +654,9 @@ class HawiAgent:
         self,
         model: Model,
         state: _ExecutionState,
+        event_bus: EventBus | None = None,
     ) -> bool:
-        return await self._compactor._maybe_auto_compact(model, state)
+        return await self._compactor._maybe_auto_compact(model, state, event_bus)
 
     async def _generate_compaction_summary(
         self,
@@ -986,7 +987,7 @@ class HawiAgent:
                             streaming=streaming,
                         )
 
-                if await self._maybe_auto_compact(m, state):
+                if await self._maybe_auto_compact(m, state, event_bus):
                     # Compaction rewrites history, so the old absolute index may
                     # no longer be meaningful for this invocation's delta view.
                     initial_message_count = min(

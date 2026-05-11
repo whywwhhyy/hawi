@@ -88,6 +88,64 @@ class SemanticEventMapper:
             self._run_queue[run_id] = self._current_queue_kind
             return []
 
+        if etype == "agent.compact_start":
+            return [
+                make_frame(
+                    "agent.compact_start",
+                    {
+                        "run_id": getattr(event, "run_id", None),
+                        "mode": getattr(event, "mode", ""),
+                        "keep_last_messages": getattr(
+                            event,
+                            "keep_last_messages",
+                            0,
+                        ),
+                        "tokens_before": getattr(event, "tokens_before", None),
+                        "message_count_before": getattr(
+                            event,
+                            "message_count_before",
+                            None,
+                        ),
+                    },
+                )
+            ]
+
+        if etype == "agent.compact_stop":
+            return [
+                make_frame(
+                    "agent.compact_stop",
+                    {
+                        "run_id": getattr(event, "run_id", None),
+                        "mode": getattr(event, "mode", ""),
+                        "status": getattr(event, "status", ""),
+                        "duration_ms": getattr(event, "duration_ms", 0.0),
+                        "tokens_before": getattr(event, "tokens_before", None),
+                        "tokens_after": getattr(event, "tokens_after", None),
+                        "message_count_before": getattr(
+                            event,
+                            "message_count_before",
+                            None,
+                        ),
+                        "message_count_after": getattr(
+                            event,
+                            "message_count_after",
+                            None,
+                        ),
+                        "replaced_message_count": getattr(
+                            event,
+                            "replaced_message_count",
+                            None,
+                        ),
+                        "kept_message_count": getattr(
+                            event,
+                            "kept_message_count",
+                            None,
+                        ),
+                        "error": getattr(event, "error", None),
+                    },
+                )
+            ]
+
         if etype == "agent.message_added":
             if getattr(event, "role", "") != "user":
                 return []

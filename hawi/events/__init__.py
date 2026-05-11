@@ -43,6 +43,8 @@ from .agent_events import (
     AgentToolResultPartEvent,
     AgentToolResultEvent,
     AgentMessageAddedEvent,
+    AgentCompactStartEvent,
+    AgentCompactStopEvent,
     AgentErrorEvent,
 )
 from .scheduler_events import (
@@ -105,6 +107,8 @@ __all__ = [
     "AgentToolResultPartEvent",
     "AgentToolResultEvent",
     "AgentMessageAddedEvent",
+    "AgentCompactStartEvent",
+    "AgentCompactStopEvent",
     "AgentErrorEvent",
     # Scheduler
     "SchedulerEnqueueEvent",

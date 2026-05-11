@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import cast
 
 from hawi.events import (
+    AgentCompactStartEvent,
+    AgentCompactStopEvent,
     AgentMessageAddedEvent,
     AgentRunStartEvent,
     AgentRunStopEvent,
@@ -399,7 +401,10 @@ def test_stream_accumulator_defers_start_until_tool_call_id_known() -> None:
         },
         request_id="req-A",
     )
-    start_events = [e for e in events if e.type == "model.tool_call_block_start"]
+    start_events = cast(
+        list[ModelToolCallBlockStartEvent],
+        [e for e in events if e.type == "model.tool_call_block_start"],
+    )
     assert start_events == [], "StartEvent must be deferred"
 
     # Subsequent chunk carrying the real id: StartEvent flushes now.
@@ -415,7 +420,10 @@ def test_stream_accumulator_defers_start_until_tool_call_id_known() -> None:
         },
         request_id="req-A",
     )
-    start_events = [e for e in events if e.type == "model.tool_call_block_start"]
+    start_events = cast(
+        list[ModelToolCallBlockStartEvent],
+        [e for e in events if e.type == "model.tool_call_block_start"],
+    )
     assert len(start_events) == 1
     assert start_events[0].tool_call_id == "tc-real"
     assert start_events[0].tool_name == "fetch"
@@ -433,9 +441,15 @@ def test_stream_accumulator_defers_start_until_tool_call_id_known() -> None:
         },
         request_id="req-A",
     )
-    start_events = [e for e in events if e.type == "model.tool_call_block_start"]
+    start_events = cast(
+        list[ModelToolCallBlockStartEvent],
+        [e for e in events if e.type == "model.tool_call_block_start"],
+    )
     assert start_events == []
-    stop_events = [e for e in events if e.type == "model.tool_call_block_stop"]
+    stop_events = cast(
+        list[ModelToolCallBlockStopEvent],
+        [e for e in events if e.type == "model.tool_call_block_stop"],
+    )
     assert len(stop_events) == 1
     assert stop_events[0].tool_call_id == "tc-real"
 
@@ -510,6 +524,41 @@ def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:
     interrupted = mapper.map(SchedulerInterruptEvent.create("user", ["tc-9"]))
     assert interrupted[0]["type"] == "scheduler.interrupt"
     assert interrupted[0]["payload"]["interrupted_tool_calls"] == ["tc-9"]
+
+
+def test_mapper_forwards_agent_compact_events() -> None:
+    mapper = SemanticEventMapper()
+
+    start = mapper.map(
+        AgentCompactStartEvent.create(
+            run_id="run-compact",
+            mode="auto",
+            keep_last_messages=4,
+            tokens_before=1000,
+            message_count_before=20,
+        )
+    )
+    stop = mapper.map(
+        AgentCompactStopEvent.create(
+            run_id="run-compact",
+            mode="auto",
+            status="success",
+            duration_ms=12.5,
+            tokens_before=1000,
+            tokens_after=250,
+            message_count_before=20,
+            message_count_after=5,
+            replaced_message_count=16,
+            kept_message_count=4,
+        )
+    )
+
+    assert start[0]["type"] == "agent.compact_start"
+    assert start[0]["payload"]["tokens_before"] == 1000
+    assert stop[0]["type"] == "agent.compact_stop"
+    assert stop[0]["payload"]["status"] == "success"
+    assert stop[0]["payload"]["tokens_after"] == 250
+    assert stop[0]["payload"]["replaced_message_count"] == 16
 
 
 def test_mapper_forwards_plugin_artifact_and_tool_progress_events() -> None:

@@ -186,6 +186,82 @@ class AgentMessageAddedEvent(Event):
         )
 
 
+class AgentCompactStartEvent(Event):
+    """Agent 开始压缩上下文"""
+    run_id: str | None = None
+    mode: Literal["manual", "auto"]
+    keep_last_messages: int
+    tokens_before: int
+    message_count_before: int
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        run_id: str | None,
+        mode: Literal["manual", "auto"],
+        keep_last_messages: int,
+        tokens_before: int,
+        message_count_before: int,
+    ) -> AgentCompactStartEvent:
+        return cls(
+            type="agent.compact_start",
+            source="agent",
+            run_id=run_id,
+            mode=mode,
+            keep_last_messages=keep_last_messages,
+            tokens_before=tokens_before,
+            message_count_before=message_count_before,
+        )
+
+
+class AgentCompactStopEvent(Event):
+    """Agent 结束压缩上下文"""
+    run_id: str | None = None
+    mode: Literal["manual", "auto"]
+    status: Literal["success", "skipped", "error"]
+    duration_ms: float
+    tokens_before: int | None = None
+    tokens_after: int | None = None
+    message_count_before: int | None = None
+    message_count_after: int | None = None
+    replaced_message_count: int | None = None
+    kept_message_count: int | None = None
+    error: str | None = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        run_id: str | None,
+        mode: Literal["manual", "auto"],
+        status: Literal["success", "skipped", "error"],
+        duration_ms: float,
+        tokens_before: int | None = None,
+        tokens_after: int | None = None,
+        message_count_before: int | None = None,
+        message_count_after: int | None = None,
+        replaced_message_count: int | None = None,
+        kept_message_count: int | None = None,
+        error: str | None = None,
+    ) -> AgentCompactStopEvent:
+        return cls(
+            type="agent.compact_stop",
+            source="agent",
+            run_id=run_id,
+            mode=mode,
+            status=status,
+            duration_ms=duration_ms,
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+            message_count_before=message_count_before,
+            message_count_after=message_count_after,
+            replaced_message_count=replaced_message_count,
+            kept_message_count=kept_message_count,
+            error=error,
+        )
+
+
 class AgentErrorEvent(Event):
     run_id: str
     error: "AgentError"
