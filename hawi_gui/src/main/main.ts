@@ -26,6 +26,7 @@ const refreshedProviders = new Set<string>();
 const MIN_CONTENT_WIDTH = 1080;
 const MIN_CONTENT_HEIGHT = 660;
 const MODEL_REFRESH_TIMEOUT_MS = 60_000;
+const FILENAME_TIMESTAMP_RE = /\b\d{8}-\d{6}\b/;
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -224,12 +225,30 @@ function ensureMarkdownExtension(filePath: string): string {
 
 function safeMarkdownFilename(value: string | undefined): string {
   const base = value && value.trim() ? path.basename(value.trim()) : "hawi-export.md";
-  return base.toLowerCase().endsWith(".md") ? base : `${base}.md`;
+  const filename = base.toLowerCase().endsWith(".md") ? base : `${base}.md`;
+  return filenameWithTimestamp(filename);
 }
 
 function safeReferenceFilename(value: string | undefined): string {
   const base = value && value.trim() ? path.basename(value.trim()) : "reference.txt";
   return base.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[.-]+/, "") || "reference.txt";
+}
+
+function filenameWithTimestamp(filename: string): string {
+  const parsed = path.parse(filename);
+  if (FILENAME_TIMESTAMP_RE.test(parsed.name)) {
+    return filename;
+  }
+  return `${parsed.name}-${timestampToSeconds()}${parsed.ext || ".md"}`;
+}
+
+function timestampToSeconds(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate())
+  ].join("") + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
 function installNavigationGuards(window: BrowserWindow): void {

@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from hawi.agent.scheduler.scheduler import HawiScheduler
 
 logger = logging.getLogger(__name__)
+SESSION_ID_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
 
 
 # Boundary events whose firing triggers a checkpoint, mapped to the components
@@ -199,7 +200,7 @@ class SessionManager:
         user-visible message. This keeps empty "New" clicks and startup
         placeholders out of the session directory.
         """
-        session_id = uuid.uuid4().hex[:12]
+        session_id = self._new_unique_session_id()
         with self._lock:
             self._writer.wait_idle(timeout=10.0)
             self._release_current_session_lock()
@@ -687,7 +688,8 @@ class SessionManager:
 
     def _new_unique_session_id(self) -> str:
         while True:
-            session_id = uuid.uuid4().hex[:12]
+            timestamp = datetime.now().strftime(SESSION_ID_TIMESTAMP_FORMAT)
+            session_id = f"session-{timestamp}-{uuid.uuid4().hex[:6]}"
             if not layout.session_dir(self._root, session_id).exists():
                 return session_id
 

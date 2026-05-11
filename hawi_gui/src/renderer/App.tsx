@@ -913,7 +913,7 @@ function SessionStatusCell({
                   >
                     <span>
                       {isLocked && <Lock size={12} />}
-                      {session.name || shortSessionId(session.session_id)}
+                      {sessionDisplayName(session)}
                     </span>
                     <small>{formatSessionTimestamp(session.created_at || session.updated_at)}</small>
                   </button>
@@ -1773,8 +1773,17 @@ function optionalPayloadString(value: unknown): string | null {
 }
 
 function shortSessionId(value: string): string {
+  const timestamped = value.match(/^session-(\d{8}-\d{6})-[0-9a-f]{6}$/);
+  if (timestamped) return timestamped[1];
   if (value.length <= 8) return value;
   return value.slice(0, 8);
+}
+
+function sessionDisplayName(session: SessionMetaPayload): string {
+  if (!session.name || session.name === session.session_id) {
+    return shortSessionId(session.session_id);
+  }
+  return session.name;
 }
 
 function formatSessionTimestamp(value: string): string {

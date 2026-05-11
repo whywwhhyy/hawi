@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 import time
 from collections.abc import AsyncGenerator
@@ -355,6 +356,12 @@ class TestSessionManager:
         assert sm.current_session_id == sid
         assert not sd.exists()
         assert sm.list_sessions() == []
+
+    def test_new_session_id_includes_time_to_seconds(self, stub_setup) -> None:
+        sm, _, _ = stub_setup
+        sid = sm.new_session(name="alpha")
+
+        assert re.fullmatch(r"session-\d{8}-\d{6}-[0-9a-f]{6}", sid)
 
     def test_save_now_skips_empty_session(self, stub_setup) -> None:
         sm, _, _ = stub_setup
