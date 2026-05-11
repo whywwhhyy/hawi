@@ -974,6 +974,7 @@ const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) 
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
+  const expandCollapsed = () => setCollapsed(false);
 
   return (
     <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""}`}>
@@ -997,6 +998,15 @@ const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) 
       </div>
       <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
         <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+        {collapsed && (
+          <button
+            type="button"
+            className="message-collapse-mask"
+            title="点击展开消息"
+            aria-label={`展开${label}`}
+            onClick={expandCollapsed}
+          />
+        )}
       </div>
     </article>
   );
@@ -1017,6 +1027,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
   const html = renderMarkdown(node.content);
   const receiving = node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
+  const expandCollapsed = () => setCollapsed(false);
 
   useEffect(() => {
     if (node.complete === true && !autoCollapsedRef.current) {
@@ -1050,7 +1061,21 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
           <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
         </div>
       </div>
-      <div className={`thinking-summary ${collapsed ? "is-visible" : ""}`} aria-hidden={!collapsed}>
+      <div
+        className={`thinking-summary ${collapsed ? "is-visible" : ""}`}
+        aria-hidden={!collapsed}
+        role={collapsed ? "button" : undefined}
+        tabIndex={collapsed ? 0 : undefined}
+        title={collapsed ? "点击展开思考内容" : undefined}
+        onClick={() => {
+          if (collapsed) expandCollapsed();
+        }}
+        onKeyDown={(event) => {
+          if (!collapsed || (event.key !== "Enter" && event.key !== " ")) return;
+          event.preventDefault();
+          expandCollapsed();
+        }}
+      >
         {thinkingExcerpt(node.content)}
       </div>
     </article>
