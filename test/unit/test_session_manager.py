@@ -7,10 +7,13 @@ and the writer thread's atomicity / backpressure / failure semantics.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -18,6 +21,8 @@ from hawi.agent import HawiAgent
 from hawi.agent.context import AgentContext
 from hawi.agent.scheduler.queue import MessageQueueManager
 from hawi.events import AgentMessageAddedEvent, EventBus, SessionWriteFailedEvent
+from hawi.models import Model
+from hawi.models.message import DeltaPart, MessageRequest, MessageResponse, TokenUsage
 from hawi.plugin import HawiPlugin, HookContext, before_conversation
 from hawi.session import SessionLockedError, SessionManager, SessionWriter, WriteJob
 from hawi.session import layout
@@ -70,6 +75,53 @@ class _StubAgent:
 
     def load_steer(self, data: list) -> None:  # pragma: no cover - exercised below
         pass
+
+
+class _PartialStreamingModel(Model):
+    default_steer_merge_mode = "user_message_template"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.delta_processed = asyncio.Event()
+
+    @property
+    def model_id(self) -> str:
+        return "partial-streaming-model"
+
+    def _prepare_request_impl(self, request: MessageRequest) -> dict[str, Any]:
+        return {}
+
+    def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
+        return MessageResponse(
+            id="response",
+            content=[{"type": "text", "text": "complete"}],
+            stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+        )
+
+    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+        return self._parse_response_impl({})
+
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncGenerator[DeltaPart, None]:
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "",
+            "is_start": True,
+            "is_end": False,
+        }
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "half answer",
+            "is_start": False,
+            "is_end": False,
+        }
+        self.delta_processed.set()
+        await asyncio.sleep(60)
 
 
 class _PromptHookPlugin(HawiPlugin):
@@ -673,6 +725,37 @@ class TestSessionManager:
             assert part["type"] == "tool_result"
             assert part["tool_call_id"] == "call_abc"
             assert part["is_error"] is False
+        finally:
+            sm.detach()
+
+    @pytest.mark.asyncio
+    async def test_interrupted_stream_persists_partial_assistant_message(
+        self,
+        session_root: Path,
+    ) -> None:
+        model = _PartialStreamingModel()
+        agent = HawiAgent(model=model, streaming=True)
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            task = asyncio.create_task(agent.arun("write a long answer"))
+            await asyncio.wait_for(model.delta_processed.wait(), timeout=2.0)
+
+            agent.interrupt("user")
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            sm.save_now()
+            entries = sm.read_message_history(sid)
+            assistant_entries = [e for e in entries if e["role"] == "assistant"]
+            assert len(assistant_entries) == 1
+            assert assistant_entries[0]["content"] == [
+                {"type": "text", "text": "half answer"}
+            ]
+            assert assistant_entries[0]["metadata"]["partial"] is True
+            assert assistant_entries[0]["metadata"]["interrupt_reason"] == "user"
         finally:
             sm.detach()
 

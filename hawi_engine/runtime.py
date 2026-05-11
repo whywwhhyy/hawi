@@ -242,6 +242,11 @@ class CoreRuntime:
             self._status_task.cancel()
             await asyncio.gather(self._status_task, return_exceptions=True)
 
+        await self._stop_scheduler(self._scheduler, self._scheduler_task, self._plugins)
+        self._scheduler = None
+        self._scheduler_task = None
+        self._plugins = []
+
         if self._session_manager is not None:
             try:
                 self._session_manager.save_now()
@@ -252,11 +257,6 @@ class CoreRuntime:
             except Exception:
                 logger.exception("session detach failed during shutdown")
             self._session_manager = None
-
-        await self._stop_scheduler(self._scheduler, self._scheduler_task, self._plugins)
-        self._scheduler = None
-        self._scheduler_task = None
-        self._plugins = []
 
         for client in list(self._clients):
             await client.close()
@@ -1036,11 +1036,16 @@ class CoreRuntime:
         plugins: list[Any],
     ) -> None:
         if scheduler is not None:
-            scheduler.agent.event_bus.unsubscribe(self._on_hawi_event)
+            try:
+                await scheduler.interrupt("shutdown")
+            except Exception:
+                logger.exception("Failed to interrupt scheduler during shutdown")
             scheduler.stop()
         if scheduler_task and not scheduler_task.done():
             scheduler_task.cancel()
             await asyncio.gather(scheduler_task, return_exceptions=True)
+        if scheduler is not None:
+            scheduler.agent.event_bus.unsubscribe(self._on_hawi_event)
         if scheduler is not None:
             try:
                 scheduler.agent.event_bus.close(wait=True, timeout=2.0)

@@ -856,6 +856,70 @@ class HawiAgent:
             current_tool_calls=self._current_tool_calls,
         )
 
+    async def _persist_interrupted_assistant_message(
+        self,
+        *,
+        run_id: str,
+        event_bus: EventBus | None,
+        content_parts: list[ContentPart],
+        text_handler: StreamBlockAccumulator | None,
+        thinking_handler: StreamBlockAccumulator | None,
+        reason: str,
+    ) -> bool:
+        """Persist assistant content that streamed before an interruption."""
+        interrupted_content = list(content_parts)
+        partials = [
+            partial
+            for partial in (
+                thinking_handler.partial_content() if thinking_handler else None,
+                text_handler.partial_content() if text_handler else None,
+            )
+            if partial is not None
+        ]
+        for _, part in sorted(partials, key=lambda item: item[0]):
+            interrupted_content.append(part)
+
+        if not self._has_persistable_interrupted_content(interrupted_content):
+            return False
+
+        metadata = {
+            "partial": True,
+            "interrupted": True,
+            "interrupt_reason": reason,
+        }
+        self._context.add_assistant_message(
+            content=interrupted_content,
+            metadata=metadata,
+        )
+        await self._emit_event(
+            AgentMessageAddedEvent.create(
+                run_id=run_id,
+                role="assistant",
+                content=interrupted_content,
+                metadata=metadata,
+            ),
+            event_bus,
+        )
+        return True
+
+    @staticmethod
+    def _has_persistable_interrupted_content(content: list[ContentPart]) -> bool:
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type == "text" and str(part.get("text") or "").strip():
+                return True
+            if part_type == "reasoning" and (
+                str(part.get("reasoning") or "").strip()
+                or part.get("signature")
+                or part.get("redacted_content")
+            ):
+                return True
+            if part_type == "tool_call" and (part.get("id") or part.get("name")):
+                return True
+        return False
+
     async def _execute(
         self,
         message: str | list[ContentPart] | None,
@@ -895,6 +959,10 @@ class HawiAgent:
         # Track cumulative usage across all model calls (for multi-turn conversations)
         cumulative_usage: TokenUsage | None = None
         post_conversation_reinvoke_message: str | list[ContentPart] | None = None
+        inflight_content_parts: list[ContentPart] = []
+        inflight_text_handler: StreamBlockAccumulator | None = None
+        inflight_thinking_handler: StreamBlockAccumulator | None = None
+        inflight_assistant_message_added = False
 
         # Add user message if provided
         if message is not None:
@@ -1015,6 +1083,10 @@ class HawiAgent:
                 text_handler = StreamBlockAccumulator.create_text_handler()
                 thinking_handler = StreamBlockAccumulator.create_thinking_handler()
                 tool_handler = StreamBlockAccumulator.create_tool_handler()
+                inflight_content_parts = content_parts
+                inflight_text_handler = text_handler
+                inflight_thinking_handler = thinking_handler
+                inflight_assistant_message_added = False
 
                 # Get model response stream (streaming or non-streaming unified)
                 model_stream_gen = self._call_model_with_retry(
@@ -1079,6 +1151,15 @@ class HawiAgent:
                     await model_stream_gen.aclose()
 
                 if state.error:
+                    if not inflight_assistant_message_added:
+                        inflight_assistant_message_added = await self._persist_interrupted_assistant_message(
+                            run_id=run_id,
+                            event_bus=event_bus,
+                            content_parts=inflight_content_parts,
+                            text_handler=inflight_text_handler,
+                            thinking_handler=inflight_thinking_handler,
+                            reason="error",
+                        )
                     # Send error event before breaking (error occurred during streaming)
                     if isinstance(state.error, AgentError):
                         await self._emit_event(
@@ -1185,6 +1266,7 @@ class HawiAgent:
                 # Add assistant message to context
                 # tool_calls are now included in content as ToolCallPart items
                 self._context.add_assistant_message(content=response_content)
+                inflight_assistant_message_added = True
 
                 # Emit event for assistant message added
                 await self._emit_event(
@@ -1195,6 +1277,9 @@ class HawiAgent:
                     ),
                     event_bus,
                 )
+                inflight_content_parts = []
+                inflight_text_handler = None
+                inflight_thinking_handler = None
 
                 # Check if tool calls need to be executed
                 if not tool_calls:
@@ -1283,6 +1368,15 @@ class HawiAgent:
 
         except asyncio.CancelledError:
             reason = self._last_interrupt_reason or "cancelled"
+            if not inflight_assistant_message_added:
+                inflight_assistant_message_added = await self._persist_interrupted_assistant_message(
+                    run_id=run_id,
+                    event_bus=event_bus,
+                    content_parts=inflight_content_parts,
+                    text_handler=inflight_text_handler,
+                    thinking_handler=inflight_thinking_handler,
+                    reason=reason,
+                )
             await self._recover_unanswered_tool_calls(
                 run_id=run_id,
                 event_bus=event_bus,

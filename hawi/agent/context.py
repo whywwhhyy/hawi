@@ -527,18 +527,20 @@ class AgentContext:
     def add_assistant_message(
         self,
         content: list[ContentPart],
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Add an assistant message.
 
         Args:
             content: Content parts (text/reasoning/tool_call/etc)
                   Tool calls should already be included as ToolCallPart items in content.
+            metadata: Optional message metadata.
         """
         self.messages.append({
             "role": "assistant",
             "content": content,
             "name": None,
-            "metadata": None,
+            "metadata": dict(metadata) if metadata else None,
         })
 
     def add_tool_result(

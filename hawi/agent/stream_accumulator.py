@@ -186,6 +186,39 @@ class StreamBlockAccumulator:
             )
         raise ValueError(f"Unknown block type: {self.block_type}")
 
+    def partial_content(self) -> tuple[int, ContentPart] | None:
+        """Return the currently open text/reasoning block, if it has content."""
+        if self.block_type == "tool_use":
+            return None
+        if self._current_block_index < 0 or self._accumulator is None:
+            return None
+
+        if self.block_type == "text":
+            text = "".join(self._accumulator)
+            if not text.strip():
+                return None
+            return self._current_block_index, TextPart(type="text", text=text)
+
+        if self.block_type == "reasoning":
+            from hawi.models.message import ReasoningPart
+
+            reasoning = "".join(self._accumulator)
+            signature = (
+                "".join(self._signature_accumulator)
+                if self._signature_accumulator
+                else None
+            )
+            if not reasoning and not signature:
+                return None
+            return self._current_block_index, ReasoningPart(
+                type="reasoning",
+                reasoning=reasoning,
+                signature=signature,
+                redacted_content=None,
+            )
+
+        return None
+
     def _is_empty(self) -> bool:
         """检查累积器是否为空"""
         if self._accumulator is None:

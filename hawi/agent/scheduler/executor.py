@@ -109,8 +109,10 @@ class AgentExecutor:
             )
 
             # Cancel current task if running
-            if self._current_task and not self._current_task.done():
-                self._current_task.cancel()
+            current_task = self._current_task
+            if current_task and not current_task.done():
+                current_task.cancel()
+                await asyncio.gather(current_task, return_exceptions=True)
 
             self._set_state(SchedulerState.IDLE)
             return interrupted_ids

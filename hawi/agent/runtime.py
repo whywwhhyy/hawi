@@ -82,6 +82,7 @@ class AgentRuntime:
         if not emit_events or not run_id:
             return
         for item in recovered:
+            normalized = self.normalize_content_parts(item.content)
             await agent._emit_event(
                 AgentToolResultEvent.create(
                     run_id=run_id,
@@ -90,6 +91,21 @@ class AgentRuntime:
                     result_preview=content,
                     duration_ms=0.0,
                     result_obj=ToolResult(success=False, error=content),
+                ),
+                event_bus,
+            )
+            await agent._emit_event(
+                AgentMessageAddedEvent.create(
+                    run_id=run_id,
+                    role="tool",
+                    content=[
+                        {
+                            "type": "tool_result",
+                            "tool_call_id": item.tool_call_id,
+                            "content": normalized,
+                            "is_error": True,
+                        }
+                    ],
                 ),
                 event_bus,
             )
