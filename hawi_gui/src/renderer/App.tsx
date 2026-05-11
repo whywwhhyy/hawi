@@ -520,15 +520,10 @@ export default function App() {
   }
 
   async function refreshProviderModels(provider: string) {
-    try {
-      const nextMetadata = await window.hawi.refreshProviderModels(provider);
-      setMetadata(nextMetadata);
-      setConfig(nextMetadata.config);
-      dispatch(metaFrame(`已刷新 ${provider} 的模型列表`));
-    } catch (error) {
-      dispatch(errorFrame(error));
-      throw error;
-    }
+    const nextMetadata = await window.hawi.refreshProviderModels(provider);
+    setMetadata(nextMetadata);
+    setConfig(nextMetadata.config);
+    dispatch(metaFrame(`已刷新 ${provider} 的模型列表`));
   }
 
   async function applyPlugins(selectedPlugins: string[], pluginConfigs: Record<string, Record<string, unknown>>) {
@@ -1489,6 +1484,7 @@ function formatArtifactData(value: unknown): string {
 function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void; onRefresh: (provider: string) => Promise<void> }) {
   const [filter, setFilter] = useState("");
   const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const grouped = useMemo(() => {
     const groups = new Map<string, string[]>();
     for (const model of models.filter((item) => item.toLowerCase().includes(filter.toLowerCase()))) {
@@ -1501,8 +1497,11 @@ function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models
   async function refresh(provider: string) {
     if (refreshingProvider) return;
     setRefreshingProvider(provider);
+    setRefreshError(null);
     try {
       await onRefresh(provider);
+    } catch (error) {
+      setRefreshError(formatDialogError(error));
     } finally {
       setRefreshingProvider(null);
     }
@@ -1513,6 +1512,7 @@ function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models
       <div className="modal-toolbar">
         <input className="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索模型" />
       </div>
+      {refreshError && <div className="model-refresh-error" role="alert">{refreshError}</div>}
       <div className="model-grid">
         {grouped.map(([provider, entries]) => (
           <section className="model-provider" key={provider}>
@@ -1537,6 +1537,10 @@ function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models
       </div>
     </Modal>
   );
+}
+
+function formatDialogError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onApply }: { catalog: PluginCatalogItem[]; selectedPlugins: string[]; pluginConfigs: Record<string, Record<string, unknown>>; onClose: () => void; onApply: (selected: string[], configs: Record<string, Record<string, unknown>>) => void }) {

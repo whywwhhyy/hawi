@@ -1601,6 +1601,19 @@ button:disabled {
   background: var(--color-surface);
 }
 
+.model-refresh-error {
+  flex: 0 0 auto;
+  margin: 10px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid #dfbbb6;
+  border-radius: var(--radius);
+  background: #fff5f3;
+  color: var(--color-danger);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .search {
   width: 100%;
   padding: 9px 10px;

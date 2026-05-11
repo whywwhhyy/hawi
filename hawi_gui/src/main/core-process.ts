@@ -12,6 +12,22 @@ export const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 
 export type EmitToRenderer = (channel: string, payload: unknown) => void;
 
+export class CoreCommandError extends Error {
+  readonly code: string;
+  readonly details: unknown;
+  readonly frame: CoreFrame;
+
+  constructor(frame: CoreFrame) {
+    const payload = frame.payload as Record<string, unknown>;
+    super(String(payload.message ?? "Core error"));
+    this.name = "CoreCommandError";
+    this.code = typeof payload.code === "string" ? payload.code : "error";
+    this.details = payload.details;
+    this.frame = frame;
+    Object.setPrototypeOf(this, CoreCommandError.prototype);
+  }
+}
+
 export class CoreProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
   private decoder = new TLVDecoder();
@@ -181,16 +197,23 @@ export class CoreProcess {
         });
         continue;
       }
-      if (frame.id && this.pending.has(frame.id) && (frame.type === "ack" || frame.type === "error" || frame.type === "pong" || frame.type === "core.status")) {
+      if (frame.id && isCommandResponseFrame(frame)) {
         const pending = this.pending.get(frame.id);
-        this.pending.delete(frame.id);
-        if (frame.type === "error") {
-          pending?.reject(new Error(String((frame.payload as Record<string, unknown>).message ?? "Core error")));
-        } else {
-          pending?.resolve(frame);
+        if (pending) {
+          this.pending.delete(frame.id);
+          if (frame.type === "error") {
+            pending.reject(new CoreCommandError(frame));
+          } else {
+            pending.resolve(frame);
+          }
         }
+        continue;
       }
       this.emitToRenderer("core:event", frame);
     }
   }
+}
+
+function isCommandResponseFrame(frame: CoreFrame): boolean {
+  return frame.type === "ack" || frame.type === "error" || frame.type === "pong" || frame.type === "core.status";
 }
