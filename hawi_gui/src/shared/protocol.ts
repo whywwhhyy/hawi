@@ -20,6 +20,7 @@ export type CoreCommandType =
   | "clear_queue"
   | "set_system_prompt"
   | "switch_model"
+  | "refresh_models"
   | "apply_plugins"
   | "get_status"
   | "shutdown"

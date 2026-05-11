@@ -20,9 +20,11 @@ let mainWindow: BrowserWindow | null = null;
 let inspectPayload: InspectPayload | null = null;
 let config: PersistedConfig | null = null;
 let core: CoreProcess | null = null;
+const refreshedProviders = new Set<string>();
 
 const MIN_CONTENT_WIDTH = 1080;
 const MIN_CONTENT_HEIGHT = 660;
+const MODEL_REFRESH_TIMEOUT_MS = 60_000;
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -62,7 +64,7 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   if (config.modelName) {
-    core.start(config, inspectPayload);
+    core.start(config, inspectPayload, refreshedProviders);
   }
 });
 
@@ -100,7 +102,7 @@ function registerIpc(): void {
     const ready = getReady();
     config = sanitizeConfig(nextConfig, ready.inspect);
     saveConfig(env.configPath, config);
-    core?.restart(config, ready.inspect);
+    core?.restart(config, ready.inspect, refreshedProviders);
     return { ok: true };
   });
 
@@ -114,6 +116,53 @@ function registerIpc(): void {
   ipcMain.handle("gui:save-markdown-export", async (_event, payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> => {
     return saveMarkdownExport(payload);
   });
+
+  ipcMain.handle("gui:refresh-provider-models", async (_event, provider: string): Promise<GuiMetadata> => {
+    return refreshProviderModels(provider);
+  });
+}
+
+async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
+  const providerName = provider.trim();
+  if (!providerName) {
+    throw new Error("provider is required");
+  }
+  const ready = getReady();
+  let allModels: string[] | null = null;
+  let nextInspect = ready.inspect;
+
+  if (core?.isRunning()) {
+    const frame = await core.sendCommand(
+      "refresh_models",
+      { provider: providerName },
+      MODEL_REFRESH_TIMEOUT_MS
+    );
+    const payload = frame.payload as Record<string, unknown>;
+    if (Array.isArray(payload.all_models)) {
+      allModels = payload.all_models.filter((item): item is string => typeof item === "string");
+    }
+  } else {
+    const refreshed = loadInspectPayload(env.repoRoot, env.workspaceRoot, env.uvCommand, [
+      "--refresh-provider",
+      providerName
+    ]);
+    nextInspect = refreshed;
+    allModels = refreshed.models;
+  }
+
+  if (!allModels) {
+    throw new Error(`refresh for provider '${providerName}' returned no models`);
+  }
+
+  refreshedProviders.add(providerName);
+  inspectPayload = { ...nextInspect, models: allModels };
+  config = sanitizeConfig(ready.config, inspectPayload);
+  saveConfig(env.configPath, config);
+  return {
+    inspect: inspectPayload,
+    config,
+    coreRunning: core?.isRunning() ?? false
+  };
 }
 
 async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {

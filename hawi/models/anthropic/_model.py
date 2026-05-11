@@ -763,6 +763,28 @@ class AnthropicModel(Model):
             details=data if isinstance(data, dict) else {},
         )
 
+    def list_models(self) -> list[str]:
+        """Query the Anthropic-compatible models endpoint."""
+        try:
+            response = self.client.models.list(limit=100)
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        return self._coerce_model_id_list(response)
+
+    async def alist_models(self) -> list[str]:
+        """Async model-list query for Anthropic-compatible providers."""
+        try:
+            response = await self.async_client.models.list(limit=100)
+        except Exception as e:
+            converted = _convert_anthropic_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        return await self._acoerce_model_id_list(response)
+
     async def _async_invoke_impl(
         self,
         request: MessageRequest,

@@ -15,6 +15,10 @@ describe("engine launch helpers", () => {
     ]);
   });
 
+  it("passes model refresh args through the engine launcher", () => {
+    expect(buildEngineRunArgs("/repo/hawi", ["--inspect", "--refresh-provider", "openai"])).toContain("--refresh-provider");
+  });
+
   it("adds the repo root to PYTHONPATH", () => {
     const env = buildEngineEnv("C:\\repo\\hawi", {
       PATH: "C:\\tools",

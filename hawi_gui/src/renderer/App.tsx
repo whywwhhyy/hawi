@@ -519,6 +519,18 @@ export default function App() {
     }
   }
 
+  async function refreshProviderModels(provider: string) {
+    try {
+      const nextMetadata = await window.hawi.refreshProviderModels(provider);
+      setMetadata(nextMetadata);
+      setConfig(nextMetadata.config);
+      dispatch(metaFrame(`已刷新 ${provider} 的模型列表`));
+    } catch (error) {
+      dispatch(errorFrame(error));
+      throw error;
+    }
+  }
+
   async function applyPlugins(selectedPlugins: string[], pluginConfigs: Record<string, Record<string, unknown>>) {
     if (!config) return;
     const nextConfig = { ...config, selectedPlugins, pluginConfigs };
@@ -710,6 +722,7 @@ export default function App() {
           current={config.modelName}
           onClose={() => setModelDialogOpen(false)}
           onSelect={selectModel}
+          onRefresh={refreshProviderModels}
         />
       )}
       {pluginDialogOpen && (
@@ -1473,8 +1486,9 @@ function formatArtifactData(value: unknown): string {
   }
 }
 
-function ModelDialog({ models, current, onClose, onSelect }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void }) {
+function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void; onRefresh: (provider: string) => Promise<void> }) {
   const [filter, setFilter] = useState("");
+  const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null);
   const grouped = useMemo(() => {
     const groups = new Map<string, string[]>();
     for (const model of models.filter((item) => item.toLowerCase().includes(filter.toLowerCase()))) {
@@ -1483,6 +1497,17 @@ function ModelDialog({ models, current, onClose, onSelect }: { models: string[];
     }
     return [...groups.entries()];
   }, [models, filter]);
+
+  async function refresh(provider: string) {
+    if (refreshingProvider) return;
+    setRefreshingProvider(provider);
+    try {
+      await onRefresh(provider);
+    } finally {
+      setRefreshingProvider(null);
+    }
+  }
+
   return (
     <Modal title="切换模型" className="model-modal" onClose={onClose}>
       <div className="modal-toolbar">
@@ -1491,7 +1516,17 @@ function ModelDialog({ models, current, onClose, onSelect }: { models: string[];
       <div className="model-grid">
         {grouped.map(([provider, entries]) => (
           <section className="model-provider" key={provider}>
-            <h3>{provider}</h3>
+            <header className="model-provider-header">
+              <h3>{provider}</h3>
+              <button
+                className="icon-button model-refresh"
+                title={`刷新 ${provider} 模型列表`}
+                disabled={Boolean(refreshingProvider)}
+                onClick={() => void refresh(provider)}
+              >
+                <RotateCcw size={15} className={refreshingProvider === provider ? "spin" : ""} />
+              </button>
+            </header>
             {entries.map((model) => (
               <button className={model === current ? "model active" : "model"} key={model} onClick={() => onSelect(model)}>
                 {model.split("/").slice(1).join("/")}

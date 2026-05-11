@@ -338,6 +338,8 @@ class CoreRuntime:
                 await self._handle_set_system_prompt(client, command)
             elif command.type == "switch_model":
                 await self._handle_switch_model(client, command)
+            elif command.type == "refresh_models":
+                await self._handle_refresh_models(client, command)
             elif command.type == "apply_plugins":
                 await self._handle_apply_plugins(client, command)
             elif command.type == "get_status":
@@ -586,6 +588,33 @@ class CoreRuntime:
             )
         )
         self.emit(make_frame("core.ready", self._ready_payload()))
+
+    async def _handle_refresh_models(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        provider = command.payload.get("provider")
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("'refresh_models.payload.provider' must be a non-empty string")
+        provider = provider.strip()
+        loop = asyncio.get_running_loop()
+        models = await loop.run_in_executor(
+            None,
+            model_registry.refresh_provider_models,
+            provider,
+        )
+        await client.send(
+            make_ack(
+                "refresh_models",
+                request_id=command.id,
+                payload={
+                    "provider": provider,
+                    "models": models,
+                    "all_models": model_registry.list_models(),
+                },
+            )
+        )
 
     async def _handle_apply_plugins(
         self,

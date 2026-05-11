@@ -46,6 +46,7 @@ __all__ = [
     "load_config",
     "list_models",
     "list_providers",
+    "refresh_provider_models",
     "ModelConfig",
     "ModelOverrideConfig",
     "CircularDependencyError",
@@ -406,10 +407,95 @@ class ModelRegistry:
         self._ensure_auto_load()
 
         models = []
+        seen: set[str] = set()
         for provider in self._providers:
             for model_id in provider.model_ids:
-                models.append(f"{provider.name}/{model_id}")
+                name = f"{provider.name}/{model_id}"
+                if name not in seen:
+                    models.append(name)
+                    seen.add(name)
         return models
+
+    def refresh_provider_models(self, name: str) -> list[str]:
+        """Query a provider's remote model list and merge it into this registry.
+
+        The refresh is in-memory only. It updates the current provider configs so
+        newly discovered ``provider/model_id`` names can be selected without
+        writing back to ``models.yaml``.
+        """
+        self._ensure_auto_load()
+
+        providers = list(self._provider_groups.get(name) or [])
+        if not providers:
+            raise UnknownTemplateError(f"Provider '{name}' not found")
+
+        refreshed_any = False
+        errors: list[str] = []
+        for provider in providers:
+            try:
+                model_ids = self._fetch_provider_model_ids(provider)
+            except Exception as exc:
+                errors.append(f"{provider.adapter}: {exc}")
+                continue
+            normalized = self._normalize_refreshed_model_ids(name, model_ids)
+            if not normalized:
+                continue
+            provider.model_ids = self._merge_model_ids(
+                provider.model_ids,
+                normalized,
+            )
+            refreshed_any = True
+
+        if not refreshed_any and errors:
+            raise RuntimeError(
+                f"Failed to refresh provider '{name}': " + "; ".join(errors)
+            )
+
+        prefix = f"{name}/"
+        return [model for model in self.list_models() if model.startswith(prefix)]
+
+    def _fetch_provider_model_ids(self, provider: ModelProviderConfig) -> list[str]:
+        adapter_class = self.get_model_adapter(provider.adapter)
+        if adapter_class is None:
+            raise UnknownModelError(f"Model adapter '{provider.adapter}' not found")
+
+        properties = dict(provider.properties)
+        self._pop_max_context_tokens(properties)
+        properties["model_id"] = provider.model_ids[0] if provider.model_ids else ""
+
+        model = adapter_class(**properties)
+        try:
+            return model.list_models()
+        finally:
+            model.reset()
+
+    @staticmethod
+    def _merge_model_ids(current: list[str], incoming: list[str]) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for model_id in [*current, *incoming]:
+            if model_id not in seen:
+                merged.append(model_id)
+                seen.add(model_id)
+        return merged
+
+    @staticmethod
+    def _normalize_refreshed_model_ids(
+        provider_name: str,
+        model_ids: list[str],
+    ) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        prefix = f"{provider_name}/"
+        for value in model_ids:
+            model_id = str(value).strip()
+            if model_id.startswith(prefix):
+                model_id = model_id[len(prefix):]
+            if not model_id or model_id in seen:
+                continue
+            normalized.append(model_id)
+            seen.add(model_id)
+        return normalized
 
     def has_model(self, name: str) -> bool:
         """检查 model 是否存在"""
@@ -715,3 +801,8 @@ def list_models() -> list[str]:
 def list_providers() -> list[str]:
     """List all registered providers using the global registry."""
     return model_registry.list_providers()
+
+
+def refresh_provider_models(provider: str) -> list[str]:
+    """Refresh one provider's model list using the global registry."""
+    return model_registry.refresh_provider_models(provider)

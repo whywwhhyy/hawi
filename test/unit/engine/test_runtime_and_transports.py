@@ -313,6 +313,38 @@ async def test_enqueue_command_returns_message_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_refresh_models_command_returns_provider_models(monkeypatch) -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    calls: list[str] = []
+
+    def refresh_provider(provider: str) -> list[str]:
+        calls.append(provider)
+        return [f"{provider}/remote-a"]
+
+    monkeypatch.setattr(model_registry, "refresh_provider_models", refresh_provider)
+    monkeypatch.setattr(
+        model_registry,
+        "list_models",
+        lambda: ["dynamic/local-a", "dynamic/remote-a"],
+    )
+
+    await runtime.handle_frame(
+        client,
+        '{"version":"%s","type":"refresh_models","id":"refresh","payload":{"provider":"dynamic"}}'
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "refresh_models"
+    assert payload["provider"] == "dynamic"
+    assert payload["models"] == ["dynamic/remote-a"]
+    assert payload["all_models"] == ["dynamic/local-a", "dynamic/remote-a"]
+    assert calls == ["dynamic"]
+
+
+@pytest.mark.asyncio
 async def test_session_history_command_returns_current_history() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
     client = FakeClient(authenticated=True)

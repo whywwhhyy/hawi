@@ -356,6 +356,29 @@ class StrandsModel(Model):
             details={"strands_method": method_name, **details},
         )
 
+    def list_models(self) -> list[str]:
+        """Delegate model-list queries to the wrapped Strands model when possible."""
+        for method_name in ("list_models", "get_models"):
+            method = getattr(self.strands_model, method_name, None)
+            if callable(method):
+                return self._coerce_model_id_list(method())
+
+        models = getattr(self.strands_model, "models", None)
+        if models is not None:
+            return self._coerce_model_id_list(models)
+
+        raise NotImplementedError(
+            f"{self.__class__.__name__} underlying model does not support model list query"
+        )
+
+    async def alist_models(self) -> list[str]:
+        """Async model-list query delegated to the wrapped Strands model."""
+        for method_name in ("alist_models", "aget_models"):
+            method = getattr(self.strands_model, method_name, None)
+            if callable(method):
+                return await self._acoerce_model_id_list(await method())
+        return self.list_models()
+
     async def _ainvoke_impl(
         self,
         request: MessageRequest,

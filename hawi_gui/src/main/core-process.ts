@@ -30,7 +30,7 @@ export class CoreProcess {
     return this.child !== null && !this.child.killed;
   }
 
-  start(nextConfig: PersistedConfig, metadata: InspectPayload): void {
+  start(nextConfig: PersistedConfig, metadata: InspectPayload, refreshedProviders: Iterable<string> = []): void {
     if (!nextConfig.modelName) {
       return;
     }
@@ -40,9 +40,11 @@ export class CoreProcess {
     const pluginConfigPath = path.join(tmpdir(), `hawi-gui-plugins-${process.pid}.json`);
     writeFileSync(pluginConfigPath, JSON.stringify(nextConfig.pluginConfigs, null, 2), "utf-8");
 
+    const refreshArgs = [...refreshedProviders].flatMap((provider) => ["--refresh-provider", provider]);
     const args = buildEngineRunArgs(this.repoRoot, [
       "--model",
       nextConfig.modelName,
+      ...refreshArgs,
       "--transport",
       "stdio",
       "--system-prompt",
@@ -85,9 +87,9 @@ export class CoreProcess {
     this.emitToRenderer("core:spawn", { args: args.slice(1), cwd: this.workspaceRoot, logFile: this.backendLogPath });
   }
 
-  restart(nextConfig: PersistedConfig, metadata: InspectPayload): void {
+  restart(nextConfig: PersistedConfig, metadata: InspectPayload, refreshedProviders: Iterable<string> = []): void {
     this.stop("restart");
-    this.start(nextConfig, metadata);
+    this.start(nextConfig, metadata, refreshedProviders);
   }
 
   stop(reason: string): void {

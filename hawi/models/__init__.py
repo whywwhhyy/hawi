@@ -103,6 +103,7 @@ from .registry import (
     UnknownModelError,
     UnknownTemplateError,
     model_registry,
+    refresh_provider_models,
 )
 
 # Convenience functions
@@ -129,6 +130,10 @@ def list_models():
 def list_providers():
     """List all registered providers using the global registry."""
     return model_registry.list_providers()
+
+def refresh_models(provider: str):
+    """Refresh one provider's model list using the global registry."""
+    return model_registry.refresh_provider_models(provider)
 
 __all__ = [
     # Base classes
@@ -218,4 +223,6 @@ __all__ = [
     "load_config",
     "list_models",
     "list_providers",
+    "refresh_provider_models",
+    "refresh_models",
 ]

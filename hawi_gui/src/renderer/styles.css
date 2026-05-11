@@ -1629,9 +1629,27 @@ button:disabled {
 }
 
 .model-provider h3 {
-  margin: 0 0 8px 0;
+  margin: 0;
   font-size: 13px;
   color: #4f5d63;
+}
+
+.model-provider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  margin-bottom: 8px;
+}
+
+.model-refresh {
+  min-height: 28px;
+  width: 30px;
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
 }
 
 .model {
@@ -1644,6 +1662,12 @@ button:disabled {
   background: var(--color-primary);
   color: var(--color-surface);
   border-color: var(--color-primary);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .plugin-enable {

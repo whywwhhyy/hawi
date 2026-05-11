@@ -6,6 +6,7 @@ declare global {
       getMetadata(): Promise<GuiMetadata>;
       saveConfig(config: PersistedConfig): Promise<PersistedConfig>;
       restartCore(config: PersistedConfig): Promise<{ ok: boolean }>;
+      refreshProviderModels(provider: string): Promise<GuiMetadata>;
       sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame>;
       saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult>;
       onCoreEvent(callback: (frame: CoreFrame) => void): () => void;

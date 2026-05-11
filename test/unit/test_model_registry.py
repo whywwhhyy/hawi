@@ -29,6 +29,31 @@ from hawi.models import (
 )
 
 
+class RefreshableModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+    refreshed_ids = ["remote-a", "remote-b"]
+
+    def __init__(self, *, model_id: str, **params):
+        self._model_id = model_id
+        self.params = params
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    def _prepare_request_impl(self, request):
+        return {}
+
+    def _parse_response_impl(self, response):
+        raise NotImplementedError
+
+    def _invoke_impl(self, request):
+        raise NotImplementedError
+
+    def list_models(self) -> list[str]:
+        return list(self.refreshed_ids)
+
+
 class TestSingletonPattern:
     """Tests for singleton behavior."""
 
@@ -152,6 +177,38 @@ class TestProviderRegistration:
 
         result = registry.unregister_provider("nonexistent")
         assert result is False
+
+    def test_refresh_provider_models_merges_remote_ids(self):
+        """Refreshing a provider should add remote model IDs in memory."""
+        registry = ModelRegistry()
+        registry.clear()
+        registry.register_adapter("RefreshableModel", RefreshableModel, quiet=True)
+        registry.register_provider(
+            "dynamic",
+            "RefreshableModel",
+            ["local-a"],
+            {"api_key": "test-key", "max_context_tokens": 1000},
+            quiet=True,
+        )
+
+        models = registry.refresh_provider_models("dynamic")
+
+        assert models == [
+            "dynamic/local-a",
+            "dynamic/remote-a",
+            "dynamic/remote-b",
+        ]
+        assert registry.has_model("dynamic/remote-a")
+        config = registry.get_model_config("dynamic/remote-a")
+        assert config is not None
+        assert config.properties == {"api_key": "test-key"}
+
+    def test_refresh_provider_models_rejects_unknown_provider(self):
+        registry = ModelRegistry()
+        registry.clear()
+
+        with pytest.raises(Exception, match="Provider 'missing' not found"):
+            registry.refresh_provider_models("missing")
 
 
 class TestModelConfigOverride:

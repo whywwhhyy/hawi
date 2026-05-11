@@ -614,6 +614,28 @@ class OpenAIModel(Model):
         estimate.details["recommended_exact_source"] = "response.usage"
         return estimate
 
+    def list_models(self) -> list[str]:
+        """Query the OpenAI-compatible ``/models`` endpoint."""
+        try:
+            response = self.client.models.list()
+        except Exception as e:
+            converted = _convert_openai_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        return self._coerce_model_id_list(response)
+
+    async def alist_models(self) -> list[str]:
+        """Async model-list query for OpenAI-compatible providers."""
+        try:
+            response = await self.async_client.models.list()
+        except Exception as e:
+            converted = _convert_openai_error(e)
+            if converted is not e:
+                raise converted from e
+            raise
+        return await self._acoerce_model_id_list(response)
+
     def _prepare_stream_request(self, request: MessageRequest) -> dict[str, Any]:
         """准备流式请求的通用配置
 

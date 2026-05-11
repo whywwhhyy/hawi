@@ -74,8 +74,8 @@ export function parseArgValue(name: string): string | null {
   return null;
 }
 
-export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCommand: string): InspectPayload {
-  const result = spawnSync(uvCommand, buildEngineRunArgs(repoRoot, ["--inspect"]), {
+export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCommand: string, inspectArgs: string[] = []): InspectPayload {
+  const result = spawnSync(uvCommand, buildEngineRunArgs(repoRoot, ["--inspect", ...inspectArgs]), {
     cwd: workspaceRoot,
     encoding: "utf-8",
     env: buildEngineEnv(repoRoot)

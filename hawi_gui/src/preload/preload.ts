@@ -11,6 +11,9 @@ const api = {
   restartCore(config: PersistedConfig): Promise<{ ok: boolean }> {
     return ipcRenderer.invoke("core:restart", config);
   },
+  refreshProviderModels(provider: string): Promise<GuiMetadata> {
+    return ipcRenderer.invoke("gui:refresh-provider-models", provider);
+  },
   sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame> {
     return ipcRenderer.invoke("core:command", type, payload);
   },

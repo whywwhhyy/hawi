@@ -287,6 +287,16 @@ class Model(ABC):
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         return self._estimate_tokens_impl(request)
 
+    def list_models(self) -> list[str]:
+        """Return model IDs currently available from this provider.
+
+        Providers that expose a model-list endpoint should override this. The
+        IDs returned here are provider-local IDs, not ``provider/model`` names.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support model list query"
+        )
+
     # ==========================================================================
     # 公共 API - 异步方法
     # ==========================================================================
@@ -336,6 +346,67 @@ class Model(ABC):
         """Async version of :meth:`estimate_tokens`."""
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         return await self._aestimate_tokens_impl(request)
+
+    async def alist_models(self) -> list[str]:
+        """Async version of :meth:`list_models`."""
+        return self.list_models()
+
+    @staticmethod
+    def _coerce_model_id_list(response: Any) -> list[str]:
+        """Extract a de-duplicated list of model IDs from SDK list responses."""
+        if isinstance(response, dict):
+            items = response.get("data", [])
+        elif hasattr(response, "data"):
+            items = getattr(response, "data")
+        elif not isinstance(response, (str, bytes)) and hasattr(response, "__iter__"):
+            items = response
+        else:
+            items = response
+
+        ids: list[str] = []
+        seen: set[str] = set()
+        try:
+            iterator = iter(items)
+        except TypeError:
+            return ids
+
+        for item in iterator:
+            model_id = Model._coerce_model_id(item)
+            if model_id and model_id not in seen:
+                ids.append(model_id)
+                seen.add(model_id)
+        return ids
+
+    @staticmethod
+    async def _acoerce_model_id_list(response: Any) -> list[str]:
+        """Async variant of :meth:`_coerce_model_id_list`."""
+        if hasattr(response, "__aiter__"):
+            ids: list[str] = []
+            seen: set[str] = set()
+            async for item in response:
+                model_id = Model._coerce_model_id(item)
+                if model_id and model_id not in seen:
+                    ids.append(model_id)
+                    seen.add(model_id)
+            return ids
+        return Model._coerce_model_id_list(response)
+
+    @staticmethod
+    def _coerce_model_id(item: Any) -> str | None:
+        if isinstance(item, str):
+            value = item
+        elif isinstance(item, dict):
+            value = item.get("id") or item.get("model") or item.get("name")
+        else:
+            value = (
+                getattr(item, "id", None)
+                or getattr(item, "model", None)
+                or getattr(item, "name", None)
+            )
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     # ==========================================================================
     # 请求/响应转换 - 子类必须实现
@@ -883,3 +954,9 @@ class DelegateModel(Model):
 
     def get_balance(self) -> list[BalanceInfo]:
         return self._delegate.get_balance()
+
+    def list_models(self) -> list[str]:
+        return self._delegate.list_models()
+
+    async def alist_models(self) -> list[str]:
+        return await self._delegate.alist_models()

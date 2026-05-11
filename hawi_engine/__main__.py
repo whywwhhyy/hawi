@@ -115,6 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extra models.yaml path. May be passed more than once.",
     )
     parser.add_argument(
+        "--refresh-provider",
+        action="append",
+        default=[],
+        help=(
+            "Temporarily refresh a provider's model list from its remote API. "
+            "May be passed more than once."
+        ),
+    )
+    parser.add_argument(
         "--no-user-models",
         action="store_true",
         help="Do not load ~/.hawi/models.yaml; use workspace and explicit model configs only.",
@@ -241,6 +250,7 @@ async def async_main(args: argparse.Namespace) -> None:
         return
 
     loaded = load_model_configs(args.models_config, include_user=not args.no_user_models)
+    refresh_model_providers(args.refresh_provider)
     available = model_registry.list_models()
     if args.inspect:
         print(json_dumps(build_inspect_payload()))
@@ -301,6 +311,13 @@ def parse_plugins(raw: str) -> list[str]:
     if not raw.strip():
         return []
     return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def refresh_model_providers(providers: list[str]) -> None:
+    for provider in providers:
+        provider = provider.strip()
+        if provider:
+            model_registry.refresh_provider_models(provider)
 
 
 def load_plugin_config(path: str | None) -> dict[str, dict[str, Any]]:
