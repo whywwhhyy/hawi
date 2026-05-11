@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import App, { isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
+import App, { formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -101,6 +101,26 @@ describe("renderMarkdown", () => {
     expect(html).toContain("href=\"https://example.com\"");
     expect(html).toContain("target=\"_blank\"");
     expect(html).toContain("rel=\"noopener noreferrer\"");
+  });
+});
+
+describe("formatToolCopyText", () => {
+  it("formats tool calls with arguments and result for clipboard copy", () => {
+    const text = formatToolCopyText({
+      runId: "run-1",
+      toolCallId: "call-1",
+      name: "read_file",
+      status: "success",
+      argsRaw: "",
+      argsState: "complete",
+      arguments: { path: "docs/todo.md" },
+      resultPreview: "done"
+    });
+
+    expect(text).toContain("Tool: read_file");
+    expect(text).toContain("Status: success");
+    expect(text).toContain("\"path\": \"docs/todo.md\"");
+    expect(text).toContain("Result:\ndone");
   });
 });
 

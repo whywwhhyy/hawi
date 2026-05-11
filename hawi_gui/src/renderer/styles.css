@@ -959,6 +959,32 @@ button:disabled {
   background: rgba(255, 255, 255, 0.68);
 }
 
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #59666c;
+}
+
+.copy-button:hover {
+  border-color: #d4dadd;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.copy-button.copied {
+  color: #176b5d;
+}
+
+.copy-button.failed {
+  color: #9d3028;
+}
+
 .collapsible-body {
   display: grid;
   grid-template-rows: 1fr;

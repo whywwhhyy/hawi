@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode, type WheelEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, CheckCircle2, ChevronDown, ChevronRight, Circle, FileText, LoaderCircle, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Copy, FileText, LoaderCircle, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
@@ -55,6 +55,7 @@ markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 };
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
+const COPY_FEEDBACK_MS = 1200;
 const SYSTEM_PROMPT_MAX_ROWS = 3;
 const MESSAGE_INPUT_MAX_ROWS = 5;
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -962,6 +963,7 @@ const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) 
         <span>{label}</span>
         <span className="message-actions">
           {receiving && <LiveSpinner title="正在接收消息" />}
+          <CopyButton text={node.content} title="复制消息" />
           <button
             className="thinking-toggle message-toggle"
             title={collapsed ? "展开消息" : "折叠消息"}
@@ -1011,6 +1013,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
         <span><Brain size={15} /> Thinking</span>
         <span className="message-actions">
           {receiving && <LiveSpinner title="正在接收思考内容" />}
+          <CopyButton text={node.content} title="复制思考内容" />
           <button
             className="thinking-toggle"
             title={collapsed ? "展开思考内容" : "折叠思考内容"}
@@ -1061,6 +1064,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
         </span>
         <span className="tool-actions">
           {running ? <LiveSpinner title="工具运行中" /> : <strong>{tool.status}</strong>}
+          <CopyButton text={formatToolCopyText(tool)} title="复制工具调用" />
           <button
             className="thinking-toggle tool-toggle"
             title={collapsed ? "展开工具调用" : "折叠工具调用"}
@@ -1103,6 +1107,50 @@ function LiveSpinner({ title }: { title: string }) {
     <span className="live-spinner" title={title} aria-label={title} role="status">
       <LoaderCircle size={15} />
     </span>
+  );
+}
+
+function CopyButton({ text, title }: { text: string; title: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+    }
+  }, []);
+
+  async function handleCopy(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    try {
+      await copyTextToClipboard(text);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+    }
+    timerRef.current = window.setTimeout(() => {
+      setState("idle");
+      timerRef.current = null;
+    }, COPY_FEEDBACK_MS);
+  }
+
+  const copied = state === "copied";
+  const failed = state === "failed";
+  const label = copied ? "已复制" : failed ? "复制失败" : title;
+
+  return (
+    <button
+      type="button"
+      className={`copy-button ${copied ? "copied" : ""} ${failed ? "failed" : ""}`.trim()}
+      title={label}
+      aria-label={label}
+      onClick={handleCopy}
+    >
+      {copied ? <Check size={14} /> : <Copy size={14} />}
+    </button>
   );
 }
 
@@ -1647,6 +1695,63 @@ function isInputComposing(event: InputKeyEvent, inputComposing: boolean): boolea
 
 export function renderMarkdown(value: string): string {
   return markdown.render(value);
+}
+
+export function formatToolCopyText(tool: ToolState): string {
+  const sections = [
+    `Tool: ${tool.name}`,
+    `Status: ${tool.status}`
+  ];
+  if (tool.description) {
+    sections.push(`Description: ${tool.description}`);
+  }
+  if (tool.toolCallId) {
+    sections.push(`Tool call id: ${tool.toolCallId}`);
+  }
+  if (tool.arguments !== undefined) {
+    sections.push(`Arguments:\n${formatCopyValue(tool.arguments)}`);
+  } else if (tool.argsRaw) {
+    sections.push(`Arguments:\n${tool.argsRaw}`);
+  }
+  if (tool.resultPreview) {
+    sections.push(`Result:\n${tool.resultPreview}`);
+  }
+  return sections.join("\n\n");
+}
+
+export async function copyTextToClipboard(value: string): Promise<void> {
+  const clipboard = globalThis.navigator?.clipboard;
+  if (clipboard?.writeText) {
+    await clipboard.writeText(value);
+    return;
+  }
+  if (typeof document === "undefined" || !document.body) {
+    throw new Error("Clipboard is unavailable");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.left = "-1000px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Clipboard copy failed");
+  }
+}
+
+function formatCopyValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function highlightCode(value: string, language: string): string {
