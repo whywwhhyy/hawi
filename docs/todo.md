@@ -196,8 +196,8 @@
     - [x] after hooks 已能拿到 duration/error 等上下文
 
 - [ ] 扩展 plugin hook 体系（详见 [hook_system_extension.md](hook_system_extension.md)）
-    - [ ] Phase 0：修复 `before_tool_calling` 不消费 `abort` / `after_tool_calling` 完全丢弃返回值的现存 bug，workflow_plugin gate review 当前不生效
-    - [ ] Phase 1：HookContext 增字段 + `__match_args__` 锁定；`AgentMessageAddedEvent` 增 `source` / `message_id` / `message_index`；新增 `before_user_message` + `UserMessageDraft`
+    - [x] Phase 0：修复 `before_tool_calling` 不消费 `abort` / `after_tool_calling` 完全丢弃返回值的现存 bug，workflow_plugin gate review 当前不生效
+    - [ ] Phase 1：HookContext 增字段 + `__match_args__` 锁定；`AgentMessageAddedEvent` 增 `message_source` / `message_id` / `message_index`（`message_source` 避开与 `Event.source` 冲突）；新增 `before_user_message` + `UserMessageDraft`
     - [ ] Phase 2：新增 `HookResult.strip()` 用于安全拦截 + 不写入 history；显式化 `before_tool_calling` 中 `arguments` 原地修改契约
     - [ ] Phase 3：compact 事务化（`before_compact` + `CompactDraft` + `after_compact`），依赖 message_id 一等公民项目先落地
     - [ ] Phase 4：`on_interrupt` hook（python_interpreter 关子进程）+ `AgentModelErrorEvent` / `AgentToolErrorEvent` 观察事件

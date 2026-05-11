@@ -178,6 +178,9 @@ def after_tool_calling(func: AfterToolCallMethod) -> AfterToolCallMethod:
     Returns:
         - ``None`` to continue normally.
         - ``HookResult.abort(reason)`` to terminate the agent run.
+        - ``HookResult.reinvoke(message)`` to append a message to context
+          and re-enter the model loop after the current tool result is
+          written.
     """
     setattr(func, "_is_hook", True)
     setattr(func, "_hook_type", "after_tool_calling")

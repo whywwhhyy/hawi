@@ -919,12 +919,14 @@ class HawiAgent:
         _hr = await self._invoke_session_hook("before_session", HookContext(run_id=run_id, iteration=0))
         if _hr and _hr.action == "abort":
             state.should_stop = True
+            state.stop_reason = "hook_abort"
 
         # before_conversation hook
         if not state.should_stop:
             _hr = await self._invoke_session_hook("before_conversation", HookContext(run_id=run_id, iteration=0))
             if _hr and _hr.action == "abort":
                 state.should_stop = True
+                state.stop_reason = "hook_abort"
 
         try:
             if message is None:
@@ -953,6 +955,7 @@ class HawiAgent:
                 if _hr:
                     if _hr.action == "abort":
                         state.should_stop = True
+                        state.stop_reason = "hook_abort"
                         break
                     elif _hr.action == "replace_model" and _hr.model is not None:
                         m = _hr.model  # use replacement model for this iteration only
@@ -1152,6 +1155,7 @@ class HawiAgent:
                 if _hr:
                     if _hr.action == "abort":
                         state.should_stop = True
+                        state.stop_reason = "hook_abort"
                     elif _hr.action == "reinvoke" and _hr.message is not None:
                         self._context.add_user_message(_hr.message)
                         await self._emit_event(
@@ -1215,6 +1219,43 @@ class HawiAgent:
 
                 if tool_batch.records:
                     self._mark_tool_results_unsent(tool_batch.records)
+
+                if tool_batch.control is not None:
+                    if tool_batch.control.action == "abort":
+                        state.should_stop = True
+                        state.stop_reason = "hook_abort"
+                        await self._emit_event(
+                            AgentRunStopEvent.create(
+                                run_id=run_id,
+                                stop_reason="hook_abort",
+                                duration_ms=(time.time() - start_time) * 1000,
+                                usage=cumulative_usage,
+                            ),
+                            event_bus,
+                        )
+                        break
+                    if (
+                        tool_batch.control.action == "reinvoke"
+                        and tool_batch.control.message is not None
+                    ):
+                        state.pending_reinvoke_message = tool_batch.control.message
+                        state.stop_reason = "hook_reinvoke"
+                        self._context.add_user_message(state.pending_reinvoke_message)
+                        await self._emit_event(
+                            AgentRunStopEvent.create(
+                                run_id=run_id,
+                                stop_reason="hook_reinvoke",
+                                duration_ms=(time.time() - start_time) * 1000,
+                                usage=cumulative_usage,
+                            ),
+                            event_bus,
+                        )
+                        return await self._arun_internal(
+                            message=None,
+                            model=model,
+                            event_bus=event_bus,
+                            streaming=streaming,
+                        )
 
                 # Check if execution was interrupted
                 if self._check_interrupt():
@@ -1325,6 +1366,8 @@ class HawiAgent:
         duration_ms = (time.time() - start_time) * 1000
         if state.error:
             stop_reason = "error"
+        elif state.stop_reason is not None:
+            stop_reason = state.stop_reason
         elif state.iteration > 0 and not state.tool_calls:
             stop_reason = "end_turn"
         else:

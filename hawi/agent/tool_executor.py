@@ -28,7 +28,7 @@ from hawi.events import (
 from hawi.models import ContentPart, ToolCallPart
 from hawi.models.message import CachePoint
 from hawi.plugin import PluginManager
-from hawi.plugin.hook_context import HookContext
+from hawi.plugin.hook_context import HookContext, HookResult
 from hawi.tool.types import (
     AgentTool,
     ToolParameterInjectionContext,
@@ -104,6 +104,7 @@ class ToolExecutionOutcome:
     record: ToolCallRecord
     audit_pending: bool
     result_content: str
+    control: HookResult | None = None
 
 
 @dataclass
@@ -112,6 +113,7 @@ class ToolExecutionBatchResult:
 
     records: list[ToolCallRecord] = field(default_factory=list)
     completed_tool_call_ids: list[str] = field(default_factory=list)
+    control: HookResult | None = None
 
 
 class ToolExecutor:
@@ -197,7 +199,8 @@ class ToolExecutor:
         active_batch_tool_calls = self._register_active_tool_calls(tool_calls)
         outcomes: list[ToolExecutionOutcome] = []
         try:
-            for tool_call in tool_calls:
+            control: HookResult | None = None
+            for index, tool_call in enumerate(tool_calls):
                 if is_interrupted is not None and is_interrupted():
                     break
 
@@ -225,6 +228,30 @@ class ToolExecutor:
                     run_id,
                     event_bus,
                 )
+                if outcome.control is not None:
+                    control = outcome.control
+                    remaining = tool_calls[index + 1 :]
+                    skipped = self._synthesize_stopped_tool_results(
+                        remaining,
+                        run_id=run_id,
+                        iteration=iteration,
+                        reason=self._control_reason(control),
+                    )
+                    outcomes.extend(skipped)
+                    if skipped:
+                        await self._commit_outcomes(
+                            skipped,
+                            run_id=run_id,
+                            event_bus=event_bus,
+                            materialize_pending_steer=False,
+                        )
+                        for skipped_outcome in skipped:
+                            await self._emit_final_result_event(
+                                skipped_outcome.record,
+                                run_id,
+                                event_bus,
+                            )
+                    break
         finally:
             self._unregister_active_tool_calls(active_batch_tool_calls)
 
@@ -244,6 +271,7 @@ class ToolExecutor:
             completed_tool_call_ids=[
                 outcome.record.tool_call_id for outcome in outcomes
             ],
+            control=control,
         )
 
     async def prepare_tool_arguments(
@@ -389,11 +417,28 @@ class ToolExecutor:
             arguments,
             before_ctx,
         )
-        if hook_result and hook_result.action == "skip":
-            result = hook_result.tool_result or ToolResult(
-                success=False,
-                error="Hook skipped tool without providing a result",
-            )
+        control: HookResult | None = None
+        if hook_result:
+            if hook_result.action == "skip":
+                result = hook_result.tool_result or ToolResult(
+                    success=False,
+                    error="Hook skipped tool without providing a result",
+                )
+            elif hook_result.action == "abort":
+                control = hook_result
+                reason = hook_result.reason or "no reason provided"
+                result = ToolResult(
+                    success=False,
+                    error=f"Aborted by before_tool_calling hook: {reason}",
+                )
+            else:
+                result = ToolResult(
+                    success=False,
+                    error=(
+                        "Unsupported before_tool_calling hook action: "
+                        f"{hook_result.action}"
+                    ),
+                )
         elif tool is None:
             err = ToolNotFoundError(f"Tool '{tool_name}' not found")
             result = ToolResult(
@@ -442,7 +487,7 @@ class ToolExecutor:
                 )
 
         duration_ms = (time.time() - start_time) * 1000
-        await self._invoke_after_tool_calling(
+        after_hook_result = await self._invoke_after_tool_calling(
             tool_name,
             arguments,
             result,
@@ -454,6 +499,8 @@ class ToolExecutor:
                 duration_ms=duration_ms,
             ),
         )
+        if after_hook_result and after_hook_result.action in {"abort", "reinvoke"}:
+            control = after_hook_result
 
         record = ToolCallRecord(
             tool_name=tool_name,
@@ -466,7 +513,50 @@ class ToolExecutor:
             record=record,
             audit_pending=audit_pending,
             result_content=self._render_tool_result(result),
+            control=control,
         )
+
+    def _synthesize_stopped_tool_results(
+        self,
+        tool_calls: list[ToolCallPart],
+        *,
+        run_id: str,
+        iteration: int,
+        reason: str,
+    ) -> list[ToolExecutionOutcome]:
+        """Create error tool results for unexecuted calls in the same batch.
+
+        Providers require every assistant tool_call to receive a matching
+        tool_result. When a hook stops a batch early, these synthetic results
+        preserve that protocol without running the remaining tools.
+        """
+        outcomes: list[ToolExecutionOutcome] = []
+        for tool_call in tool_calls:
+            result = ToolResult(
+                success=False,
+                error=f"Tool call skipped because the tool batch stopped: {reason}",
+            )
+            record = ToolCallRecord(
+                tool_name=tool_call["name"],
+                arguments=dict(tool_call["arguments"]),
+                result=result,
+                duration_ms=0.0,
+                tool_call_id=tool_call["id"],
+            )
+            outcomes.append(
+                ToolExecutionOutcome(
+                    record=record,
+                    audit_pending=False,
+                    result_content=self._render_tool_result(result),
+                )
+            )
+        return outcomes
+
+    @staticmethod
+    def _control_reason(control: HookResult) -> str:
+        if control.action == "reinvoke":
+            return "after_tool_calling requested reinvoke"
+        return control.reason or f"{control.action} requested by hook"
 
     async def _execute_agent_tool(
         self,

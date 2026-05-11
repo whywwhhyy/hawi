@@ -21,6 +21,8 @@ class _ExecutionState:
     error: HawiError | str | None = None
     should_stop: bool = False
     run_id: str = ""
+    stop_reason: str | None = None
+    pending_reinvoke_message: str | list[ContentPart] | None = None
 
 
 @dataclass
