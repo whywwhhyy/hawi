@@ -1016,13 +1016,14 @@ button:disabled {
 
 .message-body {
   position: relative;
-  max-height: 70vh;
-  overflow: hidden;
+  max-height: none;
+  overflow: visible;
   transition: max-height 190ms ease;
 }
 
 .message-body.is-collapsed {
   max-height: calc(1.48em * 10 + 20px);
+  overflow: hidden;
 }
 
 .message-body.is-collapsed::after {

@@ -158,6 +158,9 @@ class SubAgentHandle:
     closed_at: float | None = None
     last_result: AgentRunResult | None = None
     last_error: str | None = None
+    partial_text: str = ""
+    partial_reasoning: str = ""
+    partial_updated_at: float | None = None
     recent_events: list[dict[str, Any]] = field(default_factory=list)
     event_handler: Callable[[Event], Any] | None = None
     monitor_task: asyncio.Task[None] | None = None

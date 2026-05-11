@@ -16,6 +16,18 @@
     - [ ] `AgentContext` 提供按 id / tag 查询、折叠、删除、替换的 API
     - [ ] 明确哪些 metadata 会进入模型上下文，哪些仅用于运行时/GUI/插件
 
+- [ ] Agent / SubAgent Markdown 导出机制：让长对话和子任务结果更易阅读、归档和分享
+    - [ ] 设计统一 Markdown exporter：输入 `AgentContext.messages` / session `message_history` / subagent context，输出稳定 markdown
+    - [ ] 明确导出结构：frontmatter 或标题区包含 agent/session/subagent id、model、时间、system prompt 摘要、插件列表、上下文统计
+    - [ ] 消息渲染规则：user/assistant/thinking/tool/result/error 分段，tool 参数和结果用 fenced code block，保留 metadata/时间/queue 信息
+    - [ ] 支持导出范围：当前 session 全量、选中消息范围、最近 N 条、单个 run、单个 subagent/turn
+    - [ ] Core protocol 增加导出命令：`session_export_markdown`、`subagent_export_markdown`，返回 markdown 文本或 artifact/file handle
+    - [ ] GUI 主 agent 提供导出按钮：一键导出当前 session markdown，并支持复制 / 保存为 `.md`
+    - [ ] SubAgent 运行结果支持 markdown 导出：`read_subagent(view="markdown")` 或独立 `export_subagent_markdown`，默认包含任务、最终结果、context tail、关键事件
+    - [ ] SubAgent card / 侧栏提供“导出 Markdown / 复制 Markdown”入口，方便阅读和发送给主 agent 或用户
+    - [ ] 对 markdown 导出的超长 tool result 支持摘要 + artifact 引用，避免导出文件爆炸
+    - [ ] 增加测试：消息类型渲染、tool/result fenced block、metadata、session history 导出、subagent partial/completed 导出
+
 - [ ] 大文件拆分与模块边界收敛
     - [x] `hawi/agent/subagent.py` 已拆成 `hawi/agent/subagent/` package：`manager.py`、`types.py`、`prompts.py`、`utils.py`，并保留 `from hawi.agent.subagent import ...` 导入兼容
     - [x] `hawi/agent/agent.py` 第一轮拆分：配置/状态、content helper、context retry 已拆出独立模块；compaction、runtime/steer/interrupt、hook dispatch、event bus plumbing 改为显式 component，不依赖 mixin 继承
@@ -66,6 +78,9 @@
     - [x] engine/GUI 插件目录注册 `SubAgentPlugin`，GUI 插件弹窗可选择 subagent 工具
     - [x] fork 时裁掉父 agent 尾部未闭合 tool-call turn，避免 child 继承 provider-invalid context
     - [x] 增加 shell-style wait：`wait_subagent` / `wait_report` / `notify_timeout`，超时默认返回 running status 而不是工具错误
+    - [x] `read_subagent(view="events")` 保留 `model.content_block_delta.delta`，不再只暴露空的事件壳
+    - [x] `read_subagent(view="context_tail")` 在运行中追加 partial assistant message，支持看到子 agent 正在输出什么
+    - [x] `status.last_result_text` 修正为最近一次完成 run 的结果，而不是一直停留在第一次结果
     - [ ] 明确产品语义：subagent 默认服务一次性任务，但底层按可持续多轮 child session/thread 设计
     - [ ] 引入 `SubAgentSession` 概念：parent session 下的 child session tree，独立 context、scheduler、event log、权限集、manifest
     - [ ] 引入 `SubAgentTurn` 模型：每次 `send` 生成 `turn_id`，追踪 QUEUED/RUNNING/COMPLETED/FAILED/INTERRUPTED/CANCELLED
@@ -82,7 +97,7 @@
     - [ ] 设计 `ParentBridgePlugin`：child 可 `report_to_parent` / `ask_parent` / `yield_result`，第一版先用事件和最终结果，不阻塞主循环
     - [ ] 将 `working_dir` 从 prompt 字段落到支持的插件运行时配置：filesystem/shell/python interpreter 等按 child 逻辑目录执行
     - [ ] 落实 `result_contract`：text/json/review/diff/artifact 的校验、摘要和 artifact sink
-    - [x] 增加单元测试：fork/fresh 隔离、后台运行、status/read、wait timeout、tool wrapper schema
+    - [x] 增加单元测试：fork/fresh 隔离、后台运行、status/read、wait timeout、latest result、partial streaming、tool wrapper schema
     - [ ] 增加 interrupt/close 细粒度单元测试与超时后 interrupt/close action 测试
 
 - [ ] 权限机制：plugin 声明权限，agent 运行时持有权限集，并据此过滤/审查工具

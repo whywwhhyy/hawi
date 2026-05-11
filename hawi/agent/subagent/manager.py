@@ -149,9 +149,7 @@ class SubAgentManager:
     def status(self, subagent_id: str) -> SubAgentStatus:
         """Return a serializable status snapshot."""
         handle = self._require_handle(subagent_id)
-        result = handle.last_result or handle.scheduler.last_result
-        if result is not None:
-            handle.last_result = result
+        result = self._latest_result(handle)
         scheduler_state = handle.scheduler.state.name
         executor_state = handle.scheduler.executor_state.name
         queue_lengths = handle.scheduler.get_queue_lengths()
@@ -188,9 +186,7 @@ class SubAgentManager:
         deadline = time.monotonic() + timeout if timeout is not None else None
 
         while True:
-            result = handle.scheduler.last_result
-            if result is not None:
-                handle.last_result = result
+            self._latest_result(handle)
 
             queue_lengths = handle.scheduler.get_queue_lengths()
             if self._is_settled(handle, queue_lengths):
@@ -349,9 +345,13 @@ class SubAgentManager:
         if view == "events":
             return {"status": status, "events": self.recent_events(subagent_id, limit)}
         if view == "context_tail":
+            messages = deepcopy(handle.agent.context.messages)
+            partial = self._partial_assistant_message(handle)
+            if partial is not None:
+                messages.append(partial)
             return {
                 "status": status,
-                "messages": deepcopy(handle.agent.context.messages[-limit:]),
+                "messages": messages[-limit:] if limit > 0 else [],
             }
         return {
             "status": status,
@@ -533,11 +533,18 @@ class SubAgentManager:
 
             if event.type == "agent.run_start":
                 handle.state = SubAgentLifecycleState.RUNNING
+                self._clear_partial_assistant(handle)
+            elif event.type == "model.stream_start":
+                self._clear_partial_assistant(handle)
+            elif event.type == "model.content_block_delta":
+                self._append_partial_assistant_delta(handle, summary)
             elif event.type == "agent.run_stop":
                 handle.state = SubAgentLifecycleState.COMPLETED
+                self._clear_partial_assistant(handle)
             elif event.type == "agent.error":
                 handle.state = SubAgentLifecycleState.FAILED
                 handle.last_error = summary.get("error") or "Sub-agent failed"
+                self._clear_partial_assistant(handle)
             elif event.type == "scheduler.interrupt":
                 handle.state = SubAgentLifecycleState.INTERRUPTING
 
@@ -573,6 +580,62 @@ class SubAgentManager:
             ),
             None,
         )
+
+    def _latest_result(self, handle: SubAgentHandle) -> AgentRunResult | None:
+        result = handle.scheduler.last_result
+        if result is not None:
+            handle.last_result = result
+            return result
+        return handle.last_result
+
+    def _clear_partial_assistant(self, handle: SubAgentHandle) -> None:
+        handle.partial_text = ""
+        handle.partial_reasoning = ""
+        handle.partial_updated_at = None
+
+    def _append_partial_assistant_delta(
+        self,
+        handle: SubAgentHandle,
+        summary: dict[str, Any],
+    ) -> None:
+        delta = summary.get("delta")
+        if not isinstance(delta, str) or delta == "":
+            return
+        delta_type = summary.get("delta_type")
+        if delta_type == "reasoning":
+            handle.partial_reasoning += delta
+        elif delta_type == "text":
+            handle.partial_text += delta
+        else:
+            return
+        handle.partial_updated_at = time.time()
+
+    def _partial_assistant_message(
+        self,
+        handle: SubAgentHandle,
+    ) -> dict[str, Any] | None:
+        content: list[ContentPart] = []
+        if handle.partial_reasoning:
+            content.append({
+                "type": "reasoning",
+                "reasoning": handle.partial_reasoning,
+            })
+        if handle.partial_text:
+            content.append({
+                "type": "text",
+                "text": handle.partial_text,
+            })
+        if not content:
+            return None
+        return {
+            "role": "assistant",
+            "content": content,
+            "metadata": {
+                "subagent_id": handle.id,
+                "subagent_partial": True,
+                "updated_at": handle.partial_updated_at,
+            },
+        }
 
     async def _enforce_runtime_limit(
         self,

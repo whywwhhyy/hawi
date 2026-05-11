@@ -80,6 +80,39 @@ class SlowEchoModel(EchoModel):
             yield part
 
 
+class DelayedStreamingModel(EchoModel):
+    def __init__(self, delay: float = 0.2) -> None:
+        super().__init__()
+        self.delay = delay
+
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncIterator[DeltaPart]:
+        text = "streaming: " + self._last_user_text(request)
+        midpoint = max(1, len(text) // 2)
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": text[:midpoint],
+            "is_start": True,
+            "is_end": False,
+        }
+        await asyncio.sleep(self.delay)
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": text[midpoint:],
+            "is_start": False,
+            "is_end": True,
+        }
+        yield {
+            "type": "finish",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+
 @pytest.mark.asyncio
 async def test_spawn_fork_and_fresh_context_modes() -> None:
     agent = HawiAgent(model=EchoModel())
@@ -205,6 +238,56 @@ async def test_send_subagent_message_and_read_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subagent_status_tracks_latest_completed_result() -> None:
+    agent = HawiAgent(model=EchoModel())
+    handle = await agent.subagents.spawn(mode="fresh", initial_prompt="first task")
+
+    try:
+        await agent.subagents.wait(handle.id, timeout=2)
+        assert "first task" in (agent.subagents.status(handle.id).last_result_text or "")
+
+        agent.subagents.send(handle.id, "second task")
+        await agent.subagents.wait(handle.id, timeout=2)
+
+        status = agent.subagents.status(handle.id)
+        assert status.last_result_text is not None
+        assert "second task" in status.last_result_text
+        assert "first task" not in status.last_result_text
+    finally:
+        await agent.subagents.close(handle.id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_subagent_read_exposes_streaming_delta_and_partial_context() -> None:
+    agent = HawiAgent(model=DelayedStreamingModel(delay=0.2))
+    handle = await agent.subagents.spawn(mode="fresh", initial_prompt="live task")
+
+    try:
+        partial = await wait_for_partial_context(agent, handle.id)
+        assert partial is not None
+        assert partial["metadata"]["subagent_partial"] is True
+        content = partial["content"]
+        assert isinstance(content, list)
+        assert any(
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and "streaming:" in str(part.get("text"))
+            for part in content
+        )
+
+        events = agent.subagents.read(handle.id, view="events", limit=20)
+        assert any(
+            event.get("type") == "model.content_block_delta"
+            and "streaming:" in str(event.get("delta", ""))
+            for event in events["events"]
+        )
+
+        await agent.subagents.wait(handle.id, timeout=2)
+    finally:
+        await agent.subagents.close(handle.id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
 async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
     agent = HawiAgent(model=EchoModel(), plugins=[SubAgentPlugin()])
     definitions = agent.plugins.get_tool_definitions()
@@ -244,6 +327,26 @@ async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
         assert read.output["status"]["id"] == subagent_id  # type: ignore[index]
     finally:
         await agent.subagents.close(subagent_id, reason="test_cleanup")
+
+
+async def wait_for_partial_context(
+    agent: HawiAgent,
+    subagent_id: str,
+    *,
+    timeout: float = 1,
+) -> dict[str, Any] | None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        data = agent.subagents.read(subagent_id, view="context_tail", limit=5)
+        for message in data["messages"]:
+            if (
+                isinstance(message, dict)
+                and isinstance(message.get("metadata"), dict)
+                and message["metadata"].get("subagent_partial") is True
+            ):
+                return message
+        await asyncio.sleep(0.01)
+    return None
 
 
 @pytest.mark.asyncio

@@ -239,8 +239,10 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
 
 - `status`：只返回状态和队列长度。
 - `summary`：返回状态、最近结果摘要、错误。
-- `events`：返回最近 N 条 mapped events。
-- `context_tail`：返回最近 N 条子 agent 消息，默认不开放或需要显式权限。
+- `events`：返回最近 N 条 mapped events；`model.content_block_delta` 会包含 `delta`，可用于观察子 agent 的实时输出碎片。
+- `context_tail`：返回最近 N 条子 agent 消息；运行中的 model response 会追加一条带 `metadata.subagent_partial=true` 的临时 assistant 消息，完成后由真实 context message 取代。
+
+`status.last_result_text` 表示最近一次已完成 run 的结果文本；如果子 agent 正在运行，调用方可同时查看 `context_tail` 的 partial assistant message。
 
 ## 事件与审计
 

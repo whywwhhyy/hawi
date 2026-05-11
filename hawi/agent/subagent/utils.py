@@ -83,12 +83,19 @@ def event_summary(event: Event) -> dict[str, Any]:
     }
     for key in (
         "run_id",
+        "request_id",
         "tool_call_id",
         "tool_name",
         "message_id",
         "queue_type",
         "stop_reason",
         "reason",
+        "block_index",
+        "block_type",
+        "delta_type",
+        "delta",
+        "arguments_delta",
+        "is_streaming",
     ):
         if key in data:
             summary[key] = data[key]
