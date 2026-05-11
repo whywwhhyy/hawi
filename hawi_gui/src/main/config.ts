@@ -49,6 +49,18 @@ export function resolveWorkspaceRoot(): string {
   return path.resolve(raw);
 }
 
+export function buildEngineRunArgs(repoRoot: string, engineArgs: string[]): string[] {
+  return ["run", "--project", repoRoot, "python", "-m", "hawi_engine", ...engineArgs];
+}
+
+export function buildEngineEnv(repoRoot: string, baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const currentPythonPath = baseEnv.PYTHONPATH?.trim();
+  return {
+    ...baseEnv,
+    PYTHONPATH: currentPythonPath ? `${repoRoot}${path.delimiter}${currentPythonPath}` : repoRoot
+  };
+}
+
 export function parseArgValue(name: string): string | null {
   const inlinePrefix = `${name}=`;
   const inlineValue = process.argv.find((arg) => arg.startsWith(inlinePrefix));
@@ -63,10 +75,10 @@ export function parseArgValue(name: string): string | null {
 }
 
 export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCommand: string): InspectPayload {
-  const result = spawnSync(uvCommand, ["run", "--project", repoRoot, "hawi-engine", "--inspect", "--no-user-models"], {
+  const result = spawnSync(uvCommand, buildEngineRunArgs(repoRoot, ["--inspect"]), {
     cwd: workspaceRoot,
     encoding: "utf-8",
-    env: process.env
+    env: buildEngineEnv(repoRoot)
   });
   if (result.error) {
     throw new Error(`Failed to launch ${uvCommand}: ${result.error.message}`);

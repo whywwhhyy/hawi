@@ -80,6 +80,10 @@ export function renderPriorityStatusText(
   return `优先 ${highPriorityCount} · 普通 ${normalQueueCount(queueLengths, queueMessages)}`;
 }
 
+export function shouldInitializeSessionState(metadata: GuiMetadata | null): boolean {
+  return Boolean(metadata?.coreRunning);
+}
+
 function hasHighPriorityWork(
   queueLengths: Record<QueueKind, number>,
   queueMessages?: Record<QueueKind, QueueMessageState[]>
@@ -112,6 +116,7 @@ export default function App() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const configRef = useRef<PersistedConfig | null>(null);
   const pendingSystemPromptConfigRef = useRef<PersistedConfig | null>(null);
+  const initializeSessionStateRef = useRef<() => Promise<void>>(async () => undefined);
   const applyingSystemPromptRef = useRef(false);
   const followTailRef = useRef(true);
   const selectingChatRef = useRef(false);
@@ -120,6 +125,7 @@ export default function App() {
   const autoScrollFrameRef = useRef<number | null>(null);
   const inputComposingRef = useRef(false);
   const inputCompositionEndTimerRef = useRef<number | null>(null);
+  const coreRunning = shouldInitializeSessionState(metadata);
 
   useEffect(() => {
     window.hawi.getMetadata().then((meta) => {
@@ -145,9 +151,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!metadata) return;
-    void initializeSessionState();
-  }, [metadata]);
+    if (!coreRunning) return;
+    void initializeSessionStateRef.current();
+  }, [coreRunning]);
 
   useEffect(() => {
     configRef.current = config;
@@ -265,6 +271,10 @@ export default function App() {
   }
 
   async function sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame | null> {
+    if (!coreRunning) {
+      setModelDialogOpen(true);
+      return null;
+    }
     try {
       return await window.hawi.sendCommand(type, payload);
     } catch (error) {
@@ -279,6 +289,8 @@ export default function App() {
     const historyFrame = await sendCommand("session_history", {});
     applySessionHistoryFromFrame(historyFrame);
   }
+
+  initializeSessionStateRef.current = initializeSessionState;
 
   async function refreshSessions() {
     const frame = await sendCommand("session_list", {});
@@ -386,6 +398,7 @@ export default function App() {
   async function saveAndSet(nextConfig: PersistedConfig) {
     const saved = await window.hawi.saveConfig(nextConfig);
     setConfig(saved);
+    setMetadata((current) => current ? { ...current, config: saved } : current);
     return saved;
   }
 
@@ -393,6 +406,7 @@ export default function App() {
     const saved = await saveAndSet(nextConfig);
     try {
       await window.hawi.restartCore(saved);
+      setMetadata((current) => current ? { ...current, config: saved, coreRunning: true } : current);
     } catch (error) {
       dispatch(errorFrame(error));
     }
@@ -478,8 +492,12 @@ export default function App() {
     setModelDialogOpen(false);
     setConfig(nextConfig);
     try {
-      await window.hawi.sendCommand("switch_model", { model_name: modelName });
-      await saveAndSet(nextConfig);
+      if (metadata.coreRunning) {
+        await window.hawi.sendCommand("switch_model", { model_name: modelName });
+        await saveAndSet(nextConfig);
+      } else {
+        await restartWith(nextConfig);
+      }
     } catch {
       await restartWith(nextConfig);
     }

@@ -1059,18 +1059,16 @@ def load_model_configs(
 ) -> list[Path]:
     """Load model configs in core-cli order and return paths that existed."""
     loaded: list[Path] = []
-    candidates = []
-    if include_user:
-        candidates.append(Path.home() / ".hawi" / "models.yaml")
-    else:
-        # ModelRegistry has its own lazy auto-loader for ~/.hawi and cwd configs.
-        # GUI/workspace-only callers need that suppressed before the first
-        # load_config/list_models call, otherwise user models leak back in.
-        model_registry._auto_load_needed = False  # type: ignore[attr-defined]
-    candidates.extend([
+    # ModelRegistry has its own lazy auto-loader for ~/.hawi and cwd configs.
+    # The engine owns this chain explicitly so GUI and CLI metadata see the
+    # same deterministic order.
+    model_registry._auto_load_needed = False  # type: ignore[attr-defined]
+    candidates = [
         Path.cwd() / ".hawi" / "models.yaml",
         Path.cwd() / "models.yaml",
-    ])
+    ]
+    if include_user:
+        candidates.append(Path.home() / ".hawi" / "models.yaml")
     candidates.extend(Path(path) for path in (extra_paths or []))
 
     for path in candidates:

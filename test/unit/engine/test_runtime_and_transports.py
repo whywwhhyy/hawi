@@ -15,6 +15,7 @@ from hawi_engine.runtime import CoreRuntime, load_model_configs, parse_extra_too
 from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
 from hawi.agent import HawiAgent, HawiScheduler
+from hawi.models import model_registry
 from hawi.session import SessionManager
 from hawi.tool import AgentTool, ToolResult
 
@@ -600,6 +601,37 @@ def test_load_model_configs_can_skip_user_config(tmp_path, monkeypatch: pytest.M
 
     assert loaded == [workspace_config, root_config]
     assert loaded_paths == [str(workspace_config), str(root_config)]
+
+
+def test_load_model_configs_chains_workspace_then_user_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    extra_config = tmp_path / "extra.yaml"
+    home_config = home / ".hawi" / "models.yaml"
+    workspace_config = workspace / ".hawi" / "models.yaml"
+    root_config = workspace / "models.yaml"
+    for path in (home_config, workspace_config, root_config, extra_config):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("providers: {}\n", encoding="utf-8")
+
+    loaded_paths: list[str] = []
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(
+        "hawi_engine.runtime.model_registry._auto_load_needed",
+        True,
+    )
+    monkeypatch.setattr(
+        "hawi_engine.runtime.model_registry.load_config",
+        lambda path, quiet=True: loaded_paths.append(str(path)),
+    )
+
+    loaded = load_model_configs(extra_paths=[str(extra_config)])
+
+    assert loaded == [workspace_config, root_config, home_config, extra_config]
+    assert loaded_paths == [str(path) for path in loaded]
+    assert not model_registry._auto_load_needed
 
 
 @pytest.mark.asyncio

@@ -1,13 +1,35 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import App, { formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
+import type { GuiMetadata } from "../shared/protocol";
+import { VERSION } from "../shared/protocol";
+import App, { formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
     expect(renderToString(createElement(App))).toContain("Loading Hawi metadata");
   });
 });
+
+function makeMetadata(coreRunning: boolean): GuiMetadata {
+  return {
+    inspect: {
+      version: VERSION,
+      models: [],
+      plugin_catalog: [],
+      default_system_prompt: "你是Hawi，一个通用agent"
+    },
+    config: {
+      version: 1,
+      modelName: "",
+      systemPrompt: "你是Hawi，一个通用agent",
+      selectedPlugins: [],
+      pluginConfigs: {},
+      showDebug: true
+    },
+    coreRunning
+  };
+}
 
 describe("thinkingExcerpt", () => {
   it("does not add an ellipsis when the summary is the full content", () => {
@@ -48,6 +70,14 @@ describe("renderPriorityStatusText", () => {
         normal: [{ id: "steer-plain", queue: "normal", contentPreview: "plain" }]
       }
     )).toBe("优先 0 · 普通 1");
+  });
+});
+
+describe("shouldInitializeSessionState", () => {
+  it("waits until the core process is running", () => {
+    expect(shouldInitializeSessionState(null)).toBe(false);
+    expect(shouldInitializeSessionState(makeMetadata(false))).toBe(false);
+    expect(shouldInitializeSessionState(makeMetadata(true))).toBe(true);
   });
 });
 

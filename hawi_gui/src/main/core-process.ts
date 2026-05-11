@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CoreCommand, CoreCommandType, CoreFrame, InspectPayload, PersistedConfig } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
+import { buildEngineEnv, buildEngineRunArgs } from "./config";
 import { TLVDecoder, TYPE_JSON_FRAME, encodeJsonFrame } from "./tlv";
 
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 800;
@@ -39,14 +40,9 @@ export class CoreProcess {
     const pluginConfigPath = path.join(tmpdir(), `hawi-gui-plugins-${process.pid}.json`);
     writeFileSync(pluginConfigPath, JSON.stringify(nextConfig.pluginConfigs, null, 2), "utf-8");
 
-    const args = [
-      "run",
-      "--project",
-      this.repoRoot,
-      "hawi-engine",
+    const args = buildEngineRunArgs(this.repoRoot, [
       "--model",
       nextConfig.modelName,
-      "--no-user-models",
       "--transport",
       "stdio",
       "--system-prompt",
@@ -61,11 +57,11 @@ export class CoreProcess {
       "用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。",
       "--log-file",
       this.backendLogPath
-    ];
+    ]);
     const child = spawn(this.uvCommand, args, {
       cwd: this.workspaceRoot,
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env
+      env: buildEngineEnv(this.repoRoot)
     });
     this.child = child;
     this.decoder = new TLVDecoder();
