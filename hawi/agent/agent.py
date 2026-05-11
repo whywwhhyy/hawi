@@ -7,17 +7,12 @@ tool execution, and plugin hooks for agent workflows.
 from __future__ import annotations
 
 import asyncio
-import inspect
-import json
 import os
 import threading
 import time
 import uuid
-from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional, Coroutine, Literal, Mapping, Callable, cast
+from typing import Any, Optional, Literal, Callable
 
 
 from hawi.models import (
@@ -27,7 +22,6 @@ from hawi.models import (
     DeltaPart,
     TokenUsage,
     ToolCallPart,
-    ToolDefinition,
     model_registry,
 )
 from hawi.models.message import Message, MessageResponse
@@ -42,9 +36,6 @@ from hawi.plugin.hook_context import HookContext, HookResult
 from hawi.tool.types import AgentTool, ToolResult
 
 from hawi.errors import (
-    AgentErrorType,
-    ModelErrorType,
-    HawiError,
     AgentError,
     ModelError,
     ContextLengthError,
@@ -59,7 +50,6 @@ from hawi.events import (
     AgentMessageAddedEvent,
     AgentRunStartEvent,
     AgentRunStopEvent,
-    AgentToolResultEvent,
     ModelErrorEvent,
     ModelRetryEvent,
     ModelStreamStartEvent,
@@ -71,112 +61,33 @@ from .context import (
     AgentContext,
     ContextCompactionRecord,
     ContextUsageSnapshot,
-    CONTEXT_COMPACTION_PROMPT,
-    CONTEXT_COMPACTION_SUMMARY_PREFIX,
     ToolCallContext,
 )
+from .compaction import AgentCompactor
+from .eventing import AgentEvents
+from .config import (
+    AutoCompactConfig,
+    ModelErrorNotifyPolicy,
+    ModelErrorPolicy,
+    ModelErrorPolicyConfig,
+    ModelErrorRetryPolicy,
+    ModelErrorStopPolicy,
+    default_model_error_policy,
+)
+from .hook_dispatcher import HookDispatcher
 from .result import AgentRunResult, ToolCallRecord
+from .runtime import AgentRuntime
+from .state import (
+    MaterializedSteerMessage,
+    PendingInput,
+    SteerPartMergeMode,
+    _ExecutionState,
+    _RecentToolResult,
+)
 from .stream_accumulator import StreamBlockAccumulator
 from .tool_executor import PreparedToolArguments, ToolExecutor
 
 
-
-
-@dataclass
-class ModelErrorPolicy:
-    """模型失败处理策略"""
-    action: Literal[
-        'retry',
-        'notify_agent',
-        'stop',
-    ]
-
-class ModelErrorRetryPolicy(ModelErrorPolicy):
-    def __init__(self, retry_count:int):
-        super().__init__('retry')
-        self.retry_count:int = retry_count
-
-class ModelErrorNotifyPolicy(ModelErrorPolicy):
-    def __init__(self):
-        super().__init__('notify_agent')
-
-class ModelErrorStopPolicy(ModelErrorPolicy):
-    def __init__(self):
-        super().__init__('stop')
-
-ModelErrorPolicyConfig = Mapping[ModelErrorType, ModelErrorPolicy]
-
-
-@dataclass
-class AutoCompactConfig:
-    """Configuration for automatic context compaction."""
-
-    enabled: bool = True
-    max_context_tokens: int = 128_000
-    trigger_tokens: int | None = None
-    trigger_ratio: float = 0.8
-    keep_last_messages: int = 8
-    min_messages: int = 12
-    summary_max_output_tokens: int = 2048
-    max_transcript_chars: int = 120_000
-    prompt: str = CONTEXT_COMPACTION_PROMPT
-    summary_prefix: str = CONTEXT_COMPACTION_SUMMARY_PREFIX
-
-    def token_limit(self) -> int:
-        """Return the estimated-token threshold that triggers compaction."""
-        if self.trigger_tokens is not None:
-            return self.trigger_tokens
-        return max(1, int(self.max_context_tokens * self.trigger_ratio))
-
-
-@dataclass
-class _ExecutionState:
-    """Internal execution state during agent run."""
-
-    iteration: int = 0
-    tool_calls: list[ToolCallRecord] = field(default_factory=list)
-    error: HawiError | str | None = None
-    should_stop: bool = False
-    run_id: str = ""
-
-
-@dataclass
-class _RecentToolResult:
-    """A tool result that has not yet been accepted by a model call."""
-
-    tool_call_id: str
-    tool_name: str
-    content: str
-    is_error: bool
-    truncate_attempts: int = 0
-
-
-class SteerPartMergeMode(str, Enum):
-    """Preferred steer lowering strategy for the related model."""
-
-    APPEND_TO_TOOL_RESULT = "append_to_tool_result"
-    USER_MESSAGE_TEMPLATE = "user_message_template"
-    TOOL_RESULT_ASSISTANT_TEMPLATE_AND_USER_MESSAGE = (
-        "tool_result_assistant_template_and_user_message"
-    )
-
-@dataclass
-class PendingInput:
-    """Queued user input awaiting materialization into context messages."""
-
-    id: str
-    content: list[ContentPart]
-    candidate_tool_call_ids: tuple[str, ...]
-    created_at: float
-    preferred_merge_mode: SteerPartMergeMode | None = None
-
-
-@dataclass
-class MaterializedSteerMessage:
-    """A pending steer input that has been appended to context."""
-
-    content: list[ContentPart]
-    metadata: dict[str, Any]
 
 
 class HawiAgent:
@@ -270,6 +181,10 @@ class HawiAgent:
             plugin_factories=plugin_factories,
         )
         self._plugin_manager.bind_event_bus(self._event_bus)
+        self._events = AgentEvents(self)
+        self._hooks = HookDispatcher(self, self)
+        self._compactor = AgentCompactor(self)
+        self._runtime = AgentRuntime(self)
 
         # Convert system_prompt to list[ContentPart] if needed
         system_prompt_parts: list[ContentPart] | None = None
@@ -319,10 +234,7 @@ class HawiAgent:
 
     @classmethod
     def _default_model_error_policy(cls) -> ModelErrorPolicyConfig:
-        return defaultdict(ModelErrorStopPolicy, {
-            'network': ModelErrorRetryPolicy(retry_count=10),
-            'throttle': ModelErrorRetryPolicy(retry_count=3),
-        })
+        return default_model_error_policy()
 
     @property
     def plugins(self) -> PluginManager:
@@ -531,52 +443,19 @@ class HawiAgent:
         return None
 
     def interrupt(self, reason: str = "user") -> list[str]:
-        """Interrupt current agent execution.
-
-        Signals the agent to stop after the current operation completes.
-        This is a cooperative cancellation mechanism - the agent will check
-        the interrupt flag at safe points and stop gracefully.
-
-        Args:
-            reason: Reason for interruption (e.g., "user", "scheduler", "timeout")
-
-        Returns:
-            List of tool_call_ids that were currently executing when interrupted
-        """
-        self.on_interrupt(reason)
-        self._cancel_event.set()
-        self._last_interrupt_reason = reason
-        interrupted_ids = [tc.get("id", "") for tc in self._current_tool_calls]
-        self._interrupted_tool_call_ids.extend(interrupted_ids)
-        return interrupted_ids
+        return self._runtime.interrupt(reason)
 
     def on_interrupt(self, reason: str = "user") -> None:
-        """Interrupt hook (no-op by default).
-
-        Subclasses or integrations can override this to react to interrupt
-        requests without changing the default cooperative cancel behavior.
-        """
-        return None
+        return self._runtime.on_interrupt(reason)
 
     def clear_interrupt_state(self) -> None:
-        """Clear interrupt state for a fresh execution.
-
-        Should be called before starting a new agent run.
-        """
-        self._cancel_event.clear()
-        self._interrupted_tool_call_ids.clear()
-        self._current_tool_calls.clear()
+        self._runtime.clear_interrupt_state()
 
     def _check_interrupt(self) -> bool:
-        """Check if an interrupt has been requested.
-
-        Returns:
-            True if interrupted, False otherwise
-        """
-        return self._cancel_event.is_set()
+        return self._runtime.check_interrupt()
 
     def _interrupt_tool_result_content(self, reason: str) -> str:
-        return f"Tool call interrupted before completion (reason: {reason})."
+        return self._runtime.interrupt_tool_result_content(reason)
 
     async def _recover_unanswered_tool_calls(
         self,
@@ -586,119 +465,28 @@ class HawiAgent:
         reason: str,
         emit_events: bool,
     ) -> None:
-        content = self._interrupt_tool_result_content(reason)
-        recovered = self._context.add_missing_tool_results(content)
-        self._last_interrupt_reason = None
-        if not emit_events or not run_id:
-            return
-        for item in recovered:
-            await self._emit_event(
-                AgentToolResultEvent.create(
-                    run_id=run_id,
-                    tool_call_id=item.tool_call_id,
-                    success=False,
-                    result_preview=content,
-                    duration_ms=0.0,
-                    result_obj=ToolResult(success=False, error=content),
-                ),
-                event_bus,
-            )
+        await self._runtime.recover_unanswered_tool_calls(
+            run_id=run_id,
+            event_bus=event_bus,
+            reason=reason,
+            emit_events=emit_events,
+        )
 
     @property
     def has_active_tool_calls(self) -> bool:
-        """Whether the agent is currently waiting on one or more tool calls."""
-        return len(self._current_tool_calls) > 0
+        return self._runtime.has_active_tool_calls
 
     def snapshot_runtime(self) -> dict[str, Any]:
-        """Capture in-flight run state for SessionManager persistence.
-
-        ``active_run_id`` and ``iteration`` are populated only while a run is
-        executing; otherwise they're ``None`` / ``0``. Tool-call objects are
-        stored verbatim — they are TypedDicts so they survive ``json.dumps``.
-        """
-        state = self._active_execution_state
-        return {
-            "version": 1,
-            "active_run_id": state.run_id if state else None,
-            "iteration": state.iteration if state else 0,
-            "current_tool_calls": list(self._current_tool_calls),
-            "interrupted_tool_call_ids": list(self._interrupted_tool_call_ids),
-            "last_unsent_tool_results": [
-                {
-                    "tool_call_id": r.tool_call_id,
-                    "tool_name": r.tool_name,
-                    "content": r.content,
-                    "is_error": r.is_error,
-                    "truncate_attempts": r.truncate_attempts,
-                }
-                for r in self._last_unsent_tool_results
-            ],
-            "last_interrupt_reason": self._last_interrupt_reason,
-        }
+        return self._runtime.snapshot_runtime()
 
     def load_runtime(self, data: dict[str, Any]) -> None:
-        """Restore in-flight runtime state from :py:meth:`snapshot_runtime`.
-
-        Does NOT resume the run loop. Callers (typically SessionManager) feed
-        ``current_tool_calls`` into :py:meth:`_recover_unanswered_tool_calls`
-        to materialize synthetic error tool results before the next run starts.
-        """
-        version = data.get("version", 1)
-        if version != 1:
-            raise ValueError(f"Unsupported runtime snapshot version: {version}")
-        self._current_tool_calls = list(data.get("current_tool_calls", []))
-        self._interrupted_tool_call_ids = list(
-            data.get("interrupted_tool_call_ids", [])
-        )
-        self._last_unsent_tool_results = [
-            _RecentToolResult(
-                tool_call_id=entry["tool_call_id"],
-                tool_name=entry["tool_name"],
-                content=entry.get("content", ""),
-                is_error=entry.get("is_error", False),
-                truncate_attempts=entry.get("truncate_attempts", 0),
-            )
-            for entry in data.get("last_unsent_tool_results", [])
-        ]
-        self._last_interrupt_reason = data.get("last_interrupt_reason")
+        self._runtime.load_runtime(data)
 
     def snapshot_steer(self) -> list[dict[str, Any]]:
-        """Capture pending steer inputs (under the steer lock)."""
-        with self._steer_lock:
-            return [
-                {
-                    "id": p.id,
-                    "content": p.content,
-                    "candidate_tool_call_ids": list(p.candidate_tool_call_ids),
-                    "created_at": p.created_at,
-                    "preferred_merge_mode": (
-                        p.preferred_merge_mode.value
-                        if p.preferred_merge_mode is not None
-                        else None
-                    ),
-                }
-                for p in self._pending_inputs
-            ]
+        return self._runtime.snapshot_steer()
 
     def load_steer(self, data: list[dict[str, Any]]) -> None:
-        """Restore pending steer inputs from :py:meth:`snapshot_steer`."""
-        with self._steer_lock:
-            self._pending_inputs = [
-                PendingInput(
-                    id=entry["id"],
-                    content=entry.get("content", []),
-                    candidate_tool_call_ids=tuple(
-                        entry.get("candidate_tool_call_ids", [])
-                    ),
-                    created_at=entry.get("created_at", time.time()),
-                    preferred_merge_mode=(
-                        SteerPartMergeMode(entry["preferred_merge_mode"])
-                        if entry.get("preferred_merge_mode")
-                        else None
-                    ),
-                )
-                for entry in data
-            ]
+        self._runtime.load_steer(data)
 
     def steer(
         self,
@@ -706,530 +494,43 @@ class HawiAgent:
         *,
         merge_mode: SteerPartMergeMode | None = None,
     ) -> str:
-        """Queue steer content for later materialization.
-
-        Args:
-            content: Steering message content.
-            merge_mode: Preferred lowering strategy when this input is consumed
-                during a tool-result path.
-
-        Returns:
-            A steer identifier for tracing/debugging.
-        """
-        steer_content = self._normalize_content_parts(content)
-        steer_id = str(uuid.uuid4())[:8]
-        should_start_new_loop = False
-        with self._steer_lock:
-            candidate_tool_call_ids = tuple(
-                tc.get("id", "")
-                for tc in self._current_tool_calls
-                if tc.get("id")
-            )
-            self._pending_inputs.append(
-                PendingInput(
-                    id=steer_id,
-                    content=steer_content,
-                    candidate_tool_call_ids=candidate_tool_call_ids,
-                    created_at=time.time(),
-                    preferred_merge_mode=merge_mode,
-                )
-            )
-            if self.has_active_tool_calls:
-                return steer_id
-            with self._session_lock:
-                should_start_new_loop = not self._session_active
-
-        if should_start_new_loop:
-            self._ensure_pending_turn_loop()
-        return steer_id
+        return self._runtime.steer(content, merge_mode=merge_mode)
 
     def get_pending_input_messages(self) -> list[dict[str, Any]]:
-        """Return read-only previews of pending steer inputs for observability."""
-        with self._steer_lock:
-            pending_inputs = list(self._pending_inputs)
-        return [
-            {
-                "id": pending.id,
-                "queue": "high_prio",
-                "content_preview": self._truncate_preview(
-                    self._serialize_content_parts(pending.content),
-                    240,
-                ),
-                "created_at": pending.created_at,
-                "metadata": {
-                    "candidate_tool_call_ids": list(pending.candidate_tool_call_ids),
-                    "merge_mode": (
-                        pending.preferred_merge_mode.value
-                        if pending.preferred_merge_mode is not None
-                        else None
-                    ),
-                },
-            }
-            for pending in pending_inputs
-        ]
+        return self._runtime.get_pending_input_messages()
 
     def has_pending_inputs(self) -> bool:
-        """Return whether queued steer inputs still need materialization."""
-        with self._steer_lock:
-            return bool(self._pending_inputs)
+        return self._runtime.has_pending_inputs()
 
-    def _normalize_content_parts(
-        self,
-        content: str | list[ContentPart],
-    ) -> list[ContentPart]:
-        """Normalize content input into a list of ContentPart."""
-        if isinstance(content, str):
-            return [{"type": "text", "text": content}]
-        return list(content)
-
-    @staticmethod
-    def _truncate_preview(text: str, max_length: int) -> str:
-        if len(text) <= max_length:
-            return text
-        return text[: max_length - 3] + "..."
-
-    def _serialize_content_parts(self, content: list[ContentPart]) -> str:
-        """Serialize content parts into readable plain text."""
-        chunks: list[str] = []
-        for part in content:
-            part_type = part.get("type")
-            if part_type == "text":
-                chunks.append(part.get("text", ""))
-            elif part_type == "reasoning":
-                chunks.append(part.get("reasoning") or "")
-            elif part_type == "steer":
-                nested_content = part.get("content", [])
-                if isinstance(nested_content, list):
-                    nested_text = self._serialize_content_parts(
-                        cast(list[ContentPart], nested_content)
-                    )
-                else:
-                    nested_text = str(nested_content)
-                if nested_text:
-                    chunks.append(nested_text)
-            elif part_type == "tool_result":
-                nested_content = part.get("content", [])
-                if isinstance(nested_content, str):
-                    chunks.append(nested_content)
-                elif isinstance(nested_content, list):
-                    nested_text = self._serialize_content_parts(
-                        cast(list[ContentPart], nested_content)
-                    )
-                    if nested_text:
-                        chunks.append(nested_text)
-                else:
-                    chunks.append(str(nested_content))
-            else:
-                chunks.append(str(part))
-        return "\n".join(chunk for chunk in chunks if chunk.strip())
-
-    @staticmethod
-    def _tool_result_content(result: ToolResult) -> str:
-        """Render a ToolResult exactly as it is written into model context."""
-        output_str = (
-            result.output
-            if isinstance(result.output, str)
-            else str(result.output)
-            if result.output
-            else ""
-        )
-        if not result.success and result.error:
-            result_content = f"Error: {result.error}"
-            if output_str:
-                result_content = f"Output before error:\n{output_str}\n\n{result_content}"
-            return result_content
-        return output_str
+    _normalize_content_parts = staticmethod(AgentRuntime.normalize_content_parts)
+    _truncate_preview = staticmethod(AgentRuntime.truncate_preview)
+    _serialize_content_parts = staticmethod(AgentRuntime.serialize_content_parts)
+    _tool_result_content = staticmethod(AgentRuntime.tool_result_content)
+    _truncate_tool_result_for_retry = staticmethod(
+        AgentRuntime.truncate_tool_result_for_retry
+    )
+    _context_retry_tool_result_target_chars = staticmethod(
+        AgentRuntime.context_retry_tool_result_target_chars
+    )
+    _context_retry_needed_reduction_chars = staticmethod(
+        AgentRuntime.context_retry_needed_reduction_chars
+    )
 
     def _recent_tool_result_from_record(
         self,
         record: ToolCallRecord,
     ) -> _RecentToolResult:
-        return _RecentToolResult(
-            tool_call_id=record.tool_call_id,
-            tool_name=record.tool_name,
-            content=self._tool_result_content(record.result),
-            is_error=not record.result.success,
-        )
+        return self._runtime.recent_tool_result_from_record(record)
 
-    def _mark_tool_results_unsent(
-        self,
-        records: list[ToolCallRecord],
-    ) -> None:
-        """Remember tool results that still need a successful model round-trip."""
-        self._last_unsent_tool_results = [
-            self._recent_tool_result_from_record(record)
-            for record in records
-        ]
+    def _mark_tool_results_unsent(self, records: list[ToolCallRecord]) -> None:
+        self._runtime.mark_tool_results_unsent(records)
 
     async def _truncate_last_unsent_tool_results_for_context_retry(
         self,
         error: ContextLengthError,
     ) -> bool:
-        """Shrink the longest latest tool results before retrying a model call."""
-        if not self._last_unsent_tool_results:
-            return False
-
-        candidates = sorted(
-            (
-                item
-                for item in self._last_unsent_tool_results
-                if len(item.content) > 1
-            ),
-            key=lambda item: len(item.content),
-            reverse=True,
-        )
-        if not candidates:
-            return False
-
-        needed_reduction = self._context_retry_needed_reduction_chars(error)
-        selected: list[_RecentToolResult] = []
-        planned_reduction = 0
-        for item in candidates:
-            selected.append(item)
-            target_chars = self._context_retry_tool_result_target_chars(
-                len(item.content),
-                error,
-                attempt=item.truncate_attempts,
-            )
-            planned_reduction += max(1, len(item.content) - target_chars)
-            if needed_reduction is None or planned_reduction >= needed_reduction:
-                break
-
-        changed = False
-        for item in selected:
-            truncated = self._truncate_tool_result_for_retry(
-                item.content,
-                error,
-                attempt=item.truncate_attempts,
-            )
-            if truncated == item.content:
-                continue
-            if not self._context.replace_tool_result_content(
-                item.tool_call_id,
-                truncated,
-                is_error=item.is_error,
-            ):
-                continue
-            item.content = truncated
-            item.truncate_attempts += 1
-            changed = True
-        return changed
-
-    def _truncate_tool_result_for_retry(
-        self,
-        content: str,
-        error: ContextLengthError,
-        *,
-        attempt: int,
-    ) -> str:
-        if len(content) <= 1:
-            return content
-
-        target_chars = self._context_retry_tool_result_target_chars(
-            len(content),
-            error,
-            attempt=attempt,
-        )
-        if target_chars >= len(content):
-            target_chars = max(1, len(content) // 2)
-
-        omitted_chars = max(0, len(content) - target_chars)
-        token_detail = ""
-        if error.requested_tokens is not None and error.max_context_tokens is not None:
-            token_detail = (
-                f" requested_tokens={error.requested_tokens}, "
-                f"max_context_tokens={error.max_context_tokens},"
-            )
-        marker = (
-            "\n\n[Hawi truncated this tool result after a model context-length "
-            f"error;{token_detail} omitted_chars={omitted_chars}.]\n\n"
-        )
-        budget = max(0, target_chars - len(marker))
-        if budget <= 0:
-            return marker.strip()
-
-        head_chars = max(1, int(budget * 0.75))
-        tail_chars = max(0, budget - head_chars)
-        head = content[:head_chars].rstrip()
-        if tail_chars <= 0:
-            return head + marker.rstrip()
-        tail = content[-tail_chars:].lstrip()
-        return head + marker + tail
-
-    @staticmethod
-    def _context_retry_tool_result_target_chars(
-        content_chars: int,
-        error: ContextLengthError,
-        *,
-        attempt: int,
-    ) -> int:
-        ratio: float | None = None
-        if (
-            error.max_context_tokens is not None
-            and error.requested_tokens is not None
-            and error.max_context_tokens > 0
-            and error.requested_tokens > error.max_context_tokens
-        ):
-            ratio = error.max_context_tokens / error.requested_tokens
-
-        if ratio is not None:
-            target = int(content_chars * ratio * 0.8)
-        else:
-            target = content_chars // 2
-
-        if attempt > 0:
-            target = target // (2 ** attempt)
-
-        min_chars = min(2_000, max(1, content_chars // 2))
-        return max(min_chars, min(target, content_chars - 1))
-
-    @staticmethod
-    def _context_retry_needed_reduction_chars(
-        error: ContextLengthError,
-    ) -> int | None:
-        if (
-            error.max_context_tokens is None
-            or error.requested_tokens is None
-            or error.max_context_tokens <= 0
-            or error.requested_tokens <= error.max_context_tokens
-        ):
-            return None
-        overflow_tokens = error.requested_tokens - error.max_context_tokens
-        return max(1, int(overflow_tokens * 4 * 1.2))
-
-    def compact(
-        self,
-        *,
-        model: Model | None = None,
-        prompt: str | None = None,
-        keep_last_messages: int | None = None,
-    ) -> ContextCompactionRecord | None:
-        """Synchronously compact the current conversation context."""
-        return asyncio.run(
-            self.acompact(
-                model=model,
-                prompt=prompt,
-                keep_last_messages=keep_last_messages,
-            )
-        )
-
-    async def acompact(
-        self,
-        *,
-        model: Model | None = None,
-        prompt: str | None = None,
-        keep_last_messages: int | None = None,
-        config: AutoCompactConfig | None = None,
-    ) -> ContextCompactionRecord | None:
-        """Compact older context into a model-generated handoff summary."""
-        cfg = config or self._auto_compact
-        keep_last = (
-            keep_last_messages
-            if keep_last_messages is not None
-            else cfg.keep_last_messages
-        )
-        if self._context.compaction_tail_start(keep_last) <= 0:
-            return None
-
-        summary = await self._generate_compaction_summary(
-            model or self._default_model,
-            prompt=prompt or cfg.prompt,
-            max_output_tokens=cfg.summary_max_output_tokens,
-            max_transcript_chars=cfg.max_transcript_chars,
-        )
-        return self._context.compact_with_summary(
-            summary,
-            keep_last=keep_last,
-            summary_prefix=cfg.summary_prefix,
-        )
-
-    async def _maybe_auto_compact(
-        self,
-        model: Model,
-        state: _ExecutionState,
-    ) -> bool:
-        """Run automatic compaction if the configured threshold is crossed."""
-        cfg = self._auto_compact
-        if not cfg.enabled:
-            return False
-        if self.has_active_tool_calls:
-            return False
-        if len(self._context.messages) < cfg.min_messages:
-            return False
-        if self._context.estimate_tokens() < cfg.token_limit():
-            return False
-
-        record = await self.acompact(model=model, config=cfg)
-        if record is not None:
-            state.iteration = max(state.iteration, 0)
-        return record is not None
-
-    async def _generate_compaction_summary(
-        self,
-        model: Model,
-        *,
-        prompt: str,
-        max_output_tokens: int,
-        max_transcript_chars: int,
-    ) -> str:
-        """Ask the model to summarize the current context for compaction."""
-        transcript = self._build_compaction_transcript(
-            self._context.messages,
-            max_chars=max_transcript_chars,
-        )
-        summary_request: Message = {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "Summarize the following Hawi conversation transcript "
-                        "for continuation after context compaction.\n\n"
-                        f"{transcript}"
-                    ),
-                }
-            ],
-            "name": None,
-            "metadata": None,
-        }
-        system_prompt: list[ContentPart] = [{"type": "text", "text": prompt}]
-
-        try:
-            summary = await self._collect_model_text(
-                model,
-                messages=[summary_request],
-                system=system_prompt,
-                max_output_tokens=max_output_tokens,
-                streaming=False,
-            )
-        except NotImplementedError:
-            summary = await self._collect_model_text(
-                model,
-                messages=[summary_request],
-                system=system_prompt,
-                max_output_tokens=max_output_tokens,
-                streaming=True,
-            )
-
-        summary = summary.strip()
-        if summary:
-            return summary
-        return self._fallback_compaction_summary(self._context.messages)
-
-    async def _collect_model_text(
-        self,
-        model: Model,
-        *,
-        messages: list[Message],
-        system: list[ContentPart],
-        max_output_tokens: int,
-        streaming: bool,
-    ) -> str:
-        """Collect text deltas from one direct model call."""
-        chunks: list[str] = []
-        async for delta in model.ainvoke(
-            messages=messages,
-            streaming=streaming,
-            system=system,
-            tools=None,
-            max_output_tokens=max_output_tokens,
-        ):
-            if isinstance(delta, Event):
-                continue
-            if delta.get("type") == "text_delta":
-                chunks.append(str(delta.get("delta", "")))
-        return "".join(chunks)
-
-    def _build_compaction_transcript(
-        self,
-        messages: list[Message],
-        *,
-        max_chars: int,
-    ) -> str:
-        """Render Hawi messages into compact plain text for summarization."""
-        rendered: list[str] = ["<conversation>"]
-        for index, message in enumerate(messages, 1):
-            rendered.append(f"\n## Message {index}: {message['role']}")
-            metadata = message.get("metadata") or {}
-            source = metadata.get("source")
-            if source:
-                rendered.append(f"source: {source}")
-            rendered.append(self._render_message_content_for_compaction(message))
-        rendered.append("\n</conversation>")
-
-        text = "\n".join(part for part in rendered if part)
-        if max_chars <= 0 or len(text) <= max_chars:
-            return text
-        head_chars = max(0, max_chars // 4)
-        tail_chars = max(0, max_chars - head_chars)
-        return (
-            text[:head_chars]
-            + "\n\n...[transcript truncated for compaction prompt budget]...\n\n"
-            + text[-tail_chars:]
-        )
-
-    def _render_message_content_for_compaction(self, message: Message) -> str:
-        """Render one message's content in a summary-friendly format."""
-        lines: list[str] = []
-        for part in message.get("content", []):
-            if not isinstance(part, dict):
-                lines.append(str(part))
-                continue
-            part_type = part.get("type")
-            if part_type == "tool_call":
-                lines.append(
-                    "tool_call "
-                    f"{part.get('name', 'unknown')}({part.get('id', '')}): "
-                    f"{json.dumps(part.get('arguments', {}), ensure_ascii=False)}"
-                )
-            elif part_type == "tool_result":
-                nested = part.get("content", "")
-                if isinstance(nested, list):
-                    nested_text = self._serialize_content_parts(
-                        cast(list[ContentPart], nested)
-                    )
-                else:
-                    nested_text = str(nested)
-                lines.append(
-                    "tool_result "
-                    f"{part.get('tool_call_id', '')}"
-                    f"{' error' if part.get('is_error') else ''}: "
-                    f"{nested_text}"
-                )
-            elif part_type == "steer":
-                nested = part.get("content", [])
-                if isinstance(nested, list):
-                    steer_text = self._serialize_content_parts(
-                        cast(list[ContentPart], nested)
-                    )
-                else:
-                    steer_text = str(nested)
-                lines.append(
-                    "steer: "
-                    + steer_text
-                )
-            else:
-                lines.append(self._serialize_content_parts([cast(ContentPart, part)]))
-        return "\n".join(line for line in lines if line.strip())
-
-    def _fallback_compaction_summary(self, messages: list[Message]) -> str:
-        """Build a deterministic fallback if the summarizer returns no text."""
-        recent_user_messages: list[str] = []
-        for message in reversed(messages):
-            if message["role"] != "user":
-                continue
-            text = self._serialize_content_parts(list(message.get("content", [])))
-            if text:
-                recent_user_messages.append(text)
-            if len(recent_user_messages) >= 3:
-                break
-        recent_user_messages.reverse()
-        recent = "\n".join(f"- {text}" for text in recent_user_messages)
-        return (
-            "The previous conversation was compacted automatically, but the "
-            "summary model returned no text. Continue from the recent preserved "
-            "messages. Recent user requests:\n"
-            f"{recent or '- No user request text available.'}"
+        return await self._runtime.truncate_last_unsent_tool_results_for_context_retry(
+            error
         )
 
     async def _drain_pending_inputs_to_context(
@@ -1237,60 +538,16 @@ class HawiAgent:
         run_id: str,
         event_bus: EventBus | None,
     ) -> bool:
-        """Move queued pending inputs into the conversation as plain user messages."""
-        with self._steer_lock:
-            pending_inputs = self._pending_inputs[:]
-            self._pending_inputs.clear()
-
-        if not pending_inputs:
-            return False
-
-        for pending in pending_inputs:
-            metadata = {
-                "message_id": pending.id,
-                "queue": "normal",
-                "display_message_type": "normal",
-                "source_queue": "high_prio",
-                "materialized_as": "plain_user_message",
-            }
-            self._context.add_user_message(pending.content, metadata=metadata)
-            await self._emit_event(
-                AgentMessageAddedEvent.create(
-                    run_id=run_id,
-                    role="user",
-                    content=pending.content,
-                    metadata=metadata,
-                ),
-                event_bus,
-            )
-        return True
+        return await self._runtime.drain_pending_inputs_to_context(run_id, event_bus)
 
     def _clear_autonomous_run_task(self, task: asyncio.Task[AgentRunResult]) -> None:
-        """Drop the autonomous run task reference after completion."""
-        with self._session_lock:
-            if self._autonomous_run_task is task:
-                self._autonomous_run_task = None
+        self._runtime.clear_autonomous_run_task(task)
 
     async def _run_pending_turns(self) -> AgentRunResult:
-        """Execute queued turns using the agent's current configuration."""
-        return await self._arun_internal(message=None)
+        return await self._runtime.run_pending_turns()
 
     def _ensure_pending_turn_loop(self) -> None:
-        """Start a new loop to process queued pending turns when idle."""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(self._run_pending_turns())
-            return
-
-        with self._session_lock:
-            if self._session_active:
-                return
-            if self._autonomous_run_task is not None and not self._autonomous_run_task.done():
-                return
-            task = loop.create_task(self._run_pending_turns())
-            task.add_done_callback(self._clear_autonomous_run_task)
-            self._autonomous_run_task = task
+        self._runtime.ensure_pending_turn_loop()
 
     def _add_tool_result_with_pending_steer(
         self,
@@ -1302,24 +559,14 @@ class HawiAgent:
         cache_point: CachePoint | dict[str, Any] | bool | None = None,
         cache_point_source: str | None = None,
     ) -> list[MaterializedSteerMessage]:
-        """Add a tool result and materialize one matching pending input as steer.
-
-        Note: callers in async contexts should also fire
-        ``AgentMessageAddedEvent`` for role=tool so the SessionManager
-        persists the tool message. See ``_emit_tool_result_message_event``.
-        """
-        tool_result_content = self._normalize_content_parts(content)
-        self._context.add_tool_result(
-            tool_call_id=tool_call_id,
-            content=tool_result_content,
+        return self._runtime.add_tool_result_with_pending_steer(
+            tool_call_id,
+            content,
             is_error=is_error,
+            materialize_pending_steer=materialize_pending_steer,
             cache_point=cache_point,
             cache_point_source=cache_point_source,
         )
-
-        if materialize_pending_steer:
-            return self._materialize_pending_steer_for_tool_results([tool_call_id])
-        return []
 
     async def _emit_tool_result_message_event(
         self,
@@ -1330,98 +577,29 @@ class HawiAgent:
         is_error: bool,
         event_bus: EventBus | None,
     ) -> None:
-        """Emit AgentMessageAddedEvent for a tool result so it persists in
-        message_history.jsonl. cache_point markers are transport hints and
-        are intentionally excluded from the displayed/persisted content."""
-        normalized = self._normalize_content_parts(content)
-        await self._emit_event(
-            AgentMessageAddedEvent.create(
-                run_id=run_id,
-                role="tool",
-                content=[
-                    {
-                        "type": "tool_result",
-                        "tool_call_id": tool_call_id,
-                        "content": normalized,
-                        "is_error": is_error,
-                    }
-                ],
-            ),
-            event_bus,
+        await self._runtime.emit_tool_result_message_event(
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            content=content,
+            is_error=is_error,
+            event_bus=event_bus,
         )
 
     def _materialize_pending_steer_for_tool_results(
         self,
         tool_call_ids: list[str],
     ) -> list[MaterializedSteerMessage]:
-        """Append pending steer messages after a completed tool-result batch."""
-        if not tool_call_ids:
-            return []
+        return self._runtime.materialize_pending_steer_for_tool_results(tool_call_ids)
 
-        tool_call_id_set = set(tool_call_ids)
-        fallback_tool_call_id = tool_call_ids[0]
-        materialized: list[tuple[PendingInput, str]] = []
-        with self._steer_lock:
-            remaining: list[PendingInput] = []
-            for item in self._pending_inputs:
-                matched_tool_call_id = next(
-                    (
-                        candidate
-                        for candidate in item.candidate_tool_call_ids
-                        if candidate in tool_call_id_set
-                    ),
-                    None,
-                )
-                if matched_tool_call_id is None and not item.candidate_tool_call_ids:
-                    # High-priority input can arrive while the model call is
-                    # still streaming, before tool_call_ids are known. If this
-                    # turn later produces tool results, steer it into the next
-                    # request via the first completed tool result.
-                    matched_tool_call_id = fallback_tool_call_id
-                if matched_tool_call_id is None:
-                    remaining.append(item)
-                    continue
-                materialized.append((item, matched_tool_call_id))
-            self._pending_inputs = remaining
-
-        materialized_messages: list[MaterializedSteerMessage] = []
-        for pending_input, matched_tool_call_id in materialized:
-            steer_part: ContentPart = {
-                "type": "steer",
-                "content": list(pending_input.content),
-                "tool_call_id": matched_tool_call_id,
-                "preferred_merge_mode": (
-                    pending_input.preferred_merge_mode.value
-                    if pending_input.preferred_merge_mode is not None
-                    else None
-                ),
-            }
-            content = [steer_part]
-            metadata = self._steer_message_metadata(pending_input, matched_tool_call_id)
-            self._context.add_user_message(content, metadata=metadata)
-            materialized_messages.append(
-                MaterializedSteerMessage(content=content, metadata=metadata)
-            )
-        return materialized_messages
-
-    @staticmethod
     def _steer_message_metadata(
+        self,
         pending_input: PendingInput,
         matched_tool_call_id: str,
     ) -> dict[str, Any]:
-        return {
-            "message_id": pending_input.id,
-            "queue": "high_prio",
-            "display_message_type": "steer",
-            "source_queue": "high_prio",
-            "materialized_as": "steer",
-            "tool_call_id": matched_tool_call_id,
-            "merge_mode": (
-                pending_input.preferred_merge_mode.value
-                if pending_input.preferred_merge_mode is not None
-                else None
-            ),
-        }
+        return self._runtime.steer_message_metadata(
+            pending_input,
+            matched_tool_call_id,
+        )
 
     async def _emit_materialized_steer_events(
         self,
@@ -1429,66 +607,173 @@ class HawiAgent:
         materialized_messages: list[MaterializedSteerMessage],
         event_bus: EventBus | None,
     ) -> None:
-        for message in materialized_messages:
-            await self._emit_event(
-                AgentMessageAddedEvent.create(
-                    run_id=run_id,
-                    role="user",
-                    content=message.content,
-                    metadata=message.metadata,
-                ),
-                event_bus,
-            )
+        await self._runtime.emit_materialized_steer_events(
+            run_id,
+            materialized_messages,
+            event_bus,
+        )
 
-    async def _invoke_session_hook(self, hook_type: str, ctx: HookContext) -> HookResult | None:
-        """Invoke before/after_session and before/after_conversation hooks: (agent, ctx)."""
-        for hook in self._plugin_manager.get_hooks(hook_type):
-            result = hook(self, ctx)
-            if inspect.isawaitable(result):
-                result = await result
-            if result is not None:
-                return result
-        return None
+    def compact(
+        self,
+        *,
+        model: Model | None = None,
+        prompt: str | None = None,
+        keep_last_messages: int | None = None,
+    ) -> ContextCompactionRecord | None:
+        """Synchronously compact the current conversation context."""
+        return self._compactor.compact(
+            model=model,
+            prompt=prompt,
+            keep_last_messages=keep_last_messages,
+        )
 
-    async def _invoke_before_model_call(self, model: Model, ctx: HookContext) -> HookResult | None:
-        """Invoke before_model_call hook: (agent, model, ctx)."""
-        for hook in self._plugin_manager.get_hooks("before_model_call"):
-            result = hook(self, model, ctx)
-            if inspect.isawaitable(result):
-                result = await result
-            if result is not None:
-                return result
-        return None
+    async def acompact(
+        self,
+        *,
+        model: Model | None = None,
+        prompt: str | None = None,
+        keep_last_messages: int | None = None,
+        config: AutoCompactConfig | None = None,
+    ) -> ContextCompactionRecord | None:
+        """Compact older context into a model-generated handoff summary."""
+        return await self._compactor.acompact(
+            model=model,
+            prompt=prompt,
+            keep_last_messages=keep_last_messages,
+            config=config,
+        )
 
-    async def _invoke_after_model_call(self, response: "MessageResponse", ctx: HookContext) -> HookResult | None:
-        """Invoke after_model_call hook: (agent, response, ctx)."""
-        for hook in self._plugin_manager.get_hooks("after_model_call"):
-            result = hook(self, response, ctx)
-            if inspect.isawaitable(result):
-                result = await result
-            if result is not None:
-                return result
-        return None
+    async def _maybe_auto_compact(
+        self,
+        model: Model,
+        state: _ExecutionState,
+    ) -> bool:
+        return await self._compactor._maybe_auto_compact(model, state)
 
-    async def _invoke_before_tool_calling(self, tool_name: str, arguments: dict, ctx: HookContext) -> HookResult | None:
-        """Invoke before_tool_calling hook: (agent, tool_name, arguments, ctx)."""
-        for hook in self._plugin_manager.get_hooks("before_tool_calling"):
-            result = hook(self, tool_name, arguments, ctx)
-            if inspect.isawaitable(result):
-                result = await result
-            if result is not None:
-                return result
-        return None
+    async def _generate_compaction_summary(
+        self,
+        model: Model,
+        *,
+        prompt: str,
+        max_output_tokens: int,
+        max_transcript_chars: int,
+    ) -> str:
+        return await self._compactor._generate_compaction_summary(
+            model,
+            prompt=prompt,
+            max_output_tokens=max_output_tokens,
+            max_transcript_chars=max_transcript_chars,
+        )
 
-    async def _invoke_after_tool_calling(self, tool_name: str, arguments: dict, tool_result: ToolResult, ctx: HookContext) -> HookResult | None:
-        """Invoke after_tool_calling hook: (agent, tool_name, arguments, result, ctx)."""
-        for hook in self._plugin_manager.get_hooks("after_tool_calling"):
-            result = hook(self, tool_name, arguments, tool_result, ctx)
-            if inspect.isawaitable(result):
-                result = await result
-            if result is not None:
-                return result
-        return None
+    async def _collect_model_text(
+        self,
+        model: Model,
+        *,
+        messages: list[Message],
+        system: list[ContentPart],
+        max_output_tokens: int,
+        streaming: bool,
+    ) -> str:
+        return await self._compactor._collect_model_text(
+            model,
+            messages=messages,
+            system=system,
+            max_output_tokens=max_output_tokens,
+            streaming=streaming,
+        )
+
+    def _build_compaction_transcript(
+        self,
+        messages: list[Message],
+        *,
+        max_chars: int,
+    ) -> str:
+        return self._compactor._build_compaction_transcript(messages, max_chars=max_chars)
+
+    def _render_message_content_for_compaction(self, message: Message) -> str:
+        return self._compactor._render_message_content_for_compaction(message)
+
+    def _fallback_compaction_summary(self, messages: list[Message]) -> str:
+        return self._compactor._fallback_compaction_summary(messages)
+
+    @property
+    def event_bus(self) -> EventBus:
+        """Get the agent's EventBus for event subscriptions."""
+        return self._events.event_bus
+
+    def subscribe(
+        self,
+        callback: EventHandler,
+        event_types: list[str] | None = None,
+        maxsize: int = 100,
+    ) -> None:
+        """Subscribe to agent events."""
+        self._events.subscribe(callback, event_types, maxsize)
+
+    def subscribe_blocking(
+        self,
+        callback: SyncEventHandler,
+        event_types: list[str] | None = None,
+    ) -> None:
+        """Subscribe to agent events with a blocking sync handler."""
+        self._events.subscribe_blocking(callback, event_types)
+
+    def unsubscribe(
+        self,
+        callback: Callable[[Event], None],
+    ) -> bool:
+        """Unsubscribe from agent events."""
+        return self._events.unsubscribe(callback)
+
+    async def _emit_event(
+        self,
+        event: Event,
+        event_bus: EventBus | None,
+    ) -> Event:
+        return await self._events.emit(event, event_bus)
+
+    async def _invoke_session_hook(
+        self,
+        hook_type: str,
+        ctx: HookContext,
+    ) -> HookResult | None:
+        return await self._hooks.invoke_session(hook_type, ctx)
+
+    async def _invoke_before_model_call(
+        self,
+        model: Model,
+        ctx: HookContext,
+    ) -> HookResult | None:
+        return await self._hooks.invoke_before_model_call(model, ctx)
+
+    async def _invoke_after_model_call(
+        self,
+        response: MessageResponse,
+        ctx: HookContext,
+    ) -> HookResult | None:
+        return await self._hooks.invoke_after_model_call(response, ctx)
+
+    async def _invoke_before_tool_calling(
+        self,
+        tool_name: str,
+        arguments: dict,
+        ctx: HookContext,
+    ) -> HookResult | None:
+        return await self._hooks.invoke_before_tool_calling(tool_name, arguments, ctx)
+
+    async def _invoke_after_tool_calling(
+        self,
+        tool_name: str,
+        arguments: dict,
+        tool_result: ToolResult,
+        ctx: HookContext,
+    ) -> HookResult | None:
+        return await self._hooks.invoke_after_tool_calling(
+            tool_name,
+            arguments,
+            tool_result,
+            ctx,
+        )
 
     def run(
         self,
@@ -1548,84 +833,6 @@ class HawiAgent:
         finally:
             with self._session_lock:
                 self._session_active = False
-
-    @property
-    def event_bus(self) -> EventBus:
-        """Get the agent's EventBus for event subscriptions."""
-        return self._event_bus
-
-    def subscribe(
-        self,
-        callback: EventHandler,
-        event_types: list[str] | None = None,
-        maxsize: int = 100,
-    ) -> None:
-        """Subscribe to agent events (non-blocking, supports sync/async handlers).
-
-        Args:
-            callback: Callback function to handle events (sync or async)
-            event_types: List of event types to subscribe to, None for all
-            maxsize: Queue size for the handler
-        """
-        self._event_bus.subscribe(callback, event_types, maxsize)
-
-    def subscribe_blocking(
-        self,
-        callback: SyncEventHandler,
-        event_types: list[str] | None = None,
-    ) -> None:
-        """Subscribe to agent events (blocking, sync handler only).
-
-        The handler executes synchronously in the publisher's thread.
-
-        Args:
-            callback: Sync callback function to handle events
-            event_types: List of event types to subscribe to, None for all
-
-        Raises:
-            ValueError: If callback is an async function
-        """
-        self._event_bus.subscribe_blocking(callback, event_types)
-
-    def unsubscribe(
-        self,
-        callback: Callable[[Event], None],
-    ) -> bool:
-        """Unsubscribe from agent events (delegates to EventBus).
-
-        Args:
-            callback: Callback function to remove
-            wait: Whether to wait for queued events to be processed
-            timeout: Timeout for waiting (seconds)
-
-        Returns:
-            True if successfully unsubscribed
-        """
-        return self._event_bus.unsubscribe(callback)
-
-    async def _emit_event(
-        self,
-        event: Event,
-        event_bus: EventBus | None,
-    ) -> Event:
-        """Emit event to event bus(es).
-        
-        Always publishes to self._event_bus to ensure events reach
-        subscribers registered via agent.subscribe(). Additionally publishes
-        to the provided event_bus if different from self._event_bus.
-        """
-        # Always publish to self._event_bus
-        await self._event_bus.publish_async(event)
-        
-        # Also publish to external event_bus if provided and different
-        if event_bus is not None and event_bus is not self._event_bus:
-            await event_bus.publish_async(event)
-
-        # Dump event to file if configured
-        if self._dump_manager is not None:
-            self._dump_manager.dump(event)
-
-        return event
 
     def _create_tool_executor(self) -> ToolExecutor:
         """Build a tool executor bound to the agent's current runtime state."""

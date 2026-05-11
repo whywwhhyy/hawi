@@ -153,6 +153,34 @@ context = AgentContext(
 )
 ```
 
+#### Agent Execution (`hawi/agent/`)
+
+`HawiAgent` keeps the public API and the main model/tool loop in `agent.py`,
+while operational concerns live in explicit components instead of mixins:
+
+- **`AgentRuntime`** (`runtime.py`): interrupt state, steer inputs, runtime snapshots, and context-length retry helpers.
+- **`AgentCompactor`** (`compaction.py`): explicit and automatic context compaction.
+- **`AgentEvents`** (`eventing.py`): event subscription and fan-out to the agent bus / override bus.
+- **`HookDispatcher`** (`hook_dispatcher.py`): plugin hook invocation while preserving the owning agent as the first hook argument.
+- **`ToolExecutor`** (`tool_executor.py`): tool argument preparation, runtime injection, audits, and execution.
+
+`HawiAgent` exposes compatibility facade methods such as `_emit_event()`,
+`_invoke_*()`, `snapshot_runtime()`, and `steer()`, so tests and integrations can
+keep using the established entry points while the implementation remains
+componentized.
+
+#### SubAgents (`hawi/agent/subagent/`)
+
+Core sub-agent orchestration lives in a package:
+
+- **`manager.py`**: `SubAgentManager` lifecycle, scheduler wiring, event forwarding.
+- **`types.py`**: `SubAgentSpec`, `SubAgentHandle`, `SubAgentStatus`, limits, plugin policy.
+- **`prompts.py`**: built-in role system prompts.
+- **`utils.py`**: fork-context cleanup and event/content preview helpers.
+
+`from hawi.agent.subagent import SubAgentManager, SubAgentSpec` remains the
+public import style.
+
 #### Scheduler (`hawi/agent/scheduler/`)
 
 Message queue management and agent orchestration.
@@ -166,9 +194,19 @@ Message queue management and agent orchestration.
 ```
 hawi/
 ├── agent/              # Execution layer
-│   ├── agent.py        # HawiAgent main class
+│   ├── agent.py        # HawiAgent public API + main model/tool loop
+│   ├── runtime.py      # interrupt, steer, runtime snapshots
+│   ├── compaction.py   # explicit/automatic context compaction
+│   ├── eventing.py     # EventBus facade and event fan-out
+│   ├── hook_dispatcher.py # plugin hook invocation
+│   ├── tool_executor.py # tool preparation, audit, execution
+│   ├── config.py       # model error policy, auto-compact config
+│   ├── state.py        # execution/steer runtime dataclasses
+│   ├── content_utils.py # content rendering helpers
+│   ├── context_retry.py # context-length retry truncation helpers
 │   ├── context.py      # AgentContext, ToolCallContext
 │   ├── result.py       # AgentRunResult, ToolCallRecord
+│   ├── subagent/       # SubAgentManager, specs, status, role prompts
 │   ├── scheduler/      # HawiScheduler, AgentExecutor, queues
 │   ├── printers/       # Output printers (plain, rich)
 │   └── stream_accumulator.py

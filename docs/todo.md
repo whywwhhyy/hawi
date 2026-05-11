@@ -2,6 +2,7 @@
     - [x] 插队消息队列：scheduler 已有 `urgent` / `high_prio`
     - [x] 用户消息队列：scheduler 已有 `normal`
     - [x] scheduler 已有 `run_forever()` 单循环消费队列
+    - [x] 工具执行逻辑已抽出 `ToolExecutor`，agent loop 不再直接承载工具调用细节
     - [ ] 工具调用请求队列：将 tool call request 显式队列化，而不是只在 agent loop 内顺序执行
     - [ ] agent 内部执行循环与 scheduler 队列模型进一步统一
     - [ ] 明确 urgent / high_prio / normal 在 tool 执行中、model streaming 中、空闲时的完整语义
@@ -14,6 +15,17 @@
     - [ ] `Message` 类型增加 `tags` / `labels`
     - [ ] `AgentContext` 提供按 id / tag 查询、折叠、删除、替换的 API
     - [ ] 明确哪些 metadata 会进入模型上下文，哪些仅用于运行时/GUI/插件
+
+- [ ] 大文件拆分与模块边界收敛
+    - [x] `hawi/agent/subagent.py` 已拆成 `hawi/agent/subagent/` package：`manager.py`、`types.py`、`prompts.py`、`utils.py`，并保留 `from hawi.agent.subagent import ...` 导入兼容
+    - [x] `hawi/agent/agent.py` 第一轮拆分：配置/状态、content helper、context retry 已拆出独立模块；compaction、runtime/steer/interrupt、hook dispatch、event bus plumbing 改为显式 component，不依赖 mixin 继承
+    - [ ] `hawi/agent/agent.py` 后续拆分：继续拆出 model turn/retry、stream event plumbing、tool execution compatibility wrapper，让主 agent loop 只保留决策骨架
+    - [ ] `hawi_gui/src/renderer/App.tsx`：拆成 session header、timeline、composer、plugin config、artifacts/subagent panels 等组件
+    - [ ] `hawi_gui/src/renderer/state.ts`：按 session、runtime status、plugin catalog、subagent/runtime events、artifacts 拆分 state slice 与 action
+    - [ ] `hawi/agent/context.py`：拆出 token accounting、snapshot/restore、message rendering、compaction/recovery helpers
+    - [ ] `hawi_engine/runtime.py`：拆出 command handlers、session commands、plugin catalog/loading、scheduler lifecycle、subagent protocol
+    - [ ] `hawi_plugins/workflow_plugin/plugin.py`：拆出 workflow state、工具定义、gate review、持久化和 subagent reviewer adapter
+    - [ ] 后续评估 provider/model adapter 与大型 plugin：`hawi/models/*/_model.py`、`hawi/models/model.py`、`hawi_plugins/python_interpreter`、`filesystem_plugin`、`mcp_plugin`
 
 - [x] 还需要提供持久化机制，确保 agent 可以做到不管什么时候 crash 再拉起来都可以恢复 session
     - [x] `AgentContext.save/load` 已支持 JSON 保存/恢复 messages、system prompt、cache 配置、compaction records
@@ -31,6 +43,7 @@
     - [x] GUI Renderer 增加 Session 区：消息数、当前 session id、列表弹框、切换、新建、删除非当前 session
     - [x] 空 session 懒写盘：启动/New/切换空会话不会物化目录
     - [x] SessionManager 异步写盘 + ExitHandler 优先级保证最后 flush（`EXIT_PRIORITY_SESSION_FLUSH`）
+    - [x] scheduler replace 后会重新绑定 `SessionManager` / `EventBus`，避免切换插件后 session 操作使用已关闭 EventBus
 
 - [ ] subagent 顶层 API：作为 multi-agent workflow 与插件编排的基础原语
     - [x] 完成初版设计文档：`docs/subagents.md`
@@ -42,6 +55,7 @@
     - [x] 支持设计：创建时配置插件、system prompt、工作目录、初始 plan/prompt、角色、预算、ownership、结果协议、metadata
     - [x] 支持设计：后台 scheduler 运行引擎、状态查询、对话指导、生命周期管理
     - [x] 新增 core types：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、`SubAgentManager`
+    - [x] `SubAgentManager` 已从单文件拆到 `hawi.agent.subagent.manager`，spec/status/handle 等类型在 `types.py`，角色 prompt 与上下文清理 helper 独立成模块
     - [x] `HawiAgent` 持有 `subagents` manager，并提供兼容代理方法
     - [x] 实现 `fork` / `fresh` 创建路径、后台 `HawiScheduler` task、send/status/wait/interrupt/close
     - [x] 实现角色默认 system prompt：general、planner、reviewer、explorer、implementer、critic、summarizer
@@ -50,6 +64,7 @@
     - [x] 实现最小事件转发：child events 以 `plugin.event` 关联 `subagent_id`
     - [x] 新增 `SubAgentPlugin`，暴露 4 个 agent tools
     - [x] engine/GUI 插件目录注册 `SubAgentPlugin`，GUI 插件弹窗可选择 subagent 工具
+    - [x] fork 时裁掉父 agent 尾部未闭合 tool-call turn，避免 child 继承 provider-invalid context
     - [ ] 明确产品语义：subagent 默认服务一次性任务，但底层按可持续多轮 child session/thread 设计
     - [ ] 引入 `SubAgentSession` 概念：parent session 下的 child session tree，独立 context、scheduler、event log、权限集、manifest
     - [ ] 引入 `SubAgentTurn` 模型：每次 `send` 生成 `turn_id`，追踪 QUEUED/RUNNING/COMPLETED/FAILED/INTERRUPTED/CANCELLED
@@ -213,7 +228,8 @@
     - [ ] 小模型任务分级：读大文件、网页解析、git 历史、summary、状态文案等交给 cheap model
     - [x] `CLAUDE.md` / `AGENTS.md` 风格的 project steering 文件自动加载与作用域规则（EnvironPromptPlugin）
     - [ ] 系统提示词结构化：XML tags、Markdown 分区、good/bad examples、流程化算法
-    - [ ] Task/sub-agent 工具：允许主 agent 派生一个 clone 处理子问题，并限制递归深度；优先服务“多模型计划收敛”工作流
+    - [x] Task/sub-agent 工具：允许主 agent 派生 fork/fresh child agent 处理子问题
+    - [ ] subagent 递归深度 enforcement 与“多模型计划收敛”工作流继续落地
     - [ ] 为高频工具补充更详细 prompt、示例和失败处理策略
     - [ ] 工具使用策略文档化：什么时候用专用工具，什么时候回退 shell
     - [ ] 可控性规则：语气、主动性、危险操作、URL、文件编辑等统一写进 runtime prompt

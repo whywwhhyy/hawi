@@ -24,7 +24,19 @@ SubAgent 是 Hawi 的 core 级编排原语：主 agent、插件和工作流都�
 
 ## 核心对象
 
-建议新增 `hawi/agent/subagent.py`，由 `HawiAgent` 暴露 `agent.subagents`。
+当前实现位于 `hawi/agent/subagent/` package，并由 `HawiAgent` 暴露
+`agent.subagents`。公开导入仍保持简洁：
+
+```python
+from hawi.agent.subagent import SubAgentManager, SubAgentSpec
+```
+
+模块划分：
+
+- `manager.py`：`SubAgentManager` 生命周期、scheduler wiring、事件转发。
+- `types.py`：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、limits、plugin policy。
+- `prompts.py`：内置角色 system prompt。
+- `utils.py`：fork context 清理、event/content preview helper。
 
 ```python
 handle = await agent.subagents.spawn(
@@ -293,13 +305,13 @@ agent.close_subagent(handle.id)
 
 ## 实施顺序
 
-1. Core types：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、`SubAgentManager`。
-2. `HawiAgent` 持有 `subagents` manager，并提供兼容代理方法。
-3. 实现 `fork` / `fresh` 创建路径、后台 scheduler task、send/status/wait/interrupt/close。
-4. 增加最小事件转发和审计 payload。
-5. 新增 `SubAgentPlugin`，暴露 4 个 agent tools。
-6. 将 `WorkflowPlugin` 的 `SubAgentReviewer` 改为复用 core API。
-7. 增加 snapshot skeleton，再接入完整持久化和 GUI 展示。
+1. [x] Core types：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、`SubAgentManager`。
+2. [x] `HawiAgent` 持有 `subagents` manager，并提供兼容代理方法。
+3. [x] 实现 `fork` / `fresh` 创建路径、后台 scheduler task、send/status/wait/interrupt/close。
+4. [x] 增加最小事件转发 payload。
+5. [x] 新增 `SubAgentPlugin`，暴露 4 个 agent tools。
+6. [ ] 将 `WorkflowPlugin` 的 `SubAgentReviewer` 改为复用 core API。
+7. [ ] 增加 snapshot skeleton，再接入完整持久化和 GUI 展示。
 
 ## 暂不做
 

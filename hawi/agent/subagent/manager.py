@@ -1,9 +1,4 @@
-"""Sub-agent lifecycle management for HawiAgent.
-
-This module keeps sub-agents as a core runtime concept. Agent tools and
-plugins can wrap this API, but the lifecycle itself lives under
-``HawiAgent.subagents``.
-"""
+"""Sub-agent lifecycle manager."""
 
 from __future__ import annotations
 
@@ -13,207 +8,33 @@ import json
 import time
 import uuid
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
-from enum import Enum
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from hawi.events import Event, EventBus, PluginEvent
-from hawi.models import ContentPart, Model
-from hawi.plugin import HawiPlugin
+from hawi.models import ContentPart
 
-from .context import ToolCallContext
-from .result import AgentRunResult
+from ..context import ToolCallContext
+from ..result import AgentRunResult
+from .prompts import ROLE_SYSTEM_PROMPTS
+from .types import (
+    SubAgentError,
+    SubAgentHandle,
+    SubAgentLifecycleState,
+    SubAgentLimits,
+    SubAgentPluginPolicy,
+    SubAgentQueue,
+    SubAgentSpec,
+    SubAgentStatus,
+)
+from .utils import (
+    drop_trailing_unanswered_tool_call_turn,
+    event_summary,
+    normalize_system_prompt,
+)
 
 if TYPE_CHECKING:
-    from .agent import HawiAgent
-    from .scheduler import HawiScheduler
-
-
-SubAgentMode = Literal["fork", "fresh"]
-SubAgentRole = Literal[
-    "general",
-    "planner",
-    "reviewer",
-    "explorer",
-    "implementer",
-    "critic",
-    "summarizer",
-]
-SubAgentQueue = Literal["normal", "high_prio", "urgent"]
-SubAgentResultContract = Literal[
-    "text",
-    "json",
-    "plan",
-    "review",
-    "diff",
-    "artifact",
-]
-
-
-class SubAgentLifecycleState(str, Enum):
-    """Lifecycle state for a managed sub-agent."""
-
-    CREATED = "CREATED"
-    IDLE = "IDLE"
-    RUNNING = "RUNNING"
-    INTERRUPTING = "INTERRUPTING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-    CLOSED = "CLOSED"
-
-
-@dataclass
-class SubAgentLimits:
-    """Safety limits for a sub-agent.
-
-    Only ``max_runtime_seconds`` and ``max_children`` are enforced in the first
-    implementation. The rest are explicit API placeholders for the next
-    scheduler/tool-call budget pass.
-    """
-
-    max_runtime_seconds: float | None = None
-    max_tool_calls: int | None = None
-    max_iterations: int | None = None
-    max_recursion_depth: int = 1
-    max_children: int | None = None
-
-
-@dataclass
-class SubAgentPluginPolicy:
-    """Plugin inheritance and extension policy for child agents."""
-
-    inherit: bool = True
-    extra_plugins: list[HawiPlugin] = field(default_factory=list)
-    extra_factories: list[Callable[[], HawiPlugin]] = field(default_factory=list)
-    allowlist: list[str] | None = None
-    denylist: list[str] | None = None
-    tool_allowlist: list[str] | None = None
-    tool_denylist: list[str] | None = None
-
-
-@dataclass
-class SubAgentSpec:
-    """Configuration for creating a sub-agent."""
-
-    mode: SubAgentMode = "fork"
-    name: str | None = None
-    role: SubAgentRole | str = "general"
-    model: Model | str | None = None
-    system_prompt: str | list[ContentPart] | None = None
-    plugin_policy: SubAgentPluginPolicy = field(default_factory=SubAgentPluginPolicy)
-    working_dir: str | None = None
-    initial_prompt: str | list[ContentPart] | None = None
-    initial_plan: str | dict[str, Any] | list[Any] | None = None
-    limits: SubAgentLimits = field(default_factory=SubAgentLimits)
-    result_contract: SubAgentResultContract | str = "text"
-    ownership: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    description: str | None = None
-
-
-@dataclass
-class SubAgentStatus:
-    """Serializable status snapshot for a sub-agent."""
-
-    id: str
-    name: str
-    role: str
-    state: str
-    scheduler_state: str
-    executor_state: str
-    queue_lengths: dict[str, int]
-    created_at: float
-    updated_at: float
-    closed_at: float | None = None
-    model_id: str | None = None
-    working_dir: str | None = None
-    last_result_text: str | None = None
-    last_error: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-safe status dict."""
-        return {
-            "id": self.id,
-            "name": self.name,
-            "role": self.role,
-            "state": self.state,
-            "scheduler_state": self.scheduler_state,
-            "executor_state": self.executor_state,
-            "queue_lengths": self.queue_lengths,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "closed_at": self.closed_at,
-            "model_id": self.model_id,
-            "working_dir": self.working_dir,
-            "last_result_text": self.last_result_text,
-            "last_error": self.last_error,
-        }
-
-
-@dataclass
-class SubAgentHandle:
-    """Runtime handle for a managed sub-agent."""
-
-    id: str
-    spec: SubAgentSpec
-    agent: HawiAgent
-    scheduler: HawiScheduler
-    scheduler_task: asyncio.Task[None]
-    event_bus: EventBus
-    state: SubAgentLifecycleState = SubAgentLifecycleState.CREATED
-    created_at: float = field(default_factory=time.time)
-    updated_at: float = field(default_factory=time.time)
-    closed_at: float | None = None
-    last_result: AgentRunResult | None = None
-    last_error: str | None = None
-    recent_events: list[dict[str, Any]] = field(default_factory=list)
-    event_handler: Callable[[Event], Any] | None = None
-    monitor_task: asyncio.Task[None] | None = None
-
-    @property
-    def name(self) -> str:
-        return self.spec.name or self.id
-
-    @property
-    def role(self) -> str:
-        return str(self.spec.role)
-
-
-ROLE_SYSTEM_PROMPTS: dict[str, str] = {
-    "general": (
-        "You are a focused sub-agent. Complete the assigned task independently, "
-        "state important assumptions, and return a concise handoff."
-    ),
-    "planner": (
-        "You are a planning sub-agent. Produce an executable plan with "
-        "dependencies, risks, and acceptance checks."
-    ),
-    "reviewer": (
-        "You are a reviewer sub-agent. Prioritize defects, regressions, missing "
-        "tests, and unclear assumptions. Put findings before summary."
-    ),
-    "explorer": (
-        "You are an explorer sub-agent. Inspect the requested material without "
-        "making changes, and report evidence with file paths or artifact ids."
-    ),
-    "implementer": (
-        "You are an implementer sub-agent. Work within the declared ownership, "
-        "make focused changes, and report changed files."
-    ),
-    "critic": (
-        "You are a critic sub-agent. Look for counterexamples, boundary cases, "
-        "incorrect assumptions, and places where the plan could fail."
-    ),
-    "summarizer": (
-        "You are a summarizer sub-agent. Compress context into decisions, "
-        "constraints, progress, and clear next steps."
-    ),
-}
-
-
-class SubAgentError(RuntimeError):
-    """Raised when sub-agent operations fail."""
+    from ..agent import HawiAgent
 
 
 class SubAgentManager:
@@ -251,7 +72,7 @@ class SubAgentManager:
             child_event_bus = EventBus()
             child_agent = self._create_child_agent(spec, child_event_bus)
 
-            from .scheduler import HawiScheduler
+            from ..scheduler import HawiScheduler
 
             scheduler = HawiScheduler(child_agent)
             scheduler_task = asyncio.create_task(
@@ -528,7 +349,7 @@ class SubAgentManager:
             )
             if not policy.inherit:
                 child.set_context(self._parent.context.copy())
-            _drop_trailing_unanswered_tool_call_turn(child.context.messages)
+            drop_trailing_unanswered_tool_call_turn(child.context.messages)
         else:
             child = (
                 self._parent.clone()
@@ -557,7 +378,7 @@ class SubAgentManager:
         spec: SubAgentSpec,
         event_bus: EventBus,
     ) -> HawiAgent:
-        from .agent import HawiAgent
+        from ..agent import HawiAgent
 
         return HawiAgent(
             model=spec.model or self._parent.model,
@@ -599,7 +420,7 @@ class SubAgentManager:
         child: HawiAgent,
     ) -> list[ContentPart] | None:
         if spec.system_prompt is not None:
-            return _normalize_system_prompt(spec.system_prompt)
+            return normalize_system_prompt(spec.system_prompt)
 
         role_prompt = ROLE_SYSTEM_PROMPTS.get(str(spec.role), ROLE_SYSTEM_PROMPTS["general"])
         base = deepcopy(child.context.get_system_prompt() or [])
@@ -649,7 +470,7 @@ class SubAgentManager:
         handle: SubAgentHandle,
     ) -> Callable[[Event], Any]:
         async def on_child_event(event: Event) -> None:
-            summary = _event_summary(event)
+            summary = event_summary(event)
             handle.recent_events.append(summary)
             if len(handle.recent_events) > 200:
                 del handle.recent_events[:-200]
@@ -759,105 +580,3 @@ class SubAgentManager:
             return self._handles[subagent_id]
         except KeyError as exc:
             raise SubAgentError(f"Unknown sub-agent id: {subagent_id}") from exc
-
-
-def _drop_trailing_unanswered_tool_call_turn(messages: list[dict[str, Any]]) -> int:
-    """Drop the trailing parent tool-call turn if it is still in progress.
-
-    Forking can happen while a parent tool is still executing. At that moment
-    the parent context already contains the assistant tool_call message, but
-    its matching tool result has not been appended yet. The forked child should
-    see the last stable context plus its own new task message, not the parent's
-    half-finished tool-calling turn.
-    """
-    if not messages:
-        return 0
-
-    assistant_index = len(messages) - 1
-    while assistant_index >= 0 and messages[assistant_index].get("role") == "tool":
-        assistant_index -= 1
-    if assistant_index < 0:
-        return 0
-
-    assistant = messages[assistant_index]
-    if assistant.get("role") != "assistant":
-        return 0
-
-    content = assistant.get("content")
-    if not isinstance(content, list):
-        return 0
-
-    tool_call_ids = {
-        str(part.get("id"))
-        for part in content
-        if isinstance(part, dict)
-        and part.get("type") == "tool_call"
-        and part.get("id")
-    }
-    if not tool_call_ids:
-        return 0
-
-    responded_ids: set[str] = set()
-    for message in messages[assistant_index + 1:]:
-        tool_content = message.get("content")
-        if not isinstance(tool_content, list):
-            continue
-        responded_ids.update(
-            str(part.get("tool_call_id"))
-            for part in tool_content
-            if isinstance(part, dict)
-            and part.get("type") == "tool_result"
-            and part.get("tool_call_id")
-        )
-
-    if tool_call_ids <= responded_ids:
-        return 0
-
-    removed = len(messages) - assistant_index
-    del messages[assistant_index:]
-    return removed
-
-
-def _normalize_system_prompt(
-    value: str | list[ContentPart],
-) -> list[ContentPart]:
-    if isinstance(value, str):
-        return [{"type": "text", "text": value}]
-    return deepcopy(value)
-
-
-def _event_summary(event: Event) -> dict[str, Any]:
-    data = event.model_dump(mode="json", exclude_none=True)
-    summary: dict[str, Any] = {
-        "type": data.get("type"),
-        "source": data.get("source"),
-        "timestamp": data.get("timestamp"),
-    }
-    for key in (
-        "run_id",
-        "tool_call_id",
-        "tool_name",
-        "message_id",
-        "queue_type",
-        "stop_reason",
-        "reason",
-    ):
-        if key in data:
-            summary[key] = data[key]
-    if "error" in data:
-        summary["error"] = str(data["error"])
-    if event.type == "agent.message_added" and "content" in data:
-        summary["content_preview"] = _content_preview(data["content"])
-    return summary
-
-
-def _content_preview(content: Any, max_chars: int = 160) -> str:
-    if not isinstance(content, list):
-        text = str(content)
-    else:
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                parts.append(str(part.get("text", "")))
-        text = " ".join(parts)
-    return text[: max_chars - 3] + "..." if len(text) > max_chars else text

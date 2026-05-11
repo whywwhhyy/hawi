@@ -635,5 +635,8 @@ agent.plugins.unmask_tool("dangerous_tool")
 | `hawi/plugin/manager.py` | `PluginManager` + 动态管理 |
 | `hawi_engine/runtime.py` | 插件创建 + 注册 |
 | `hawi_engine/inspect.py` | GUI 插件目录 |
-| `hawi/agent/agent.py` | Agent 执行流程（Hook 调用位置） |
+| `hawi/agent/agent.py` | Agent 主循环与 Hook facade 调用位置 |
+| `hawi/agent/hook_dispatcher.py` | Hook dispatch 实现 |
+| `hawi/agent/runtime.py` | interrupt / steer / runtime snapshot |
+| `hawi/agent/eventing.py` | agent event 发布与订阅 facade |
 | `hawi/agent/context.py` | `AgentContext`（消息管理） |

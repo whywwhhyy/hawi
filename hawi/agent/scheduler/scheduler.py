@@ -15,7 +15,7 @@ import logging
 from typing import Any, Callable, Literal
 
 from hawi.agent.agent import HawiAgent
-from hawi.agent.agent import SteerPartMergeMode
+from hawi.agent.state import SteerPartMergeMode
 from hawi.errors import ConfigurationError
 from hawi.agent.result import AgentRunResult
 from hawi.events import Event, EventBus

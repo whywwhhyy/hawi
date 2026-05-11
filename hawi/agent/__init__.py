@@ -1,15 +1,15 @@
 
 """Hawi Agent module."""
 
-from .agent import (
-    HawiAgent,
+from .agent import HawiAgent
+from .config import (
+    AutoCompactConfig,
     ModelErrorPolicy,
     ModelErrorRetryPolicy,
     ModelErrorNotifyPolicy,
     ModelErrorStopPolicy,
-    SteerPartMergeMode,
-    AutoCompactConfig,
 )
+from .state import SteerPartMergeMode
 from .context import (
     AgentContext,
     ContextCompactionRecord,

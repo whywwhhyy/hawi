@@ -7,6 +7,11 @@
 应足够详细以支持直接实施——文件路径、行号、签名、diff、边界条件、测试
 都在文档中明确。
 
+> 维护说明：本文档中的 `agent.py` 行号来自重构前的大单文件版本，只能作为
+> 历史定位参考。当前 hook dispatch 逻辑在
+> `hawi/agent/hook_dispatcher.py`，`HawiAgent` 仍保留 `_invoke_*()` facade；
+> 主循环调用点仍在 `hawi/agent/agent.py`。
+
 ---
 
 ## 目录
@@ -58,7 +63,10 @@
 - `hawi/plugin/types.py` — method 类型 + `PluginHooks` TypedDict
 - `hawi/plugin/manager.py` — `PluginManager`（hook 收集与 dispatch；不需改 hook 接入逻辑）
 - `hawi/plugin/plugin.py` — `HawiPlugin` 基类（自动收集机制不需改）
-- `hawi/agent/agent.py` — 主循环、hook 调用点
+- `hawi/agent/agent.py` — 主循环、hook facade 调用点
+- `hawi/agent/hook_dispatcher.py` — hook dispatch 实现
+- `hawi/agent/runtime.py` — interrupt、runtime snapshot、steer 路径
+- `hawi/agent/compaction.py` — compact 路径
 - `hawi/agent/context.py` — `AgentContext` 与 `ContextCompactionRecord`
 - `hawi/events/agent_events.py` — agent 级事件
 - `hawi_plugins/workflow_plugin/plugin.py` — 受 Phase 0 影响
