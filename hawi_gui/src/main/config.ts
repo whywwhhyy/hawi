@@ -146,3 +146,50 @@ export function saveConfig(configPath: string, nextConfig: PersistedConfig): voi
   mkdirSync(path.dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
 }
+
+export function preserveProviderOrder(previousModels: string[], nextModels: string[]): string[] {
+  const previousProviders = providerOrder(previousModels);
+  const groupedNext = groupModelsByProvider(nextModels);
+  const ordered: string[] = [];
+
+  for (const provider of previousProviders) {
+    const models = groupedNext.get(provider);
+    if (!models) continue;
+    ordered.push(...models);
+    groupedNext.delete(provider);
+  }
+
+  for (const models of groupedNext.values()) {
+    ordered.push(...models);
+  }
+  return ordered;
+}
+
+function providerOrder(models: string[]): string[] {
+  const providers: string[] = [];
+  const seen = new Set<string>();
+  for (const model of models) {
+    const provider = modelProvider(model);
+    if (!provider || seen.has(provider)) continue;
+    providers.push(provider);
+    seen.add(provider);
+  }
+  return providers;
+}
+
+function groupModelsByProvider(models: string[]): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const model of models) {
+    if (seen.has(model)) continue;
+    seen.add(model);
+    const provider = modelProvider(model);
+    if (!provider) continue;
+    groups.set(provider, [...(groups.get(provider) ?? []), model]);
+  }
+  return groups;
+}
+
+function modelProvider(model: string): string {
+  return model.split("/", 1)[0] ?? "";
+}

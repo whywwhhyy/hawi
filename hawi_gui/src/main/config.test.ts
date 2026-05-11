@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildEngineEnv, buildEngineRunArgs } from "./config";
+import { buildEngineEnv, buildEngineRunArgs, preserveProviderOrder } from "./config";
 
 describe("engine launch helpers", () => {
   it("runs the engine module through uv so dependencies can sync", () => {
@@ -27,5 +27,21 @@ describe("engine launch helpers", () => {
 
     expect(env.PATH).toBe("C:\\tools");
     expect(env.PYTHONPATH).toBe(`C:\\repo\\hawi${path.delimiter}C:\\existing`);
+  });
+});
+
+describe("provider order", () => {
+  it("keeps an existing provider in its original position after refresh", () => {
+    expect(preserveProviderOrder(
+      ["alpha/a1", "target/t1", "omega/o1"],
+      ["target/t1", "target/t2", "alpha/a1", "omega/o1"]
+    )).toEqual(["alpha/a1", "target/t1", "target/t2", "omega/o1"]);
+  });
+
+  it("appends newly discovered providers after known providers", () => {
+    expect(preserveProviderOrder(
+      ["alpha/a1", "omega/o1"],
+      ["new/n1", "omega/o1", "alpha/a1"]
+    )).toEqual(["alpha/a1", "omega/o1", "new/n1"]);
   });
 });

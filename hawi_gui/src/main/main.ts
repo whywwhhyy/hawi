@@ -9,7 +9,8 @@ import {
   loadInspectPayload,
   loadConfig,
   saveConfig,
-  sanitizeConfig
+  sanitizeConfig,
+  preserveProviderOrder
 } from "./config";
 import { CoreProcess, type EmitToRenderer } from "./core-process";
 
@@ -155,7 +156,10 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
   }
 
   refreshedProviders.add(providerName);
-  inspectPayload = { ...nextInspect, models: allModels };
+  inspectPayload = {
+    ...nextInspect,
+    models: preserveProviderOrder(ready.inspect.models, allModels)
+  };
   config = sanitizeConfig(ready.config, inspectPayload);
   saveConfig(env.configPath, config);
   return {
