@@ -51,7 +51,7 @@ class ConfigLoader:
         merged: ConfigValue = deepcopy(dict(defaults or {}))
         for path in reversed(self.find_files(directories)):
             merged = deep_merge(merged, load_config_file(path))
-        return Config(merged)
+        return Config(raw=merged)
 
 
 def load_config_from_directory_chain(

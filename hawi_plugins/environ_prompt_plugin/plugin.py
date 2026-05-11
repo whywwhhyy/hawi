@@ -156,7 +156,9 @@ class EnvironPromptPlugin(HawiPlugin):
             resolved = Path(config_path).expanduser().resolve()
             if resolved.is_file():
                 try:
-                    return Config(deep_merge(DEFAULT_CONFIG, load_config_file(resolved))).data
+                    return Config(
+                        raw=deep_merge(DEFAULT_CONFIG, load_config_file(resolved))
+                    ).data
                 except ConfigLoaderError:
                     logger.exception(
                         "Failed to parse environ prompt config from %s; "
