@@ -31,6 +31,11 @@ from hawi.models.anthropic._streaming import (
     _AnthropicStreamHandler,
     run_async_stream,
 )
+from hawi.models._model_listing import (
+    afetch_json_model_ids,
+    bearer_auth_headers,
+    fetch_json_model_ids,
+)
 from hawi.models.anthropic._converters import needs_async_conversion
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
 from hawi.models.anthropic._model import _convert_anthropic_error as _base_convert_anthropic_error
@@ -277,6 +282,36 @@ class MiniMaxAnthropicModel(AnthropicModel):
                 del req[param]
         
         return req
+
+    def list_models(self) -> list[str]:
+        """Query MiniMax's Anthropic-compatible model-list endpoint."""
+        return fetch_json_model_ids(
+            self._models_endpoint_url(),
+            provider="MiniMax",
+            headers=bearer_auth_headers(self.api_key),
+            params={"limit": 100},
+            timeout=self.timeout,
+            paginate=True,
+        )
+
+    async def alist_models(self) -> list[str]:
+        """Async model-list query for MiniMax's Anthropic-compatible adapter."""
+        return await afetch_json_model_ids(
+            self._models_endpoint_url(),
+            provider="MiniMax",
+            headers=bearer_auth_headers(self.api_key),
+            params={"limit": 100},
+            timeout=self.timeout,
+            paginate=True,
+        )
+
+    def _models_endpoint_url(self) -> str:
+        base_url = (self.base_url or "https://api.minimaxi.com/anthropic").rstrip("/")
+        if base_url.endswith("/models"):
+            return base_url
+        if base_url.endswith("/v1"):
+            return f"{base_url}/models"
+        return f"{base_url}/v1/models"
 
     def _estimate_tokens_impl(
         self,

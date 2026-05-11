@@ -18,6 +18,11 @@ from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 from hawi.models.anthropic import AnthropicModel
+from hawi.models._model_listing import (
+    afetch_json_model_ids,
+    bearer_auth_headers,
+    fetch_json_model_ids,
+)
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
 from ._token_estimate import DeepSeekTokenEstimateMixin
 from ._adaptive_reasoning import (
@@ -126,6 +131,32 @@ class DeepSeekAnthropicModel(DeepSeekTokenEstimateMixin, AnthropicModel):
         for param in UNSUPPORTED_REASONER_PARAMS:
             if param in self.params:
                 logger.warning("DeepSeek Reasoner 不支持 '%s' 参数，设置无效", param)
+
+    def list_models(self) -> list[str]:
+        """Query DeepSeek's OpenAI-style model-list endpoint."""
+        return fetch_json_model_ids(
+            self._models_endpoint_url(),
+            provider="DeepSeek",
+            headers=bearer_auth_headers(self.api_key),
+            timeout=self.timeout,
+        )
+
+    async def alist_models(self) -> list[str]:
+        """Async model-list query for DeepSeek's Anthropic-compatible adapter."""
+        return await afetch_json_model_ids(
+            self._models_endpoint_url(),
+            provider="DeepSeek",
+            headers=bearer_auth_headers(self.api_key),
+            timeout=self.timeout,
+        )
+
+    def _models_endpoint_url(self) -> str:
+        base_url = (self.base_url or "https://api.deepseek.com/anthropic").rstrip("/")
+        for suffix in ("/anthropic/v1", "/anthropic"):
+            if base_url.endswith(suffix):
+                base_url = base_url[: -len(suffix)]
+                break
+        return f"{base_url}/models"
 
     def _prepare_request_impl(self, request: MessageRequest) -> dict[str, Any]:
         """准备请求，清理 DeepSeek 不支持的参数"""

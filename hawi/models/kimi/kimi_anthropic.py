@@ -20,6 +20,8 @@ from ._token_estimate import KimiTokenEstimateMixin
 
 logger = logging.getLogger(__name__)
 
+KIMI_CODE_MODEL_ID = "kimi-for-coding"
+
 
 class KimiAnthropicModel(KimiTokenEstimateMixin, AnthropicModel):
     """
@@ -86,6 +88,14 @@ class KimiAnthropicModel(KimiTokenEstimateMixin, AnthropicModel):
                 logger.debug("Detected citations in response: %s", block["citations"])
 
         return super()._parse_response_impl(response)
+
+    def list_models(self) -> list[str]:
+        """Return Kimi Code's stable Anthropic-compatible model ID."""
+        return [KIMI_CODE_MODEL_ID]
+
+    async def alist_models(self) -> list[str]:
+        """Async model-list query for Kimi Code."""
+        return self.list_models()
 
     def _prepare_kimi_token_estimate_request(
         self,
