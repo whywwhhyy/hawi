@@ -109,12 +109,14 @@ class SessionManager:
         *,
         writer: SessionWriter | None = None,
         time_provider: Callable[[], float] = time.time,
+        keep_session_system_prompt: bool = True,
     ) -> None:
         self._root = Path(root).expanduser() if root else layout.DEFAULT_ROOT
         self._root.mkdir(parents=True, exist_ok=True)
         self._writer_owned = writer is None
         self._writer = writer or SessionWriter()
         self._time = time_provider
+        self._keep_session_system_prompt = keep_session_system_prompt
         self._lock = threading.RLock()
 
         self._agent: HawiAgent | None = None
@@ -204,6 +206,7 @@ class SessionManager:
             self._session_name = name or session_id
             self._session_created_at = datetime.now().isoformat()
             self._session_has_visible_messages = False
+            self._set_agent_system_prompt_hooks_suppressed(False)
             self._configure_subagent_storage()
         return session_id
 
@@ -261,6 +264,9 @@ class SessionManager:
         previous_session_name = self._session_name
         previous_created_at = self._session_created_at
         previous_has_visible_messages = self._session_has_visible_messages
+        previous_system_prompt_hook_suppressed = (
+            self._agent_system_prompt_hooks_suppressed()
+        )
         try:
             with self._lock:
                 if session_id != self._session_id:
@@ -277,12 +283,14 @@ class SessionManager:
                 )
 
                 loaded: list[str] = []
+                loaded_system_prompt = False
 
                 ctx_path = layout.context_path(session_dir)
                 if ctx_path.exists():
                     ctx_data = json.loads(ctx_path.read_text(encoding="utf-8"))
                     self._agent.context.load_snapshot(ctx_data)
                     loaded.append(layout.COMPONENT_CONTEXT)
+                    loaded_system_prompt = "system_prompt" in ctx_data
 
                 queues_path = layout.queues_path(session_dir)
                 if queues_path.exists() and self._scheduler is not None:
@@ -326,6 +334,9 @@ class SessionManager:
                     self._load_plugins(plugins_dir, manifest)
                     loaded.append(layout.COMPONENT_PLUGINS)
 
+                self._set_agent_system_prompt_hooks_suppressed(
+                    self._keep_session_system_prompt and loaded_system_prompt
+                )
                 if self._event_bus is not None:
                     self._event_bus.publish(
                         SessionLoadedEvent.create(
@@ -348,6 +359,9 @@ class SessionManager:
             self._session_name = previous_session_name
             self._session_created_at = previous_created_at
             self._session_has_visible_messages = previous_has_visible_messages
+            self._set_agent_system_prompt_hooks_suppressed(
+                previous_system_prompt_hook_suppressed
+            )
             raise
 
     def read_message_history(
@@ -877,6 +891,20 @@ class SessionManager:
             logger.warning("failed to read session manifest %s", manifest_path)
             return {}
         return data if isinstance(data, dict) else {}
+
+    def _agent_system_prompt_hooks_suppressed(self) -> bool:
+        if self._agent is None:
+            return False
+        return bool(getattr(self._agent, "_suppress_system_prompt_hooks", False))
+
+    def _set_agent_system_prompt_hooks_suppressed(self, suppress: bool) -> None:
+        if self._agent is None:
+            return
+        setter = getattr(self._agent, "suppress_system_prompt_hooks", None)
+        if callable(setter):
+            setter(suppress)
+        else:
+            setattr(self._agent, "_suppress_system_prompt_hooks", suppress)
 
     def _configure_subagent_storage(self) -> None:
         subagents = getattr(self._agent, "subagents", None)

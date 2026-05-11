@@ -127,7 +127,32 @@ def test_project_steering_truncates_large_files(tmp_path: Path, monkeypatch) -> 
     assert "Truncated by EnvironPromptPlugin at 3 bytes" in text
 
 
-def _project_steering_config(tmp_path: Path, max_file_bytes: int = 65536) -> Path:
+def test_system_prompt_orders_stable_project_content_before_session_info(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "AGENTS.md").write_text("stable project rules", encoding="utf-8")
+    config_path = _project_steering_config(tmp_path, include_session_info=True)
+
+    monkeypatch.chdir(repo)
+    plugin = EnvironPromptPlugin(config_path=str(config_path))
+
+    text = _inject_system_prompt(plugin)
+
+    assert "stable project rules" in text
+    assert "Session environment:" in text
+    assert text.index("stable project rules") < text.index("Session environment:")
+
+
+def _project_steering_config(
+    tmp_path: Path,
+    max_file_bytes: int = 65536,
+    *,
+    include_session_info: bool = False,
+) -> Path:
     path = tmp_path / "environ_prompt.json"
     path.write_text(
         json.dumps(
@@ -135,7 +160,7 @@ def _project_steering_config(tmp_path: Path, max_file_bytes: int = 65536) -> Pat
                 "enabled": True,
                 "system_prompt": {
                     "enabled": True,
-                    "include_session_info": False,
+                    "include_session_info": include_session_info,
                     "include_project_steering": True,
                     "project_steering": {
                         "filenames": ["AGENTS.md", "CLAUDE.md"],

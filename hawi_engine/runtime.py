@@ -158,6 +158,7 @@ class CoreRuntime:
         plugin_configs: dict[str, dict[str, Any]] | None = None,
         extra_tool_parameters: list[ExtraToolParameter] | None = None,
         max_context_tokens: int | None = None,
+        keep_session_system_prompt: bool = True,
         token: str | None = None,
         status_interval: float = 0.3,
         broadcast_queue_size: int = 1000,
@@ -171,6 +172,7 @@ class CoreRuntime:
         }
         self._extra_tool_parameters = list(extra_tool_parameters or [])
         self._max_context_tokens = max_context_tokens
+        self._keep_session_system_prompt = keep_session_system_prompt
         self._token = token
         self._blob_store: BlobStore | None = blob_store
         self._status_interval = status_interval
@@ -211,7 +213,9 @@ class CoreRuntime:
         self._scheduler = scheduler
         self._scheduler_task = scheduler_task
         self._plugins = plugins
-        self._session_manager = SessionManager()
+        self._session_manager = SessionManager(
+            keep_session_system_prompt=self._keep_session_system_prompt,
+        )
         self._session_manager.attach(
             scheduler.agent,
             scheduler,

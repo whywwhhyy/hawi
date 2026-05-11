@@ -114,7 +114,7 @@ def test_dynamic_plugin_multiple_hook_types():
 # PluginManager Tests
 # =============================================================================
 
-from hawi.plugin import HawiPlugin
+from hawi.plugin import HawiPlugin, before_conversation
 from hawi.plugin.manager import PluginManager
 
 
@@ -253,6 +253,54 @@ class TestPluginManagerHooks:
         pm.add_hook("before_conversation", my_hook)
         assert pm.remove_hook("before_conversation", my_hook) is True
         assert my_hook not in pm.get_hooks("before_conversation")
+
+    def test_system_prompt_hooks_sort_by_variability(self):
+        class DefaultPromptPlugin(HawiPlugin):
+            @before_conversation(system_prompt_variability="default")
+            def inject_default(self, agent, ctx):
+                return None
+
+        class StablePromptPlugin(HawiPlugin):
+            @before_conversation(system_prompt_variability="hardcoded")
+            def inject_stable(self, agent, ctx):
+                return None
+
+        class HourlyPromptPlugin(HawiPlugin):
+            @before_conversation(system_prompt_variability="time_hour")
+            def inject_hourly(self, agent, ctx):
+                return None
+
+        pm = PluginManager(
+            plugins=[
+                DefaultPromptPlugin(),
+                HourlyPromptPlugin(),
+                StablePromptPlugin(),
+            ]
+        )
+
+        assert [hook.__name__ for hook in pm.get_hooks("before_conversation")] == [
+            "inject_stable",
+            "inject_hourly",
+            "inject_default",
+        ]
+
+    def test_plain_hooks_keep_registration_order(self):
+        class FirstPlugin(HawiPlugin):
+            @before_conversation
+            def first(self, agent, ctx):
+                return None
+
+        class SecondPlugin(HawiPlugin):
+            @before_conversation
+            def second(self, agent, ctx):
+                return None
+
+        pm = PluginManager(plugins=[FirstPlugin(), SecondPlugin()])
+
+        assert [hook.__name__ for hook in pm.get_hooks("before_conversation")] == [
+            "first",
+            "second",
+        ]
 
 
 class TestPluginManagerClone:

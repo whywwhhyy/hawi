@@ -84,7 +84,7 @@ class SkillsPlugin(HawiPlugin):
                 result[key.strip()] = value.strip()
         return result
 
-    @before_conversation
+    @before_conversation(system_prompt_variability="filesystem")
     def inject_skills_context(self, agent: Any, ctx):
         """Inject the list of available skills into the agent's system prompt."""
         # Re-scan to get latest skills

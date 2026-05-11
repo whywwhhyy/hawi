@@ -14,9 +14,11 @@ from pathlib import Path
 
 import pytest
 
+from hawi.agent import HawiAgent
 from hawi.agent.context import AgentContext
 from hawi.agent.scheduler.queue import MessageQueueManager
 from hawi.events import AgentMessageAddedEvent, EventBus, SessionWriteFailedEvent
+from hawi.plugin import HawiPlugin, HookContext, before_conversation
 from hawi.session import SessionLockedError, SessionManager, SessionWriter, WriteJob
 from hawi.session import layout
 from hawi.session.lock import SessionFileLock, make_lock_metadata
@@ -68,6 +70,18 @@ class _StubAgent:
 
     def load_steer(self, data: list) -> None:  # pragma: no cover - exercised below
         pass
+
+
+class _PromptHookPlugin(HawiPlugin):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @before_conversation(system_prompt_variability="hardcoded")
+    def inject_system_prompt(self, agent, ctx) -> None:
+        self.calls += 1
+        system_prompt = list(agent.context.system_prompt or [])
+        system_prompt.append({"type": "text", "text": "regenerated prompt"})
+        agent.context.system_prompt = system_prompt
 
 
 @pytest.fixture
@@ -321,6 +335,82 @@ class TestSessionManager:
             assert (
                 agent2.context.messages[0]["content"][0]["text"] == "hello session"
             )
+        finally:
+            sm2.detach()
+
+    @pytest.mark.asyncio
+    async def test_load_session_keeps_saved_system_prompt_by_default(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = HawiAgent(model=object(), plugins=[_PromptHookPlugin()])
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            agent.context.system_prompt = [{"type": "text", "text": "saved prompt"}]
+            agent.context.add_user_message("hello")
+            sid = sm.new_session(name="saved")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        plugin2 = _PromptHookPlugin()
+        agent2 = HawiAgent(model=object(), plugins=[plugin2])
+        scheduler2 = _StubScheduler()
+        sm2 = SessionManager(root=session_root)
+        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        try:
+            sm2.load_session(sid)
+            await agent2._invoke_session_hook(
+                "before_conversation",
+                HookContext(run_id="r1", iteration=0),
+            )
+
+            assert plugin2.calls == 0
+            assert agent2.context.system_prompt == [
+                {"type": "text", "text": "saved prompt"}
+            ]
+        finally:
+            sm2.detach()
+
+    @pytest.mark.asyncio
+    async def test_load_session_can_regenerate_system_prompt_when_configured(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = HawiAgent(model=object(), plugins=[_PromptHookPlugin()])
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            agent.context.system_prompt = [{"type": "text", "text": "saved prompt"}]
+            agent.context.add_user_message("hello")
+            sid = sm.new_session(name="saved")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        plugin2 = _PromptHookPlugin()
+        agent2 = HawiAgent(model=object(), plugins=[plugin2])
+        scheduler2 = _StubScheduler()
+        sm2 = SessionManager(
+            root=session_root,
+            keep_session_system_prompt=False,
+        )
+        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        try:
+            sm2.load_session(sid)
+            await agent2._invoke_session_hook(
+                "before_conversation",
+                HookContext(run_id="r1", iteration=0),
+            )
+
+            assert plugin2.calls == 1
+            assert agent2.context.system_prompt == [
+                {"type": "text", "text": "saved prompt"},
+                {"type": "text", "text": "regenerated prompt"},
+            ]
         finally:
             sm2.detach()
 

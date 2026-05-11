@@ -183,6 +183,8 @@ class HawiAgent:
         self._plugin_manager.bind_event_bus(self._event_bus)
         self._events = AgentEvents(self)
         self._hooks = HookDispatcher(self, self)
+        self._suppress_system_prompt_hooks = False
+        self._system_prompt_part_variability_rank: dict[int, int] = {}
         self._compactor = AgentCompactor(self)
         self._runtime = AgentRuntime(self)
 
@@ -279,6 +281,10 @@ class HawiAgent:
         self._context.set_system_prompt(system_prompt)
         self._system_prompt = self._context.get_system_prompt()
 
+    def suppress_system_prompt_hooks(self, suppress: bool = True) -> None:
+        """Control whether declared system-prompt injection hooks are skipped."""
+        self._suppress_system_prompt_hooks = suppress
+
     def set_model(self, model: Model | str) -> None:
         """Replace the default model for this agent.
 
@@ -349,6 +355,7 @@ class HawiAgent:
         new_agent._plugin_manager = self._plugin_manager.clone()
         new_agent._plugin_manager.bind_event_bus(new_agent._event_bus)
         new_agent.set_context(self._context.copy())
+        new_agent.suppress_system_prompt_hooks(self._suppress_system_prompt_hooks)
         return new_agent
 
     def fork(self) -> HawiAgent:

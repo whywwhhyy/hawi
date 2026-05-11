@@ -149,6 +149,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON/YAML/TOML file containing plugin config object keyed by plugin name",
     )
     parser.add_argument(
+        "--keep-session-system-prompt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "When loading a saved session, keep the persisted system prompt "
+            "instead of regenerating declared system-prompt hook content."
+        ),
+    )
+    parser.add_argument(
         "--status-interval",
         type=float,
         default=0.3,
@@ -274,6 +283,7 @@ async def async_main(args: argparse.Namespace) -> None:
         plugin_configs=plugin_configs,
         extra_tool_parameters=extra_tool_parameters,
         max_context_tokens=args.max_context_tokens,
+        keep_session_system_prompt=args.keep_session_system_prompt,
         token=token_from_arg_or_env(args.token),
         status_interval=args.status_interval,
         blob_store=blob_store,

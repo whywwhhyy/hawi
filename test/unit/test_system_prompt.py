@@ -7,12 +7,15 @@ This test suite verifies the refactored system_prompt design:
 """
 
 
+import pytest
+
 from hawi.models.message import MessageRequest, ContentPart
 from hawi.agent.context import AgentContext
 from hawi.agent import HawiAgent
 from hawi.models import Model
 from hawi.models.openai._converters import prepare_request as openai_prepare_request
 from hawi.models.anthropic._utils import convert_system_prompt
+from hawi.plugin import HawiPlugin, HookContext, before_conversation, before_session
 
 
 class TestSystemPromptTypes:
@@ -249,6 +252,43 @@ class TestHawiAgentSystemPrompt:
         agent.run("hi")
 
         assert model.system_seen == [{"type": "text", "text": "You are helpful."}]
+
+    @pytest.mark.asyncio
+    async def test_declared_system_prompt_hooks_sort_across_session_phases(self):
+        class VariableSessionPlugin(HawiPlugin):
+            @before_session(system_prompt_variability="time_hour")
+            def inject_variable(self, agent, ctx):
+                system_prompt = list(agent.context.system_prompt or [])
+                system_prompt.append({"type": "text", "text": "variable"})
+                agent.context.system_prompt = system_prompt
+
+        class StableConversationPlugin(HawiPlugin):
+            @before_conversation(system_prompt_variability="hardcoded")
+            def inject_stable(self, agent, ctx):
+                system_prompt = list(agent.context.system_prompt or [])
+                system_prompt.append({"type": "text", "text": "stable"})
+                agent.context.system_prompt = system_prompt
+
+        agent = HawiAgent(
+            model=object(),
+            plugins=[VariableSessionPlugin(), StableConversationPlugin()],
+            system_prompt="base",
+        )
+
+        await agent._invoke_session_hook(
+            "before_session",
+            HookContext(run_id="r1", iteration=0),
+        )
+        await agent._invoke_session_hook(
+            "before_conversation",
+            HookContext(run_id="r1", iteration=0),
+        )
+
+        assert agent.context.system_prompt == [
+            {"type": "text", "text": "base"},
+            {"type": "text", "text": "stable"},
+            {"type": "text", "text": "variable"},
+        ]
 
 
 class TestOpenAISystemPromptConversion:

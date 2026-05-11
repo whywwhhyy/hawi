@@ -9,9 +9,10 @@ from .decorators import (
     after_model_call,
     before_tool_calling,
     after_tool_calling,
+    system_prompt_variability,
     tool,
 )
-from .types import PluginHooks
+from .types import PluginHooks, SystemPromptVariability
 from .hook_context import HookContext, HookResult
 from .resource import HawiResource, ResourceContent
 
@@ -20,6 +21,7 @@ __all__ = [
     "PluginRuntimeContext",
     "PluginManager",
     "PluginHooks",
+    "SystemPromptVariability",
     "HookContext",
     "HookResult",
     "HawiResource",
@@ -32,5 +34,6 @@ __all__ = [
     "after_model_call",
     "before_tool_calling",
     "after_tool_calling",
+    "system_prompt_variability",
     "tool",
 ]

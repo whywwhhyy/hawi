@@ -183,7 +183,7 @@ class WorkflowPlugin(HawiPlugin):
         self._manual_read = bool(data.get("manual_read", False))
     # ═══════════════════════════════════════════════════════════════
 
-    @before_conversation
+    @before_conversation(system_prompt_variability="session_state")
     def inject_gate_context(self, agent: Any, ctx: Any) -> None:
         """Inject current gate constraints + construction guidance."""
         system_prompt = list(agent.context.system_prompt or [])

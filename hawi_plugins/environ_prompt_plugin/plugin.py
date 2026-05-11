@@ -218,7 +218,7 @@ class EnvironPromptPlugin(HawiPlugin):
     # Hook: before_session — inject static env info into system prompt
     # ==============================================================
 
-    @before_session
+    @before_session(system_prompt_variability=("time_hour", "working_dir"))
     def inject_system_prompt_env(
         self,
         agent: Any,
@@ -236,22 +236,22 @@ class EnvironPromptPlugin(HawiPlugin):
         if not cfg.get("enabled", True):
             return
 
-        parts: list[str] = []
+        stable_parts: list[str] = []
+        dynamic_parts: list[str] = []
 
-        # -- session-level information ---------------------------------
-        if cfg.get("include_session_info", True):
-            parts.append(_format_session_info())
+        # Put stable, repo-scoped guidance before per-session facts so provider
+        # prompt caches can reuse the longest common prefix across sessions.
 
         # -- scoped project steering files ------------------------------
         if cfg.get("include_project_steering", True):
             steering = _format_project_steering(cfg.get("project_steering"))
             if steering:
-                parts.append(steering)
+                stable_parts.append(steering)
 
         # -- user-specified static text --------------------------------
         text = cfg.get("text")
         if text and isinstance(text, str) and text.strip():
-            parts.append(text.strip())
+            stable_parts.append(text.strip())
 
         # -- user-specified static file content -------------------------
         files = cfg.get("files")
@@ -259,7 +259,13 @@ class EnvironPromptPlugin(HawiPlugin):
             for entry in files:
                 content = _read_file_entry(entry)
                 if content is not None:
-                    parts.append(content)
+                    stable_parts.append(content)
+
+        # -- session-level information ---------------------------------
+        if cfg.get("include_session_info", True):
+            dynamic_parts.append(_format_session_info())
+
+        parts = stable_parts + dynamic_parts
 
         if not parts:
             return

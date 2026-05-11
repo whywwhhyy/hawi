@@ -12,7 +12,7 @@ from hawi.tool.types import (
     ToolParameterInjectionHandler,
     ToolParameterInjectionPredicate,
 )
-from hawi.plugin.types import HookReturnType
+from hawi.plugin.types import HookReturnType, system_prompt_variability_rank
 from hawi.models.message import ToolDefinition
 
 if TYPE_CHECKING:
@@ -408,7 +408,16 @@ class PluginManager:
         """Get hook chain for a specific type (plugin hooks + dynamic hooks)."""
         plugin_hooks = self._hooks.get(hook_type, [])
         dynamic_hooks = self._dynamic.get_hooks(hook_type)
-        return plugin_hooks + dynamic_hooks
+        hooks = plugin_hooks + dynamic_hooks
+        if hook_type in {"before_session", "before_conversation"}:
+            return [
+                hook
+                for _, hook in sorted(
+                    enumerate(hooks),
+                    key=lambda item: (system_prompt_variability_rank(item[1]), item[0]),
+                )
+            ]
+        return hooks
 
     # --- Clone ---
     def clone(self) -> "PluginManager":

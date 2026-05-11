@@ -10,6 +10,8 @@ from .types import (
     AfterModelCallMethod,
     BeforeToolCallMethod,
     AfterToolCallMethod,
+    SystemPromptVariabilityInput,
+    normalize_system_prompt_variability,
 )
 
 # Type variables for preserving function signature
@@ -17,12 +19,49 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def before_session(func: BeforeSessionMethod) -> BeforeSessionMethod:
+def _mark_hook(
+    func: Callable[..., Any],
+    hook_type: str,
+    *,
+    system_prompt_variability: SystemPromptVariabilityInput | None = None,
+) -> Callable[..., Any]:
+    setattr(func, "_is_hook", True)
+    setattr(func, "_hook_type", hook_type)
+    if system_prompt_variability is not None:
+        setattr(func, "_injects_system_prompt", True)
+        setattr(
+            func,
+            "_system_prompt_variability",
+            normalize_system_prompt_variability(system_prompt_variability),
+        )
+    return func
+
+
+@overload
+def before_session(func: BeforeSessionMethod, /) -> BeforeSessionMethod:
+    ...
+
+
+@overload
+def before_session(
+    *,
+    system_prompt_variability: SystemPromptVariabilityInput | None = None,
+) -> Callable[[BeforeSessionMethod], BeforeSessionMethod]:
+    ...
+
+
+def before_session(
+    func: BeforeSessionMethod | None = None,
+    *,
+    system_prompt_variability: SystemPromptVariabilityInput | None = None,
+) -> BeforeSessionMethod | Callable[[BeforeSessionMethod], BeforeSessionMethod]:
     """Hook called once at the start of an agent session (before any run).
 
     Args:
         agent: The HawiAgent instance.
         ctx: HookContext with run_id and iteration=0.
+        system_prompt_variability: Optional declaration for hooks that inject
+            system prompt content. Stable hooks run before more variable ones.
 
     Context operations (safe at this point):
         Modifications to ``agent.context`` take effect before the first
@@ -32,23 +71,47 @@ def before_session(func: BeforeSessionMethod) -> BeforeSessionMethod:
         - ``None`` to continue normally.
         - ``HookResult.abort(reason)`` to terminate the agent run.
     """
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "before_session")
-    return func
+    def decorate(hook: BeforeSessionMethod) -> BeforeSessionMethod:
+        return _mark_hook(
+            hook,
+            "before_session",
+            system_prompt_variability=system_prompt_variability,
+        )  # type: ignore[return-value]
+
+    if func is None:
+        return decorate
+    return decorate(func)
 
 
 def after_session(func: AfterSessionMethod) -> AfterSessionMethod:
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "after_session")
-    return func
+    return _mark_hook(func, "after_session")  # type: ignore[return-value]
 
 
-def before_conversation(func: BeforeConversationMethod) -> BeforeConversationMethod:
+@overload
+def before_conversation(func: BeforeConversationMethod, /) -> BeforeConversationMethod:
+    ...
+
+
+@overload
+def before_conversation(
+    *,
+    system_prompt_variability: SystemPromptVariabilityInput | None = None,
+) -> Callable[[BeforeConversationMethod], BeforeConversationMethod]:
+    ...
+
+
+def before_conversation(
+    func: BeforeConversationMethod | None = None,
+    *,
+    system_prompt_variability: SystemPromptVariabilityInput | None = None,
+) -> BeforeConversationMethod | Callable[[BeforeConversationMethod], BeforeConversationMethod]:
     """Hook called at the start of each conversation turn.
 
     Args:
         agent: The HawiAgent instance.
         ctx: HookContext with run_id and iteration=0.
+        system_prompt_variability: Optional declaration for hooks that inject
+            system prompt content. Stable hooks run before more variable ones.
 
     Context operations (safe at this point):
         Modifications to ``agent.context`` take effect before the first
@@ -58,15 +121,20 @@ def before_conversation(func: BeforeConversationMethod) -> BeforeConversationMet
         - ``None`` to continue normally.
         - ``HookResult.abort(reason)`` to terminate the agent run.
     """
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "before_conversation")
-    return func
+    def decorate(hook: BeforeConversationMethod) -> BeforeConversationMethod:
+        return _mark_hook(
+            hook,
+            "before_conversation",
+            system_prompt_variability=system_prompt_variability,
+        )  # type: ignore[return-value]
+
+    if func is None:
+        return decorate
+    return decorate(func)
 
 
 def after_conversation(func: AfterConversationMethod) -> AfterConversationMethod:
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "after_conversation")
-    return func
+    return _mark_hook(func, "after_conversation")  # type: ignore[return-value]
 
 
 def before_model_call(func: BeforeModelCallMethod) -> BeforeModelCallMethod:
@@ -89,9 +157,7 @@ def before_model_call(func: BeforeModelCallMethod) -> BeforeModelCallMethod:
           to the next loop iteration.
         - ``HookResult.abort(reason)`` to terminate the agent run.
     """
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "before_model_call")
-    return func
+    return _mark_hook(func, "before_model_call")  # type: ignore[return-value]
 
 
 def after_model_call(func: AfterModelCallMethod) -> AfterModelCallMethod:
@@ -119,9 +185,7 @@ def after_model_call(func: AfterModelCallMethod) -> AfterModelCallMethod:
           re-invoke the agent with the new message.
         - ``HookResult.abort(reason)`` to terminate the agent run.
     """
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "after_model_call")
-    return func
+    return _mark_hook(func, "after_model_call")  # type: ignore[return-value]
 
 
 def before_tool_calling(func: BeforeToolCallMethod) -> BeforeToolCallMethod:
@@ -149,9 +213,7 @@ def before_tool_calling(func: BeforeToolCallMethod) -> BeforeToolCallMethod:
           ``result`` as the synthetic tool output.
         - ``HookResult.abort(reason)`` to terminate the agent run.
     """
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "before_tool_calling")
-    return func
+    return _mark_hook(func, "before_tool_calling")  # type: ignore[return-value]
 
 
 def after_tool_calling(func: AfterToolCallMethod) -> AfterToolCallMethod:
@@ -182,9 +244,23 @@ def after_tool_calling(func: AfterToolCallMethod) -> AfterToolCallMethod:
           and re-enter the model loop after the current tool result is
           written.
     """
-    setattr(func, "_is_hook", True)
-    setattr(func, "_hook_type", "after_tool_calling")
-    return func
+    return _mark_hook(func, "after_tool_calling")  # type: ignore[return-value]
+
+
+def system_prompt_variability(
+    variability: SystemPromptVariabilityInput = "default",
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Mark an already-decorated hook as injecting system prompt content."""
+    def decorate(func: Callable[P, R]) -> Callable[P, R]:
+        setattr(func, "_injects_system_prompt", True)
+        setattr(
+            func,
+            "_system_prompt_variability",
+            normalize_system_prompt_variability(variability),
+        )
+        return func
+
+    return decorate
 
 
 @overload

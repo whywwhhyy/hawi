@@ -9,6 +9,10 @@ from hawi.models import Model
 from hawi.models.message import MessageResponse
 from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
+from hawi.plugin.types import (
+    is_system_prompt_injection_hook,
+    system_prompt_variability_rank,
+)
 from hawi.tool.types import ToolResult
 
 
@@ -30,12 +34,93 @@ class HookDispatcher:
     ) -> HookResult | None:
         """Invoke before/after_session and before/after_conversation hooks."""
         for hook in self._owner._plugin_manager.get_hooks(hook_type):
+            if self._should_skip_system_prompt_hook(hook_type, hook):
+                continue
+            tracks_system_prompt = is_system_prompt_injection_hook(hook)
+            before_part_ids = (
+                self._current_system_prompt_part_ids()
+                if tracks_system_prompt
+                else set()
+            )
             result = hook(self._agent, ctx)
             if inspect.isawaitable(result):
                 result = await result
+            if tracks_system_prompt:
+                self._record_system_prompt_parts(
+                    before_part_ids,
+                    system_prompt_variability_rank(hook),
+                )
             if result is not None:
                 return result
         return None
+
+    def _should_skip_system_prompt_hook(self, hook_type: str, hook: object) -> bool:
+        if hook_type not in {"before_session", "before_conversation"}:
+            return False
+        if not getattr(self._agent, "_suppress_system_prompt_hooks", False):
+            return False
+        return is_system_prompt_injection_hook(hook)
+
+    def _current_system_prompt_part_ids(self) -> set[int]:
+        context = getattr(self._agent, "context", None)
+        parts = getattr(context, "system_prompt", None)
+        if not isinstance(parts, list):
+            return set()
+        return {id(part) for part in parts}
+
+    def _record_system_prompt_parts(
+        self,
+        previous_part_ids: set[int],
+        rank: int,
+    ) -> None:
+        context = getattr(self._agent, "context", None)
+        parts = getattr(context, "system_prompt", None)
+        if not isinstance(parts, list):
+            return
+        rank_by_part_id = getattr(
+            self._agent,
+            "_system_prompt_part_variability_rank",
+            None,
+        )
+        if rank_by_part_id is None:
+            rank_by_part_id = {}
+            setattr(
+                self._agent,
+                "_system_prompt_part_variability_rank",
+                rank_by_part_id,
+            )
+
+        current_ids: set[int] = set()
+        for part in parts:
+            part_id = id(part)
+            current_ids.add(part_id)
+            if part_id not in previous_part_ids:
+                rank_by_part_id[part_id] = rank
+
+        for part_id in list(rank_by_part_id):
+            if part_id not in current_ids:
+                del rank_by_part_id[part_id]
+
+        indexed_parts = list(enumerate(parts))
+        indexed_parts.sort(
+            key=lambda item: self._system_prompt_sort_key(
+                item[0],
+                item[1],
+                rank_by_part_id,
+            )
+        )
+        context.system_prompt = [part for _, part in indexed_parts]
+
+    @staticmethod
+    def _system_prompt_sort_key(
+        index: int,
+        part: object,
+        rank_by_part_id: dict[int, int],
+    ) -> tuple[int, int, int]:
+        rank = rank_by_part_id.get(id(part))
+        if rank is None:
+            return (0, 0, index)
+        return (1, rank, index)
 
     async def invoke_before_model_call(
         self,
