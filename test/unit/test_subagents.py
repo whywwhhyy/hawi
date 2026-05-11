@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncIterator
 
 import pytest
@@ -63,6 +64,20 @@ class EchoModel(Model):
                 if isinstance(part, dict) and part.get("type") == "text"
             )
         return ""
+
+
+class SlowEchoModel(EchoModel):
+    def __init__(self, delay: float = 0.2) -> None:
+        super().__init__()
+        self.delay = delay
+
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncIterator[DeltaPart]:
+        await asyncio.sleep(self.delay)
+        async for part in super()._astream_impl(request):
+            yield part
 
 
 @pytest.mark.asyncio
@@ -198,6 +213,7 @@ async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
     assert {
         "create_subagent",
         "send_subagent_message",
+        "wait_subagent",
         "read_subagent",
         "close_subagent",
     }.issubset(names)
@@ -226,5 +242,44 @@ async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
         )
         assert read.success is True
         assert read.output["status"]["id"] == subagent_id  # type: ignore[index]
+    finally:
+        await agent.subagents.close(subagent_id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_wait_subagent_tool_returns_running_status_on_timeout() -> None:
+    agent = HawiAgent(model=SlowEchoModel(), plugins=[SubAgentPlugin()])
+    create_tool = agent.plugins.get_tool("create_subagent")
+    wait_tool = agent.plugins.get_tool("wait_subagent")
+    assert create_tool is not None
+    assert wait_tool is not None
+
+    created = await create_tool.arun(
+        mode="fresh",
+        initial_prompt="slow task",
+        ctx=ToolCallContext(agent),
+    )
+    assert created.success is True
+    subagent_id = created.output["subagent_id"]  # type: ignore[index]
+
+    try:
+        timed_out = await wait_tool.arun(
+            subagent_id=subagent_id,
+            notify_timeout=0.01,
+            ctx=ToolCallContext(agent),
+        )
+        assert timed_out.success is True
+        assert timed_out.output["timed_out"] is True  # type: ignore[index]
+        assert timed_out.output["status"]["state"] == "RUNNING"  # type: ignore[index]
+        assert "next_action" in timed_out.output  # type: ignore[operator]
+
+        completed = await wait_tool.arun(
+            subagent_id=subagent_id,
+            notify_timeout=2,
+            ctx=ToolCallContext(agent),
+        )
+        assert completed.success is True
+        assert completed.output["timed_out"] is False  # type: ignore[index]
+        assert "slow task" in completed.output["result_text"]  # type: ignore[index]
     finally:
         await agent.subagents.close(subagent_id, reason="test_cleanup")

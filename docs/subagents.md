@@ -49,6 +49,7 @@ handle = await agent.subagents.spawn(
 await agent.subagents.send(handle.id, "Please focus on API stability.")
 status = agent.subagents.status(handle.id)
 result = await agent.subagents.wait(handle.id, timeout=60)
+report = await agent.subagents.wait_report(handle.id, timeout=5)
 await agent.subagents.close(handle.id)
 ```
 
@@ -188,6 +189,7 @@ await agent.subagents.send(
 
 status = agent.subagents.status(handle.id)
 result = await agent.subagents.wait(handle.id, timeout=120)
+report = await agent.subagents.wait_report(handle.id, timeout=30)
 events = agent.subagents.recent_events(handle.id, limit=50)
 await agent.subagents.interrupt(handle.id, reason="parent_changed_direction")
 await agent.subagents.close(handle.id, reason="done")
@@ -203,18 +205,35 @@ agent.close_subagent(handle.id)
 
 这些方法只是代理到 `agent.subagents`，让插件和旧代码更容易迁移。
 
+### 等待语义
+
+`wait()` 保持 Python 原语语义：等待子 agent 进入稳定状态，超时抛出 `TimeoutError`，调用方可以自己决定取消、继续轮询或关闭。
+
+模型工具侧使用更接近 shell command 的语义：`create_subagent` / `send_subagent_message` 可传 `notify_timeout`，`wait_subagent` 可传 `notify_timeout` 和 `timeout_action`。默认超时只返回当前 status 与下一步提示，不把仍在运行的任务当作工具失败。
+
+`timeout_action` 第一版支持：
+
+| action | 语义 |
+|--------|------|
+| `status` | 默认值；超时返回 running status，子 agent 继续后台运行 |
+| `interrupt` | 超时后请求中断子 agent，并返回最新状态 |
+| `close` | 超时后关闭子 agent，并返回最新状态 |
+
+Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，便于测试或严格编排代码使用。
+
 ## Agent 工具面
 
-模型可见工具要少而清楚。第一版建议暴露 4 个工具：
+模型可见工具要少而清楚。第一版建议暴露 5 个工具：
 
 | 工具 | 作用 |
 |------|------|
 | `create_subagent` | 创建后台子 agent，可带初始任务 |
 | `send_subagent_message` | 向已有子 agent 发送后续指导或材料 |
+| `wait_subagent` | 等待子 agent 当前任务完成；超时默认返回状态，也可中断或关闭 |
 | `read_subagent` | 查询状态、最近输出、最终结果和错误 |
 | `close_subagent` | 中断、取消或关闭子 agent |
 
-不建议默认暴露完整 scheduler 队列操作，也不建议把所有生命周期动作塞进一个 `subagent_control(action=...)` 万能工具。四个工具的 schema 更短，模型误用成本也低。
+不建议默认暴露完整 scheduler 队列操作，也不建议把所有生命周期动作塞进一个 `subagent_control(action=...)` 万能工具。少量专用工具的 schema 更短，模型误用成本也低。
 
 `read_subagent` 可用 `view` 参数控制返回量：
 

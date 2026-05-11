@@ -58,6 +58,11 @@ class SubAgentPlugin(HawiPlugin):
                 },
                 "ownership": {"type": "object"},
                 "metadata": {"type": "object"},
+                "notify_timeout": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "Seconds to wait for the initial task before returning. 0 returns immediately.",
+                },
             },
         },
     )
@@ -77,6 +82,7 @@ class SubAgentPlugin(HawiPlugin):
         result_contract: str = "text",
         ownership: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        notify_timeout: float = 0,
         ctx: ToolCallContext | None = None,
     ) -> dict[str, Any]:
         """Create a background sub-agent and optionally enqueue its first task."""
@@ -105,6 +111,11 @@ class SubAgentPlugin(HawiPlugin):
         return {
             "subagent_id": handle.id,
             "status": ctx.agent.subagents.status(handle.id).to_dict(),
+            "wait": (
+                await ctx.agent.subagents.wait_report(handle.id, timeout=notify_timeout)
+                if notify_timeout > 0
+                else None
+            ),
         }
 
     @tool(
@@ -122,6 +133,11 @@ class SubAgentPlugin(HawiPlugin):
                     "default": "normal",
                 },
                 "metadata": {"type": "object"},
+                "notify_timeout": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "Seconds to wait for this queued task before returning. 0 returns immediately.",
+                },
             },
             "required": ["subagent_id", "message"],
         },
@@ -132,6 +148,7 @@ class SubAgentPlugin(HawiPlugin):
         message: str,
         queue: Literal["normal", "high_prio", "urgent"] = "normal",
         metadata: dict[str, Any] | None = None,
+        notify_timeout: float = 0,
         ctx: ToolCallContext | None = None,
     ) -> dict[str, Any]:
         """Send follow-up guidance or material to a sub-agent."""
@@ -146,7 +163,51 @@ class SubAgentPlugin(HawiPlugin):
         return {
             "message_id": message_id,
             "status": ctx.agent.subagents.status(subagent_id).to_dict(),
+            "wait": (
+                await ctx.agent.subagents.wait_report(subagent_id, timeout=notify_timeout)
+                if notify_timeout > 0
+                else None
+            ),
         }
+
+    @tool(
+        name="wait_subagent",
+        context="ctx",
+        tags=["subagent", "orchestration"],
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "subagent_id": {"type": "string"},
+                "notify_timeout": {
+                    "type": "number",
+                    "default": 30,
+                    "description": "Maximum seconds to wait before returning a running status.",
+                },
+                "timeout_action": {
+                    "type": "string",
+                    "enum": ["status", "interrupt", "close"],
+                    "default": "status",
+                    "description": "status returns a running report; interrupt/close act on timeout.",
+                },
+            },
+            "required": ["subagent_id"],
+        },
+    )
+    async def wait_subagent(
+        self,
+        subagent_id: str,
+        notify_timeout: float = 30,
+        timeout_action: Literal["status", "interrupt", "close"] = "status",
+        ctx: ToolCallContext | None = None,
+    ) -> dict[str, Any]:
+        """Wait for a sub-agent like waiting on a shell job."""
+        if ctx is None:
+            raise RuntimeError("wait_subagent requires Hawi tool context")
+        return await ctx.agent.subagents.wait_report(
+            subagent_id,
+            timeout=notify_timeout,
+            timeout_action=timeout_action,
+        )
 
     @tool(
         name="read_subagent",

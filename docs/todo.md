@@ -49,7 +49,7 @@
     - [x] 完成初版设计文档：`docs/subagents.md`
     - [x] 明确原则：subagent 首先是 core 级 API，不只是模型调用的 tool
     - [x] 明确 API 形态：`spawn` / `send` / `status` / `wait` / `interrupt` / `close`，`run_subagent` 仅作为便利包装
-    - [x] 明确 tool 形态：默认暴露克制的 4 个工具 `create_subagent` / `send_subagent_message` / `read_subagent` / `close_subagent`
+    - [x] 明确 tool 形态：默认暴露克制的 5 个工具 `create_subagent` / `send_subagent_message` / `wait_subagent` / `read_subagent` / `close_subagent`
     - [x] 支持设计：fork 上下文创建 subagent
     - [x] 支持设计：fresh 全新上下文创建 subagent
     - [x] 支持设计：创建时配置插件、system prompt、工作目录、初始 plan/prompt、角色、预算、ownership、结果协议、metadata
@@ -62,9 +62,10 @@
     - [x] 实现插件策略第一版：继承父插件、禁用继承、追加插件/工厂
     - [x] 实现基础 limits：最大运行时间、最大递归深度、最大子 agent 数（tool call 数仍待 scheduler/tool budget 接入）
     - [x] 实现最小事件转发：child events 以 `plugin.event` 关联 `subagent_id`
-    - [x] 新增 `SubAgentPlugin`，暴露 4 个 agent tools
+    - [x] 新增 `SubAgentPlugin`，暴露 5 个 agent tools
     - [x] engine/GUI 插件目录注册 `SubAgentPlugin`，GUI 插件弹窗可选择 subagent 工具
     - [x] fork 时裁掉父 agent 尾部未闭合 tool-call turn，避免 child 继承 provider-invalid context
+    - [x] 增加 shell-style wait：`wait_subagent` / `wait_report` / `notify_timeout`，超时默认返回 running status 而不是工具错误
     - [ ] 明确产品语义：subagent 默认服务一次性任务，但底层按可持续多轮 child session/thread 设计
     - [ ] 引入 `SubAgentSession` 概念：parent session 下的 child session tree，独立 context、scheduler、event log、权限集、manifest
     - [ ] 引入 `SubAgentTurn` 模型：每次 `send` 生成 `turn_id`，追踪 QUEUED/RUNNING/COMPLETED/FAILED/INTERRUPTED/CANCELLED
@@ -81,8 +82,8 @@
     - [ ] 设计 `ParentBridgePlugin`：child 可 `report_to_parent` / `ask_parent` / `yield_result`，第一版先用事件和最终结果，不阻塞主循环
     - [ ] 将 `working_dir` 从 prompt 字段落到支持的插件运行时配置：filesystem/shell/python interpreter 等按 child 逻辑目录执行
     - [ ] 落实 `result_contract`：text/json/review/diff/artifact 的校验、摘要和 artifact sink
-    - [x] 增加单元测试：fork/fresh 隔离、后台运行、status/read、tool wrapper schema
-    - [ ] 增加 interrupt/close 细粒度单元测试与超时取消测试
+    - [x] 增加单元测试：fork/fresh 隔离、后台运行、status/read、wait timeout、tool wrapper schema
+    - [ ] 增加 interrupt/close 细粒度单元测试与超时后 interrupt/close action 测试
 
 - [ ] 权限机制：plugin 声明权限，agent 运行时持有权限集，并据此过滤/审查工具
     - [ ] 设计权限模型：每个权限都有 stable id、scope、description、risk level、默认策略

@@ -14,6 +14,7 @@ from .types import (
     SubAgentRole,
     SubAgentSpec,
     SubAgentStatus,
+    SubAgentTimeoutAction,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "SubAgentRole",
     "SubAgentSpec",
     "SubAgentStatus",
+    "SubAgentTimeoutAction",
 ]

@@ -30,6 +30,7 @@ SubAgentRole = Literal[
     "summarizer",
 ]
 SubAgentQueue = Literal["normal", "high_prio", "urgent"]
+SubAgentTimeoutAction = Literal["status", "interrupt", "close", "raise"]
 SubAgentResultContract = Literal[
     "text",
     "json",

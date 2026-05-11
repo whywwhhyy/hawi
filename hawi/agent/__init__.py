@@ -27,6 +27,7 @@ from .subagent import (
     SubAgentPluginPolicy,
     SubAgentSpec,
     SubAgentStatus,
+    SubAgentTimeoutAction,
 )
 
 # Re-export scheduler classes
@@ -71,6 +72,7 @@ __all__ = [
     "SubAgentPluginPolicy",
     "SubAgentSpec",
     "SubAgentStatus",
+    "SubAgentTimeoutAction",
     # Scheduler
     "HawiScheduler",
     "SchedulerError",

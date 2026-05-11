@@ -26,6 +26,7 @@ from .types import (
     SubAgentQueue,
     SubAgentSpec,
     SubAgentStatus,
+    SubAgentTimeoutAction,
 )
 from .utils import (
     drop_trailing_unanswered_tool_call_turn,
@@ -181,6 +182,8 @@ class SubAgentManager:
         raise_on_error: bool = False,
     ) -> AgentRunResult | None:
         """Wait until the sub-agent has no queued or active work."""
+        if timeout is not None and timeout < 0:
+            raise ValueError("timeout must be greater than or equal to 0")
         handle = self._require_handle(subagent_id)
         deadline = time.monotonic() + timeout if timeout is not None else None
 
@@ -200,7 +203,59 @@ class SubAgentManager:
 
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"Timed out waiting for sub-agent: {subagent_id}")
-            await asyncio.sleep(self._poll_interval)
+            sleep_for = self._poll_interval
+            if deadline is not None:
+                sleep_for = max(0.0, min(sleep_for, deadline - time.monotonic()))
+            await asyncio.sleep(sleep_for)
+
+    async def wait_report(
+        self,
+        subagent_id: str,
+        timeout: float | None = None,
+        *,
+        timeout_action: SubAgentTimeoutAction = "status",
+        raise_on_error: bool = False,
+    ) -> dict[str, Any]:
+        """Wait like a shell job and return a structured status report.
+
+        Unlike :meth:`wait`, timeout is reported as data by default so agent
+        tools can tell the model to check again instead of surfacing a tool
+        error.
+        """
+        timed_out = False
+        result: AgentRunResult | None = None
+        try:
+            result = await self.wait(
+                subagent_id,
+                timeout=timeout,
+                raise_on_error=raise_on_error,
+            )
+        except TimeoutError:
+            timed_out = True
+            if timeout_action == "raise":
+                raise
+            if timeout_action == "interrupt":
+                await self.interrupt(subagent_id, reason="wait_timeout")
+            elif timeout_action == "close":
+                await self.close(subagent_id, reason="wait_timeout", interrupt=True)
+
+        status = self.status(subagent_id).to_dict()
+        result_text = result.text if result is not None else status.get("last_result_text")
+        report = {
+            "subagent_id": subagent_id,
+            "timed_out": timed_out,
+            "timeout_action": timeout_action,
+            "status": status,
+            "result_text": result_text,
+            "last_error": status.get("last_error"),
+        }
+        if timed_out and timeout_action == "status":
+            report["next_action"] = (
+                "Sub-agent is still running. Call wait_subagent with the same "
+                "subagent_id and a positive notify_timeout to wait again, or "
+                "read_subagent for a non-blocking status snapshot."
+            )
+        return report
 
     def recent_events(self, subagent_id: str, limit: int = 50) -> list[dict[str, Any]]:
         """Return recent child event summaries."""
