@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CoreCommandType, CoreFrame, GuiMetadata, PersistedConfig } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult } from "../shared/protocol";
 
 const api = {
   getMetadata(): Promise<GuiMetadata> {
@@ -13,6 +13,9 @@ const api = {
   },
   sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame> {
     return ipcRenderer.invoke("core:command", type, payload);
+  },
+  saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {
+    return ipcRenderer.invoke("gui:save-markdown-export", payload);
   },
   onCoreEvent(callback: (frame: CoreFrame) => void): () => void {
     const listener = (_event: Electron.IpcRendererEvent, frame: CoreFrame) => callback(frame);

@@ -5,14 +5,23 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import time
 import uuid
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from hawi.events import Event, EventBus, PluginEvent
 from hawi.models import ContentPart
+from hawi.session import layout as session_layout
+from hawi.session.markdown_export import (
+    MarkdownExport,
+    export_message_history_to_markdown,
+    write_markdown_export_bundle,
+)
+from hawi.session.message_history import message_history_entry_from_event
 
 from ..context import ToolCallContext
 from ..result import AgentRunResult
@@ -37,6 +46,8 @@ from .utils import (
 if TYPE_CHECKING:
     from ..agent import HawiAgent
 
+logger = logging.getLogger(__name__)
+
 
 class SubAgentManager:
     """Create, drive, inspect, and close sub-agents for one parent agent."""
@@ -53,6 +64,18 @@ class SubAgentManager:
         self._poll_interval = poll_interval
         self._handles: dict[str, SubAgentHandle] = {}
         self._lock = asyncio.Lock()
+        self._session_root: Path | None = None
+        self._session_id_provider: Callable[[], str | None] | None = None
+
+    def configure_session_storage(
+        self,
+        *,
+        root: Path | str,
+        session_id_provider: Callable[[], str | None],
+    ) -> None:
+        """Bind sub-agent histories to the parent SessionManager layout."""
+        self._session_root = Path(root).expanduser()
+        self._session_id_provider = session_id_provider
 
     def list(self) -> list[SubAgentStatus]:
         """Return status snapshots for all known sub-agents."""
@@ -89,6 +112,7 @@ class SubAgentManager:
                 scheduler_task=scheduler_task,
                 event_bus=child_event_bus,
                 state=SubAgentLifecycleState.IDLE,
+                parent_session_id=self._current_parent_session_id(),
             )
             handle.event_handler = self._make_event_handler(handle)
             child_event_bus.subscribe(handle.event_handler)
@@ -245,6 +269,15 @@ class SubAgentManager:
             "result_text": result_text,
             "last_error": status.get("last_error"),
         }
+        handle = self._require_handle(subagent_id)
+        if not timed_out and handle.message_history:
+            export = self.export_markdown(subagent_id)
+            report["export"] = self._export_query_payload(export)
+            report["query_hint"] = (
+                "Use read_subagent(view='markdown') for the readable report, "
+                "read_subagent(view='export') for paths, or read_subagent(view='ref', "
+                "ref_path='<filename>') for folded tool arguments/results."
+            )
         if timed_out and timeout_action == "status":
             report["next_action"] = (
                 "Sub-agent is still running. Call wait_subagent with the same "
@@ -334,8 +367,17 @@ class SubAgentManager:
         self,
         subagent_id: str,
         *,
-        view: Literal["status", "summary", "events", "context_tail"] = "summary",
+        view: Literal[
+            "status",
+            "summary",
+            "events",
+            "context_tail",
+            "markdown",
+            "export",
+            "ref",
+        ] = "summary",
         limit: int = 20,
+        ref_path: str | None = None,
     ) -> dict[str, Any]:
         """Read a controlled view of sub-agent state."""
         handle = self._require_handle(subagent_id)
@@ -353,10 +395,64 @@ class SubAgentManager:
                 "status": status,
                 "messages": messages[-limit:] if limit > 0 else [],
             }
+        if view == "markdown":
+            export = self.export_markdown(subagent_id)
+            return {
+                "status": status,
+                "markdown": export.markdown,
+                "export": self._export_query_payload(export, include_references=True),
+            }
+        if view == "export":
+            export = self.export_markdown(subagent_id)
+            return {
+                "status": status,
+                "export": self._export_query_payload(export, include_references=True),
+            }
+        if view == "ref":
+            return {
+                "status": status,
+                "reference": self._read_export_reference(handle, ref_path),
+            }
         return {
             "status": status,
             "recent_events": self.recent_events(subagent_id, min(limit, 10)),
         }
+
+    def export_markdown(self, subagent_id: str) -> MarkdownExport:
+        """Create or refresh the session-internal Markdown export for a child."""
+        handle = self._require_handle(subagent_id)
+        history_path = self._subagent_history_path(handle)
+        export = export_message_history_to_markdown(
+            handle.message_history,
+            kind="subagent",
+            subject_id=handle.id,
+            title=f"SubAgent {handle.name}",
+            model=str(getattr(handle.agent.model, "model_id", "")) or None,
+            system_prompt=handle.agent.context.get_system_prompt(),
+            metadata={
+                "name": handle.name,
+                "role": handle.role,
+                "state": self.status(handle.id).state,
+                "parent_session_id": handle.parent_session_id,
+                "working_dir": handle.spec.working_dir,
+                "result_contract": handle.spec.result_contract,
+                "message_count": len(handle.message_history),
+            },
+            raw_history_path=str(history_path) if history_path is not None else None,
+        )
+        export_dir = self._subagent_export_dir(handle, export.export_id)
+        if export_dir is not None:
+            export = write_markdown_export_bundle(
+                export,
+                export_dir=export_dir,
+                source_jsonl_path=history_path,
+                message_history=handle.message_history,
+            )
+        handle.last_export = self._export_query_payload(
+            export,
+            include_references=True,
+        )
+        return export
 
     def _coerce_spec(
         self,
@@ -530,6 +626,10 @@ class SubAgentManager:
             if len(handle.recent_events) > 200:
                 del handle.recent_events[:-200]
             handle.updated_at = time.time()
+            entry = message_history_entry_from_event(event)
+            if entry is not None:
+                handle.message_history.append(entry)
+                self._append_subagent_history(handle, [entry])
 
             if event.type == "agent.run_start":
                 handle.state = SubAgentLifecycleState.RUNNING
@@ -587,6 +687,120 @@ class SubAgentManager:
             handle.last_result = result
             return result
         return handle.last_result
+
+    def _current_parent_session_id(self) -> str | None:
+        if self._session_id_provider is None:
+            return None
+        try:
+            return self._session_id_provider()
+        except Exception:
+            logger.debug("subagent session id provider failed", exc_info=True)
+            return None
+
+    def _parent_session_dir(self, handle: SubAgentHandle) -> Path | None:
+        if self._session_root is None or not handle.parent_session_id:
+            return None
+        return session_layout.session_dir(self._session_root, handle.parent_session_id)
+
+    def _subagent_dir(self, handle: SubAgentHandle) -> Path | None:
+        parent_dir = self._parent_session_dir(handle)
+        if parent_dir is None:
+            return None
+        return session_layout.subagent_dir(parent_dir, handle.id)
+
+    def _subagent_history_path(self, handle: SubAgentHandle) -> Path | None:
+        subagent_dir = self._subagent_dir(handle)
+        if subagent_dir is None:
+            return None
+        return session_layout.message_history_path(subagent_dir)
+
+    def _subagent_export_dir(
+        self,
+        handle: SubAgentHandle,
+        export_id: str,
+    ) -> Path | None:
+        subagent_dir = self._subagent_dir(handle)
+        if subagent_dir is None:
+            return None
+        return session_layout.export_dir(subagent_dir, export_id)
+
+    def _append_subagent_history(
+        self,
+        handle: SubAgentHandle,
+        entries: list[dict[str, Any]],
+    ) -> None:
+        path = self._subagent_history_path(handle)
+        if path is None:
+            return
+        try:
+            session_layout.append_jsonl(path, entries, fsync=False)
+        except Exception:
+            logger.warning("failed to append subagent history %s", path, exc_info=True)
+
+    def _export_query_payload(
+        self,
+        export: MarkdownExport,
+        *,
+        include_references: bool = False,
+    ) -> dict[str, Any]:
+        payload = {
+            "export_id": export.export_id,
+            "markdown_path": export.session_markdown_path,
+            "message_history_path": export.session_jsonl_path,
+            "reference_dir_name": export.reference_dir_name,
+            "query": {
+                "tool": "read_subagent",
+                "markdown": {
+                    "view": "markdown",
+                    "subagent_id": export.subject_id,
+                },
+                "export": {
+                    "view": "export",
+                    "subagent_id": export.subject_id,
+                },
+                "reference": {
+                    "view": "ref",
+                    "subagent_id": export.subject_id,
+                    "ref_path": "<filename>",
+                },
+            },
+        }
+        if include_references:
+            payload["references"] = [
+                {
+                    "filename": ref.filename,
+                    "mime_type": ref.mime_type,
+                }
+                for ref in export.references
+            ]
+        return payload
+
+    def _read_export_reference(
+        self,
+        handle: SubAgentHandle,
+        ref_path: str | None,
+    ) -> dict[str, Any] | None:
+        if not ref_path:
+            return None
+        export_info = handle.last_export
+        if export_info is None:
+            export = self.export_markdown(handle.id)
+            export_info = self._export_query_payload(export, include_references=True)
+        markdown_path = export_info.get("markdown_path") if isinstance(export_info, dict) else None
+        ref_dir_name = export_info.get("reference_dir_name") if isinstance(export_info, dict) else None
+        if not isinstance(markdown_path, str) or not isinstance(ref_dir_name, str):
+            return None
+        filename = Path(ref_path).name
+        path = Path(markdown_path).parent / ref_dir_name / filename
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        return {
+            "filename": filename,
+            "path": str(path),
+            "content": content,
+        }
 
     def _clear_partial_assistant(self, handle: SubAgentHandle) -> None:
         handle.partial_text = ""

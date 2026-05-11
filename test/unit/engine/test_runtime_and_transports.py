@@ -160,6 +160,28 @@ class DummySessionManager:
     ) -> list[dict[str, Any]]:
         return list(self.histories[session_id or self.current_session_id])
 
+    def export_markdown(
+        self,
+        session_id: str | None = None,
+        *,
+        model: str | None = None,
+    ) -> Any:
+        sid = session_id or self.current_session_id
+
+        class Export:
+            def to_dict(self, *, include_markdown: bool = True) -> dict[str, Any]:
+                payload = {
+                    "suggested_filename": f"{sid}.md",
+                    "reference_dir_name": f"{sid}-ref",
+                    "references": [],
+                    "session_jsonl_path": f"/sessions/{sid}/message_history.jsonl",
+                }
+                if include_markdown:
+                    payload["markdown"] = f"# {sid}\n\nmodel={model}\n"
+                return payload
+
+        return Export()
+
     def load_session(self, session_id: str) -> None:
         self.loaded = session_id
         self.current_session_id = session_id
@@ -296,6 +318,25 @@ async def test_session_history_command_returns_current_history() -> None:
     assert payload["command"] == "session_history"
     assert payload["session_id"] == "current-session"
     assert payload["message_history"][0]["content"][0]["text"] == "current"
+
+
+@pytest.mark.asyncio
+async def test_session_export_markdown_command_returns_export_payload() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runtime._session_manager = DummySessionManager()  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        '{"version":"%s","type":"session_export_markdown","id":"export","payload":{}}'
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert payload["command"] == "session_export_markdown"
+    assert payload["session_id"] == "current-session"
+    assert payload["export"]["suggested_filename"] == "current-session.md"
+    assert payload["export"]["markdown"].startswith("# current-session")
 
 
 @pytest.mark.asyncio

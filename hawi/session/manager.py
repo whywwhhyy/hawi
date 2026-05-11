@@ -28,6 +28,12 @@ from hawi.events import (
 from hawi.utils.lifecycle import ExitHandler
 
 from . import layout
+from .markdown_export import (
+    MarkdownExport,
+    export_message_history_to_markdown,
+    write_markdown_export_bundle,
+)
+from .message_history import message_history_entry_from_event, should_persist_message
 from .writer import SessionWriter, WriteJob
 
 if TYPE_CHECKING:
@@ -136,6 +142,7 @@ class SessionManager:
 
             if bus is not None:
                 self._subscribe(bus)
+            self._configure_subagent_storage()
 
             if not self._exit_hook_registered:
                 ExitHandler.get_instance().register_last(
@@ -177,6 +184,7 @@ class SessionManager:
             self._session_name = name or session_id
             self._session_created_at = datetime.now().isoformat()
             self._session_has_visible_messages = False
+            self._configure_subagent_storage()
         return session_id
 
     @property
@@ -289,6 +297,7 @@ class SessionManager:
             self._session_has_visible_messages = self._session_dir_has_visible_messages(
                 session_dir
             )
+            self._configure_subagent_storage()
 
     def read_message_history(
         self,
@@ -300,6 +309,45 @@ class SessionManager:
             return []
         return layout.read_jsonl(
             layout.message_history_path(layout.session_dir(self._root, sid))
+        )
+
+    def export_markdown(
+        self,
+        session_id: str | None = None,
+        *,
+        model: str | None = None,
+        title: str | None = None,
+    ) -> MarkdownExport:
+        """Create a session-internal Markdown export bundle."""
+        sid = session_id or self._session_id
+        if sid is None:
+            raise RuntimeError("No active session to export")
+        if session_id is None or session_id == self._session_id:
+            self.save_now()
+        session_dir = layout.session_dir(self._root, sid)
+        history_path = layout.message_history_path(session_dir)
+        message_history = layout.read_jsonl(history_path)
+        context_snapshot = self._read_context_snapshot(sid)
+        manifest = self._read_manifest(sid)
+        export = export_message_history_to_markdown(
+            message_history,
+            kind="session",
+            subject_id=sid,
+            title=title or f"Hawi Session {sid}",
+            model=model,
+            system_prompt=context_snapshot.get("system_prompt"),
+            metadata={
+                "name": manifest.get("name"),
+                "active_plugins": manifest.get("active_plugins"),
+                "message_count": len(message_history),
+            },
+            raw_history_path=str(history_path),
+        )
+        return write_markdown_export_bundle(
+            export,
+            export_dir=layout.export_dir(session_dir, export.export_id),
+            source_jsonl_path=history_path,
+            message_history=message_history,
         )
 
     def switch_to(self, session_id: str) -> None:
@@ -369,7 +417,7 @@ class SessionManager:
             return
         message_history_entries: list[dict[str, Any]] = []
         if event.type == "agent.message_added":
-            entry = self._message_history_entry(event)
+            entry = message_history_entry_from_event(event)
             if entry is not None:
                 message_history_entries.append(entry)
                 self._session_has_visible_messages = True
@@ -568,7 +616,7 @@ class SessionManager:
         content = message.get("content")
         if not isinstance(content, list) or not content:
             return False
-        return cls._should_persist_message(message.get("metadata"))
+        return should_persist_message(message.get("metadata"))
 
     def _scheduler_queue_manager(self) -> Any:
         if self._scheduler is None:
@@ -600,55 +648,38 @@ class SessionManager:
             getattr(p, "plugin_name", p.__class__.__name__) for p in self._iter_plugins()
         ]
 
-    def _message_history_entry(self, event: Event) -> dict[str, Any] | None:
-        """Build an append-only history record for displayable message events."""
+    def _read_context_snapshot(self, session_id: str) -> dict[str, Any]:
+        ctx_path = layout.context_path(layout.session_dir(self._root, session_id))
+        if not ctx_path.exists():
+            if session_id == self._session_id and self._agent is not None:
+                return self._agent.context.snapshot()
+            return {}
         try:
-            data = event.model_dump(mode="json")
-        except Exception:
-            logger.exception("failed to serialize message history event")
-            return None
+            data = json.loads(ctx_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.warning("failed to read context snapshot %s", ctx_path)
+            return {}
+        return data if isinstance(data, dict) else {}
 
-        role = data.get("role")
-        if role not in {"user", "assistant", "tool"}:
-            return None
-        metadata = data.get("metadata")
-        if not self._should_persist_message(metadata):
-            return None
-        content = data.get("content")
-        if not isinstance(content, list) or not content:
-            return None
+    def _read_manifest(self, session_id: str) -> dict[str, Any]:
+        manifest_path = layout.manifest_path(layout.session_dir(self._root, session_id))
+        if not manifest_path.exists():
+            return {}
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.warning("failed to read session manifest %s", manifest_path)
+            return {}
+        return data if isinstance(data, dict) else {}
 
-        return {
-            "version": 1,
-            "timestamp": data.get("timestamp"),
-            "run_id": data.get("run_id"),
-            "role": role,
-            "content": content,
-            "metadata": metadata if isinstance(metadata, dict) else None,
-        }
-
-    @staticmethod
-    def _should_persist_message(metadata: Any) -> bool:
-        """Return whether a message should be kept in display history.
-
-        Hidden/internal messages can opt out through metadata. Messages that
-        never emit ``agent.message_added`` are not considered here at all.
-        """
-        if not isinstance(metadata, dict):
-            return True
-        if metadata.get("hidden") is True:
-            return False
-        for key in ("display", "visible", "persist", "persist_session"):
-            if metadata.get(key) is False:
-                return False
-        display_type = metadata.get("display_message_type")
-        if isinstance(display_type, str) and display_type in {
-            "hidden",
-            "internal",
-            "none",
-        }:
-            return False
-        return True
+    def _configure_subagent_storage(self) -> None:
+        subagents = getattr(self._agent, "subagents", None)
+        if subagents is None or not hasattr(subagents, "configure_session_storage"):
+            return
+        subagents.configure_session_storage(
+            root=self._root,
+            session_id_provider=lambda: self._session_id,
+        )
 
     def _load_plugins(self, plugins_dir_: Path, manifest: dict[str, Any]) -> None:
         existing_by_name = {

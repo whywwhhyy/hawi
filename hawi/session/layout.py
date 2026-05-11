@@ -9,6 +9,8 @@ Each session lives in its own directory under ``root``::
         queues.json            # scheduler queues + steer + audit
         runtime.json           # in-flight run state + last unsent results
         plugins/<name>.json    # one per plugin returning non-None state
+        exports/<id>/...       # session-internal markdown export bundles
+        subagents/<id>/...     # child agent histories and export bundles
 
 Snapshot component files share the same atomic-write protocol: write to a
 ``*.json.tmp`` sibling then ``os.replace`` it onto the final name. Message
@@ -33,6 +35,8 @@ MESSAGE_HISTORY_FILENAME = "message_history.jsonl"
 QUEUES_FILENAME = "queues.json"
 RUNTIME_FILENAME = "runtime.json"
 PLUGINS_DIRNAME = "plugins"
+EXPORTS_DIRNAME = "exports"
+SUBAGENTS_DIRNAME = "subagents"
 
 # Top-level versions for migration handling.
 MANIFEST_VERSION = 1
@@ -79,6 +83,22 @@ def runtime_path(session_dir_: Path) -> Path:
 
 def plugins_dir(session_dir_: Path) -> Path:
     return session_dir_ / PLUGINS_DIRNAME
+
+
+def exports_dir(session_dir_: Path) -> Path:
+    return session_dir_ / EXPORTS_DIRNAME
+
+
+def export_dir(session_dir_: Path, export_id: str) -> Path:
+    return exports_dir(session_dir_) / export_id
+
+
+def subagents_dir(session_dir_: Path) -> Path:
+    return session_dir_ / SUBAGENTS_DIRNAME
+
+
+def subagent_dir(session_dir_: Path, subagent_id: str) -> Path:
+    return subagents_dir(session_dir_) / subagent_id
 
 
 def plugin_state_path(session_dir_: Path, plugin_name: str) -> Path:

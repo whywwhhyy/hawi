@@ -358,6 +358,8 @@ class CoreRuntime:
                 await self._handle_session_save_now(client, command)
             elif command.type == "session_history":
                 await self._handle_session_history(client, command)
+            elif command.type == "session_export_markdown":
+                await self._handle_session_export_markdown(client, command)
             elif command.type == "shutdown":
                 await client.send(make_ack("shutdown", request_id=command.id))
                 await self.stop()
@@ -820,6 +822,31 @@ class CoreRuntime:
                     "session_id": session_id,
                     "message_history": message_history,
                     "context_usage": context_usage,
+                },
+            )
+        )
+
+    async def _handle_session_export_markdown(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        requested_session_id = self._optional_session_id(command)
+        session_id = requested_session_id or sm.current_session_id
+        if session_id is None:
+            raise ValueError("No active session to export")
+        export = sm.export_markdown(
+            requested_session_id,
+            model=self.model_name,
+        )
+        await client.send(
+            make_ack(
+                "session_export_markdown",
+                request_id=command.id,
+                payload={
+                    "session_id": session_id,
+                    "export": export.to_dict(include_markdown=True),
                 },
             )
         )

@@ -11,7 +11,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, Bot, Brain, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Copy, FileText, LoaderCircle, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type QueueMessageState, type ToolProgressState } from "./state";
@@ -111,6 +111,7 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -512,6 +513,26 @@ export default function App() {
     await sendCommand("apply_plugins", { selected_plugins: selectedPlugins, plugin_configs: pluginConfigs });
   }
 
+  async function exportCurrentSession() {
+    if (!currentSessionId || exportBusy) return;
+    setExportBusy(true);
+    try {
+      const frame = await sendCommand("session_export_markdown", { session_id: currentSessionId });
+      const exportPayload = normalizeMarkdownExportPayload(frame?.payload?.export);
+      if (!exportPayload) {
+        throw new Error("导出结果为空");
+      }
+      const saved = await window.hawi.saveMarkdownExport(exportPayload);
+      if (!saved.canceled && saved.markdownPath) {
+        dispatch(metaFrame(`Markdown 已导出：${saved.markdownPath}`));
+      }
+    } catch (error) {
+      dispatch(errorFrame(error));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   if (!metadata || !config) {
     return <div className="boot">Loading Hawi metadata...</div>;
   }
@@ -543,6 +564,14 @@ export default function App() {
             onNew={newSession}
           />
         </div>
+        <button
+          className="tool-button"
+          title="导出当前 Session Markdown"
+          disabled={!currentSessionId || state.sessionMessageCount === 0 || exportBusy}
+          onClick={exportCurrentSession}
+        >
+          <FileText size={17} /> {exportBusy ? "导出中" : "导出"}
+        </button>
         <button className="tool-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
           <Plug size={17} /> 插件配置
         </button>
@@ -1586,11 +1615,40 @@ function errorFrame(error: unknown): CoreFrame {
   };
 }
 
+function metaFrame(message: string): CoreFrame {
+  return {
+    version: VERSION,
+    type: "debug.info",
+    payload: { message }
+  };
+}
+
 function framePayload(frame: CoreFrame | null): Record<string, unknown> | null {
   if (!frame || !frame.payload || typeof frame.payload !== "object" || Array.isArray(frame.payload)) {
     return null;
   }
   return frame.payload as Record<string, unknown>;
+}
+
+function normalizeMarkdownExportPayload(value: unknown): MarkdownExportPayload | null {
+  if (!isRecord(value) || typeof value.markdown !== "string") {
+    return null;
+  }
+  const references = Array.isArray(value.references)
+    ? value.references
+      .filter(isRecord)
+      .map((item) => ({
+        filename: String(item.filename ?? "reference.txt"),
+        content: String(item.content ?? ""),
+        mime_type: typeof item.mime_type === "string" ? item.mime_type : undefined
+      }))
+    : [];
+  return {
+    suggested_filename: String(value.suggested_filename ?? "hawi-export.md"),
+    reference_dir_name: typeof value.reference_dir_name === "string" ? value.reference_dir_name : undefined,
+    markdown: value.markdown,
+    references
+  };
 }
 
 function normalizeSessionList(value: unknown): SessionMetaPayload[] {

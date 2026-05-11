@@ -158,6 +158,9 @@ class SubAgentHandle:
     closed_at: float | None = None
     last_result: AgentRunResult | None = None
     last_error: str | None = None
+    parent_session_id: str | None = None
+    message_history: list[dict[str, Any]] = field(default_factory=list)
+    last_export: dict[str, Any] | None = None
     partial_text: str = ""
     partial_reasoning: str = ""
     partial_updated_at: float | None = None

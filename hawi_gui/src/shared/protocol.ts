@@ -30,7 +30,8 @@ export type CoreCommandType =
   | "session_switch"
   | "session_delete"
   | "session_save_now"
-  | "session_history";
+  | "session_history"
+  | "session_export_markdown";
 
 export interface SessionMetaPayload {
   session_id: string;
@@ -122,6 +123,25 @@ export interface GuiMetadata {
   inspect: InspectPayload;
   config: PersistedConfig;
   coreRunning: boolean;
+}
+
+export interface MarkdownExportReference {
+  filename: string;
+  content: string;
+  mime_type?: string;
+}
+
+export interface MarkdownExportPayload {
+  suggested_filename: string;
+  reference_dir_name?: string;
+  markdown: string;
+  references?: MarkdownExportReference[];
+}
+
+export interface SaveMarkdownExportResult {
+  canceled: boolean;
+  markdownPath?: string;
+  referenceDir?: string;
 }
 
 export function makeCommand<TPayload extends Record<string, unknown>>(

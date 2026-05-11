@@ -241,8 +241,12 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
 - `summary`：返回状态、最近结果摘要、错误。
 - `events`：返回最近 N 条 mapped events；`model.content_block_delta` 会包含 `delta`，可用于观察子 agent 的实时输出碎片。
 - `context_tail`：返回最近 N 条子 agent 消息；运行中的 model response 会追加一条带 `metadata.subagent_partial=true` 的临时 assistant 消息，完成后由真实 context message 取代。
+- `markdown`：生成/刷新 session 内部 Markdown export，并返回阅读版 Markdown；tool arguments/result 超过 100 行时只返回折叠后的引用。
+- `export`：只返回 export manifest、session 内路径、ref 列表和可继续查询的工具参数。
+- `ref`：读取 `export` / `markdown` 返回的 ref 文件内容，用于按需查看被折叠的完整 tool arguments/result。
 
 `status.last_result_text` 表示最近一次已完成 run 的结果文本；如果子 agent 正在运行，调用方可同时查看 `context_tail` 的 partial assistant message。
+完成态的 `wait_subagent` report 会附带 export 查询提示，主 agent 默认拿最后结论继续工作；详细子会话 Markdown、JSONL 和 ref 文件保留在 parent session 目录下。
 
 ## 事件与审计
 
@@ -282,6 +286,7 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
 
 - manager registry snapshot。
 - 每个 child 的 `AgentContext.snapshot()`。
+- 每个 child 的 `message_history.jsonl`，作为 Markdown export 和 GUI child chat 的唯一可见历史来源。
 - 每个 child scheduler 的 queue snapshot。
 - child runtime snapshot。
 - 插件状态 snapshot。

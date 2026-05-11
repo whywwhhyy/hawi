@@ -52,6 +52,7 @@ COMMAND_TYPES = {
     "session_delete",
     "session_save_now",
     "session_history",
+    "session_export_markdown",
     "blob.upload_init",
     "blob.upload_chunk",
     "blob.upload_finalize",

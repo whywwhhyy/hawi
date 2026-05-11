@@ -17,16 +17,23 @@
     - [ ] 明确哪些 metadata 会进入模型上下文，哪些仅用于运行时/GUI/插件
 
 - [ ] Agent / SubAgent Markdown 导出机制：让长对话和子任务结果更易阅读、归档和分享
-    - [ ] 设计统一 Markdown exporter：输入 `AgentContext.messages` / session `message_history` / subagent context，输出稳定 markdown
-    - [ ] 明确导出结构：frontmatter 或标题区包含 agent/session/subagent id、model、时间、system prompt 摘要、插件列表、上下文统计
-    - [ ] 消息渲染规则：user/assistant/thinking/tool/result/error 分段，tool 参数和结果用 fenced code block，保留 metadata/时间/queue 信息
+    - [x] 设计统一 Markdown exporter：输入统一收敛为 `message_history` 语义；主 session 读取 `message_history.jsonl`，subagent 需要捕获同形状历史
+    - [x] 明确导出结构：标题区包含 agent/session/subagent id、model、时间、system prompt、插件/状态、上下文统计，并引用 session 内原始 JSONL
+    - [x] 消息渲染规则：消息之间用分割线和标题分隔，thinking 用引用块，tool 参数和结果用 fenced code block
+    - [x] 阅读版截断规则：只折叠超过 100 行的 tool arguments / tool result；人工与模型生成对话完整保留
+    - [x] 折叠引用规则：被折叠的内容写入 Markdown 同目录 `<markdown名>-ref/`，code block 前给出引用链接
+    - [x] 原始导出规则：`message_history.jsonl` 只保留在 session 保存目录/内部 export bundle 中，默认外部导出只写 Markdown 与 ref 目录
+    - [x] 主 session 内部导出 bundle：`exports/<export_id>/` 保存 Markdown、ref 目录、`message_history.jsonl` 快照和 manifest
+    - [x] GUI 外部保存策略：系统保存框只落目标 `.md` 与必要的 `<markdown名>-ref/`，不会把 JSONL 拷出 session 目录
     - [ ] 支持导出范围：当前 session 全量、选中消息范围、最近 N 条、单个 run、单个 subagent/turn
-    - [ ] Core protocol 增加导出命令：`session_export_markdown`、`subagent_export_markdown`，返回 markdown 文本或 artifact/file handle
-    - [ ] GUI 主 agent 提供导出按钮：一键导出当前 session markdown，并支持复制 / 保存为 `.md`
-    - [ ] SubAgent 运行结果支持 markdown 导出：`read_subagent(view="markdown")` 或独立 `export_subagent_markdown`，默认包含任务、最终结果、context tail、关键事件
+    - [x] Core protocol 增加主 session 导出命令：`session_export_markdown`
+    - [x] GUI 主 agent 提供导出按钮：一键导出当前 session markdown，系统保存框选择目标 `.md`
+    - [x] SubAgent 捕获独立 `message_history`：child `agent.message_added` 进入 handle 历史，并写入 parent session 下的 child history
+    - [x] SubAgent 运行结果支持 markdown 查询：`read_subagent(view="markdown" | "export" | "ref")`，wait report 返回查询提示
     - [ ] SubAgent card / 侧栏提供“导出 Markdown / 复制 Markdown”入口，方便阅读和发送给主 agent 或用户
-    - [ ] 对 markdown 导出的超长 tool result 支持摘要 + artifact 引用，避免导出文件爆炸
-    - [ ] 增加测试：消息类型渲染、tool/result fenced block、metadata、session history 导出、subagent partial/completed 导出
+    - [x] 对 markdown 导出的超长 tool result 支持 ref 引用，避免导出文件爆炸
+    - [x] 增加测试：消息类型渲染、tool/result fenced block、session history 导出、subagent completed 导出、core command 导出
+    - [ ] 后续增强测试：metadata 细节、选中范围、单个 run、subagent partial/turn 导出、GUI 保存路径重命名 ref dir
 
 - [ ] 大文件拆分与模块边界收敛
     - [x] `hawi/agent/subagent.py` 已拆成 `hawi/agent/subagent/` package：`manager.py`、`types.py`、`prompts.py`、`utils.py`，并保留 `from hawi.agent.subagent import ...` 导入兼容

@@ -219,10 +219,22 @@ class SubAgentPlugin(HawiPlugin):
                 "subagent_id": {"type": "string"},
                 "view": {
                     "type": "string",
-                    "enum": ["status", "summary", "events", "context_tail"],
+                    "enum": [
+                        "status",
+                        "summary",
+                        "events",
+                        "context_tail",
+                        "markdown",
+                        "export",
+                        "ref",
+                    ],
                     "default": "summary",
                 },
                 "limit": {"type": "integer", "default": 20},
+                "ref_path": {
+                    "type": "string",
+                    "description": "Reference filename returned by view=export or view=markdown.",
+                },
             },
             "required": ["subagent_id"],
         },
@@ -230,14 +242,28 @@ class SubAgentPlugin(HawiPlugin):
     async def read_subagent(
         self,
         subagent_id: str,
-        view: Literal["status", "summary", "events", "context_tail"] = "summary",
+        view: Literal[
+            "status",
+            "summary",
+            "events",
+            "context_tail",
+            "markdown",
+            "export",
+            "ref",
+        ] = "summary",
         limit: int = 20,
+        ref_path: str | None = None,
         ctx: ToolCallContext | None = None,
     ) -> dict[str, Any]:
         """Read sub-agent status, events, or recent context."""
         if ctx is None:
             raise RuntimeError("read_subagent requires Hawi tool context")
-        return ctx.agent.subagents.read(subagent_id, view=view, limit=limit)
+        return ctx.agent.subagents.read(
+            subagent_id,
+            view=view,
+            limit=limit,
+            ref_path=ref_path,
+        )
 
     @tool(
         name="close_subagent",

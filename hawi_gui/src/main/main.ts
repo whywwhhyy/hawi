@@ -1,7 +1,8 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CoreCommandType, GuiMetadata, InspectPayload, PersistedConfig } from "../shared/protocol";
+import type { CoreCommandType, GuiMetadata, InspectPayload, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult } from "../shared/protocol";
 import {
   type EnvPaths,
   resolveEnvPaths,
@@ -109,6 +110,73 @@ function registerIpc(): void {
     }
     return core.sendCommand(type, payload);
   });
+
+  ipcMain.handle("gui:save-markdown-export", async (_event, payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> => {
+    return saveMarkdownExport(payload);
+  });
+}
+
+async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {
+  if (!payload || typeof payload.markdown !== "string") {
+    throw new Error("invalid markdown export payload");
+  }
+  const suggested = safeMarkdownFilename(payload.suggested_filename);
+  const options = {
+    title: "导出 Markdown",
+    defaultPath: suggested,
+    filters: [{ name: "Markdown", extensions: ["md"] }]
+  };
+  const result = mainWindow
+    ? await dialog.showSaveDialog(mainWindow, options)
+    : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return { canceled: true };
+  }
+
+  const markdownPath = ensureMarkdownExtension(result.filePath);
+  const parsed = path.parse(markdownPath);
+  const referenceDirName = `${parsed.name}-ref`;
+  const originalRefDir = payload.reference_dir_name;
+  const markdown = originalRefDir && originalRefDir !== referenceDirName
+    ? payload.markdown.split(originalRefDir).join(referenceDirName)
+    : payload.markdown;
+
+  mkdirSync(parsed.dir, { recursive: true });
+  writeFileSync(markdownPath, markdown, "utf8");
+
+  const references = Array.isArray(payload.references) ? payload.references : [];
+  let referenceDir: string | undefined;
+  if (references.length > 0) {
+    referenceDir = path.join(parsed.dir, referenceDirName);
+    mkdirSync(referenceDir, { recursive: true });
+    for (const ref of references) {
+      if (!ref || typeof ref.content !== "string") {
+        continue;
+      }
+      const filename = safeReferenceFilename(ref.filename);
+      writeFileSync(path.join(referenceDir, filename), ref.content, "utf8");
+    }
+  }
+
+  return {
+    canceled: false,
+    markdownPath,
+    referenceDir
+  };
+}
+
+function ensureMarkdownExtension(filePath: string): string {
+  return path.extname(filePath) ? filePath : `${filePath}.md`;
+}
+
+function safeMarkdownFilename(value: string | undefined): string {
+  const base = value && value.trim() ? path.basename(value.trim()) : "hawi-export.md";
+  return base.toLowerCase().endsWith(".md") ? base : `${base}.md`;
+}
+
+function safeReferenceFilename(value: string | undefined): string {
+  const base = value && value.trim() ? path.basename(value.trim()) : "reference.txt";
+  return base.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[.-]+/, "") || "reference.txt";
 }
 
 function installNavigationGuards(window: BrowserWindow): void {

@@ -258,6 +258,30 @@ async def test_subagent_status_tracks_latest_completed_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subagent_markdown_export_uses_message_history(tmp_path) -> None:
+    agent = HawiAgent(model=EchoModel())
+    agent.subagents.configure_session_storage(
+        root=tmp_path,
+        session_id_provider=lambda: "parent-session",
+    )
+    handle = await agent.subagents.spawn(mode="fresh", initial_prompt="export task")
+
+    try:
+        await agent.subagents.wait(handle.id, timeout=2)
+        assert handle.message_history
+
+        data = agent.subagents.read(handle.id, view="markdown")
+        assert "markdown" in data
+        assert "export task" in data["markdown"]
+        export = data["export"]
+        assert export["markdown_path"]
+        assert export["message_history_path"]
+        assert "read_subagent" == export["query"]["tool"]
+    finally:
+        await agent.subagents.close(handle.id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
 async def test_subagent_read_exposes_streaming_delta_and_partial_context() -> None:
     agent = HawiAgent(model=DelayedStreamingModel(delay=0.2))
     handle = await agent.subagents.spawn(mode="fresh", initial_prompt="live task")
