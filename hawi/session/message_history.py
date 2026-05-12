@@ -11,7 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
-    """Build a stable message-history record from ``agent.message_added``."""
+    """Build a stable message-history record from a user-visible event."""
+    if event.type == "model.retry":
+        return _model_retry_entry(event)
+    if event.type in {"model.error", "agent.error"}:
+        return _error_entry(event)
+    if event.type in {"scheduler.interrupt", "agent.interrupt"}:
+        return _interrupt_entry(event)
     if event.type != "agent.message_added":
         return None
     try:
@@ -21,7 +27,7 @@ def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
         return None
 
     role = data.get("role")
-    if role not in {"user", "assistant", "tool"}:
+    if role not in {"user", "assistant", "tool", "system", "error"}:
         return None
     metadata = data.get("metadata")
     if not should_persist_message(metadata):
@@ -37,6 +43,81 @@ def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
         "role": role,
         "content": content,
         "metadata": metadata if isinstance(metadata, dict) else None,
+    }
+
+
+def _model_retry_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize model retry history event")
+        return None
+    attempt = data.get("attempt", "")
+    max_retries = data.get("max_retries", "")
+    error_type = data.get("error_type", "")
+    error_message = data.get("error_message", "")
+    text = f"模型重试 {attempt}/{max_retries}: [{error_type}] {error_message}"
+    return {
+        "version": 1,
+        "timestamp": data.get("timestamp"),
+        "run_id": data.get("run_id") or data.get("request_id"),
+        "role": "system",
+        "content": [{"type": "text", "text": text}],
+        "metadata": {
+            "display_message_type": "model_retry",
+            "request_id": data.get("request_id"),
+            "error_type": error_type,
+            "attempt": attempt,
+            "max_retries": max_retries,
+            "persist_session": True,
+        },
+    }
+
+
+def _error_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize error history event")
+        return None
+    error = data.get("error") if isinstance(data.get("error"), dict) else {}
+    message = str(error.get("message") or "Unknown error")
+    return {
+        "version": 1,
+        "timestamp": data.get("timestamp"),
+        "run_id": data.get("run_id"),
+        "role": "error",
+        "content": [{"type": "text", "text": message}],
+        "metadata": {
+            "display_message_type": event.type,
+            "code": "model_error" if event.type == "model.error" else "agent_error",
+            "error": error,
+            "persist_session": True,
+        },
+    }
+
+
+def _interrupt_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize interrupt history event")
+        return None
+    if event.type == "scheduler.interrupt":
+        text = f"执行被中断: {data.get('reason', '')}"
+    else:
+        text = f"Agent 中断: {data.get('interrupt_type', '')}"
+    return {
+        "version": 1,
+        "timestamp": data.get("timestamp"),
+        "run_id": data.get("run_id"),
+        "role": "system",
+        "content": [{"type": "text", "text": text}],
+        "metadata": {
+            "display_message_type": event.type,
+            "interrupted_tool_calls": data.get("interrupted_tool_calls"),
+            "persist_session": True,
+        },
     }
 
 

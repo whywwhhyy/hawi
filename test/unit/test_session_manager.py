@@ -21,7 +21,17 @@ import pytest
 from hawi.agent import HawiAgent
 from hawi.agent.context import AgentContext
 from hawi.agent.scheduler.queue import MessageQueueManager
-from hawi.events import AgentMessageAddedEvent, EventBus, SessionWriteFailedEvent
+from hawi.errors import DeniedError, ToolExecutionError
+from hawi.events import (
+    AgentErrorEvent,
+    AgentInterruptEvent,
+    AgentMessageAddedEvent,
+    EventBus,
+    ModelErrorEvent,
+    ModelRetryEvent,
+    SchedulerInterruptEvent,
+    SessionWriteFailedEvent,
+)
 from hawi.models import Model
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse, TokenUsage
 from hawi.plugin import HawiPlugin, HookContext, before_conversation
@@ -797,6 +807,80 @@ class TestSessionManager:
             sd = layout.session_dir(session_root, sid)
             assert layout.context_path(sd).exists()
             manifest = json.loads(layout.manifest_path(sd).read_text())
+            assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
+        finally:
+            sm.detach()
+
+    def test_user_visible_status_and_error_events_append_message_history(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        scheduler = _StubScheduler()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            agent.event_bus.publish(
+                AgentMessageAddedEvent.create(
+                    run_id="r1",
+                    role="user",
+                    content=[{"type": "text", "text": "call the model"}],
+                )
+            )
+            agent.event_bus.publish(
+                ModelRetryEvent.create(
+                    request_id="r1-1",
+                    error_type="network",
+                    attempt=1,
+                    max_retries=10,
+                    error_message="Anthropic connection error: Connection error.",
+                )
+            )
+            agent.event_bus.publish(
+                ModelErrorEvent.create(
+                    DeniedError("Anthropic authentication failed: Error code: 401")
+                )
+            )
+            agent.event_bus.publish(
+                AgentErrorEvent.create(
+                    run_id="r1",
+                    error=ToolExecutionError("Tool execution failed loudly"),
+                )
+            )
+            agent.event_bus.publish(
+                SchedulerInterruptEvent.create("user", ["tc-1"])
+            )
+            agent.event_bus.publish(
+                AgentInterruptEvent.create(interrupt_type="user", run_id="r1")
+            )
+            sm._writer.wait_idle(timeout=2.0)
+
+            entries = sm.read_message_history(sid)
+            assert [entry["role"] for entry in entries] == [
+                "user",
+                "system",
+                "error",
+                "error",
+                "system",
+                "system",
+            ]
+            assert entries[1]["content"][0]["text"].startswith("模型重试 1/10")
+            assert entries[1]["metadata"]["display_message_type"] == "model_retry"
+            assert (
+                "Anthropic authentication failed"
+                in entries[2]["content"][0]["text"]
+            )
+            assert entries[2]["metadata"]["code"] == "model_error"
+            assert "Tool execution failed loudly" in entries[3]["content"][0]["text"]
+            assert entries[3]["metadata"]["code"] == "agent_error"
+            assert entries[4]["content"][0]["text"] == "执行被中断: user"
+            assert entries[4]["metadata"]["interrupted_tool_calls"] == ["tc-1"]
+            assert entries[5]["content"][0]["text"] == "Agent 中断: user"
+
+            manifest = json.loads(
+                layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
+            )
             assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
         finally:
             sm.detach()

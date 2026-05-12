@@ -72,9 +72,14 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
         layout.COMPONENT_PLUGINS,
     ),
     "agent.message_added": (layout.COMPONENT_CONTEXT,),
+    "agent.error": (layout.COMPONENT_RUNTIME,),
+    "agent.interrupt": (layout.COMPONENT_RUNTIME,),
     "agent.compact_stop": (layout.COMPONENT_CONTEXT,),
+    "model.retry": (layout.COMPONENT_RUNTIME,),
+    "model.error": (layout.COMPONENT_RUNTIME,),
     "scheduler.enqueue": (layout.COMPONENT_QUEUES,),
     "scheduler.dequeue": (layout.COMPONENT_QUEUES,),
+    "scheduler.interrupt": (layout.COMPONENT_RUNTIME,),
 }
 
 
@@ -543,11 +548,10 @@ class SessionManager:
         if not components:
             return
         message_history_entries: list[dict[str, Any]] = []
-        if event.type == "agent.message_added":
-            entry = message_history_entry_from_event(event)
-            if entry is not None:
-                message_history_entries.append(entry)
-                self._session_has_visible_messages = True
+        entry = message_history_entry_from_event(event)
+        if entry is not None:
+            message_history_entries.append(entry)
+            self._session_has_visible_messages = True
         if (
             not message_history_entries
             and not self._current_session_has_visible_messages()
