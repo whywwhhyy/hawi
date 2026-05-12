@@ -12,6 +12,9 @@ export interface ChatNode {
   kind: ChatKind;
   content: string;
   complete?: boolean;
+  streamStartedAt?: number;
+  streamFinishedAt?: number;
+  streamDurationMs?: number;
   queue?: QueueKind;
   displayMessageType?: DisplayMessageType;
   tool?: ToolState;
@@ -27,6 +30,9 @@ export interface ToolState {
   argsState: "pending" | "streaming" | "complete";
   arguments?: unknown;
   resultPreview: string;
+  streamStartedAt?: number;
+  streamFinishedAt?: number;
+  streamDurationMs?: number;
   durationMs?: number;
   progress?: ToolProgressState;
 }
@@ -254,18 +260,25 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
       if (!runId) return state;
       const delta = String(payload.delta ?? "");
-      return appendRunDelta(completeThinkingForRun(state, runId), runId, "agent", delta);
+      const eventAt = frameTime(frame);
+      return appendRunDelta(
+        completeThinkingForRun(state, runId, eventAt),
+        runId,
+        "agent",
+        delta,
+        eventAt
+      );
     }
 
     case "run.thinking_delta": {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
       if (!runId) return state;
-      return appendRunDelta(state, runId, "thinking", String(payload.delta ?? ""));
+      return appendRunDelta(state, runId, "thinking", String(payload.delta ?? ""), frameTime(frame));
     }
 
     case "run.stop": {
       const runId = String(payload.run_id ?? "");
-      const completedState = completeOpenRunNodesForRun(state, runId);
+      const completedState = completeOpenRunNodesForRun(state, runId, frameTime(frame));
       const withDivider = appendChatNode(completedState, {
         id: nodeId("divider", `${runId}-${Date.now()}`),
         kind: "divider",
@@ -282,7 +295,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "tool.call_start": {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
-      const completedState = completeOpenRunNodesForRun(state, runId);
+      const eventAt = frameTime(frame);
+      const completedState = completeOpenRunNodesForRun(state, runId, eventAt);
       const toolCallId = String(payload.tool_call_id ?? "");
       const status = normalizeToolStatus(payload.status, "running");
       const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
@@ -302,6 +316,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
               name: String(payload.tool_name || node.tool.name),
               description,
               status,
+              streamStartedAt: node.tool.streamStartedAt ?? (argumentInfo ? undefined : eventAt),
               argsState: argumentInfo ? "complete" : node.tool.argsState,
               arguments: argumentInfo ? argumentInfo.arguments : node.tool.arguments,
               argsRaw: argumentInfo
@@ -320,7 +335,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         argsRaw: "",
         argsState: argumentInfo ? "complete" : "pending",
         arguments: argumentInfo?.arguments,
-        resultPreview: ""
+        resultPreview: "",
+        streamStartedAt: argumentInfo ? undefined : eventAt
       };
       const node: ChatNode = {
         id: nodeId("tool", toolCallId),
@@ -362,25 +378,27 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "tool.call_stop":
       return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => {
+        const eventAt = frameTime(frame);
         const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
         const argumentInfo = hasArguments ? splitToolArguments(payload.arguments) : undefined;
         const description = optionalToolPurpose(payload)
           ?? argumentInfo?.description
           ?? tool.description;
-        return {
+        return completeToolStream({
           ...tool,
           name: String(payload.tool_name ?? tool.name),
           description,
           argsState: "complete",
           arguments: argumentInfo ? argumentInfo.arguments : tool.arguments,
           argsRaw: argumentInfo ? JSON.stringify(argumentInfo.arguments, null, 2) : tool.argsRaw
-        };
+        }, eventAt);
       });
 
     case "tool.result":
       return updateToolResult(state, String(payload.tool_call_id ?? ""), payload, (tool) => {
+        const eventAt = frameTime(frame);
         const text = formatToolResultText(payload);
-        return {
+        return completeToolStream({
           ...tool,
           status: payload.success === false ? "fail" : "success",
           name: String(payload.tool_name || tool.name),
@@ -389,7 +407,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
             ? truncate(tool.resultPreview + text)
             : truncate(text || tool.resultPreview),
           durationMs: Number(payload.duration_ms ?? tool.durationMs ?? 0)
-        };
+        }, eventAt);
       });
 
     case "model.metadata": {
@@ -834,19 +852,36 @@ function formatContextUsage(context?: ContextUsageState): string {
   return `${prefix}${context.usedTokens}/${context.maxContextTokens} (${Math.round(context.ratio * 100)}%)${suffix}`;
 }
 
-function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinking", delta: string): AppState {
+function appendRunDelta(
+  state: AppState,
+  runId: string,
+  kind: "agent" | "thinking",
+  delta: string,
+  eventAt: number,
+): AppState {
   const run = state.runs[runId] ?? {};
   const key = kind === "agent" ? "agentNodeId" : "thinkingNodeId";
   const existingId = run[key];
   if (existingId) {
-    return updateChatNode(state, existingId, (node) => ({ ...node, content: node.content + delta, complete: false }));
+    return updateChatNode(state, existingId, (node) => ({
+      ...node,
+      content: node.content + delta,
+      complete: false,
+      streamStartedAt: node.streamStartedAt ?? eventAt
+    }));
   }
   const processingId = run.processingId;
   const shouldCountAssistant = run.assistantMessageCounted !== true;
   if (processingId) {
     const withoutProcessing = clearProcessingForRun(state, runId);
     const id = nodeId(kind, `${runId}-${withoutProcessing.nodes.length}`);
-    const next = appendChatNode(withoutProcessing, { id, kind, content: delta, complete: false });
+    const next = appendChatNode(withoutProcessing, {
+      id,
+      kind,
+      content: delta,
+      complete: false,
+      streamStartedAt: eventAt
+    });
     return {
       ...next,
       sessionMessageCount: shouldCountAssistant
@@ -863,7 +898,13 @@ function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinkin
     };
   }
   const id = nodeId(kind, `${runId}-${state.nodes.length}`);
-  const next = appendChatNode(state, { id, kind, content: delta, complete: false });
+  const next = appendChatNode(state, {
+    id,
+    kind,
+    content: delta,
+    complete: false,
+    streamStartedAt: eventAt
+  });
   return {
     ...next,
     sessionMessageCount: shouldCountAssistant
@@ -880,21 +921,23 @@ function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinkin
   };
 }
 
-function completeThinkingForRun(state: AppState, runId: string): AppState {
-  return completeRunNodeForRun(state, runId, "thinkingNodeId", "thinking");
+function completeThinkingForRun(state: AppState, runId: string, finishedAt: number): AppState {
+  return completeRunNodeForRun(state, runId, "thinkingNodeId", "thinking", finishedAt);
 }
 
-function completeOpenRunNodesForRun(state: AppState, runId: string): AppState {
+function completeOpenRunNodesForRun(state: AppState, runId: string, finishedAt: number): AppState {
   return completeRunNodeForRun(
     completeRunNodeForRun(
       clearProcessingForRun(state, runId),
       runId,
       "thinkingNodeId",
-      "thinking"
+      "thinking",
+      finishedAt
     ),
     runId,
     "agentNodeId",
-    "agent"
+    "agent",
+    finishedAt
   );
 }
 
@@ -902,14 +945,15 @@ function completeRunNodeForRun(
   state: AppState,
   runId: string,
   key: "agentNodeId" | "thinkingNodeId",
-  kind: "agent" | "thinking"
+  kind: "agent" | "thinking",
+  finishedAt: number
 ): AppState {
   const nodeIdForRun = state.runs[runId]?.[key];
   if (!nodeIdForRun) {
     return state;
   }
   const updated = updateChatNode(state, nodeIdForRun, (node) => (
-    node.kind === kind ? { ...node, complete: true } : node
+    node.kind === kind ? completeChatNodeStream({ ...node, complete: true }, finishedAt) : node
   ));
   return {
     ...updated,
@@ -920,6 +964,36 @@ function completeRunNodeForRun(
         [key]: undefined
       }
     }
+  };
+}
+
+function completeChatNodeStream(node: ChatNode, finishedAt: number): ChatNode {
+  if (
+    node.streamFinishedAt !== undefined
+    || node.streamStartedAt === undefined
+    || !Number.isFinite(finishedAt)
+  ) {
+    return node;
+  }
+  return {
+    ...node,
+    streamFinishedAt: finishedAt,
+    streamDurationMs: Math.max(0, finishedAt - node.streamStartedAt)
+  };
+}
+
+function completeToolStream(tool: ToolState, finishedAt: number): ToolState {
+  if (
+    tool.streamFinishedAt !== undefined
+    || tool.streamStartedAt === undefined
+    || !Number.isFinite(finishedAt)
+  ) {
+    return tool;
+  }
+  return {
+    ...tool,
+    streamFinishedAt: finishedAt,
+    streamDurationMs: Math.max(0, finishedAt - tool.streamStartedAt)
   };
 }
 

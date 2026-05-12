@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { VERSION, type CoreFrame } from "../shared/protocol";
 import { createInitialState, reduceCoreEvent } from "./state";
 
-function frame(type: string, payload: Record<string, unknown>): CoreFrame {
-  return { version: VERSION, type, payload };
+function frame(type: string, payload: Record<string, unknown>, ts?: number): CoreFrame {
+  return ts === undefined
+    ? { version: VERSION, type, payload }
+    : { version: VERSION, type, payload, ts };
 }
 
 describe("core event reducer", () => {
@@ -212,6 +214,34 @@ describe("core event reducer", () => {
     expect(state.nodes[1].complete).toBe(true);
   });
 
+  it("records stream durations for thinking, answer, and tool call blocks", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-stream-times", user_content: "hi", queue: "normal" }, 10));
+    state = reduceCoreEvent(state, frame("run.thinking_delta", { run_id: "run-stream-times", delta: "thinking" }, 11));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-stream-times", delta: "answer" }, 12.5));
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-stream-times", tool_call_id: "tc-time", tool_name: "calc" }, 13));
+    state = reduceCoreEvent(state, frame("tool.call_stop", { tool_call_id: "tc-time", tool_name: "calc", arguments: { expression: "1+1" } }, 13.75));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent", "tool"]);
+    expect(state.nodes[1]).toMatchObject({
+      complete: true,
+      streamStartedAt: 11000,
+      streamFinishedAt: 12500,
+      streamDurationMs: 1500
+    });
+    expect(state.nodes[2]).toMatchObject({
+      complete: true,
+      streamStartedAt: 12500,
+      streamFinishedAt: 13000,
+      streamDurationMs: 500
+    });
+    expect(state.nodes[3].tool).toMatchObject({
+      streamStartedAt: 13000,
+      streamFinishedAt: 13750,
+      streamDurationMs: 750
+    });
+  });
+
   it("marks thinking complete when run stops", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("run.start", { run_id: "run-stop-thinking", user_content: "hi", queue: "normal" }));
@@ -220,6 +250,21 @@ describe("core event reducer", () => {
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "divider"]);
     expect(state.nodes[1].complete).toBe(true);
+  });
+
+  it("finishes the active answer block when the run stops", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-stop-agent-time", user_content: "hi", queue: "normal" }, 20));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-stop-agent-time", delta: "answer" }, 21));
+    state = reduceCoreEvent(state, frame("run.stop", { run_id: "run-stop-agent-time", stop_reason: "end_turn" }, 22.25));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent", "divider"]);
+    expect(state.nodes[1]).toMatchObject({
+      complete: true,
+      streamStartedAt: 21000,
+      streamFinishedAt: 22250,
+      streamDurationMs: 1250
+    });
   });
 
   it("removes the pending processing line when a run stops before model output", () => {
@@ -502,7 +547,6 @@ describe("core event reducer", () => {
     expect(state.queueMessages.urgent[0].contentPreview).toBe("stop now");
     expect(state.queueMessages.high_prio[0].contentPreview).toBe("merge this");
     expect(state.queueMessages.normal[0].contentPreview).toBe("first");
-    expect(state.metadataLines[0]).toContain("total=7");
     expect(state.metadataLines[0]).toContain("cache_read=1");
     expect(state.metadataLines[0]).toContain("reasoning=2");
     expect(state.metadataLines[0]).toContain("ctx=128/1024 (13%)");

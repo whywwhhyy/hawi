@@ -14,7 +14,7 @@ import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText,
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState } from "./state";
+import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -1033,9 +1033,15 @@ const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) 
   return (
     <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""}`}>
       <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
-        <span>{label}</span>
+        <span className="bubble-title">
+          {label}
+          <BlockStreamStatus
+            receiving={receiving}
+            durationMs={node.streamDurationMs}
+            receivingTitle="正在接收消息"
+          />
+        </span>
         <span className="message-actions">
-          {receiving && <LiveSpinner title="正在接收消息" />}
           <CopyButton text={node.content} title="复制消息" />
           <button
             className="thinking-toggle message-toggle"
@@ -1093,9 +1099,15 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
   return (
     <article className={`bubble thinking ${collapsed ? "collapsed" : ""}`}>
       <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
-        <span><Brain size={15} /> Thinking</span>
+        <span className="bubble-title">
+          <Brain size={15} /> Thinking
+          <BlockStreamStatus
+            receiving={receiving}
+            durationMs={node.streamDurationMs}
+            receivingTitle="正在接收思考内容"
+          />
+        </span>
         <span className="message-actions">
-          {receiving && <LiveSpinner title="正在接收思考内容" />}
           <CopyButton text={node.content} title="复制思考内容" />
           <button
             className="thinking-toggle"
@@ -1140,6 +1152,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   const tool = node.tool!;
   const completed = tool.status === "success" || tool.status === "fail";
   const running = tool.status === "running";
+  const receivingArguments = tool.argsState !== "complete";
   const [collapsed, setCollapsed] = useState(() => completed);
   const autoCollapsedRef = useRef(completed);
   const hasStructuredArguments = tool.arguments !== undefined;
@@ -1156,11 +1169,18 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
     <article className={`bubble tool ${tool.status} ${collapsed ? "collapsed" : ""}`}>
       <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
         <span className="tool-title">
-          <span className="tool-name"><Wrench size={15} /> {tool.name}</span>
+          <span className="tool-name">
+            <Wrench size={15} /> {tool.name}
+            <BlockStreamStatus
+              receiving={receivingArguments}
+              durationMs={tool.streamDurationMs}
+              receivingTitle="正在接收工具调用"
+            />
+          </span>
           {tool.description && <span className="tool-description">{tool.description}</span>}
         </span>
         <span className="tool-actions">
-          {running ? <LiveSpinner title="工具运行中" /> : <strong>{tool.status}</strong>}
+          <strong>{running ? "running" : tool.status}</strong>
           <CopyButton text={formatToolCopyText(tool)} title="复制工具调用" />
           <button
             className="thinking-toggle tool-toggle"
@@ -1198,6 +1218,29 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
     </article>
   );
 });
+
+function BlockStreamStatus({
+  receiving,
+  durationMs,
+  receivingTitle,
+}: {
+  receiving: boolean;
+  durationMs?: number;
+  receivingTitle: string;
+}) {
+  if (receiving) {
+    return (
+      <span className="block-stream-status receiving">
+        <LiveSpinner title={receivingTitle} />
+      </span>
+    );
+  }
+  const label = formatStreamFinishedLabel(durationMs);
+  if (!label) {
+    return null;
+  }
+  return <span className="block-stream-status">{label}</span>;
+}
 
 function LiveSpinner({ title }: { title: string }) {
   return (
@@ -1871,6 +1914,13 @@ function isInputComposing(event: InputKeyEvent, inputComposing: boolean): boolea
 
 export function renderMarkdown(value: string): string {
   return markdown.render(value);
+}
+
+export function formatStreamFinishedLabel(durationMs?: number): string | null {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) {
+    return null;
+  }
+  return `finished in ${(durationMs / 1000).toFixed(1)}s`;
 }
 
 export function formatToolCopyText(tool: ToolState): string {

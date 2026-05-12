@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
+import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -38,6 +38,16 @@ describe("thinkingExcerpt", () => {
 
   it("adds an ellipsis only when content is truncated", () => {
     expect(thinkingExcerpt("too long", 3)).toBe("too...");
+  });
+});
+
+describe("formatStreamFinishedLabel", () => {
+  it("formats stream completion durations in seconds", () => {
+    expect(formatStreamFinishedLabel(1250)).toBe("finished in 1.3s");
+  });
+
+  it("skips missing stream durations", () => {
+    expect(formatStreamFinishedLabel()).toBeNull();
   });
 });
 
