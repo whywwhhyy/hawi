@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
@@ -10,6 +12,8 @@ from hawi.agent.context import AgentContext, ContextUsageSnapshot
 from hawi.events import Event, EventBus
 from hawi.models import Model
 from hawi.models.message import DeltaPart, Message, MessageRequest, MessageResponse
+from hawi.plugin import HawiPlugin
+from hawi.plugin.decorators import before_model_call
 
 
 class CompactingModel(Model):
@@ -102,6 +106,64 @@ class ContextTokenModel(Model):
         }
 
 
+class TimingStreamingModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
+    @property
+    def model_id(self) -> str:
+        return "timing-streaming-model"
+
+    def _prepare_request_impl(self, request: MessageRequest) -> dict[str, Any]:
+        return {}
+
+    def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
+        return MessageResponse(id="response", content=[])
+
+    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+        return MessageResponse(id="response", content=[])
+
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncGenerator[DeltaPart, None]:
+        await asyncio.sleep(0.01)
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "done",
+            "is_start": True,
+            "is_end": False,
+        }
+        await asyncio.sleep(0.01)
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "",
+            "is_start": False,
+            "is_end": True,
+        }
+        yield {
+            "type": "finish",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "context_tokens": 60,
+                "cache_read_tokens": 20,
+                "output_tokens": 5,
+            },
+        }
+
+
+class BeforeModelMessagePlugin(HawiPlugin):
+    def __init__(self) -> None:
+        self.added_at: float | None = None
+
+    @before_model_call
+    def add_plugin_message(self, agent: HawiAgent, model: Model, ctx: Any) -> None:
+        self.added_at = time.time()
+        agent.context.add_user_message("plugin supplied input")
+
+
 def test_context_compaction_keeps_tool_exchange_intact() -> None:
     context = AgentContext()
     context.add_user_message("old request")
@@ -184,16 +246,64 @@ def test_model_metadata_uses_normalized_provider_context_tokens() -> None:
         bus.close()
 
     metadata = cast(Any, events[-1])
-    assert metadata.context_tokens == 60
-    assert metadata.context_ratio == 0.6
+    assert metadata.context_tokens == 65
+    assert metadata.context_ratio == 0.65
     assert metadata.context_source == "provider_usage"
     assert agent.context.context_usage_snapshot() == ContextUsageSnapshot(
-        used_tokens=60,
+        used_tokens=65,
         max_context_tokens=100,
-        usage_ratio=0.6,
-        remaining_tokens=40,
+        usage_ratio=0.65,
+        remaining_tokens=35,
         source="provider_usage",
     )
+
+
+def test_model_metadata_includes_ttft_and_speed_estimates() -> None:
+    events: list[Event] = []
+    bus = EventBus()
+    bus.subscribe_blocking(events.append, event_types=["model.metadata"])
+    agent = HawiAgent(model=TimingStreamingModel(), event_bus=bus, streaming=True)
+
+    try:
+        agent.run("hi")
+    finally:
+        bus.close()
+
+    metadata = cast(Any, events[-1])
+    assert metadata.started_at is not None
+    assert metadata.first_token_at is not None
+    assert metadata.completed_at is not None
+    assert metadata.started_at <= metadata.first_token_at <= metadata.completed_at
+    assert metadata.ttft_ms > 0
+    assert metadata.decode_ms > 0
+    assert metadata.prefill_tokens == 40
+    assert metadata.decode_tokens == 5
+    assert metadata.context_tokens == 65
+    assert metadata.prefill_tokens_per_second > 0
+    assert metadata.decode_tokens_per_second > 0
+
+
+def test_ttft_timer_uses_plugin_added_message_start() -> None:
+    events: list[Event] = []
+    bus = EventBus()
+    bus.subscribe_blocking(events.append, event_types=["model.metadata"])
+    plugin = BeforeModelMessagePlugin()
+    agent = HawiAgent(
+        model=TimingStreamingModel(),
+        plugins=[plugin],
+        event_bus=bus,
+        streaming=True,
+    )
+
+    try:
+        agent.run(None)
+    finally:
+        bus.close()
+
+    metadata = cast(Any, events[-1])
+    assert plugin.added_at is not None
+    assert metadata.started_at >= plugin.added_at
+    assert metadata.ttft_ms > 0
 
 
 @pytest.mark.asyncio

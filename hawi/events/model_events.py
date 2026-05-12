@@ -404,6 +404,15 @@ class ModelMetadataEvent(Event):
     request_id: str
     usage: TokenUsage | None = None
     latency_ms: float | None = None
+    started_at: float | None = None
+    first_token_at: float | None = None
+    completed_at: float | None = None
+    ttft_ms: float | None = None
+    decode_ms: float | None = None
+    prefill_tokens: int | None = None
+    decode_tokens: int | None = None
+    prefill_tokens_per_second: float | None = None
+    decode_tokens_per_second: float | None = None
     context_tokens: int | None = None
     max_context_tokens: int | None = None
     context_ratio: float | None = None
@@ -415,6 +424,15 @@ class ModelMetadataEvent(Event):
         request_id: str,
         usage: TokenUsage | None = None,
         latency_ms: float | None = None,
+        started_at: float | None = None,
+        first_token_at: float | None = None,
+        completed_at: float | None = None,
+        ttft_ms: float | None = None,
+        decode_ms: float | None = None,
+        prefill_tokens: int | None = None,
+        decode_tokens: int | None = None,
+        prefill_tokens_per_second: float | None = None,
+        decode_tokens_per_second: float | None = None,
         context_tokens: int | None = None,
         max_context_tokens: int | None = None,
         context_ratio: float | None = None,
@@ -426,6 +444,15 @@ class ModelMetadataEvent(Event):
             request_id=request_id,
             usage=usage,
             latency_ms=latency_ms,
+            started_at=started_at,
+            first_token_at=first_token_at,
+            completed_at=completed_at,
+            ttft_ms=ttft_ms,
+            decode_ms=decode_ms,
+            prefill_tokens=prefill_tokens,
+            decode_tokens=decode_tokens,
+            prefill_tokens_per_second=prefill_tokens_per_second,
+            decode_tokens_per_second=decode_tokens_per_second,
             context_tokens=context_tokens,
             max_context_tokens=max_context_tokens,
             context_ratio=context_ratio,

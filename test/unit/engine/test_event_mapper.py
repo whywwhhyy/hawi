@@ -11,7 +11,9 @@ from hawi.events import (
     AgentToolCallEvent,
     AgentToolResultEvent,
     ModelContentBlockDeltaEvent,
+    ModelErrorEvent,
     ModelMetadataEvent,
+    ModelStreamStartEvent,
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockStopEvent,
@@ -20,9 +22,14 @@ from hawi.events import (
     SchedulerEnqueueEvent,
     SchedulerInterruptEvent,
 )
+from hawi.errors import ModelError
 from hawi.models.message import DeltaPart, TokenUsage
 from hawi.tool.types import ToolResult
 from hawi_engine.event_mapper import SemanticEventMapper
+
+
+def with_timestamp(event, timestamp: float):
+    return event.model_copy(update={"timestamp": timestamp})
 
 
 def test_mapper_only_logs_high_priority_message_on_enqueue() -> None:
@@ -69,6 +76,81 @@ def test_mapper_emits_run_start_with_queue_kind() -> None:
     assert frames[0]["payload"]["queue"] == "urgent"
     assert frames[0]["payload"]["display_message_type"] == "urgent"
     assert frames[0]["payload"]["user_content"] == "hello"
+
+
+def test_mapper_emits_ttft_debug_before_first_model_delta() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-ttft"))
+    mapper.map(
+        with_timestamp(
+            AgentMessageAddedEvent.create(
+                "run-ttft",
+                "user",
+                [{"type": "text", "text": "hello"}],
+            ),
+            100.0,
+        )
+    )
+    mapper.map(
+        with_timestamp(
+            ModelStreamStartEvent.create("req-ttft"),
+            100.1,
+        )
+    )
+
+    frames = mapper.map(
+        with_timestamp(
+            ModelContentBlockDeltaEvent.create(
+                "req-ttft",
+                {
+                    "type": "text_delta",
+                    "index": 0,
+                    "delta": "hi",
+                    "is_start": False,
+                    "is_end": False,
+                },
+            ),
+            100.25,
+        )
+    )
+
+    assert [frame["type"] for frame in frames] == ["debug.info", "run.text_delta"]
+    assert frames[0]["payload"]["message"] == "TTFT 250ms"
+    assert frames[0]["payload"]["elapsed_ms"] == 250.0
+    assert frames[1]["payload"]["delta"] == "hi"
+
+
+def test_mapper_emits_elapsed_wait_before_model_error() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-error"))
+    mapper.map(
+        with_timestamp(
+            AgentMessageAddedEvent.create(
+                "run-error",
+                "user",
+                [{"type": "text", "text": "hello"}],
+            ),
+            200.0,
+        )
+    )
+    mapper.map(
+        with_timestamp(
+            ModelStreamStartEvent.create("req-error"),
+            200.1,
+        )
+    )
+
+    frames = mapper.map(
+        with_timestamp(
+            ModelErrorEvent.create(ModelError("network", "connection failed")),
+            201.0,
+        )
+    )
+
+    assert [frame["type"] for frame in frames] == ["debug.info", "error"]
+    assert frames[0]["payload"]["message"] == "TTFT unavailable after 1000ms"
+    assert frames[0]["payload"]["elapsed_ms"] == 1000.0
+    assert frames[1]["payload"]["code"] == "model_error"
 
 
 def test_mapper_falls_back_to_run_queue_without_message_metadata() -> None:
@@ -507,6 +589,15 @@ def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:
                 reasoning_tokens=2,
             ),
             latency_ms=10.0,
+            started_at=100.0,
+            first_token_at=100.2,
+            completed_at=101.0,
+            ttft_ms=200.0,
+            decode_ms=800.0,
+            prefill_tokens=2,
+            decode_tokens=5,
+            prefill_tokens_per_second=10.0,
+            decode_tokens_per_second=6.25,
             context_tokens=100,
             max_context_tokens=1000,
             context_ratio=0.1,
@@ -520,6 +611,16 @@ def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:
     assert metadata[0]["payload"]["context_tokens"] == 100
     assert metadata[0]["payload"]["context_ratio"] == 0.1
     assert metadata[0]["payload"]["context_source"] == "provider_usage"
+    assert metadata[0]["payload"]["started_at"] == 100.0
+    assert metadata[0]["payload"]["first_token_at"] == 100.2
+    assert metadata[0]["payload"]["completed_at"] == 101.0
+    assert metadata[0]["payload"]["ttft_ms"] == 200.0
+    assert metadata[0]["payload"]["decode_ms"] == 800.0
+    assert metadata[0]["payload"]["prefill_tokens"] == 2
+    assert metadata[0]["payload"]["decode_tokens"] == 5
+    assert metadata[0]["payload"]["prefill_tokens_per_second"] == 10.0
+    assert metadata[0]["payload"]["decode_tokens_per_second"] == 6.25
+    assert len(metadata) == 1
 
     interrupted = mapper.map(SchedulerInterruptEvent.create("user", ["tc-9"]))
     assert interrupted[0]["type"] == "scheduler.interrupt"

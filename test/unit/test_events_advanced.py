@@ -202,12 +202,18 @@ class TestModelEventClasses:
         event = ModelMetadataEvent.create(
             request_id="req-123",
             usage=usage,
-            latency_ms=500.0
+            latency_ms=500.0,
+            ttft_ms=120.0,
+            prefill_tokens_per_second=83.3,
+            decode_tokens_per_second=52.6,
         )
         assert event.type == "model.metadata"
         assert event.usage is not None
         assert event.usage["output_tokens"] == 20
         assert event.latency_ms == 500.0
+        assert event.ttft_ms == 120.0
+        assert event.prefill_tokens_per_second == 83.3
+        assert event.decode_tokens_per_second == 52.6
 
 
 class TestAgentEventClasses:

@@ -62,6 +62,7 @@ from .context import (
     ContextCompactionRecord,
     ContextUsageSnapshot,
     ToolCallContext,
+    estimate_content_tokens,
 )
 from .compaction import AgentCompactor
 from .eventing import AgentEvents
@@ -221,6 +222,7 @@ class HawiAgent:
         self._steer_lock = threading.RLock()
         self._pending_inputs: list[PendingInput] = []
         self._last_unsent_tool_results: list[_RecentToolResult] = []
+        self._pending_model_input_started_at: float | None = None
         self._session_lock = threading.RLock()
         self._session_active = False
         self._autonomous_run_task: asyncio.Task[AgentRunResult] | None = None
@@ -448,6 +450,101 @@ class HawiAgent:
         if self._auto_compact.max_context_tokens > 0:
             return self._auto_compact.max_context_tokens
         return None
+
+    @staticmethod
+    def _is_first_output_chunk(chunk: DeltaPart) -> bool:
+        """Return True when a delta contains observable model output."""
+        chunk_type = chunk.get("type")
+        if chunk_type in {"text_delta", "reasoning_delta"}:
+            return bool(chunk.get("delta"))
+        if chunk_type == "tool_call_delta":
+            return bool(
+                chunk.get("arguments_delta")
+                or chunk.get("name")
+                or chunk.get("id")
+            )
+        return False
+
+    @staticmethod
+    def _tokens_per_second(tokens: int | None, duration_ms: float | None) -> float | None:
+        if tokens is None or tokens <= 0 or duration_ms is None or duration_ms <= 0:
+            return None
+        return tokens / (duration_ms / 1000)
+
+    @staticmethod
+    def _prefill_tokens_for_timing(
+        usage: TokenUsage | None,
+        context_tokens: int,
+    ) -> int | None:
+        if context_tokens <= 0:
+            return None
+        cache_read_tokens = 0
+        if usage is not None:
+            value = usage.get("cache_read_tokens")
+            if isinstance(value, int) and value > 0:
+                cache_read_tokens = value
+        return max(0, context_tokens - cache_read_tokens)
+
+    def _mark_model_input_started(self, at: float | None = None) -> None:
+        """Remember when new model-visible input began waiting for a reply."""
+        timestamp = time.time() if at is None else at
+        if (
+            self._pending_model_input_started_at is None
+            or timestamp < self._pending_model_input_started_at
+        ):
+            self._pending_model_input_started_at = timestamp
+
+    def _consume_model_input_started(self, fallback: float) -> float:
+        started_at = self._pending_model_input_started_at
+        self._pending_model_input_started_at = None
+        return started_at if started_at is not None else fallback
+
+    def _mark_context_growth_as_model_input(
+        self,
+        *,
+        message_count_before: int,
+        started_at: float,
+    ) -> None:
+        if len(self._context.messages) > message_count_before:
+            self._mark_model_input_started(started_at)
+
+    @classmethod
+    def _model_timing_metadata(
+        cls,
+        *,
+        started_at: float,
+        first_token_at: float | None,
+        completed_at: float,
+        prefill_tokens: int | None,
+        decode_tokens: int | None,
+    ) -> dict[str, float | int | None]:
+        ttft_ms = (
+            max(0.0, (first_token_at - started_at) * 1000)
+            if first_token_at is not None
+            else None
+        )
+        decode_ms = (
+            max(0.0, (completed_at - first_token_at) * 1000)
+            if first_token_at is not None
+            else None
+        )
+        return {
+            "started_at": started_at,
+            "first_token_at": first_token_at,
+            "completed_at": completed_at,
+            "ttft_ms": ttft_ms,
+            "decode_ms": decode_ms,
+            "prefill_tokens": prefill_tokens,
+            "decode_tokens": decode_tokens,
+            "prefill_tokens_per_second": cls._tokens_per_second(
+                prefill_tokens,
+                ttft_ms,
+            ),
+            "decode_tokens_per_second": cls._tokens_per_second(
+                decode_tokens,
+                decode_ms,
+            ),
+        }
 
     def interrupt(self, reason: str = "user") -> list[str]:
         return self._runtime.interrupt(reason)
@@ -738,6 +835,11 @@ class HawiAgent:
         event: Event,
         event_bus: EventBus | None,
     ) -> Event:
+        if (
+            isinstance(event, AgentMessageAddedEvent)
+            and event.role in {"user", "tool"}
+        ):
+            self._mark_model_input_started(event.timestamp)
         return await self._events.emit(event, event_bus)
 
     async def _invoke_session_hook(
@@ -992,14 +1094,24 @@ class HawiAgent:
         )
 
         # before_session hook
+        hook_message_count = len(self._context.messages)
         _hr = await self._invoke_session_hook("before_session", HookContext(run_id=run_id, iteration=0))
+        self._mark_context_growth_as_model_input(
+            message_count_before=hook_message_count,
+            started_at=time.time(),
+        )
         if _hr and _hr.action == "abort":
             state.should_stop = True
             state.stop_reason = "hook_abort"
 
         # before_conversation hook
         if not state.should_stop:
+            hook_message_count = len(self._context.messages)
             _hr = await self._invoke_session_hook("before_conversation", HookContext(run_id=run_id, iteration=0))
+            self._mark_context_growth_as_model_input(
+                message_count_before=hook_message_count,
+                started_at=time.time(),
+            )
             if _hr and _hr.action == "abort":
                 state.should_stop = True
                 state.stop_reason = "hook_abort"
@@ -1024,9 +1136,14 @@ class HawiAgent:
                 state.iteration += 1
 
                 # before_model_call hook
+                hook_message_count = len(self._context.messages)
                 _hr = await self._invoke_before_model_call(
                     m,
                     HookContext(run_id=run_id, iteration=state.iteration),
+                )
+                self._mark_context_growth_as_model_input(
+                    message_count_before=hook_message_count,
+                    started_at=time.time(),
                 )
                 if _hr:
                     if _hr.action == "abort":
@@ -1038,6 +1155,7 @@ class HawiAgent:
                     elif _hr.action == "restart_turn":
                         continue  # skip model call, go to next loop iteration
                     elif _hr.action == "reinvoke" and _hr.message is not None:
+                        self._mark_model_input_started()
                         self._context.add_user_message(_hr.message)
                         await self._emit_event(
                             AgentRunStopEvent.create(
@@ -1077,6 +1195,10 @@ class HawiAgent:
                 stop_reason = "end_turn"
                 usage: TokenUsage | None = None
                 model_call_start = time.time()
+                model_input_started_at = self._consume_model_input_started(
+                    model_call_start
+                )
+                first_token_at: float | None = None
                 response_content: list[ContentPart] = []
 
                 # Content block handlers for processing different chunk types
@@ -1094,6 +1216,7 @@ class HawiAgent:
                 )
                 try:
                     async for chunk in model_stream_gen:
+                        chunk_received_at = time.time()
                         if state.error:
                             if isinstance(state.error, AgentError):
                                 await self._emit_event(
@@ -1117,6 +1240,8 @@ class HawiAgent:
                             continue
 
                         chunk_type = chunk.get("type", "")
+                        if first_token_at is None and self._is_first_output_chunk(chunk):
+                            first_token_at = chunk_received_at
                         idx = chunk.get("index", 0)
 
                         # Get or create handler for this chunk type
@@ -1168,6 +1293,7 @@ class HawiAgent:
                         )
                     break
 
+                model_call_end = time.time()
                 # Model stream stop
                 await self._emit_event(
                     ModelStreamStopEvent.create(
@@ -1178,20 +1304,33 @@ class HawiAgent:
                 )
 
                 # Model metadata (usage + per-call latency)
-                metadata_context_tokens = context_usage.used_tokens
+                usage_output_tokens = (
+                    usage.get("output_tokens")
+                    if usage is not None and isinstance(usage.get("output_tokens"), int)
+                    else None
+                )
+                estimated_output_tokens = estimate_content_tokens(content_parts)
+                context_output_tokens = (
+                    usage_output_tokens
+                    if usage_output_tokens is not None and usage_output_tokens > 0
+                    else estimated_output_tokens
+                )
+                prompt_context_tokens = context_usage.used_tokens
+                metadata_context_tokens = prompt_context_tokens + context_output_tokens
                 metadata_context_ratio = context_usage.usage_ratio
                 metadata_context_source = context_usage.source
                 provider_context_tokens = usage_context_tokens(usage)
                 if provider_context_tokens is not None and provider_context_tokens > 0:
-                    metadata_context_tokens = provider_context_tokens
+                    prompt_context_tokens = provider_context_tokens
+                    metadata_context_tokens = provider_context_tokens + context_output_tokens
                     metadata_context_source = "provider_usage"
-                    if context_usage.max_context_tokens:
-                        metadata_context_ratio = min(
-                            1.0,
-                            metadata_context_tokens / context_usage.max_context_tokens,
-                        )
-                    else:
-                        metadata_context_ratio = None
+                if context_usage.max_context_tokens:
+                    metadata_context_ratio = min(
+                        1.0,
+                        metadata_context_tokens / context_usage.max_context_tokens,
+                    )
+                else:
+                    metadata_context_ratio = None
                 metadata_remaining_tokens = (
                     max(0, context_usage.max_context_tokens - metadata_context_tokens)
                     if context_usage.max_context_tokens is not None
@@ -1206,11 +1345,27 @@ class HawiAgent:
                         source=metadata_context_source,
                     )
                 )
+                decode_tokens = (
+                    usage_output_tokens
+                    if usage_output_tokens is not None and usage_output_tokens > 0
+                    else estimated_output_tokens or None
+                )
+                timing_metadata = self._model_timing_metadata(
+                    started_at=model_input_started_at,
+                    first_token_at=first_token_at,
+                    completed_at=model_call_end,
+                    prefill_tokens=self._prefill_tokens_for_timing(
+                        usage,
+                        prompt_context_tokens,
+                    ),
+                    decode_tokens=decode_tokens,
+                )
                 await self._emit_event(
                     ModelMetadataEvent.create(
                         request_id=request_id,
                         usage=usage,
-                        latency_ms=(time.time() - model_call_start) * 1000,
+                        latency_ms=(model_call_end - model_call_start) * 1000,
+                        **timing_metadata,
                         context_tokens=metadata_context_tokens,
                         max_context_tokens=context_usage.max_context_tokens,
                         context_ratio=metadata_context_ratio,
@@ -1233,6 +1388,7 @@ class HawiAgent:
                 )
                 
                 # after_model_call hook
+                hook_message_count = len(self._context.messages)
                 _hr = await self._invoke_after_model_call(
                     response,
                     HookContext(
@@ -1241,11 +1397,16 @@ class HawiAgent:
                         duration_ms=(time.time() - model_call_start) * 1000,
                     ),
                 )
+                self._mark_context_growth_as_model_input(
+                    message_count_before=hook_message_count,
+                    started_at=time.time(),
+                )
                 if _hr:
                     if _hr.action == "abort":
                         state.should_stop = True
                         state.stop_reason = "hook_abort"
                     elif _hr.action == "reinvoke" and _hr.message is not None:
+                        self._mark_model_input_started()
                         self._context.add_user_message(_hr.message)
                         await self._emit_event(
                             AgentRunStopEvent.create(
@@ -1333,6 +1494,7 @@ class HawiAgent:
                     ):
                         state.pending_reinvoke_message = tool_batch.control.message
                         state.stop_reason = "hook_reinvoke"
+                        self._mark_model_input_started()
                         self._context.add_user_message(state.pending_reinvoke_message)
                         await self._emit_event(
                             AgentRunStopEvent.create(
@@ -1456,6 +1618,7 @@ class HawiAgent:
             self._active_execution_state = None
 
         if post_conversation_reinvoke_message is not None:
+            self._mark_model_input_started()
             self._context.add_user_message(post_conversation_reinvoke_message)
             return await self._arun_internal(
                 message=None,
@@ -1463,6 +1626,8 @@ class HawiAgent:
                 event_bus=event_bus,
                 streaming=streaming,
             )
+
+        self._pending_model_input_started_at = None
 
         # Build and return result
         duration_ms = (time.time() - start_time) * 1000

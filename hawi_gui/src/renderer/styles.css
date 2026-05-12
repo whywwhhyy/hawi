@@ -963,6 +963,11 @@ button:disabled {
   width: 22px;
   height: 22px;
   color: #7f8f8b;
+}
+
+.live-spinner svg {
+  display: block;
+  transform-origin: center;
   animation: status-spin 920ms linear infinite;
 }
 
@@ -1119,8 +1124,7 @@ button:disabled {
   .collapsible-body.is-collapsed,
   .message-body,
   .thinking-summary,
-  .thinking-summary.is-visible,
-  .live-spinner {
+  .thinking-summary.is-visible {
     transition: none;
     animation: none;
   }

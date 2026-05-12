@@ -21,6 +21,10 @@ class SemanticEventMapper:
         self._current_queue_kind = "normal"
         self._run_queue: dict[str, str] = {}
         self._active_tool_calls: dict[str, dict[str, Any]] = {}
+        self._pending_model_input_started_at: float | None = None
+        self._active_model_request_id: str | None = None
+        self._active_model_stream_started_at: float | None = None
+        self._reported_ttft_request_ids: set[str] = set()
 
     def map(self, event: Event) -> list[dict[str, Any]]:
         """Return zero or more semantic protocol events for one Hawi event."""
@@ -147,7 +151,10 @@ class SemanticEventMapper:
             ]
 
         if etype == "agent.message_added":
-            if getattr(event, "role", "") != "user":
+            role = getattr(event, "role", "")
+            if role in {"user", "tool"}:
+                self._mark_model_wait_start(getattr(event, "timestamp", None))
+            if role != "user":
                 return []
             run_id = str(getattr(event, "run_id", self._active_run_id or ""))
             text = self._extract_text(getattr(event, "content", []))
@@ -174,12 +181,17 @@ class SemanticEventMapper:
 
         if etype == "model.content_block_delta":
             run_id = self._active_run_id or ""
+            request_id = str(getattr(event, "request_id", self._active_model_request_id or ""))
             delta_type = getattr(event, "delta_type", "")
             delta = getattr(event, "delta", "")
             if delta_type == "text" and delta:
-                return [make_frame("run.text_delta", {"run_id": run_id, "delta": delta})]
+                frames = self._ttft_debug_frames(event, request_id=request_id)
+                frames.append(make_frame("run.text_delta", {"run_id": run_id, "delta": delta}))
+                return frames
             if delta_type == "reasoning" and delta:
-                return [make_frame("run.thinking_delta", {"run_id": run_id, "delta": delta})]
+                frames = self._ttft_debug_frames(event, request_id=request_id)
+                frames.append(make_frame("run.thinking_delta", {"run_id": run_id, "delta": delta}))
+                return frames
             return []
 
         if etype == "model.metadata":
@@ -187,12 +199,15 @@ class SemanticEventMapper:
             input_tokens = int(usage.get("input_tokens", 0) or 0)
             output_tokens = int(usage.get("output_tokens", 0) or 0)
             total_tokens = usage_total(usage)
+            run_id = self._active_run_id or ""
+            request_id = getattr(event, "request_id", "")
+            ttft_ms = getattr(event, "ttft_ms", None)
             return [
                 make_frame(
                     "model.metadata",
                     {
-                        "run_id": self._active_run_id or "",
-                        "request_id": getattr(event, "request_id", ""),
+                        "run_id": run_id,
+                        "request_id": request_id,
                         "usage": usage,
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
@@ -206,6 +221,23 @@ class SemanticEventMapper:
                         "accepted_prediction_tokens": usage.get("accepted_prediction_tokens"),
                         "rejected_prediction_tokens": usage.get("rejected_prediction_tokens"),
                         "latency_ms": getattr(event, "latency_ms", None),
+                        "started_at": getattr(event, "started_at", None),
+                        "first_token_at": getattr(event, "first_token_at", None),
+                        "completed_at": getattr(event, "completed_at", None),
+                        "ttft_ms": ttft_ms,
+                        "decode_ms": getattr(event, "decode_ms", None),
+                        "prefill_tokens": getattr(event, "prefill_tokens", None),
+                        "decode_tokens": getattr(event, "decode_tokens", None),
+                        "prefill_tokens_per_second": getattr(
+                            event,
+                            "prefill_tokens_per_second",
+                            None,
+                        ),
+                        "decode_tokens_per_second": getattr(
+                            event,
+                            "decode_tokens_per_second",
+                            None,
+                        ),
                         "context_tokens": getattr(event, "context_tokens", None),
                         "max_context_tokens": getattr(event, "max_context_tokens", None),
                         "context_ratio": getattr(event, "context_ratio", None),
@@ -231,13 +263,19 @@ class SemanticEventMapper:
 
         if etype == "model.error":
             error = getattr(event, "error", None)
-            return [
+            frames = self._ttft_debug_frames(
+                event,
+                request_id=self._active_model_request_id or "",
+                failed=True,
+            )
+            frames.append(
                 make_error(
                     self._error_message(error, "Model error"),
                     code="model_error",
                     details=self._error_details(error),
                 )
-            ]
+            )
+            return frames
 
         if etype == "agent.error":
             error = getattr(event, "error", None)
@@ -264,7 +302,11 @@ class SemanticEventMapper:
                 "run_id": self._active_run_id or "",
                 "tool_call_purpose": "",
             }
-            return [
+            frames = self._ttft_debug_frames(
+                event,
+                request_id=str(getattr(event, "request_id", self._active_model_request_id or "")),
+            )
+            frames.append(
                 make_frame(
                     "tool.call_start",
                     {
@@ -275,7 +317,8 @@ class SemanticEventMapper:
                         "tool_call_purpose": "",
                     },
                 )
-            ]
+            )
+            return frames
 
         if etype == "model.tool_call_block_delta":
             tool_call_id = str(getattr(event, "tool_call_id", ""))
@@ -426,6 +469,9 @@ class SemanticEventMapper:
             self._run_queue.pop(run_id, None)
             if self._active_run_id == run_id:
                 self._active_run_id = None
+            self._pending_model_input_started_at = None
+            self._active_model_request_id = None
+            self._active_model_stream_started_at = None
             return [
                 make_frame(
                     "run.stop",
@@ -445,6 +491,11 @@ class SemanticEventMapper:
             "model.content_block_stop",
             "model.content_metadata",
         }:
+            if etype == "model.stream_start":
+                self._active_model_request_id = str(getattr(event, "request_id", ""))
+                self._active_model_stream_started_at = self._float_timestamp(
+                    getattr(event, "timestamp", None)
+                )
             return [
                 make_frame(
                     "debug.info",
@@ -456,6 +507,65 @@ class SemanticEventMapper:
             ]
 
         return []
+
+    @staticmethod
+    def _float_timestamp(value: Any) -> float | None:
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    def _mark_model_wait_start(self, timestamp: Any) -> None:
+        started_at = self._float_timestamp(timestamp)
+        if started_at is None:
+            return
+        if (
+            self._pending_model_input_started_at is None
+            or started_at < self._pending_model_input_started_at
+        ):
+            self._pending_model_input_started_at = started_at
+
+    def _ttft_debug_frames(
+        self,
+        event: Event,
+        *,
+        request_id: str,
+        failed: bool = False,
+    ) -> list[dict[str, Any]]:
+        if request_id and request_id in self._reported_ttft_request_ids:
+            return []
+
+        started_at = (
+            self._pending_model_input_started_at
+            if self._pending_model_input_started_at is not None
+            else self._active_model_stream_started_at
+        )
+        event_at = self._float_timestamp(getattr(event, "timestamp", None))
+        if started_at is None or event_at is None:
+            return []
+
+        elapsed_ms = max(0.0, (event_at - started_at) * 1000)
+        if request_id:
+            self._reported_ttft_request_ids.add(request_id)
+        self._pending_model_input_started_at = None
+
+        message = (
+            f"TTFT unavailable after {elapsed_ms:.0f}ms"
+            if failed
+            else f"TTFT {elapsed_ms:.0f}ms"
+        )
+        return [
+            make_frame(
+                "debug.info",
+                {
+                    "run_id": self._active_run_id or "",
+                    "request_id": request_id,
+                    "event_type": "model.error" if failed else event.type,
+                    "ttft_ms": None if failed else elapsed_ms,
+                    "elapsed_ms": elapsed_ms,
+                    "message": message,
+                },
+            )
+        ]
 
     @classmethod
     def _extract_text(cls, content: Any) -> str:

@@ -162,7 +162,7 @@ export default function App() {
 
   useBrowserLayoutEffect(() => {
     keepChatTailVisible();
-  }, [state.nodes]);
+  }, [state.nodes, state.processing?.id]);
 
   useEffect(() => {
     function syncSelection() {

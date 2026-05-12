@@ -775,14 +775,36 @@ function formatModelMetadata(payload: Record<string, unknown>): string {
   const latency = payload.latency_ms == null ? "n/a" : `${Number(payload.latency_ms).toFixed(0)}ms`;
   const details = formatUsageDetails(payload);
   const context = formatContextUsage(parseContextUsage(payload));
+  const timing = formatModelTiming(payload);
   return [
     `模型统计 in=${Number(payload.input_tokens ?? 0)}`,
     `out=${Number(payload.output_tokens ?? 0)}`,
     `total=${Number(payload.total_tokens ?? 0)}`,
     details,
     context,
+    timing,
     `latency=${latency}`
   ].filter(Boolean).join(" ");
+}
+
+function formatModelTiming(payload: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const ttft = optionalNumber(payload.ttft_ms);
+  const prefillTps = optionalNumber(payload.prefill_tokens_per_second);
+  const decodeTps = optionalNumber(payload.decode_tokens_per_second);
+  if (ttft !== undefined) parts.push(`ttft=${ttft.toFixed(0)}ms`);
+  if (prefillTps !== undefined && prefillTps > 0) {
+    parts.push(`prefill≈${formatTokenRate(prefillTps)}`);
+  }
+  if (decodeTps !== undefined && decodeTps > 0) {
+    parts.push(`decode≈${formatTokenRate(decodeTps)}`);
+  }
+  return parts.join(" ");
+}
+
+function formatTokenRate(value: number): string {
+  const rounded = value >= 10 ? value.toFixed(0) : value.toFixed(1);
+  return `${rounded} tok/s`;
 }
 
 function formatUsageDetails(payload: Record<string, unknown>): string {

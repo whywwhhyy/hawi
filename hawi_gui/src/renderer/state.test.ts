@@ -489,6 +489,9 @@ describe("core event reducer", () => {
       max_context_tokens: 1024,
       context_ratio: 0.125,
       context_source: "provider_usage",
+      ttft_ms: 120,
+      prefill_tokens_per_second: 1066.7,
+      decode_tokens_per_second: 42.5,
       latency_ms: 44
     }));
     state = reduceCoreEvent(state, frame("model.retry", { attempt: 1, max_retries: 3, error_type: "network", error_message: "retrying" }));
@@ -503,6 +506,9 @@ describe("core event reducer", () => {
     expect(state.metadataLines[0]).toContain("cache_read=1");
     expect(state.metadataLines[0]).toContain("reasoning=2");
     expect(state.metadataLines[0]).toContain("ctx=128/1024 (13%)");
+    expect(state.metadataLines[0]).toContain("ttft=120ms");
+    expect(state.metadataLines[0]).toContain("prefill≈1067 tok/s");
+    expect(state.metadataLines[0]).toContain("decode≈43 tok/s");
     expect(state.metadataLines[0]).not.toContain("estimated");
     expect(state.contextUsage).toEqual({ usedTokens: 128, maxContextTokens: 1024, ratio: 0.125, source: "provider_usage" });
     expect(state.nodes.map((node) => node.kind)).toContain("error");
