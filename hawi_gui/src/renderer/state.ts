@@ -4,7 +4,7 @@ const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 const MAX_RESULT_PREVIEW_LENGTH = 1200;
 
-export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider";
+export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "processing";
 export type DisplayMessageType = "normal" | "steer" | "urgent";
 
 export interface ChatNode {
@@ -101,6 +101,7 @@ export interface QueueMessageState {
 interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
+  pendingNodeId?: string;
   assistantMessageCounted?: boolean;
 }
 
@@ -218,17 +219,25 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const messageId = optionalString(payload.message_id);
       const userContent = String(payload.user_content ?? "");
       const userNodeId = messageId ? userMessageNodeId(messageId) : nodeId("user", runId);
+      const withUser = appendChatNode(state, {
+        id: userNodeId,
+        kind: "user",
+        queue,
+        displayMessageType,
+        content: userContent
+      });
+      const pendingNodeId = nodeId("processing", `${runId}-${withUser.nodes.length}`);
+      const withPending = appendChatNode(withUser, {
+        id: pendingNodeId,
+        kind: "processing",
+        content: "处理中...",
+        complete: false
+      });
       return {
-        ...appendNode(state, {
-          id: userNodeId,
-          kind: "user",
-          queue,
-          displayMessageType,
-          content: userContent
-        }),
+        ...withPending,
         sessionMessageCount: state.sessionMessageCount + 1,
         activeRunId: runId,
-        runs: { ...state.runs, [runId]: {} }
+        runs: { ...withPending.runs, [runId]: { pendingNodeId } }
       };
     }
 
@@ -248,14 +257,15 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     case "run.stop": {
       const runId = String(payload.run_id ?? "");
       const completedState = completeOpenRunNodesForRun(state, runId);
-      const nextRuns = { ...completedState.runs };
+      const withDivider = appendChatNode(completedState, {
+        id: nodeId("divider", `${runId}-${Date.now()}`),
+        kind: "divider",
+        content: formatRunStop(payload)
+      });
+      const nextRuns = { ...withDivider.runs };
       delete nextRuns[runId];
       return {
-        ...appendNode(completedState, {
-          id: nodeId("divider", `${runId}-${Date.now()}`),
-          kind: "divider",
-          content: formatRunStop(payload)
-        }),
+        ...withDivider,
         runs: nextRuns,
         activeRunId: state.activeRunId === runId ? undefined : state.activeRunId
       };
@@ -270,7 +280,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const argumentInfo = hasArguments ? splitToolArguments(payload.arguments) : undefined;
       const existingNodeId = completedState.toolNodeByCallId[toolCallId];
       if (existingNodeId) {
-        return updateNode(completedState, existingNodeId, (node) => {
+        return updateChatNode(completedState, existingNodeId, (node) => {
           if (!node.tool) return node;
           const description = optionalToolPurpose(payload)
             ?? argumentInfo?.description
@@ -309,18 +319,19 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         content: "",
         tool
       };
+      const withTool = appendChatNode(completedState, node);
       const runs = {
-        ...completedState.runs,
+        ...withTool.runs,
         [runId]: {
-          ...(completedState.runs[runId] ?? {}),
+          ...(withTool.runs[runId] ?? {}),
           agentNodeId: undefined,
           thinkingNodeId: undefined
         }
       };
       return {
-        ...appendNode(completedState, node),
+        ...withTool,
         runs,
-        toolNodeByCallId: { ...completedState.toolNodeByCallId, [toolCallId]: node.id }
+        toolNodeByCallId: { ...withTool.toolNodeByCallId, [toolCallId]: node.id }
       };
     }
 
@@ -394,7 +405,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "debug.info":
       return {
-        ...appendNode(state, {
+        ...appendChatNode(state, {
           id: nodeId("debug", `${Date.now()}-${state.debugLines.length}`),
           kind: "debug",
           content: String(payload.message ?? "")
@@ -407,7 +418,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "error":
       return {
-        ...appendNode(state, {
+        ...appendChatNode(state, {
           id: nodeId("error", `${Date.now()}-${state.errors.length}`),
           kind: "error",
           content: String(payload.message ?? "Unknown error")
@@ -782,11 +793,31 @@ function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinkin
   const key = kind === "agent" ? "agentNodeId" : "thinkingNodeId";
   const existingId = run[key];
   if (existingId) {
-    return updateNode(state, existingId, (node) => ({ ...node, content: node.content + delta, complete: false }));
+    return updateChatNode(state, existingId, (node) => ({ ...node, content: node.content + delta, complete: false }));
+  }
+  const pendingId = run.pendingNodeId;
+  const shouldCountAssistant = run.assistantMessageCounted !== true;
+  if (pendingId) {
+    const withoutPending = clearPendingForRun(state, runId);
+    const id = nodeId(kind, `${runId}-${withoutPending.nodes.length}`);
+    const next = appendChatNode(withoutPending, { id, kind, content: delta, complete: false });
+    return {
+      ...next,
+      sessionMessageCount: shouldCountAssistant
+        ? next.sessionMessageCount + 1
+        : next.sessionMessageCount,
+      runs: {
+        ...next.runs,
+        [runId]: {
+          ...(next.runs[runId] ?? {}),
+          [key]: id,
+          assistantMessageCounted: true
+        }
+      }
+    };
   }
   const id = nodeId(kind, `${runId}-${state.nodes.length}`);
-  const next = appendNode(state, { id, kind, content: delta, complete: false });
-  const shouldCountAssistant = run.assistantMessageCounted !== true;
+  const next = appendChatNode(state, { id, kind, content: delta, complete: false });
   return {
     ...next,
     sessionMessageCount: shouldCountAssistant
@@ -809,7 +840,12 @@ function completeThinkingForRun(state: AppState, runId: string): AppState {
 
 function completeOpenRunNodesForRun(state: AppState, runId: string): AppState {
   return completeRunNodeForRun(
-    completeRunNodeForRun(state, runId, "thinkingNodeId", "thinking"),
+    completeRunNodeForRun(
+      clearPendingForRun(state, runId),
+      runId,
+      "thinkingNodeId",
+      "thinking"
+    ),
     runId,
     "agentNodeId",
     "agent"
@@ -826,7 +862,7 @@ function completeRunNodeForRun(
   if (!nodeIdForRun) {
     return state;
   }
-  const updated = updateNode(state, nodeIdForRun, (node) => (
+  const updated = updateChatNode(state, nodeIdForRun, (node) => (
     node.kind === kind ? { ...node, complete: true } : node
   ));
   return {
@@ -841,12 +877,53 @@ function completeRunNodeForRun(
   };
 }
 
+function clearPendingForRun(state: AppState, runId: string): AppState {
+  const pendingNodeId = state.runs[runId]?.pendingNodeId;
+  if (!pendingNodeId) {
+    return state;
+  }
+  return {
+    ...state,
+    nodes: state.nodes.filter((node) => node.id !== pendingNodeId),
+    runs: {
+      ...state.runs,
+      [runId]: {
+        ...(state.runs[runId] ?? {}),
+        pendingNodeId: undefined
+      }
+    }
+  };
+}
+
+function clearPendingProcessingLines(state: AppState): AppState {
+  const pendingIds = Object.values(state.runs)
+    .map((run) => run.pendingNodeId)
+    .filter((id): id is string => Boolean(id));
+  if (pendingIds.length === 0) {
+    return state;
+  }
+  const pendingIdSet = new Set(pendingIds);
+  const runs = Object.fromEntries(
+    Object.entries(state.runs).map(([runId, run]) => [
+      runId,
+      pendingIdSet.has(run.pendingNodeId ?? "")
+        ? { ...run, pendingNodeId: undefined }
+        : run
+    ])
+  );
+  return {
+    ...state,
+    nodes: state.nodes.filter((node) => !pendingIdSet.has(node.id)),
+    runs
+  };
+}
+
 function updateTool(state: AppState, toolCallId: string, updater: (tool: ToolState) => ToolState): AppState {
   const nodeIdForTool = state.toolNodeByCallId[toolCallId];
   if (!nodeIdForTool) {
     return state;
   }
-  return updateNode(state, nodeIdForTool, (node) => {
+  return updateChatNode(state, nodeIdForTool, (node) => {
     if (!node.tool) return node;
     return { ...node, tool: updater(node.tool) };
   });
@@ -860,7 +937,7 @@ function updateToolResult(
 ): AppState {
   const nodeIdForTool = state.toolNodeByCallId[toolCallId];
   if (nodeIdForTool) {
-    const updated = updateNode(state, nodeIdForTool, (node) => {
+    const updated = updateChatNode(state, nodeIdForTool, (node) => {
       if (!node.tool) return node;
       return { ...node, tool: updater({ ...node.tool, toolCallId: toolCallId || node.tool.toolCallId }) };
     });
@@ -881,7 +958,7 @@ function updateToolResult(
     argsState: "complete",
     resultPreview: ""
   };
-  const next = appendNode(state, {
+  const next = appendChatNode(state, {
     id: nodeIdForNewTool,
     kind: "tool",
     content: "",
@@ -892,22 +969,25 @@ function updateToolResult(
     : next;
 }
 
-function updateNode(state: AppState, id: string, updater: (node: ChatNode) => ChatNode): AppState {
+function updateChatNode(state: AppState, id: string, updater: (node: ChatNode) => ChatNode): AppState {
+  const target = state.nodes.find((node) => node.id === id);
+  const base = target?.kind === "processing" ? state : clearPendingProcessingLines(state);
   return {
-    ...state,
-    nodes: state.nodes.map((node) => (node.id === id ? updater(node) : node))
+    ...base,
+    nodes: base.nodes.map((node) => (node.id === id ? updater(node) : node))
   };
 }
 
-function appendNode(state: AppState, node: ChatNode): AppState {
+function appendChatNode(state: AppState, node: ChatNode): AppState {
+  const base = node.kind === "processing" ? state : clearPendingProcessingLines(state);
   return {
-    ...state,
-    nodes: [...state.nodes, node]
+    ...base,
+    nodes: [...base.nodes, node]
   };
 }
 
 function addSystem(state: AppState, content: string): AppState {
-  return appendNode(state, {
+  return appendChatNode(state, {
     id: nodeId("system", `${Date.now()}-${state.nodes.length}`),
     kind: "system",
     content
@@ -916,7 +996,7 @@ function addSystem(state: AppState, content: string): AppState {
 
 function addMeta(state: AppState, content: string): AppState {
   return {
-    ...appendNode(state, {
+    ...appendChatNode(state, {
       id: nodeId("meta", `${Date.now()}-${state.metadataLines.length}`),
       kind: "meta",
       content

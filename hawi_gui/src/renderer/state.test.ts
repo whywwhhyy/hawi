@@ -18,13 +18,18 @@ describe("core event reducer", () => {
       display_message_type: "normal"
     }));
 
-    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes).toHaveLength(2);
     expect(state.nodes[0]).toMatchObject({
       id: "user-message-steer-1",
       kind: "user",
       queue: "normal",
       displayMessageType: "normal",
       content: "new priority"
+    });
+    expect(state.nodes[1]).toMatchObject({
+      kind: "processing",
+      content: "处理中...",
+      complete: false
     });
     expect(state.activeRunId).toBe("run-1");
     expect(state.sessionMessageCount).toBe(1);
@@ -94,6 +99,27 @@ describe("core event reducer", () => {
     expect(state.sessionMessageCount).toBe(2);
   });
 
+  it("replaces the pending processing line with the first text delta", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-prefill", user_content: "hi", queue: "normal" }));
+    const pendingNodeId = state.nodes[1].id;
+
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-prefill", delta: "answer" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
+    expect(state.nodes.some((node) => node.id === pendingNodeId)).toBe(false);
+    expect(state.nodes[1]).toMatchObject({
+      content: "answer",
+      complete: false
+    });
+    expect(state.runs["run-prefill"]).toMatchObject({
+      agentNodeId: state.nodes[1].id,
+      assistantMessageCounted: true
+    });
+    expect(state.runs["run-prefill"].pendingNodeId).toBeUndefined();
+    expect(state.sessionMessageCount).toBe(2);
+  });
+
   it("shows materialized steer messages with steer display type", () => {
     let state = createInitialState();
 
@@ -105,7 +131,7 @@ describe("core event reducer", () => {
       display_message_type: "steer"
     }));
 
-    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes).toHaveLength(2);
     expect(state.nodes[0]).toMatchObject({
       id: "user-message-steer-1",
       kind: "user",
@@ -113,8 +139,13 @@ describe("core event reducer", () => {
       displayMessageType: "steer",
       content: "new priority"
     });
+    expect(state.nodes[1]).toMatchObject({
+      kind: "processing",
+      content: "处理中...",
+      complete: false
+    });
     expect(state.activeRunId).toBe("run-1");
-    expect(state.runs["run-1"]).toEqual({});
+    expect(state.runs["run-1"].pendingNodeId).toBe(state.nodes[1].id);
   });
 
   it("splits agent content around tool calls", () => {
@@ -176,6 +207,24 @@ describe("core event reducer", () => {
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "divider"]);
     expect(state.nodes[1].complete).toBe(true);
+  });
+
+  it("removes the pending processing line when a run stops before model output", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-empty", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.stop", { run_id: "run-empty", stop_reason: "error" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "divider"]);
+    expect(state.sessionMessageCount).toBe(1);
+  });
+
+  it("removes the pending processing line before any new chat content", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-error", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("error", { message: "boom" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "error"]);
+    expect(state.runs["run-error"].pendingNodeId).toBeUndefined();
   });
 
   it("marks agent messages complete when run stops", () => {

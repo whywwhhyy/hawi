@@ -900,6 +900,22 @@ button:disabled {
   border-color: #d9e0e2;
 }
 
+.processing-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px 0;
+  padding: 2px 0;
+  color: #607074;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.processing-line .live-spinner {
+  width: 18px;
+  height: 18px;
+}
+
 .bubble.tool.success {
   border-color: #b8d7c9;
 }

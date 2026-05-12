@@ -1041,6 +1041,9 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
       </div>
     );
   }
+  if (node.kind === "processing") {
+    return <ProcessingLine node={node} />;
+  }
   if (node.kind === "tool" && node.tool) {
     return <ToolBubble node={node} />;
   }
@@ -1049,6 +1052,15 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   }
   return <MessageBubble node={node} />;
 });
+
+function ProcessingLine({ node }: { node: ChatNode }) {
+  return (
+    <div className="processing-line">
+      <LiveSpinner title="处理中" />
+      <span>{node.content || "处理中..."}</span>
+    </div>
+  );
+}
 
 const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) {
   const [collapsed, setCollapsed] = useState(false);
