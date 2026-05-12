@@ -18,7 +18,7 @@ describe("core event reducer", () => {
       display_message_type: "normal"
     }));
 
-    expect(state.nodes).toHaveLength(2);
+    expect(state.nodes).toHaveLength(1);
     expect(state.nodes[0]).toMatchObject({
       id: "user-message-steer-1",
       kind: "user",
@@ -26,10 +26,9 @@ describe("core event reducer", () => {
       displayMessageType: "normal",
       content: "new priority"
     });
-    expect(state.nodes[1]).toMatchObject({
-      kind: "processing",
+    expect(state.processing).toMatchObject({
       content: "处理中...",
-      complete: false
+      runId: "run-1"
     });
     expect(state.activeRunId).toBe("run-1");
     expect(state.sessionMessageCount).toBe(1);
@@ -52,6 +51,18 @@ describe("core event reducer", () => {
             { type: "text", text: "answer" }
           ],
           metadata: null
+        },
+        {
+          run_id: "run-1-1",
+          role: "system",
+          content: [{ type: "text", text: "模型重试 1/10: [network] retrying" }],
+          metadata: { display_message_type: "model_retry" }
+        },
+        {
+          run_id: "run-1",
+          role: "error",
+          content: [{ type: "text", text: "Anthropic authentication failed" }],
+          metadata: { display_message_type: "model.error" }
         }
       ],
       context_usage: {
@@ -62,11 +73,13 @@ describe("core event reducer", () => {
       }
     }));
 
-    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent"]);
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent", "system", "error"]);
     expect(state.nodes[0].content).toBe("hello");
     expect(state.nodes[1]).toMatchObject({ content: "thinking", complete: true });
     expect(state.nodes[2]).toMatchObject({ content: "answer", complete: true });
-    expect(state.sessionMessageCount).toBe(2);
+    expect(state.nodes[3].content).toContain("模型重试 1/10");
+    expect(state.nodes[4].content).toBe("Anthropic authentication failed");
+    expect(state.sessionMessageCount).toBe(4);
     expect(state.contextUsage).toEqual({
       usedTokens: 42,
       maxContextTokens: 1000,
@@ -102,12 +115,12 @@ describe("core event reducer", () => {
   it("replaces the pending processing line with the first text delta", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("run.start", { run_id: "run-prefill", user_content: "hi", queue: "normal" }));
-    const pendingNodeId = state.nodes[1].id;
+    const processingId = state.processing?.id;
 
     state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-prefill", delta: "answer" }));
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
-    expect(state.nodes.some((node) => node.id === pendingNodeId)).toBe(false);
+    expect(state.nodes.some((node) => node.id === processingId)).toBe(false);
     expect(state.nodes[1]).toMatchObject({
       content: "answer",
       complete: false
@@ -116,7 +129,8 @@ describe("core event reducer", () => {
       agentNodeId: state.nodes[1].id,
       assistantMessageCounted: true
     });
-    expect(state.runs["run-prefill"].pendingNodeId).toBeUndefined();
+    expect(state.runs["run-prefill"].processingId).toBeUndefined();
+    expect(state.processing).toBeUndefined();
     expect(state.sessionMessageCount).toBe(2);
   });
 
@@ -131,7 +145,7 @@ describe("core event reducer", () => {
       display_message_type: "steer"
     }));
 
-    expect(state.nodes).toHaveLength(2);
+    expect(state.nodes).toHaveLength(1);
     expect(state.nodes[0]).toMatchObject({
       id: "user-message-steer-1",
       kind: "user",
@@ -139,13 +153,12 @@ describe("core event reducer", () => {
       displayMessageType: "steer",
       content: "new priority"
     });
-    expect(state.nodes[1]).toMatchObject({
-      kind: "processing",
+    expect(state.processing).toMatchObject({
       content: "处理中...",
-      complete: false
+      runId: "run-1"
     });
     expect(state.activeRunId).toBe("run-1");
-    expect(state.runs["run-1"].pendingNodeId).toBe(state.nodes[1].id);
+    expect(state.runs["run-1"].processingId).toBe(state.processing?.id);
   });
 
   it("splits agent content around tool calls", () => {
@@ -215,6 +228,7 @@ describe("core event reducer", () => {
     state = reduceCoreEvent(state, frame("run.stop", { run_id: "run-empty", stop_reason: "error" }));
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "divider"]);
+    expect(state.processing).toBeUndefined();
     expect(state.sessionMessageCount).toBe(1);
   });
 
@@ -224,7 +238,40 @@ describe("core event reducer", () => {
     state = reduceCoreEvent(state, frame("error", { message: "boom" }));
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "error"]);
-    expect(state.runs["run-error"].pendingNodeId).toBeUndefined();
+    expect(state.runs["run-error"].processingId).toBeUndefined();
+    expect(state.processing).toBeUndefined();
+  });
+
+  it("keeps the pending processing line when hidden debug content arrives", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-debug", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("debug.info", { message: "model stream started" }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "debug"]);
+    expect(state.processing).toMatchObject({
+      content: "处理中...",
+      runId: "run-debug"
+    });
+    expect(state.runs["run-debug"].processingId).toBe(state.processing?.id);
+  });
+
+  it("keeps the pending processing line when model retry is reported", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-retry", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("model.retry", {
+      attempt: 1,
+      max_retries: 10,
+      error_type: "network",
+      error_message: "Anthropic connection error: Connection error."
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "system"]);
+    expect(state.nodes[1].content).toContain("模型重试 1/10");
+    expect(state.processing).toMatchObject({
+      content: "处理中...",
+      runId: "run-retry"
+    });
+    expect(state.runs["run-retry"].processingId).toBe(state.processing?.id);
   });
 
   it("marks agent messages complete when run stops", () => {

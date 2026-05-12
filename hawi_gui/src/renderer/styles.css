@@ -108,7 +108,6 @@ button:disabled {
   background: var(--color-surface);
 }
 
-.status-cell,
 .priority-status,
 .context-status,
 .session-status {
@@ -120,55 +119,6 @@ button:disabled {
   border-right: 1px solid var(--color-border);
   gap: 8px;
   white-space: nowrap;
-}
-
-.status-cell {
-  width: 104px;
-  flex: 0 0 104px;
-  padding: 0 10px;
-  text-align: center;
-  border-radius: var(--radius) 0 0 var(--radius);
-}
-
-.status-cell strong {
-  color: #34464c;
-}
-
-.status-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: #6f8480;
-}
-
-.state-ready .status-icon,
-.state-idle .status-icon {
-  color: #5d8177;
-}
-
-.state-running .status-icon {
-  color: #a37a3d;
-  animation: status-spin 920ms linear infinite;
-}
-
-.state-interrupting .status-icon {
-  color: #9a7461;
-  animation: status-spin 1280ms linear infinite;
-}
-
-.state-stopped .status-icon {
-  color: #839094;
-}
-
-.state-running strong,
-.state-interrupting strong {
-  color: #7a6548;
-}
-
-.state-stopped strong {
-  color: #6f7b80;
 }
 
 @keyframes status-spin {
@@ -1170,7 +1120,6 @@ button:disabled {
   .message-body,
   .thinking-summary,
   .thinking-summary.is-visible,
-  .status-icon,
   .live-spinner {
     transition: none;
     animation: none;

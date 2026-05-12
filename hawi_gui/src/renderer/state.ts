@@ -4,7 +4,7 @@ const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 const MAX_RESULT_PREVIEW_LENGTH = 1200;
 
-export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "processing";
+export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider";
 export type DisplayMessageType = "normal" | "steer" | "urgent";
 
 export interface ChatNode {
@@ -98,10 +98,16 @@ export interface QueueMessageState {
   metadata?: Record<string, unknown>;
 }
 
+export interface ProcessingState {
+  id: string;
+  runId: string;
+  content: string;
+}
+
 interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
-  pendingNodeId?: string;
+  processingId?: string;
   assistantMessageCounted?: boolean;
 }
 
@@ -125,6 +131,7 @@ export interface AppState {
   pluginStatuses: Record<string, PluginStatusState>;
   toolProgress: Record<string, ToolProgressState>;
   sessionMessageCount: number;
+  processing?: ProcessingState;
 }
 
 export function createInitialState(): AppState {
@@ -145,7 +152,8 @@ export function createInitialState(): AppState {
     pluginMessages: [],
     pluginStatuses: {},
     toolProgress: {},
-    sessionMessageCount: 0
+    sessionMessageCount: 0,
+    processing: undefined
   };
 }
 
@@ -169,7 +177,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         pluginMessages: [],
         pluginStatuses: {},
         toolProgress: {},
-        sessionMessageCount: 0
+        sessionMessageCount: 0,
+        processing: undefined
       };
 
     case "gui.load_session_history": {
@@ -191,7 +200,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         pluginMessages: [],
         pluginStatuses: {},
         toolProgress: {},
-        sessionMessageCount: history.length
+        sessionMessageCount: history.length,
+        processing: undefined
       };
     }
 
@@ -226,18 +236,17 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         displayMessageType,
         content: userContent
       });
-      const pendingNodeId = nodeId("processing", `${runId}-${withUser.nodes.length}`);
-      const withPending = appendChatNode(withUser, {
-        id: pendingNodeId,
-        kind: "processing",
+      const processing: ProcessingState = {
+        id: nodeId("processing", `${runId}-${withUser.nodes.length}`),
+        runId,
         content: "处理中...",
-        complete: false
-      });
+      };
       return {
-        ...withPending,
+        ...withUser,
         sessionMessageCount: state.sessionMessageCount + 1,
+        processing,
         activeRunId: runId,
-        runs: { ...withPending.runs, [runId]: { pendingNodeId } }
+        runs: { ...withUser.runs, [runId]: { processingId: processing.id } }
       };
     }
 
@@ -394,7 +403,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     case "model.retry":
       return addSystem(
         state,
-        `模型重试 ${String(payload.attempt ?? "")}/${String(payload.max_retries ?? "")}: [${String(payload.error_type ?? "")}] ${String(payload.error_message ?? "")}`
+        `模型重试 ${String(payload.attempt ?? "")}/${String(payload.max_retries ?? "")}: [${String(payload.error_type ?? "")}] ${String(payload.error_message ?? "")}`,
+        { clearProcessing: false }
       );
 
     case "scheduler.interrupt":
@@ -486,7 +496,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
 
 interface SessionHistoryRecord {
   runId: string;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "system" | "error";
   content: unknown[];
   metadata?: Record<string, unknown>;
 }
@@ -497,7 +507,13 @@ function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
     .filter(isRecord)
     .map((item, index): SessionHistoryRecord | null => {
       const role = item.role;
-      if (role !== "user" && role !== "assistant" && role !== "tool") {
+      if (
+        role !== "user"
+        && role !== "assistant"
+        && role !== "tool"
+        && role !== "system"
+        && role !== "error"
+      ) {
         return null;
       }
       const content = Array.isArray(item.content) ? item.content : [];
@@ -524,6 +540,14 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
 
   history.forEach((record, index) => {
     const baseId = `${record.runId}-${index}`;
+    if (record.role === "system" || record.role === "error") {
+      nodes.push({
+        id: nodeId(`${record.role}-history`, baseId),
+        kind: record.role,
+        content: historyContentText(record.content)
+      });
+      return;
+    }
     if (record.role === "user") {
       const queue = normalizeQueue(record.metadata?.queue ?? "normal");
       nodes.push({
@@ -795,12 +819,12 @@ function appendRunDelta(state: AppState, runId: string, kind: "agent" | "thinkin
   if (existingId) {
     return updateChatNode(state, existingId, (node) => ({ ...node, content: node.content + delta, complete: false }));
   }
-  const pendingId = run.pendingNodeId;
+  const processingId = run.processingId;
   const shouldCountAssistant = run.assistantMessageCounted !== true;
-  if (pendingId) {
-    const withoutPending = clearPendingForRun(state, runId);
-    const id = nodeId(kind, `${runId}-${withoutPending.nodes.length}`);
-    const next = appendChatNode(withoutPending, { id, kind, content: delta, complete: false });
+  if (processingId) {
+    const withoutProcessing = clearProcessingForRun(state, runId);
+    const id = nodeId(kind, `${runId}-${withoutProcessing.nodes.length}`);
+    const next = appendChatNode(withoutProcessing, { id, kind, content: delta, complete: false });
     return {
       ...next,
       sessionMessageCount: shouldCountAssistant
@@ -841,7 +865,7 @@ function completeThinkingForRun(state: AppState, runId: string): AppState {
 function completeOpenRunNodesForRun(state: AppState, runId: string): AppState {
   return completeRunNodeForRun(
     completeRunNodeForRun(
-      clearPendingForRun(state, runId),
+      clearProcessingForRun(state, runId),
       runId,
       "thinkingNodeId",
       "thinking"
@@ -877,43 +901,38 @@ function completeRunNodeForRun(
   };
 }
 
-function clearPendingForRun(state: AppState, runId: string): AppState {
-  const pendingNodeId = state.runs[runId]?.pendingNodeId;
-  if (!pendingNodeId) {
+function clearProcessingForRun(state: AppState, runId: string): AppState {
+  const processingId = state.runs[runId]?.processingId;
+  if (!processingId) {
     return state;
   }
   return {
     ...state,
-    nodes: state.nodes.filter((node) => node.id !== pendingNodeId),
+    processing: state.processing?.id === processingId ? undefined : state.processing,
     runs: {
       ...state.runs,
       [runId]: {
         ...(state.runs[runId] ?? {}),
-        pendingNodeId: undefined
+        processingId: undefined
       }
     }
   };
 }
 
-function clearPendingProcessingLines(state: AppState): AppState {
-  const pendingIds = Object.values(state.runs)
-    .map((run) => run.pendingNodeId)
-    .filter((id): id is string => Boolean(id));
-  if (pendingIds.length === 0) {
+function clearProcessing(state: AppState): AppState {
+  const hasRunProcessing = Object.values(state.runs).some((run) => run.processingId);
+  if (!state.processing && !hasRunProcessing) {
     return state;
   }
-  const pendingIdSet = new Set(pendingIds);
   const runs = Object.fromEntries(
     Object.entries(state.runs).map(([runId, run]) => [
       runId,
-      pendingIdSet.has(run.pendingNodeId ?? "")
-        ? { ...run, pendingNodeId: undefined }
-        : run
+      run.processingId ? { ...run, processingId: undefined } : run
     ])
   );
   return {
     ...state,
-    nodes: state.nodes.filter((node) => !pendingIdSet.has(node.id)),
+    processing: undefined,
     runs
   };
 }
@@ -971,27 +990,44 @@ function updateToolResult(
 
 function updateChatNode(state: AppState, id: string, updater: (node: ChatNode) => ChatNode): AppState {
   const target = state.nodes.find((node) => node.id === id);
-  const base = target?.kind === "processing" ? state : clearPendingProcessingLines(state);
+  const base = target && shouldClearProcessingForNode(target)
+    ? clearProcessing(state)
+    : state;
   return {
     ...base,
     nodes: base.nodes.map((node) => (node.id === id ? updater(node) : node))
   };
 }
 
-function appendChatNode(state: AppState, node: ChatNode): AppState {
-  const base = node.kind === "processing" ? state : clearPendingProcessingLines(state);
+function appendChatNode(
+  state: AppState,
+  node: ChatNode,
+  options: { clearProcessing?: boolean } = {},
+): AppState {
+  const shouldClearProcessing = options.clearProcessing ?? shouldClearProcessingForNode(node);
+  const base = shouldClearProcessing
+    ? clearProcessing(state)
+    : state;
   return {
     ...base,
     nodes: [...base.nodes, node]
   };
 }
 
-function addSystem(state: AppState, content: string): AppState {
+function shouldClearProcessingForNode(node: ChatNode): boolean {
+  return node.kind !== "debug";
+}
+
+function addSystem(
+  state: AppState,
+  content: string,
+  options: { clearProcessing?: boolean } = {},
+): AppState {
   return appendChatNode(state, {
     id: nodeId("system", `${Date.now()}-${state.nodes.length}`),
     kind: "system",
     content
-  });
+  }, options);
 }
 
 function addMeta(state: AppState, content: string): AppState {

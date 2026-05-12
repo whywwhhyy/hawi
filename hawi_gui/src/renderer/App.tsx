@@ -10,11 +10,11 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Copy, FileText, GitFork, LoaderCircle, Lock, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type QueueMessageState, type ToolProgressState } from "./state";
+import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -563,10 +563,6 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="status-strip">
-          <StatusCell
-            value={combinedRunState(state.schedulerState, state.agentState)}
-            title={`Scheduler: ${state.schedulerState} · Executor: ${state.agentState}`}
-          />
           <PriorityStatusCell
             queueLengths={state.queueLengths}
             queueMessages={state.queueMessages}
@@ -637,6 +633,7 @@ export default function App() {
             .map((node) => (
               <ChatBubble node={node} key={node.id} />
             ))}
+          {state.processing && <ProcessingLine processing={state.processing} />}
         </main>
         <PluginPreviewPanel
           artifacts={state.artifacts}
@@ -731,40 +728,6 @@ export default function App() {
       )}
     </div>
   );
-}
-
-function StatusCell({ value, title }: { value: string; title?: string }) {
-  const icon = statusIconForRunState(value);
-  const showLabel = value !== "RUNNING";
-  return (
-    <div className={`status-cell state-${value.toLowerCase()}`} title={title}>
-      <span className="status-icon" aria-hidden="true">{icon}</span>
-      {showLabel && <strong>{value}</strong>}
-    </div>
-  );
-}
-
-function statusIconForRunState(value: string): ReactNode {
-  if (value === "RUNNING") return <LoaderCircle size={15} />;
-  if (value === "INTERRUPTING") return <RotateCcw size={15} />;
-  if (value === "STOPPED") return <Circle size={15} />;
-  return <CheckCircle2 size={15} />;
-}
-
-function combinedRunState(schedulerState: string, agentState: string): string {
-  if (agentState === "INTERRUPTING" || schedulerState === "INTERRUPTING") {
-    return "INTERRUPTING";
-  }
-  if (agentState === "RUNNING" || schedulerState === "RUNNING") {
-    return "RUNNING";
-  }
-  if (agentState === "READY" || schedulerState === "READY") {
-    return "READY";
-  }
-  if (agentState === "STOPPED" || schedulerState === "STOPPED") {
-    return "STOPPED";
-  }
-  return "IDLE";
 }
 
 function PriorityStatusCell({
@@ -1041,9 +1004,6 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
       </div>
     );
   }
-  if (node.kind === "processing") {
-    return <ProcessingLine node={node} />;
-  }
   if (node.kind === "tool" && node.tool) {
     return <ToolBubble node={node} />;
   }
@@ -1053,11 +1013,11 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   return <MessageBubble node={node} />;
 });
 
-function ProcessingLine({ node }: { node: ChatNode }) {
+function ProcessingLine({ processing }: { processing: ProcessingState }) {
   return (
     <div className="processing-line">
       <LiveSpinner title="处理中" />
-      <span>{node.content || "处理中..."}</span>
+      <span>{processing.content || "处理中..."}</span>
     </div>
   );
 }
