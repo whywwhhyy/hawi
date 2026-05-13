@@ -11,7 +11,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
@@ -84,6 +84,42 @@ export function shouldInitializeSessionState(metadata: GuiMetadata | null): bool
   return Boolean(metadata?.coreRunning);
 }
 
+interface SessionRuntimeStats {
+  running: number;
+  loaded: number;
+  maxLoaded: number;
+}
+
+type SessionStates = Record<string, AppState>;
+
+interface SessionStateAction {
+  sessionId: string | null;
+  frame: CoreFrame;
+}
+
+export function reduceSessionStates(states: SessionStates, action: SessionStateAction): SessionStates {
+  const sessionId = action.sessionId;
+  if (!sessionId) {
+    return states;
+  }
+  const previous = states[sessionId] ?? createInitialState();
+  const next = reduceCoreEvent(previous, action.frame);
+  if (next === previous) {
+    return states;
+  }
+  return { ...states, [sessionId]: next };
+}
+
+export function renderSessionCounterText(runningCount: number, loadedCount: number): string {
+  return `${runningCount}/${loadedCount}`;
+}
+
+export function sessionLoadStateLabel(state: SessionLoadState): string {
+  if (state === "running") return "运行中";
+  if (state === "loaded") return "已加载待命";
+  return "未加载";
+}
+
 function hasHighPriorityWork(
   queueLengths: Record<QueueKind, number>,
   queueMessages?: Record<QueueKind, QueueMessageState[]>
@@ -101,7 +137,7 @@ function normalQueueCount(
 export default function App() {
   const [metadata, setMetadata] = useState<GuiMetadata | null>(null);
   const [config, setConfig] = useState<PersistedConfig | null>(null);
-  const [state, dispatch] = useReducer(reduceCoreEvent, undefined, createInitialState);
+  const [statesBySession, dispatchSessionState] = useReducer(reduceSessionStates, {});
   const [input, setInput] = useState("");
   const [queue, setQueue] = useState<QueueKind>("high_prio");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
@@ -110,12 +146,18 @@ export default function App() {
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionStats, setSessionStats] = useState<SessionRuntimeStats>({
+    running: 0,
+    loaded: 0,
+    maxLoaded: 5
+  });
   const [sessionBusy, setSessionBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const configRef = useRef<PersistedConfig | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
   const pendingSystemPromptConfigRef = useRef<PersistedConfig | null>(null);
   const initializeSessionStateRef = useRef<() => Promise<void>>(async () => undefined);
   const applyingSystemPromptRef = useRef(false);
@@ -126,12 +168,20 @@ export default function App() {
   const autoScrollFrameRef = useRef<number | null>(null);
   const inputComposingRef = useRef(false);
   const inputCompositionEndTimerRef = useRef<number | null>(null);
-  const coreRunning = shouldInitializeSessionState(metadata);
+  const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0;
+  const fallbackState = useMemo(createInitialState, []);
+  const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
 
   useEffect(() => {
     window.hawi.getMetadata().then((meta) => {
       setMetadata(meta);
       setConfig(meta.config);
+      setCurrentSessionId(meta.currentSessionId ?? null);
+      setSessionStats({
+        running: meta.runningSessionCount ?? 0,
+        loaded: meta.loadedSessionCount ?? 0,
+        maxLoaded: meta.maxLoadedSessions ?? 5
+      });
       if (!meta.config.modelName) {
         setModelDialogOpen(true);
       }
@@ -141,7 +191,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const offEvent = window.hawi.onCoreEvent((frame) => dispatch(frame));
+    const offEvent = window.hawi.onCoreEvent((frame) => handleCoreEvent(frame));
     const offLog = window.hawi.onCoreLog((message) => {
       dispatch({ version: VERSION, type: "debug.info", payload: { message } });
     });
@@ -149,7 +199,14 @@ export default function App() {
       offEvent();
       offLog();
     };
+    // Core event routing reads mutable session state through refs; resubscribing
+    // on every render would duplicate IPC churn without changing behavior.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
 
   useEffect(() => {
     if (!coreRunning) return;
@@ -195,6 +252,41 @@ export default function App() {
   useEffect(() => {
     resizeTextareaToRows(inputRef.current, MESSAGE_INPUT_MAX_ROWS);
   }, [input]);
+
+  function dispatch(frame: CoreFrame, sessionId = currentSessionIdRef.current) {
+    dispatchSessionState({ sessionId, frame });
+  }
+
+  function handleCoreEvent(frame: CoreFrame) {
+    if (frame.type === "gui.session_status") {
+      applySessionRuntimeStatus(frame);
+      return;
+    }
+    const sessionId = frameSessionId(frame) ?? currentSessionIdRef.current;
+    dispatchSessionState({ sessionId, frame });
+  }
+
+  function applySessionRuntimeStatus(frame: CoreFrame) {
+    const payload = framePayload(frame);
+    if (!payload) return;
+    const sessionId = optionalPayloadString(payload.session_id);
+    const loadState = normalizeSessionLoadState(payload.load_state);
+    const currentId = optionalPayloadString(payload.current_session_id);
+    if (currentId) {
+      setCurrentSessionId(currentId);
+    }
+    setSessionStats((current) => ({
+      running: optionalPayloadNumber(payload.running_session_count) ?? current.running,
+      loaded: optionalPayloadNumber(payload.loaded_session_count) ?? current.loaded,
+      maxLoaded: optionalPayloadNumber(payload.max_loaded_sessions) ?? current.maxLoaded
+    }));
+    if (!sessionId) return;
+    setSessions((items) => upsertSessionRuntime(items, sessionId, {
+      load_state: loadState,
+      loaded_at: optionalPayloadNumber(payload.loaded_at),
+      last_finished_at: optionalPayloadNumber(payload.last_finished_at)
+    }));
+  }
 
   function updateFollowTail() {
     const element = chatRef.current;
@@ -271,13 +363,17 @@ export default function App() {
     return Boolean((anchor && element.contains(anchor)) || (focus && element.contains(focus)));
   }
 
-  async function sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame | null> {
+  async function sendCommand(
+    type: CoreCommandType,
+    payload: Record<string, unknown>,
+    targetSessionId: string | null = currentSessionIdRef.current
+  ): Promise<CoreFrame | null> {
     if (!coreRunning) {
       setModelDialogOpen(true);
       return null;
     }
     try {
-      return await window.hawi.sendCommand(type, payload);
+      return await window.hawi.sendCommand(type, payload, targetSessionId);
     } catch (error) {
       dispatch(errorFrame(error));
       return null;
@@ -285,28 +381,35 @@ export default function App() {
   }
 
   async function initializeSessionState() {
-    const listFrame = await sendCommand("session_list", {});
+    const listFrame = await sendCommand("session_list", {}, null);
     updateSessionsFromFrame(listFrame);
-    const historyFrame = await sendCommand("session_history", {});
+    const historyFrame = await sendCommand("session_history", {}, currentSessionIdRef.current);
     applySessionHistoryFromFrame(historyFrame);
   }
 
   initializeSessionStateRef.current = initializeSessionState;
 
-  async function refreshSessions() {
-    const frame = await sendCommand("session_list", {});
-    updateSessionsFromFrame(frame);
+  async function refreshSessions(): Promise<SessionMetaPayload[]> {
+    const frame = await sendCommand("session_list", {}, null);
+    return updateSessionsFromFrame(frame);
   }
 
-  function updateSessionsFromFrame(frame: CoreFrame | null) {
+  function updateSessionsFromFrame(frame: CoreFrame | null): SessionMetaPayload[] {
     const payload = framePayload(frame);
-    if (!payload) return;
+    if (!payload) return sessions;
     const nextSessions = normalizeSessionList(payload.sessions);
     setSessions(nextSessions);
+    setSessionStats((current) => ({
+      running: optionalPayloadNumber(payload.running_session_count) ?? countSessionsByState(nextSessions, "running"),
+      loaded: optionalPayloadNumber(payload.loaded_session_count) ?? nextSessions.filter((item) => item.load_state === "loaded" || item.load_state === "running").length,
+      maxLoaded: optionalPayloadNumber(payload.max_loaded_sessions) ?? current.maxLoaded
+    }));
     const nextCurrent = optionalPayloadString(payload.current_session_id);
     if (nextCurrent) {
       setCurrentSessionId(nextCurrent);
+      syncConfigFromSession(nextCurrent, nextSessions);
     }
+    return nextSessions;
   }
 
   function applySessionHistoryFromFrame(frame: CoreFrame | null) {
@@ -315,16 +418,30 @@ export default function App() {
     const nextCurrent = optionalPayloadString(payload.session_id);
     if (nextCurrent) {
       setCurrentSessionId(nextCurrent);
+      syncConfigFromSession(nextCurrent);
+    }
+    if (!Array.isArray(payload.message_history)) {
+      return;
     }
     dispatch({
       version: VERSION,
       type: "gui.load_session_history",
       payload: {
-        message_history: Array.isArray(payload.message_history) ? payload.message_history : [],
+        message_history: payload.message_history,
         context_usage: payload.context_usage
       }
-    });
+    }, nextCurrent ?? currentSessionIdRef.current);
     followTailRef.current = true;
+  }
+
+  function syncConfigFromSession(sessionId: string, sessionList = sessions) {
+    const profile = sessionList.find((session) => session.session_id === sessionId)?.gui_launch_profile;
+    if (!profile || !configRef.current) {
+      return;
+    }
+    const nextConfig = configFromLaunchProfile(profile, configRef.current);
+    setConfig(nextConfig);
+    setMetadata((current) => current ? { ...current, config: nextConfig } : current);
   }
 
   async function openSessionDialog() {
@@ -346,7 +463,8 @@ export default function App() {
     try {
       const frame = await sendCommand("session_switch", { session_id: sessionId });
       applySessionHistoryFromFrame(frame);
-      await refreshSessions();
+      const refreshed = await refreshSessions();
+      syncConfigFromSession(sessionId, refreshed);
       setSessionDialogOpen(false);
     } finally {
       setSessionBusy(false);
@@ -354,7 +472,11 @@ export default function App() {
   }
 
   async function deleteSession(sessionId: string) {
-    if (!sessionId || sessionId === currentSessionId) {
+    if (!sessionId) {
+      return;
+    }
+    const target = sessions.find((session) => session.session_id === sessionId);
+    if (target?.load_state === "running") {
       return;
     }
     if (!window.confirm(`删除 Session ${shortSessionId(sessionId)}？`)) {
@@ -362,10 +484,17 @@ export default function App() {
     }
     setSessionBusy(true);
     try {
-      const frame = await sendCommand("session_delete", { session_id: sessionId });
+      const frame = await sendCommand("session_delete", { session_id: sessionId }, null);
       if (!frame) return;
       setSessions((items) => items.filter((item) => item.session_id !== sessionId));
-      await refreshSessions();
+      const nextCurrent = optionalPayloadString(framePayload(frame)?.current_session_id);
+      if (nextCurrent) {
+        setCurrentSessionId(nextCurrent);
+      }
+      const refreshed = await refreshSessions();
+      if (nextCurrent) {
+        syncConfigFromSession(nextCurrent, refreshed);
+      }
     } finally {
       setSessionBusy(false);
     }
@@ -387,9 +516,12 @@ export default function App() {
         version: VERSION,
         type: "gui.load_session_history",
         payload: { message_history: [] }
-      });
+      }, sessionId ?? currentSessionIdRef.current);
       followTailRef.current = true;
-      await refreshSessions();
+      const refreshed = await refreshSessions();
+      if (sessionId) {
+        syncConfigFromSession(sessionId, refreshed);
+      }
       setSessionDialogOpen(false);
     } finally {
       setSessionBusy(false);
@@ -404,14 +536,18 @@ export default function App() {
       const frame = await sendCommand("session_fork", { session_id: sourceSessionId });
       applySessionHistoryFromFrame(frame);
       followTailRef.current = true;
-      await refreshSessions();
+      const refreshed = await refreshSessions();
+      const forkedSessionId = optionalPayloadString(framePayload(frame)?.session_id);
+      if (forkedSessionId) {
+        syncConfigFromSession(forkedSessionId, refreshed);
+      }
       setSessionDialogOpen(false);
     } finally {
       setSessionBusy(false);
     }
   }
 
-  async function saveAndSet(nextConfig: PersistedConfig) {
+  async function saveGlobalAndSet(nextConfig: PersistedConfig) {
     const saved = await window.hawi.saveConfig(nextConfig);
     setConfig(saved);
     setMetadata((current) => current ? { ...current, config: saved } : current);
@@ -419,10 +555,10 @@ export default function App() {
   }
 
   async function restartWith(nextConfig: PersistedConfig) {
-    const saved = await saveAndSet(nextConfig);
+    setConfig(nextConfig);
     try {
-      await window.hawi.restartCore(saved);
-      setMetadata((current) => current ? { ...current, config: saved, coreRunning: true } : current);
+      await window.hawi.restartCore(nextConfig);
+      setMetadata((current) => current ? { ...current, config: nextConfig, coreRunning: true } : current);
     } catch (error) {
       dispatch(errorFrame(error));
     }
@@ -487,13 +623,8 @@ export default function App() {
           const pending = pendingSystemPromptConfigRef.current;
           pendingSystemPromptConfigRef.current = null;
           await sendCommand("set_system_prompt", { system_prompt: pending.systemPrompt });
-          try {
-            const saved = await window.hawi.saveConfig(pending);
-            if (configRef.current?.systemPrompt === pending.systemPrompt) {
-              setConfig(saved);
-            }
-          } catch (error) {
-            dispatch(errorFrame(error));
+          if (configRef.current?.systemPrompt === pending.systemPrompt) {
+            setConfig(pending);
           }
         }
       } finally {
@@ -508,21 +639,28 @@ export default function App() {
     setModelDialogOpen(false);
     setConfig(nextConfig);
     try {
-      if (metadata.coreRunning) {
-        await window.hawi.sendCommand("switch_model", { model_name: modelName });
-        await saveAndSet(nextConfig);
+      if (coreRunning) {
+        await sendCommand("switch_model", { model_name: modelName });
       } else {
+        await saveGlobalAndSet(nextConfig);
         await restartWith(nextConfig);
       }
-    } catch {
-      await restartWith(nextConfig);
+    } catch (error) {
+      dispatch(errorFrame(error));
     }
   }
 
   async function refreshProviderModels(provider: string) {
     const nextMetadata = await window.hawi.refreshProviderModels(provider);
     setMetadata(nextMetadata);
-    setConfig(nextMetadata.config);
+    setConfig((current) => current
+      ? {
+        ...current,
+        modelName: nextMetadata.inspect.models.includes(current.modelName)
+          ? current.modelName
+          : nextMetadata.config.modelName
+      }
+      : nextMetadata.config);
     dispatch(metaFrame(`已刷新 ${provider} 的模型列表`));
   }
 
@@ -531,7 +669,6 @@ export default function App() {
     const nextConfig = { ...config, selectedPlugins, pluginConfigs };
     setConfig(nextConfig);
     setPluginDialogOpen(false);
-    await saveAndSet(nextConfig);
     await sendCommand("apply_plugins", { selected_plugins: selectedPlugins, plugin_configs: pluginConfigs });
   }
 
@@ -572,6 +709,8 @@ export default function App() {
           <ContextUsageCell usage={state.contextUsage} />
           <SessionStatusCell
             messageCount={state.sessionMessageCount}
+            runningCount={sessionStats.running}
+            loadedCount={sessionStats.loaded}
             sessions={sessions}
             currentSessionId={currentSessionId}
             open={sessionDialogOpen}
@@ -666,7 +805,7 @@ export default function App() {
             onChange={(event) => {
               const next = { ...config, showDebug: event.target.checked };
               setConfig(next);
-              void saveAndSet(next);
+              void saveGlobalAndSet(next);
             }}
           />
           Debug
@@ -787,6 +926,8 @@ function ContextUsageCell({ usage }: { usage?: ContextUsageState }) {
 
 function SessionStatusCell({
   messageCount,
+  runningCount,
+  loadedCount,
   sessions,
   currentSessionId,
   open,
@@ -798,6 +939,8 @@ function SessionStatusCell({
   onFork
 }: {
   messageCount: number;
+  runningCount: number;
+  loadedCount: number;
   sessions: SessionMetaPayload[];
   currentSessionId: string | null;
   open: boolean;
@@ -819,9 +962,10 @@ function SessionStatusCell({
         title="切换 Session"
         disabled={busy}
         onClick={onToggle}
+        aria-label={`Session ${renderSessionCounterText(runningCount, loadedCount)}`}
       >
         <span>Session</span>
-        <strong>{messageCount}</strong>
+        <strong>{renderSessionCounterText(runningCount, loadedCount)}</strong>
         <small>{currentSessionId ? shortSessionId(currentSessionId) : "-"}</small>
       </button>
       <button
@@ -861,11 +1005,14 @@ function SessionStatusCell({
               <div className="session-empty">No sessions</div>
             ) : sortedSessions.map((session) => {
               const isCurrent = session.session_id === currentSessionId;
-              const isLocked = session.locked === true && !isCurrent;
+              const isLoadedHere = session.load_state === "loaded" || session.load_state === "running";
+              const isRunning = session.load_state === "running";
+              const isLocked = session.locked === true && !isCurrent && !isLoadedHere;
+              const canShowDelete = !isRunning && (!isLocked || isLoadedHere);
               return (
                 <div
                   key={session.session_id}
-                  className={`session-option ${isCurrent ? "current" : ""} ${isLocked ? "locked" : ""}`}
+                  className={`session-option ${isCurrent ? "current" : ""} ${isLocked ? "locked" : ""} ${isLoadedHere ? "loaded" : ""}`}
                 >
                   <button
                     type="button"
@@ -875,33 +1022,38 @@ function SessionStatusCell({
                     onClick={() => onSelect(session.session_id)}
                   >
                     <span>
+                      <SessionLoadIndicator state={session.load_state ?? "unloaded"} />
                       {isLocked && <Lock size={12} />}
                       {sessionDisplayName(session)}
                     </span>
                     <small>{formatSessionTimestamp(session.created_at || session.updated_at)}</small>
                   </button>
-                  {!isCurrent && (
+                  {(!isCurrent || canShowDelete) && (
                     <div className="session-actions">
-                      <button
-                        type="button"
-                        className="session-action"
-                        title="Fork Session"
-                        aria-label={`Fork Session ${shortSessionId(session.session_id)}`}
-                        disabled={busy}
-                        onClick={() => onFork(session.session_id)}
-                      >
-                        <GitFork size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="session-delete"
-                        title={isLocked ? "Session 正被使用，不能删除" : "删除 Session"}
-                        aria-label={`删除 Session ${shortSessionId(session.session_id)}`}
-                        disabled={busy || isLocked}
-                        onClick={() => onDelete(session.session_id)}
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {!isCurrent && (
+                        <button
+                          type="button"
+                          className="session-action"
+                          title="Fork Session"
+                          aria-label={`Fork Session ${shortSessionId(session.session_id)}`}
+                          disabled={busy}
+                          onClick={() => onFork(session.session_id)}
+                        >
+                          <GitFork size={13} />
+                        </button>
+                      )}
+                      {canShowDelete && (
+                        <button
+                          type="button"
+                          className="session-delete"
+                          title={isLoadedHere ? "关闭并删除 Session" : "删除 Session"}
+                          aria-label={`删除 Session ${shortSessionId(session.session_id)}`}
+                          disabled={busy}
+                          onClick={() => onDelete(session.session_id)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -911,6 +1063,18 @@ function SessionStatusCell({
         </div>
       )}
     </div>
+  );
+}
+
+function SessionLoadIndicator({ state }: { state: SessionLoadState }) {
+  if (state === "running") {
+    return <LoaderCircle className="session-load-spinner" size={13} aria-label={sessionLoadStateLabel(state)} />;
+  }
+  return (
+    <span
+      className={`session-load-dot ${state}`}
+      aria-label={sessionLoadStateLabel(state)}
+    />
   );
 }
 
@@ -1793,9 +1957,97 @@ function normalizeSessionList(value: unknown): SessionMetaPayload[] {
         ? item.components_present.map((entry) => String(entry))
         : [],
       locked: item.locked === true,
-      lock_owner: isRecord(item.lock_owner) ? item.lock_owner : null
+      lock_owner: isRecord(item.lock_owner) ? item.lock_owner : null,
+      load_state: normalizeSessionLoadState(item.load_state),
+      loaded_at: optionalPayloadNumber(item.loaded_at),
+      last_finished_at: optionalPayloadNumber(item.last_finished_at),
+      gui_launch_profile: normalizeLaunchProfile(item.gui_launch_profile)
     }))
     .filter((item) => item.session_id);
+}
+
+function frameSessionId(frame: CoreFrame): string | null {
+  return framePayload(frame) ? optionalPayloadString(framePayload(frame)?.session_id) : null;
+}
+
+function upsertSessionRuntime(
+  sessions: SessionMetaPayload[],
+  sessionId: string,
+  patch: Pick<SessionMetaPayload, "load_state" | "loaded_at" | "last_finished_at">
+): SessionMetaPayload[] {
+  const index = sessions.findIndex((session) => session.session_id === sessionId);
+  if (index < 0) {
+    return [
+      {
+        session_id: sessionId,
+        name: sessionId,
+        created_at: patch.loaded_at ? new Date(patch.loaded_at).toISOString() : "",
+        updated_at: patch.loaded_at ? new Date(patch.loaded_at).toISOString() : "",
+        last_checkpoint_event: null,
+        components_present: [],
+        locked: false,
+        lock_owner: null,
+        ...patch
+      },
+      ...sessions
+    ];
+  }
+  return sessions.map((session, itemIndex) => (
+    itemIndex === index ? { ...session, ...patch, locked: patch.load_state === "unloaded" ? session.locked : false } : session
+  ));
+}
+
+function countSessionsByState(sessions: SessionMetaPayload[], state: SessionLoadState): number {
+  return sessions.filter((session) => session.load_state === state).length;
+}
+
+function normalizeSessionLoadState(value: unknown): SessionLoadState | undefined {
+  if (value === "unloaded" || value === "loaded" || value === "running") {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeLaunchProfile(value: unknown): SessionLaunchProfile | null {
+  if (!isRecord(value)) return null;
+  const modelName = optionalPayloadString(value.modelName);
+  const systemPrompt = typeof value.systemPrompt === "string" ? value.systemPrompt : null;
+  if (!modelName || systemPrompt === null) return null;
+  return {
+    version: 1,
+    modelName,
+    systemPrompt,
+    selectedPlugins: Array.isArray(value.selectedPlugins)
+      ? value.selectedPlugins.filter((item): item is string => typeof item === "string")
+      : [],
+    pluginConfigs: normalizePluginConfigs(value.pluginConfigs),
+    engineArgs: Array.isArray(value.engineArgs)
+      ? value.engineArgs.filter((item): item is string => typeof item === "string")
+      : undefined
+  };
+}
+
+function normalizePluginConfigs(value: unknown): Record<string, Record<string, unknown>> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).map(([key, config]) => [
+      key,
+      isRecord(config) ? { ...config } : {}
+    ])
+  );
+}
+
+function configFromLaunchProfile(
+  profile: SessionLaunchProfile,
+  baseConfig: PersistedConfig
+): PersistedConfig {
+  return {
+    ...baseConfig,
+    modelName: profile.modelName,
+    systemPrompt: profile.systemPrompt,
+    selectedPlugins: [...profile.selectedPlugins],
+    pluginConfigs: normalizePluginConfigs(profile.pluginConfigs)
+  };
 }
 
 export function sortSessionsByCreatedAt(sessions: SessionMetaPayload[]): SessionMetaPayload[] {
@@ -1810,6 +2062,10 @@ function optionalPayloadString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function optionalPayloadNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function shortSessionId(value: string): string {

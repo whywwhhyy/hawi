@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CoreCommand, CoreCommandType, CoreFrame, InspectPayload, PersistedConfig } from "../shared/protocol";
+import type { CoreCommand, CoreCommandType, CoreFrame, InspectPayload, PersistedConfig, SessionLaunchProfile } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { buildEngineEnv, buildEngineRunArgs } from "./config";
 import { TLVDecoder, TYPE_JSON_FRAME, encodeJsonFrame } from "./tlv";
@@ -11,6 +11,12 @@ export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 800;
 export const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 
 export type EmitToRenderer = (channel: string, payload: unknown) => void;
+
+export interface CoreStartOptions {
+  initialSessionId?: string;
+  initialSessionName?: string;
+  launchProfile?: SessionLaunchProfile;
+}
 
 export class CoreCommandError extends Error {
   readonly code: string;
@@ -33,6 +39,10 @@ export class CoreProcess {
   private decoder = new TLVDecoder();
   private pending = new Map<string, { resolve: (frame: CoreFrame) => void; reject: (error: Error) => void }>();
   private sequence = 0;
+  private stopWaiters: Array<() => void> = [];
+
+  private static instanceSequence = 0;
+  private readonly instanceId: number;
 
   constructor(
     private readonly emitToRenderer: EmitToRenderer,
@@ -40,23 +50,38 @@ export class CoreProcess {
     private readonly workspaceRoot: string,
     private readonly backendLogPath: string,
     private readonly uvCommand: string
-  ) {}
+  ) {
+    CoreProcess.instanceSequence += 1;
+    this.instanceId = CoreProcess.instanceSequence;
+  }
 
   isRunning(): boolean {
     return this.child !== null && !this.child.killed;
   }
 
-  start(nextConfig: PersistedConfig, metadata: InspectPayload, refreshedProviders: Iterable<string> = []): void {
+  start(
+    nextConfig: PersistedConfig,
+    metadata: InspectPayload,
+    refreshedProviders: Iterable<string> = [],
+    options: CoreStartOptions = {}
+  ): void {
     if (!nextConfig.modelName) {
       return;
     }
     this.stop("start-replace-existing");
     mkdirSync(path.dirname(this.backendLogPath), { recursive: true });
     writeFileSync(this.backendLogPath, "", "utf-8"); // 每次启动清空日志
-    const pluginConfigPath = path.join(tmpdir(), `hawi-gui-plugins-${process.pid}.json`);
+    const pluginConfigPath = path.join(tmpdir(), `hawi-gui-plugins-${process.pid}-${this.instanceId}.json`);
     writeFileSync(pluginConfigPath, JSON.stringify(nextConfig.pluginConfigs, null, 2), "utf-8");
 
     const refreshArgs = [...refreshedProviders].flatMap((provider) => ["--refresh-provider", provider]);
+    const launchProfileArgs = options.launchProfile
+      ? ["--gui-launch-profile", JSON.stringify(options.launchProfile)]
+      : [];
+    const initialSessionArgs = [
+      ...(options.initialSessionId ? ["--initial-session-id", options.initialSessionId] : []),
+      ...(options.initialSessionName ? ["--initial-session-name", options.initialSessionName] : [])
+    ];
     const args = buildEngineRunArgs(this.repoRoot, [
       "--model",
       nextConfig.modelName,
@@ -69,6 +94,8 @@ export class CoreProcess {
       nextConfig.selectedPlugins.join(","),
       "--plugin-config",
       pluginConfigPath,
+      ...launchProfileArgs,
+      ...initialSessionArgs,
       "--extra-tool-parameter",
       "tool_call_purpose",
       "str",
@@ -99,6 +126,7 @@ export class CoreProcess {
         this.pending.clear();
       }
       this.emitToRenderer("core:exit", { code, signal });
+      this.resolveStopWaiters();
     });
     this.emitToRenderer("core:spawn", { args: args.slice(1), cwd: this.workspaceRoot, logFile: this.backendLogPath });
   }
@@ -108,10 +136,10 @@ export class CoreProcess {
     this.start(nextConfig, metadata, refreshedProviders);
   }
 
-  stop(reason: string): void {
+  stop(reason: string): Promise<void> {
     const child = this.child;
     if (!child) {
-      return;
+      return Promise.resolve();
     }
     this.child = null;
     const error = new Error("hawi-engine was stopped");
@@ -129,11 +157,15 @@ export class CoreProcess {
     } catch {
       // Process may already be closing.
     }
-    setTimeout(() => {
-      if (!child.killed) {
-        child.kill();
-      }
-    }, GRACEFUL_SHUTDOWN_TIMEOUT_MS).unref();
+    return new Promise((resolve) => {
+      this.stopWaiters.push(resolve);
+      setTimeout(() => {
+        if (!child.killed) {
+          child.kill();
+        }
+        this.resolveStopWaiters();
+      }, GRACEFUL_SHUTDOWN_TIMEOUT_MS).unref();
+    });
   }
 
   sendCommand(type: CoreCommandType, payload: Record<string, unknown>, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS): Promise<CoreFrame> {
@@ -210,6 +242,13 @@ export class CoreProcess {
         continue;
       }
       this.emitToRenderer("core:event", frame);
+    }
+  }
+
+  private resolveStopWaiters(): void {
+    const waiters = this.stopWaiters.splice(0);
+    for (const resolve of waiters) {
+      resolve();
     }
   }
 }

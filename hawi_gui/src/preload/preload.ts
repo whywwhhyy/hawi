@@ -14,8 +14,8 @@ const api = {
   refreshProviderModels(provider: string): Promise<GuiMetadata> {
     return ipcRenderer.invoke("gui:refresh-provider-models", provider);
   },
-  sendCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame> {
-    return ipcRenderer.invoke("core:command", type, payload);
+  sendCommand(type: CoreCommandType, payload: Record<string, unknown>, sessionId?: string | null): Promise<CoreFrame> {
+    return ipcRenderer.invoke("core:command", type, payload, sessionId);
   },
   saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {
     return ipcRenderer.invoke("gui:save-markdown-export", payload);

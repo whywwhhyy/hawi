@@ -159,6 +159,9 @@ class CoreRuntime:
         extra_tool_parameters: list[ExtraToolParameter] | None = None,
         max_context_tokens: int | None = None,
         keep_session_system_prompt: bool = True,
+        gui_launch_profile: dict[str, Any] | None = None,
+        initial_session_id: str | None = None,
+        initial_session_name: str | None = None,
         token: str | None = None,
         status_interval: float = 0.3,
         broadcast_queue_size: int = 1000,
@@ -173,6 +176,11 @@ class CoreRuntime:
         self._extra_tool_parameters = list(extra_tool_parameters or [])
         self._max_context_tokens = max_context_tokens
         self._keep_session_system_prompt = keep_session_system_prompt
+        self._gui_launch_profile = (
+            dict(gui_launch_profile) if isinstance(gui_launch_profile, dict) else None
+        )
+        self._initial_session_id = initial_session_id
+        self._initial_session_name = initial_session_name
         self._token = token
         self._blob_store: BlobStore | None = blob_store
         self._status_interval = status_interval
@@ -215,6 +223,7 @@ class CoreRuntime:
         self._plugins = plugins
         self._session_manager = SessionManager(
             keep_session_system_prompt=self._keep_session_system_prompt,
+            manifest_metadata_provider=self._session_manifest_metadata,
         )
         self._session_manager.attach(
             scheduler.agent,
@@ -225,7 +234,10 @@ class CoreRuntime:
         # to disk lazily once the conversation has a user-visible message, so
         # startup and empty "New" clicks do not leave blank sessions behind.
         try:
-            self._session_manager.new_session()
+            self._session_manager.new_session(
+                name=self._initial_session_name,
+                session_id=self._initial_session_id,
+            )
         except Exception:
             logger.exception("failed to auto-create initial session")
         self._broadcast_task = asyncio.create_task(self._broadcast_loop())
@@ -568,6 +580,7 @@ class CoreRuntime:
             raise ValueError("'set_system_prompt.payload.system_prompt' must be a string")
         self.system_prompt = system_prompt
         self._require_scheduler().agent.context.set_system_prompt(system_prompt)
+        self._update_gui_launch_profile(system_prompt=system_prompt)
         await client.send(make_ack("set_system_prompt", request_id=command.id))
 
     async def _handle_switch_model(
@@ -580,6 +593,7 @@ class CoreRuntime:
             raise ValueError("'switch_model.payload.model_name' must be a non-empty string")
         self._require_scheduler().agent.set_model(model_name)
         self.model_name = model_name
+        self._update_gui_launch_profile(model_name=model_name)
         await client.send(
             make_ack(
                 "switch_model",
@@ -702,6 +716,7 @@ class CoreRuntime:
                 "components_present": m.components_present,
                 "locked": m.locked,
                 "lock_owner": m.lock_owner,
+                "gui_launch_profile": to_json_safe(m.gui_launch_profile),
             }
             for m in sm.list_sessions()
         ]
@@ -964,6 +979,10 @@ class CoreRuntime:
         self._plugins = new_plugins
         self._selected_plugins = list(selected_plugins)
         self._plugin_configs = {name: dict(cfg) for name, cfg in plugin_configs.items()}
+        self._update_gui_launch_profile(
+            selected_plugins=self._selected_plugins,
+            plugin_configs=self._plugin_configs,
+        )
         if session_manager is not None:
             session_manager.attach(
                 new_scheduler.agent,
@@ -1153,6 +1172,45 @@ class CoreRuntime:
         if context_usage is not None:
             payload["context_usage"] = context_usage
         return payload
+
+    def _session_manifest_metadata(self) -> dict[str, Any]:
+        if self._gui_launch_profile is None:
+            return {}
+        profile = self._effective_gui_launch_profile()
+        return {"gui_launch_profile": to_json_safe(profile)} if profile else {}
+
+    def _effective_gui_launch_profile(self) -> dict[str, Any] | None:
+        if self._gui_launch_profile is not None:
+            return dict(self._gui_launch_profile)
+        return {
+            "version": 1,
+            "modelName": self.model_name,
+            "systemPrompt": self.system_prompt,
+            "selectedPlugins": list(self._selected_plugins),
+            "pluginConfigs": to_json_safe(self._plugin_configs),
+        }
+
+    def _update_gui_launch_profile(self, **updates: Any) -> None:
+        if self._gui_launch_profile is None:
+            return
+        profile = self._effective_gui_launch_profile() or {"version": 1}
+        for key, value in updates.items():
+            if key == "model_name":
+                profile["modelName"] = value
+            elif key == "system_prompt":
+                profile["systemPrompt"] = value
+            elif key == "selected_plugins":
+                profile["selectedPlugins"] = list(value or [])
+            elif key == "plugin_configs":
+                profile["pluginConfigs"] = to_json_safe(value or {})
+            else:
+                profile[key] = to_json_safe(value)
+        profile.setdefault("version", 1)
+        profile.setdefault("modelName", self.model_name)
+        profile.setdefault("systemPrompt", self.system_prompt)
+        profile.setdefault("selectedPlugins", list(self._selected_plugins))
+        profile.setdefault("pluginConfigs", to_json_safe(self._plugin_configs))
+        self._gui_launch_profile = profile
 
     def _agent_context_usage(self) -> dict[str, Any] | None:
         if self._scheduler is None:

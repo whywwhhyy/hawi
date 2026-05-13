@@ -12,6 +12,8 @@ export interface QueueMessageSnapshot {
 
 export type QueueMessagesSnapshot = Record<QueueKind, QueueMessageSnapshot[]>;
 
+export type SessionLoadState = "unloaded" | "loaded" | "running";
+
 export type CoreCommandType =
   | "hello"
   | "enqueue"
@@ -44,6 +46,10 @@ export interface SessionMetaPayload {
   components_present: string[];
   locked?: boolean;
   lock_owner?: Record<string, unknown> | null;
+  load_state?: SessionLoadState;
+  loaded_at?: number;
+  last_finished_at?: number;
+  gui_launch_profile?: SessionLaunchProfile | null;
 }
 
 export interface CoreFrame<TPayload = Record<string, unknown>> {
@@ -123,10 +129,23 @@ export interface PersistedConfig {
   showDebug: boolean;
 }
 
+export interface SessionLaunchProfile {
+  version: 1;
+  modelName: string;
+  systemPrompt: string;
+  selectedPlugins: string[];
+  pluginConfigs: Record<string, Record<string, unknown>>;
+  engineArgs?: string[];
+}
+
 export interface GuiMetadata {
   inspect: InspectPayload;
   config: PersistedConfig;
   coreRunning: boolean;
+  currentSessionId?: string | null;
+  runningSessionCount?: number;
+  loadedSessionCount?: number;
+  maxLoadedSessions?: number;
 }
 
 export interface MarkdownExportReference {

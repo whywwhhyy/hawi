@@ -95,6 +95,7 @@ class SessionMeta:
     components_present: list[str]
     locked: bool = False
     lock_owner: dict[str, Any] | None = None
+    gui_launch_profile: dict[str, Any] | None = None
 
 
 class SessionManager:
@@ -117,6 +118,7 @@ class SessionManager:
         writer: SessionWriter | None = None,
         time_provider: Callable[[], float] = time.time,
         keep_session_system_prompt: bool = True,
+        manifest_metadata_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._root = Path(root).expanduser() if root else layout.DEFAULT_ROOT
         self._root.mkdir(parents=True, exist_ok=True)
@@ -124,6 +126,7 @@ class SessionManager:
         self._writer = writer or SessionWriter()
         self._time = time_provider
         self._keep_session_system_prompt = keep_session_system_prompt
+        self._manifest_metadata_provider = manifest_metadata_provider
         self._lock = threading.RLock()
 
         self._agent: HawiAgent | None = None
@@ -198,14 +201,22 @@ class SessionManager:
 
     # --- session API -----------------------------------------------------
 
-    def new_session(self, name: str | None = None) -> str:
+    def new_session(
+        self,
+        name: str | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> str:
         """Create an in-memory session and make it current.
 
         The session is materialized on disk lazily, once it has at least one
         user-visible message. This keeps empty "New" clicks and startup
         placeholders out of the session directory.
         """
-        session_id = self._new_unique_session_id()
+        session_id = session_id or self._new_unique_session_id()
+        session_dir = layout.session_dir(self._root, session_id)
+        if session_dir.exists():
+            raise FileExistsError(f"session already exists: {session_id}")
         with self._lock:
             self._writer.wait_idle(timeout=10.0)
             self._release_current_session_lock()
@@ -252,6 +263,11 @@ class SessionManager:
                     components_present=list(data.get("components_present", [])),
                     locked=lock_info.locked,
                     lock_owner=lock_info.owner if lock_info.locked else None,
+                    gui_launch_profile=(
+                        data.get("gui_launch_profile")
+                        if isinstance(data.get("gui_launch_profile"), dict)
+                        else None
+                    ),
                 )
             )
         return sorted(out, key=lambda m: _parse_iso_timestamp(m.created_at), reverse=True)
@@ -650,6 +666,14 @@ class SessionManager:
             "last_checkpoint_event": trigger,
             "active_plugins": self._active_plugin_names(),
         }
+        if self._manifest_metadata_provider is not None:
+            try:
+                extra_metadata = self._manifest_metadata_provider()
+            except Exception:
+                logger.exception("session manifest metadata provider failed")
+            else:
+                if isinstance(extra_metadata, dict):
+                    manifest_patch.update(extra_metadata)
         return snapshots, manifest_patch
 
     def _final_flush(self) -> None:

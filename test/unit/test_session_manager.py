@@ -373,6 +373,14 @@ class TestSessionManager:
 
         assert re.fullmatch(r"session-\d{8}-\d{6}-[0-9a-f]{6}", sid)
 
+    def test_new_session_accepts_gui_supplied_id(self, stub_setup) -> None:
+        sm, _, _ = stub_setup
+
+        sid = sm.new_session(name="alpha", session_id="session-custom-gui")
+
+        assert sid == "session-custom-gui"
+        assert sm.current_session_id == "session-custom-gui"
+
     def test_save_now_skips_empty_session(self, stub_setup) -> None:
         sm, _, _ = stub_setup
         sid = sm.new_session(name="empty")
@@ -406,6 +414,34 @@ class TestSessionManager:
             )
         finally:
             sm2.detach()
+
+    def test_manifest_includes_gui_launch_profile(self, session_root: Path) -> None:
+        profile = {
+            "version": 1,
+            "modelName": "deepseek-chat",
+            "systemPrompt": "profile prompt",
+            "selectedPlugins": ["filesystem"],
+            "pluginConfigs": {"filesystem": {"root": "."}},
+        }
+        agent = _StubAgent()
+        scheduler = _StubScheduler()
+        sm = SessionManager(
+            root=session_root,
+            manifest_metadata_provider=lambda: {"gui_launch_profile": profile},
+        )
+        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session(name="profiled")
+            agent.context.add_user_message("hello")
+            sm.save_now()
+
+            manifest = json.loads(
+                layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
+            )
+            assert manifest["gui_launch_profile"] == profile
+            assert sm.list_sessions()[0].gui_launch_profile == profile
+        finally:
+            sm.detach()
 
     @pytest.mark.asyncio
     async def test_load_session_keeps_saved_system_prompt_by_default(

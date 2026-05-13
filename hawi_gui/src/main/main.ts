@@ -12,7 +12,8 @@ import {
   sanitizeConfig,
   preserveProviderOrder
 } from "./config";
-import { CoreProcess, type EmitToRenderer } from "./core-process";
+import type { EmitToRenderer } from "./core-process";
+import { SessionEngineManager } from "./session-engine-manager";
 
 const env: EnvPaths = resolveEnvPaths();
 const appIndexUrl = pathToFileURL(path.join(env.guiRoot, "dist", "index.html"));
@@ -20,12 +21,11 @@ const appIndexUrl = pathToFileURL(path.join(env.guiRoot, "dist", "index.html"));
 let mainWindow: BrowserWindow | null = null;
 let inspectPayload: InspectPayload | null = null;
 let config: PersistedConfig | null = null;
-let core: CoreProcess | null = null;
+let engineManager: SessionEngineManager | null = null;
 const refreshedProviders = new Set<string>();
 
 const MIN_CONTENT_WIDTH = 1080;
 const MIN_CONTENT_HEIGHT = 660;
-const MODEL_REFRESH_TIMEOUT_MS = 60_000;
 const FILENAME_TIMESTAMP_RE = /\b\d{8}-\d{6}\b/;
 
 function createWindow(): void {
@@ -54,7 +54,7 @@ function createWindow(): void {
   window.loadFile(path.join(env.guiRoot, "dist", "index.html"));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   inspectPayload = loadInspectPayload(env.repoRoot, env.workspaceRoot, env.uvCommand);
   config = loadConfig(env.configPath, inspectPayload);
   const argvModel = parseArgValue("--model");
@@ -62,11 +62,12 @@ app.whenReady().then(() => {
     config = { ...config, modelName: argvModel };
     saveConfig(env.configPath, config);
   }
-  core = new CoreProcess(emitToRenderer, env.repoRoot, env.workspaceRoot, env.backendLogPath, env.uvCommand);
+  engineManager = new SessionEngineManager(emitToRenderer, env.repoRoot, env.workspaceRoot, env.backendLogPath, env.uvCommand);
+  engineManager.configure(inspectPayload, config, refreshedProviders);
   registerIpc();
   createWindow();
   if (config.modelName) {
-    core.start(config, inspectPayload, refreshedProviders);
+    await engineManager.startInitial(config, inspectPayload, refreshedProviders);
   }
 });
 
@@ -81,7 +82,7 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  core?.stop("before-quit");
+  void engineManager?.stopAll("before-quit");
 });
 
 function registerIpc(): void {
@@ -90,29 +91,33 @@ function registerIpc(): void {
     return {
       inspect: ready.inspect,
       config: ready.config,
-      coreRunning: core?.isRunning() ?? false
+      ...currentManagerSnapshot()
     } satisfies GuiMetadata;
   });
 
   ipcMain.handle("gui:save-config", (_event, nextConfig: PersistedConfig) => {
     config = sanitizeConfig(nextConfig, inspectPayload);
     saveConfig(env.configPath, config);
+    if (inspectPayload && engineManager) {
+      engineManager.configure(inspectPayload, config, refreshedProviders);
+    }
     return config;
   });
 
-  ipcMain.handle("core:restart", (_event, nextConfig: PersistedConfig) => {
+  ipcMain.handle("core:restart", async (_event, nextConfig: PersistedConfig) => {
     const ready = getReady();
     config = sanitizeConfig(nextConfig, ready.inspect);
     saveConfig(env.configPath, config);
-    core?.restart(config, ready.inspect, refreshedProviders);
+    engineManager?.configure(ready.inspect, config, refreshedProviders);
+    await engineManager?.restartCurrent(config);
     return { ok: true };
   });
 
-  ipcMain.handle("core:command", async (_event, type: CoreCommandType, payload: Record<string, unknown>) => {
-    if (!core) {
+  ipcMain.handle("core:command", async (_event, type: CoreCommandType, payload: Record<string, unknown>, sessionId?: string | null) => {
+    if (!engineManager) {
       throw new Error("hawi-engine is not initialized");
     }
-    return core.sendCommand(type, payload);
+    return engineManager.sendCommand(type, payload, sessionId);
   });
 
   ipcMain.handle("gui:save-markdown-export", async (_event, payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> => {
@@ -133,12 +138,9 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
   let allModels: string[] | null = null;
   let nextInspect = ready.inspect;
 
-  if (core?.isRunning()) {
-    const frame = await core.sendCommand(
-      "refresh_models",
-      { provider: providerName },
-      MODEL_REFRESH_TIMEOUT_MS
-    );
+  const refreshFrame = await engineManager?.refreshModels(providerName);
+  if (refreshFrame) {
+    const frame = refreshFrame;
     const payload = frame.payload as Record<string, unknown>;
     if (Array.isArray(payload.all_models)) {
       allModels = payload.all_models.filter((item): item is string => typeof item === "string");
@@ -163,10 +165,11 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
   };
   config = sanitizeConfig(ready.config, inspectPayload);
   saveConfig(env.configPath, config);
+  engineManager?.configure(inspectPayload, config, refreshedProviders);
   return {
     inspect: inspectPayload,
     config,
-    coreRunning: core?.isRunning() ?? false
+    ...currentManagerSnapshot()
   };
 }
 
@@ -295,6 +298,16 @@ function getReady(): { inspect: InspectPayload; config: PersistedConfig } {
     throw new Error("GUI metadata is not ready");
   }
   return { inspect: inspectPayload, config };
+}
+
+function currentManagerSnapshot() {
+  return engineManager?.snapshot() ?? {
+    currentSessionId: null,
+    runningSessionCount: 0,
+    loadedSessionCount: 0,
+    maxLoadedSessions: 5,
+    coreRunning: false
+  };
 }
 
 const emitToRenderer: EmitToRenderer = (channel, payload) => {

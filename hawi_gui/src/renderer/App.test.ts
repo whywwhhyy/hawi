@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, renderMarkdown, renderPriorityStatusText, resolveFollowTailOnScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
+import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -80,6 +80,40 @@ describe("renderPriorityStatusText", () => {
         normal: [{ id: "steer-plain", queue: "normal", contentPreview: "plain" }]
       }
     )).toBe("优先 0 · 普通 1");
+  });
+});
+
+describe("session runtime display helpers", () => {
+  it("renders running over loaded counts", () => {
+    expect(renderSessionCounterText(2, 5)).toBe("2/5");
+  });
+
+  it("labels all session load states", () => {
+    expect(sessionLoadStateLabel("unloaded")).toBe("未加载");
+    expect(sessionLoadStateLabel("loaded")).toBe("已加载待命");
+    expect(sessionLoadStateLabel("running")).toBe("运行中");
+  });
+
+  it("keeps separate chat state per session id", () => {
+    let states = reduceSessionStates({}, {
+      sessionId: "session-a",
+      frame: {
+        version: VERSION,
+        type: "run.start",
+        payload: { run_id: "run-a", user_content: "hello a", queue: "normal" }
+      }
+    });
+    states = reduceSessionStates(states, {
+      sessionId: "session-b",
+      frame: {
+        version: VERSION,
+        type: "run.start",
+        payload: { run_id: "run-b", user_content: "hello b", queue: "normal" }
+      }
+    });
+
+    expect(states["session-a"].nodes[0].content).toBe("hello a");
+    expect(states["session-b"].nodes[0].content).toBe("hello b");
   });
 });
 

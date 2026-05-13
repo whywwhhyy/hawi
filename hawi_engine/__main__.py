@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 import warnings
@@ -167,6 +168,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--gui-launch-profile",
+        default=None,
+        help="JSON object with GUI session launch profile metadata to persist in session manifests.",
+    )
+    parser.add_argument(
+        "--initial-session-id",
+        default=None,
+        help="Optional initial in-memory session id for GUI-managed engines.",
+    )
+    parser.add_argument(
+        "--initial-session-name",
+        default=None,
+        help="Optional initial in-memory session name for GUI-managed engines.",
+    )
+    parser.add_argument(
         "--status-interval",
         type=float,
         default=0.3,
@@ -294,6 +310,9 @@ async def async_main(args: argparse.Namespace) -> None:
         extra_tool_parameters=extra_tool_parameters,
         max_context_tokens=args.max_context_tokens,
         keep_session_system_prompt=args.keep_session_system_prompt,
+        gui_launch_profile=parse_gui_launch_profile(args.gui_launch_profile),
+        initial_session_id=args.initial_session_id,
+        initial_session_name=args.initial_session_name,
         token=token_from_arg_or_env(args.token),
         status_interval=args.status_interval,
         blob_store=blob_store,
@@ -330,6 +349,18 @@ def load_plugin_config(path: str | None) -> dict[str, dict[str, Any]]:
         str(name): dict(cfg) if isinstance(cfg, dict) else {}
         for name, cfg in data.items()
     }
+
+
+def parse_gui_launch_profile(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("--gui-launch-profile must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("--gui-launch-profile must be a JSON object")
+    return parsed
 
 
 if __name__ == "__main__":
