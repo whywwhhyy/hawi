@@ -25,6 +25,15 @@ export function mergePluginDefaults(
   };
 }
 
+export function selectAllPluginKeys(catalog: PluginCatalogItem[]): string[] {
+  return catalog.map((item) => item.key);
+}
+
+export function invertPluginSelection(catalog: PluginCatalogItem[], selectedPlugins: Iterable<string>): string[] {
+  const selected = new Set(selectedPlugins);
+  return catalog.filter((item) => !selected.has(item.key)).map((item) => item.key);
+}
+
 export function validatePluginConfig(item: PluginCatalogItem, config: Record<string, unknown>): string[] {
   const errors: string[] = [];
   const required = item.schema.required ?? [];

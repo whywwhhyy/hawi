@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
+import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import type { PluginCatalogItem } from "../shared/protocol";
 
 const item: PluginCatalogItem = {
@@ -18,10 +18,40 @@ const item: PluginCatalogItem = {
   }
 };
 
+const catalog: PluginCatalogItem[] = [
+  item,
+  {
+    key: "plan",
+    label: "PlanPlugin",
+    defaults: {},
+    schema: {
+      type: "object",
+      properties: {}
+    }
+  },
+  {
+    key: "workflow",
+    label: "WorkflowPlugin",
+    defaults: {},
+    schema: {
+      type: "object",
+      properties: {}
+    }
+  }
+];
+
 describe("plugin config helpers", () => {
   it("merges defaults for selected plugins", () => {
     const result = mergePluginDefaults([item], ["mcp"], { mcp: { config_path: "custom.json" } });
     expect(result.pluginConfigs.mcp.config_path).toBe("custom.json");
+  });
+
+  it("returns catalog keys for select all in display order", () => {
+    expect(selectAllPluginKeys(catalog)).toEqual(["mcp", "plan", "workflow"]);
+  });
+
+  it("inverts selection while ignoring unknown selected keys", () => {
+    expect(invertPluginSelection(catalog, new Set(["mcp", "missing"]))).toEqual(["plan", "workflow"]);
   });
 
   it("validates required fields", () => {

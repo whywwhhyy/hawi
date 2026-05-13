@@ -13,7 +13,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import { coerceSchemaValue, mergePluginDefaults, validatePluginConfig } from "./pluginConfig";
+import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
@@ -1563,14 +1563,15 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
   const [selected, setSelected] = useState(new Set(initial.selectedPlugins));
   const [configs, setConfigs] = useState(initial.pluginConfigs);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const selectedCount = catalog.filter((item) => selected.has(item.key)).length;
 
   function apply() {
     const selectedList = catalog.filter((item) => selected.has(item.key)).map((item) => item.key);
-    const nextConfigs: Record<string, Record<string, unknown>> = {};
+    const nextState = mergePluginDefaults(catalog, selectedList, configs);
+    const nextConfigs = nextState.pluginConfigs;
     const errors: Record<string, string> = {};
     for (const item of catalog) {
       if (!selected.has(item.key)) continue;
-      nextConfigs[item.key] = configs[item.key] ?? {};
       for (const err of validatePluginConfig(item, nextConfigs[item.key])) {
         const colonIdx = err.indexOf(": ");
         const fieldKey = colonIdx > 0 ? `${item.key}.${err.slice(0, colonIdx)}` : `${item.key}.unknown`;
@@ -1581,11 +1582,16 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
       setFieldErrors(errors);
       return;
     }
-    onApply(selectedList, nextConfigs);
+    onApply(nextState.selectedPlugins, nextConfigs);
   }
 
   function getFieldError(pluginKey: string, field: string): string | undefined {
     return fieldErrors[`${pluginKey}.${field}`];
+  }
+
+  function updateSelection(next: Set<string>) {
+    setSelected(next);
+    if (Object.keys(fieldErrors).length > 0) setFieldErrors({});
   }
 
   return (
@@ -1598,9 +1604,28 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
           {Object.keys(fieldErrors).length > 0 && (
             <div className="form-errors">{Object.values(fieldErrors).join("\n")}</div>
           )}
-          <div className="modal-action-row">
-            <button className="tool-button" onClick={onClose}>取消</button>
-            <button className="primary-button" onClick={apply}>应用</button>
+          <div className="plugin-action-row">
+            <div className="plugin-bulk-actions">
+              <button
+                className="tool-button"
+                disabled={catalog.length === 0}
+                onClick={() => updateSelection(new Set(selectAllPluginKeys(catalog)))}
+              >
+                <Check size={15} /> 全选
+              </button>
+              <button
+                className="tool-button"
+                disabled={catalog.length === 0}
+                onClick={() => updateSelection(new Set(invertPluginSelection(catalog, selected)))}
+              >
+                <RotateCcw size={15} /> 反选
+              </button>
+              <span className="plugin-selection-count">{selectedCount} / {catalog.length} 已选</span>
+            </div>
+            <div className="modal-action-row">
+              <button className="tool-button" onClick={onClose}>取消</button>
+              <button className="primary-button" onClick={apply}>应用</button>
+            </div>
           </div>
         </>
       }
@@ -1616,7 +1641,7 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
                   const next = new Set(selected);
                   if (event.target.checked) next.add(item.key);
                   else next.delete(item.key);
-                  setSelected(next);
+                  updateSelection(next);
                 }}
               />
               <strong>{item.label}</strong>

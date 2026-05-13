@@ -1616,7 +1616,48 @@ button:disabled {
 .plugin-list {
   display: grid;
   gap: 12px;
+}
+
+.model-grid {
   padding: 0 14px 14px;
+}
+
+.plugin-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.plugin-action-row .modal-action-row {
+  margin-left: auto;
+}
+
+.plugin-selection-count {
+  flex: 0 0 auto;
+  color: #627076;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.plugin-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-bulk-actions .tool-button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.plugin-list {
+  padding: 14px;
 }
 
 .model-modal .model-grid {
