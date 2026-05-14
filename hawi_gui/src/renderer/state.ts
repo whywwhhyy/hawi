@@ -1,10 +1,10 @@
-import type { CoreFrame, PluginArtifactPayload, QueueKind } from "../shared/protocol";
+import type { CoreFrame, PluginArtifactPayload, QueueKind, RuntimeControlState } from "../shared/protocol";
 
 const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 
 export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "compact";
-export type DisplayMessageType = "normal" | "steer" | "urgent";
+export type DisplayMessageType = "normal" | "steer" | "urgent" | "resume";
 
 export interface ChatNode {
   id: string;
@@ -138,6 +138,7 @@ export interface AppState {
   agentState: string;
   queueLengths: Record<QueueKind, number>;
   queueMessages: Record<QueueKind, QueueMessageState[]>;
+  control: RuntimeControlState;
   metadataLines: string[];
   contextUsage?: ContextUsageState;
   contextCompression?: ContextCompressionState;
@@ -162,6 +163,7 @@ export function createInitialState(): AppState {
     agentState: "IDLE",
     queueLengths: { normal: 0, high_prio: 0, urgent: 0 },
     queueMessages: { normal: [], high_prio: [], urgent: [] },
+    control: { paused: false, resumable: false, pause_reason: null, paused_at: null, last_error_message: null },
     metadataLines: [],
     contextUsage: undefined,
     contextCompression: undefined,
@@ -585,6 +587,23 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
   }
 }
 
+function normalizeControlState(value: unknown): RuntimeControlState {
+  if (!isRecord(value)) {
+    return { paused: false, resumable: false, pause_reason: null, paused_at: null, last_error_message: null };
+  }
+  return {
+    paused: value.paused === true,
+    pause_reason: optionalString(value.pause_reason),
+    resumable: value.resumable === true,
+    paused_at: optionalNumber(value.paused_at),
+    last_error_message: optionalString(value.last_error_message),
+  };
+}
+
+function sameControlState(a: RuntimeControlState, b: RuntimeControlState): boolean {
+  return a.paused === b.paused && a.resumable === b.resumable && a.pause_reason === b.pause_reason;
+}
+
 function updateStatus(state: AppState, payload: Record<string, unknown>): AppState {
   const runnerState = String(payload.runner_state ?? state.runnerState);
   const agentState = String(payload.agent_state ?? state.agentState);
@@ -597,12 +616,14 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     state.contextUsage,
     parseStatusContextUsage(payload.context_usage)
   );
+  const control = normalizeControlState(payload.control);
   if (
     runnerState === state.runnerState
     && agentState === state.agentState
     && sameQueueLengths(queueLengths, state.queueLengths)
     && sameQueueMessages(queueMessages, state.queueMessages)
     && sameContextUsage(contextUsage, state.contextUsage)
+    && sameControlState(control, state.control)
   ) {
     return state;
   }
@@ -612,7 +633,8 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     agentState,
     queueLengths,
     queueMessages,
-    contextUsage
+    contextUsage,
+    control
   };
 }
 
@@ -1601,7 +1623,7 @@ function normalizeDisplayMessageType(
   value: unknown,
   queue: QueueKind = "normal"
 ): DisplayMessageType {
-  if (value === "normal" || value === "steer" || value === "urgent") return value;
+  if (value === "normal" || value === "steer" || value === "urgent" || value === "resume") return value;
   if (queue === "urgent") return "urgent";
   if (queue === "high_prio") return "steer";
   return "normal";
