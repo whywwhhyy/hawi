@@ -3,9 +3,11 @@ import fnmatch
 import glob as glob_module
 import os
 import re
+import stat
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 from hawi.plugin import HawiPlugin, tool
@@ -27,7 +29,7 @@ class FileSystemPlugin(HawiPlugin):
     文件系统操作插件，提供文件读写、编辑、搜索能力。
 
     对应 Claude Code 的文件操作工具族：
-    - read_file: 读取文件内容（支持分页、行号格式、缓存去重；支持 mode="structure" 查看文件符号结构）
+    - read_file: 读取文件内容（支持分页、行号格式、缓存去重）
     - write_file: 覆盖写入文件（要求先读取，支持乐观并发控制）
     - edit_file: 精确字符串替换编辑（要求先读取，支持乐观并发控制）
     - list_dir: 列出目录内容（支持递归、深度、隐藏文件和数量限制）
@@ -349,91 +351,6 @@ class FileSystemPlugin(HawiPlugin):
                 pass
             raise
 
-    def _parse_structure(self, content: str, language: str) -> list[dict]:
-        """Parse file content to extract structural elements (functions, classes, sections).
-
-        Returns a list of ``{type, name, start_line, end_line}`` dicts sorted
-        by position. Uses lightweight regex heuristics; not a full parser.
-        """
-        lines = content.splitlines(keepends=False)
-        symbols: list[dict] = []
-
-        # Language-agnostic symbol patterns: function/class definitions
-        # Ordered roughly by likelihood so earlier matches dominate.
-        patterns = [
-            # Python
-            (r'^\s*(async\s+)?def\s+(\w+)\s*\(', 'function'),
-            (r'^\s*class\s+(\w+)\s*[\(:]', 'class'),
-            # JavaScript / TypeScript
-            (r'^\s*(export\s+)?(async\s+)?function\s+\*?\s*(\w+)\s*\(', 'function'),
-            (r'^\s*(export\s+)?class\s+(\w+)', 'class'),
-            (r'^\s*(export\s+)?(default\s+)?(async\s+)?\(?\s*(\w+)\s*=\s*(\(|async\s*\()', 'function'),
-            # Go
-            (r'^\s*func\s+(\w+)\s*\(', 'function'),
-            (r'^\s*type\s+(\w+)\s+struct\s*\{', 'struct'),
-            (r'^\s*type\s+(\w+)\s+interface\s*\{', 'interface'),
-            (r'^\s*func\s+\([^)]+\)\s+(\w+)\s*\(', 'method'),
-            # Rust
-            (r'^\s*fn\s+(\w+)\s*\(', 'function'),
-            (r'^\s*struct\s+(\w+)\s*[<{]', 'struct'),
-            (r'^\s*enum\s+(\w+)\s*[<{]', 'enum'),
-            (r'^\s*trait\s+(\w+)\s*[<{]', 'trait'),
-            (r'^\s*impl\s+(\w+)', 'impl'),
-            # C / C++ / Java / C#
-            (r'^\s*(public|private|protected|static|virtual|override|abstract)?\s*(public|private|protected|static|virtual|override|abstract)?\s*(class|struct|interface)\s+(\w+)', 'class'),
-            (r'^\s*(public|private|protected|static|virtual|override|abstract|inline|const)?\s*(public|private|protected|static|virtual|override|abstract|inline|const)?\s*[\w:*<>]+\s+(\w+)\s*\(', 'function'),
-            # Ruby
-            (r'^\s*(def|def self\.)\s+(\w+)', 'function'),
-            (r'^\s*class\s+(\w+)', 'class'),
-            (r'^\s*module\s+(\w+)', 'module'),
-            # PHP
-            (r'^\s*function\s+(\w+)\s*\(', 'function'),
-            (r'^\s*(abstract\s+)?class\s+(\w+)', 'class'),
-            # Swift
-            (r'^\s*(public|private|internal|open)?\s*(func|class|struct|enum|protocol)\s+(\w+)', 'declaration'),
-            # Kotlin
-            (r'^\s*(fun|class|data class|object|interface|enum class)\s+(\w+)', 'declaration'),
-            # Haskell
-            (r'^\s*(\w+)\s*::', 'type_signature'),
-            # Elixir
-            (r'^\s*def\s+(\w+)', 'function'),
-            (r'^\s*defmodule\s+(\w+)', 'module'),
-            # Shell
-            (r'^\s*(function\s+)?(\w+)\s*\(\)\s*\{', 'function'),
-            # Lua
-            (r'^\s*function\s+(\w+[\.:]\w+|\w+)', 'function'),
-            # Markdown heading as section
-            (r'^#{1,6}\s+(.+)', 'section'),
-        ]
-
-        for i, line in enumerate(lines):
-            line_stripped = line.rstrip()
-            for pat, sym_type in patterns:
-                m = re.search(pat, line_stripped)
-                if m:
-                    # Extract the name (last non-None group is the name)
-                    groups = m.groups()
-                    name = next((g for g in reversed(groups) if g is not None), f"<{sym_type}>")
-                    symbols.append({
-                        "type": sym_type,
-                        "name": name,
-                        "start_line": i,  # 0-based
-                        "line": i + 1,    # 1-based for display
-                    })
-                    break
-
-        # Estimate end_line by looking at next symbol or end of file
-        for idx, sym in enumerate(symbols):
-            if idx + 1 < len(symbols):
-                sym["end_line"] = symbols[idx + 1]["start_line"] - 1
-            else:
-                sym["end_line"] = len(lines) - 1
-            sym["line_count"] = sym["end_line"] - sym["start_line"] + 1
-
-        return symbols
-
-
-
     def _generate_structured_patch(
         self, old_content: str, new_content: str, file_path: str = "file"
     ) -> tuple[list[dict], str]:
@@ -487,32 +404,53 @@ class FileSystemPlugin(HawiPlugin):
             return "file"
         return "other"
 
-    def _directory_entry_info(
-        self,
-        entry: os.DirEntry,
-        *,
-        root_path: str,
-        depth: int,
-    ) -> dict:
+    def _ls_format_line(self, entry: os.DirEntry) -> str:
+        """Format a directory entry as an ``ls -la`` style line."""
         entry_type = self._directory_entry_type(entry)
         try:
-            stat_result = entry.stat(follow_symlinks=False)
-            size = stat_result.st_size
-            mtime = stat_result.st_mtime
+            st = entry.stat(follow_symlinks=False)
         except OSError:
-            size = None
-            mtime = None
+            return f"?---------   ?  ?      ?            ? {entry.name}"
 
-        abs_path = os.path.abspath(entry.path)
-        return {
-            "name": entry.name,
-            "path": abs_path,
-            "relativePath": os.path.relpath(abs_path, root_path),
-            "type": entry_type,
-            "size": size,
-            "mtime": mtime,
-            "depth": depth,
-        }
+        # Permission string via stat.filemode (e.g. "drwxr-xr-x")
+        perm = stat.filemode(st.st_mode)
+
+        # Links count
+        nlink = st.st_nlink
+
+        # Owner / Group names (gracefully fall back to numeric IDs)
+        try:
+            import pwd
+            owner = pwd.getpwuid(st.st_uid).pw_name
+        except (ImportError, KeyError):
+            owner = str(st.st_uid)
+
+        try:
+            import grp
+            group = grp.getgrgid(st.st_gid).gr_name
+        except (ImportError, KeyError):
+            group = str(st.st_gid)
+
+        # Size (right-aligned to 8 chars, like ls)
+        size_str = f"{st.st_size:>8}"
+
+        # Modification time (like ls -la: "Jan  5 15:42")
+        mtime_dt = datetime.fromtimestamp(st.st_mtime)
+        mtime_str = mtime_dt.strftime("%b %d %H:%M")
+        # Single-digit day → "Jan  5" not "Jan 05"
+        if mtime_dt.day < 10:
+            mtime_str = mtime_dt.strftime("%b").ljust(4) + mtime_dt.strftime("%d %H:%M")
+
+        # Symlink target
+        name = entry.name
+        if entry_type == "symlink":
+            try:
+                target = os.readlink(entry.path)
+                name = f"{name} -> {target}"
+            except OSError:
+                pass
+
+        return f"{perm} {nlink:>2} {owner:<8} {group:<8} {size_str} {mtime_str} {name}"
 
     @tool(name="read_file")
     def read_file(
@@ -526,35 +464,16 @@ class FileSystemPlugin(HawiPlugin):
         """
         读取文件内容，支持分页读取和行号格式输出。
 
-        支持两种 mode：
-        - ``mode="content"``（默认）：返回文件具体内容，带行号、语言标注、缓存去重
-        - ``mode="structure"``：返回文件的符号结构表，包含函数、类、章节等定义的行号
-
-        mode="content" 规则：
-        - 优先使用 read_file 读取文件后再编辑或写入，触发乐观并发控制
-        - 同一文件、相同参数读取两次，第二次返回 ``file_unchanged``（去重）
-        - 大文件建议先 mode="structure" 看清结构，再按 offset/limit 读具体区间
-
-        mode="structure" 规则：
-        - 使用正则启发式解析符号（非编译器），覆盖 Python、JS/TS、Go、Rust 等 15+ 语言
-        - Markdown 文件的章节标题也会被识别
-        - 返回每个符号的类型、名称、起止行号
-
         Args:
             file_path: 文件路径（绝对路径或相对于当前工作目录）
-            offset: 起始行号（0-based），用于大文件分块读取（仅 mode="content"）
-            limit: 读取的最大行数（仅 mode="content"）
-            show_line_numbers: 是否在每行前显示行号（默认 true，仅 mode="content"）
-            mode: 读取模式 - "content" 或 "structure"
+            offset: 起始行号（0-based），用于大文件分块读取
+            limit: 读取的最大行数
+            show_line_numbers: 是否在每行前显示行号（默认 true）
+            mode: 保留参数，仅支持 "content"
 
         示例:
             read_file("src/main.py")                                   # 读取整个文件
-            read_file("src/main.py", mode="structure")                 # 查看文件结构
             read_file("src/main.py", offset=0, limit=50)               # 读取前 50 行
-
-        典型流程:
-            read_file("large.py", mode="structure")                    # 1. 看结构
-            read_file("large.py", offset=10, limit=30)                 # 2. 读具体函数
         """
         abs_path = self._resolve_path(file_path)
 
@@ -571,22 +490,6 @@ class FileSystemPlugin(HawiPlugin):
             )
         except Exception as e:
             return ToolResult(success=False, error=f"Error reading file: {e}")
-
-        # mode="structure" → return symbol table
-        if mode == "structure":
-            language = self._detect_language(abs_path)
-            symbols = self._parse_structure(content, language)
-            return ToolResult(
-                success=True,
-                output={
-                    "type": "structure",
-                    "file": abs_path,
-                    "language": language,
-                    "symbols": symbols,
-                    "numSymbols": len(symbols),
-                    "totalLines": len(content.splitlines()),
-                },
-            )
 
         try:
             mtime = os.path.getmtime(abs_path)
@@ -738,19 +641,10 @@ class FileSystemPlugin(HawiPlugin):
             show_line_numbers=True,
         )
 
-        hunks, git_diff = self._generate_structured_patch(
-            original_content or "", content, file_path=abs_path
-        )
-
+        action = "updated" if file_exists else "created"
         return ToolResult(
             success=True,
-            output={
-                "type": "update" if file_exists else "create",
-                "file_path": abs_path,
-                "structured_patch": hunks,
-                "original_content": original_content,
-                "git_diff": git_diff,
-            },
+            output=f"File {action}: {abs_path}",
         )
 
     @tool(name="edit_file")
@@ -850,20 +744,10 @@ class FileSystemPlugin(HawiPlugin):
             show_line_numbers=True,
         )
 
-        hunks, git_diff = self._generate_structured_patch(
-            original_content, new_content, file_path=abs_path
-        )
-
+        count = matches if replace_all else 1
         return ToolResult(
             success=True,
-            output={
-                "type": "edit",
-                "file_path": abs_path,
-                "replacements_made": matches if replace_all else 1,
-                "structured_patch": hunks,
-                "original_content": original_content,
-                "git_diff": git_diff,
-            },
+            output=f"File edited: {abs_path} ({count} replacement{'s' if count != 1 else ''})",
         )
 
     @tool(name="list_dir")
@@ -876,7 +760,7 @@ class FileSystemPlugin(HawiPlugin):
         limit: int = 200,
     ) -> ToolResult:
         """
-        列出目录内容，返回文件和子目录的结构化元数据。
+        列出目录内容，类似 ``ls -la`` 风格纯文本输出。
 
         Args:
             path: 要列出的目录路径，默认为当前工作目录
@@ -893,8 +777,9 @@ class FileSystemPlugin(HawiPlugin):
 
         effective_depth = max(1, max_depth)
         effective_limit = max(0, limit)
-        entries: list[dict] = []
+        lines: list[str] = []
         truncated = False
+        total_count = 0
 
         def should_include(name: str) -> bool:
             return include_hidden or not name.startswith(".")
@@ -908,65 +793,74 @@ class FileSystemPlugin(HawiPlugin):
                 ]
             return sorted(
                 children,
-                key=lambda entry: (
-                    0 if entry.is_dir(follow_symlinks=False) else 1,
-                    entry.name.lower(),
-                    entry.name,
+                key=lambda e: (
+                    0 if e.is_dir(follow_symlinks=False) else 1,
+                    e.name.lower(),
+                    e.name,
                 ),
             )
 
         def visit(directory: str, depth: int) -> None:
-            nonlocal truncated
+            nonlocal truncated, total_count
             if truncated:
                 return
+
             try:
                 children = sorted_children(directory)
             except OSError as e:
-                entries.append({
-                    "name": os.path.basename(directory),
-                    "path": directory,
-                    "relativePath": os.path.relpath(directory, root_path),
-                    "type": "error",
-                    "size": None,
-                    "mtime": None,
-                    "depth": depth,
-                    "error": str(e),
-                })
+                lines.append(f"?---------   ?  ?      ?            ? {os.path.basename(directory)}  [{e}]")
                 return
 
+            dir_label = os.path.relpath(directory, root_path)
+            if dir_label == ".":
+                dir_label = os.path.basename(root_path) or root_path
+
+            if recursive and depth > 1:
+                lines.append("")
+            if recursive:
+                lines.append(f"{dir_label}:")
+
+            # "total" line: sum of 512-byte blocks
+            total_blocks = 0
+            has_content = False
             for entry in children:
-                if len(entries) >= effective_limit:
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                    total_blocks += (st.st_blocks if hasattr(st, "st_blocks") else (st.st_size + 511) // 512)
+                    has_content = True
+                except OSError:
+                    pass
+            if has_content:
+                lines.append(f"total {total_blocks}")
+
+            for entry in children:
+                if total_count >= effective_limit:
                     truncated = True
                     return
+                lines.append(self._ls_format_line(entry))
+                total_count += 1
 
-                info = self._directory_entry_info(
-                    entry,
-                    root_path=root_path,
-                    depth=depth,
-                )
-                entries.append(info)
-
-                if (
-                    recursive
-                    and info["type"] == "directory"
-                    and depth < effective_depth
-                ):
-                    visit(entry.path, depth + 1)
+            if recursive and depth < effective_depth:
+                for entry in children:
+                    if entry.is_dir(follow_symlinks=False) and should_include(entry.name):
+                        if total_count >= effective_limit:
+                            truncated = True
+                            return
+                        visit(entry.path, depth + 1)
 
         visit(root_path, 1)
+
+        output_text = "\n".join(lines) + ("\n" if lines else "")
+        if truncated:
+            output_text += f"... (truncated at {effective_limit} entries)\n"
 
         return ToolResult(
             success=True,
             output={
-                "type": "directory",
-                "path": root_path,
-                "entries": entries,
-                "numEntries": len(entries),
+                "type": "ls_output",
+                "text": output_text,
+                "numEntries": total_count,
                 "isTruncated": truncated,
-                "recursive": recursive,
-                "maxDepth": effective_depth,
-                "includeHidden": include_hidden,
-                "limit": effective_limit,
             },
         )
 

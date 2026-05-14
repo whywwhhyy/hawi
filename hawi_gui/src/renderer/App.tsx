@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type WheelEvent } from "react";
+import { forwardRef, memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -1335,33 +1335,25 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
 
 const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
   const tool = node.tool!;
-  const completed = tool.status === "success" || tool.status === "fail";
   const running = tool.status === "running";
   const receivingArguments = tool.argsState !== "complete";
-  const [collapsed, setCollapsed] = useState(() => completed);
-  const autoCollapsedRef = useRef(completed);
-  const hasStructuredArguments = tool.arguments !== undefined;
+  const [collapsed, setCollapsed] = useState(true);
+  const presentation = toolPresentation(tool);
   const toggleCollapsed = () => setCollapsed((value) => !value);
-
-  useEffect(() => {
-    if (completed && !autoCollapsedRef.current) {
-      setCollapsed(true);
-      autoCollapsedRef.current = true;
-    }
-  }, [completed]);
 
   return (
     <article className={`bubble tool ${tool.status} ${collapsed ? "collapsed" : ""}`}>
       <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
         <span className="tool-title">
           <span className="tool-name">
-            <Wrench size={15} /> {tool.name}
+            <Wrench size={15} /> {presentation.label}
             <BlockStreamStatus
               receiving={receivingArguments}
               durationMs={tool.streamDurationMs}
               receivingTitle="正在接收工具调用"
             />
           </span>
+          {presentation.subject && <span className="tool-subject">{presentation.subject}</span>}
           {tool.description && <span className="tool-description">{tool.description}</span>}
         </span>
         <span className="tool-actions">
@@ -1388,17 +1380,12 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
               Arguments
               {tool.argsState !== "complete" && <span className="detail-state">receiving</span>}
             </summary>
-            {hasStructuredArguments
-              ? <ToolArguments value={tool.arguments} />
-              : <div className="tool-hint">{tool.argsState === "complete" ? "No arguments." : "Receiving arguments..."}</div>}
+            {renderToolArguments(tool)}
           </details>
-          {(tool.resultPreview || tool.status === "fail") && (
+          {(tool.resultPreview || tool.resultData !== undefined || tool.status === "fail") && (
             <details open>
               <summary>Result {tool.durationMs ? `· ${tool.durationMs.toFixed(0)}ms` : ""}</summary>
-              <pre
-                className="tool-result-block"
-                onWheel={handleNestedVerticalScroll}
-              >{tool.resultPreview || "Tool failed without an error message."}</pre>
+              {renderToolResult(tool)}
             </details>
           )}
         </div>
@@ -1406,6 +1393,276 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
     </article>
   );
 });
+
+/** 根据工具名称渲染参数区域 */
+function renderToolArguments(tool: ToolState): ReactNode {
+  if (tool.argsState !== "complete") {
+    return <div className="tool-hint">Receiving arguments...</div>;
+  }
+  const args = tool.arguments;
+  if (!isRecord(args)) {
+    return args === undefined
+      ? <div className="tool-hint">No arguments.</div>
+      : <ToolArguments value={args} />;
+  }
+  const toolKind = filesystemToolKind(tool.name);
+
+  // write_file: content 单独一个大可滚动框
+  if (toolKind === "write_file" && typeof args.content === "string") {
+    const { content, ...rest } = args;
+    const language = detectLanguageFromPath(optionalRecordString(args.file_path));
+    return (
+      <>
+        {Object.keys(rest).length > 0 && (
+          <div className="argument-list">
+            {Object.entries(rest).map(([key, item]) => (
+              <ArgumentRow key={key} name={key} value={item} />
+            ))}
+          </div>
+        )}
+        <div className="tool-content-section">
+          <div className="tool-content-label">Content</div>
+          <CodeScrollBlock
+            className="tool-content-block"
+            value={content}
+            language={language}
+          />
+        </div>
+      </>
+    );
+  }
+
+  // edit_file: old / new 水平分屏
+  if (toolKind === "edit_file") {
+    return <EditFileArguments args={args} />;
+  }
+
+  // 默认参数渲染
+  return <ToolArguments value={args} />;
+}
+
+/** 根据工具名称渲染结果区域 */
+function renderToolResult(tool: ToolState): ReactNode {
+  const preview = tool.resultPreview || (tool.status === "fail" ? "Tool failed without an error message." : "");
+  const toolKind = filesystemToolKind(tool.name);
+
+  // read_file: 从 resultData 解析结构化输出做语法高亮
+  if (toolKind === "read_file") {
+    // 优先从 resultData 解析结构化数据
+    const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
+    const fileInfo = resultData ? (isRecord(resultData.file) ? resultData.file : undefined) : undefined;
+    if (resultData?.type === "file_unchanged") {
+      const filePath = fileInfo ? optionalRecordString(fileInfo.filePath) : undefined;
+      return (
+        <div className="tool-result-view">
+          <ToolResultMeta items={[filePath, "unchanged"].filter(isNonEmptyString)} />
+          <div className="tool-hint">File content is unchanged from the previous read.</div>
+        </div>
+      );
+    }
+    const rawContent = fileInfo ? String(fileInfo.content ?? "") : preview;
+    const detectedLang = fileInfo ? optionalRecordString(fileInfo.language) : undefined;
+    const normalizedFile = normalizeReadFileContent(rawContent, detectedLang);
+    const headerLines: string[] = [];
+    if (fileInfo) {
+      const filePath = String(fileInfo.filePath ?? "");
+      const totalLines = Number(fileInfo.totalLines ?? 0);
+      const startLine = Number(fileInfo.startLine ?? 0);
+      const numLines = Number(fileInfo.numLines ?? 0);
+      if (filePath) headerLines.push(filePath);
+      if (totalLines > 0 && numLines > 0 && numLines < totalLines) {
+        headerLines.push(`Lines ${startLine + 1}-${startLine + numLines} of ${totalLines}`);
+      }
+      if (normalizedFile.language && normalizedFile.language !== "text") {
+        headerLines.push(`language: ${normalizedFile.language}`);
+      }
+    }
+    return (
+      <div className="tool-result-view">
+        <ToolResultMeta items={headerLines} />
+        <CodeScrollBlock
+          className="tool-result-block nowrap"
+          value={normalizedFile.content}
+          language={normalizedFile.language}
+        />
+      </div>
+    );
+  }
+
+  // run_shell: 终端风格
+  if (toolKind === "run_shell" && preview) {
+    return (
+      <pre className="tool-result-block terminal nowrap" onWheel={handleNestedVerticalScroll}>{preview}</pre>
+    );
+  }
+
+  // list_dir: ls -la 终端风格
+  if (toolKind === "list_dir") {
+    const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
+    const lsText = resultData?.type === "ls_output" ? String(resultData.text ?? "") : preview;
+    const meta = resultData
+      ? [
+        formatCount(resultData.numEntries, "entry", "entries"),
+        resultData.isTruncated === true ? "truncated" : ""
+      ].filter(isNonEmptyString)
+      : [];
+    return (
+      <div className="tool-result-view">
+        <ToolResultMeta items={meta} />
+        <pre className="tool-result-block terminal nowrap" onWheel={handleNestedVerticalScroll}>{lsText}</pre>
+      </div>
+    );
+  }
+
+  if (toolKind === "glob") {
+    const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
+    const matches = Array.isArray(resultData?.matches)
+      ? resultData.matches.map((item) => String(item))
+      : [];
+    return (
+      <div className="tool-result-view">
+        <ToolResultMeta items={[formatCount(matches.length, "match", "matches")]} />
+        <pre className="tool-result-block nowrap" onWheel={handleNestedVerticalScroll}>
+          {matches.length > 0 ? matches.join("\n") : "No matches."}
+        </pre>
+      </div>
+    );
+  }
+
+  if (toolKind === "grep") {
+    const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
+    const content = resultData && typeof resultData.content === "string"
+      ? resultData.content
+      : preview;
+    const meta = resultData
+      ? [
+        formatCount(resultData.numMatches ?? resultData.numLines, "match", "matches"),
+        formatCount(resultData.numFiles, "file", "files")
+      ].filter(isNonEmptyString)
+      : [];
+    return (
+      <div className="tool-result-view">
+        <ToolResultMeta items={meta} />
+        <pre className="tool-result-block search nowrap" onWheel={handleNestedVerticalScroll}>{content || "No matches."}</pre>
+      </div>
+    );
+  }
+
+  // 其他工具: 纯文本结果（已在 formatToolResultText 中渲染为文本）
+  return (
+    <pre className="tool-result-block" onWheel={handleNestedVerticalScroll}>
+      {preview || "Tool failed without an error message."}
+    </pre>
+  );
+}
+
+function ToolResultMeta({ items }: { items: string[] }) {
+  if (items.length === 0) return null;
+  return <div className="tool-result-meta">{items.join(" · ")}</div>;
+}
+
+function EditFileArguments({ args }: { args: Record<string, unknown> }) {
+  const oldRef = useRef<HTMLPreElement | null>(null);
+  const newRef = useRef<HTMLPreElement | null>(null);
+  const syncingRef = useRef(false);
+  const { old_string, new_string, file_path, replace_all, ...extra } = args;
+  const oldText = old_string != null ? String(old_string) : "";
+  const newText = new_string != null ? String(new_string) : "";
+  const language = detectLanguageFromPath(optionalRecordString(file_path));
+  const metaArgs: Record<string, unknown> = {};
+  if (file_path !== undefined) metaArgs.file_path = file_path;
+  if (replace_all !== undefined) metaArgs.replace_all = replace_all;
+  Object.assign(metaArgs, extra);
+
+  function syncScroll(source: ReactUIEvent<HTMLPreElement>, target: HTMLPreElement | null) {
+    if (!target || syncingRef.current) return;
+    const sourceElement = source.currentTarget;
+    syncingRef.current = true;
+    target.scrollTop = clampedScrollOffset(
+      sourceElement.scrollTop,
+      target.scrollHeight - target.clientHeight
+    );
+    target.scrollLeft = clampedScrollOffset(
+      sourceElement.scrollLeft,
+      target.scrollWidth - target.clientWidth
+    );
+    window.requestAnimationFrame(() => {
+      syncingRef.current = false;
+    });
+  }
+
+  return (
+    <>
+      {Object.keys(metaArgs).length > 0 && (
+        <div className="argument-list compact">
+          {Object.entries(metaArgs).map(([key, item]) => (
+            <ArgumentRow key={key} name={key} value={item} />
+          ))}
+        </div>
+      )}
+      <div className="tool-diff-section sync">
+        <div className="tool-diff-pane old">
+          <div className="tool-diff-label">
+            <span>Old</span>
+            <small>{formatTextStats(oldText)}</small>
+          </div>
+          <CodeScrollBlock
+            ref={oldRef}
+            className="tool-diff-block"
+            value={oldText}
+            language={language}
+            onScroll={(event) => syncScroll(event, newRef.current)}
+          />
+        </div>
+        <div className="tool-diff-pane new">
+          <div className="tool-diff-label">
+            <span>New</span>
+            <small>{formatTextStats(newText)}</small>
+          </div>
+          <CodeScrollBlock
+            ref={newRef}
+            className="tool-diff-block"
+            value={newText}
+            language={language}
+            onScroll={(event) => syncScroll(event, oldRef.current)}
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
+interface CodeScrollBlockProps {
+  value: string;
+  language?: string;
+  className?: string;
+  onScroll?: (event: ReactUIEvent<HTMLPreElement>) => void;
+}
+
+const CodeScrollBlock = memo(forwardRef<HTMLPreElement, CodeScrollBlockProps>(function CodeScrollBlock({
+  value,
+  language,
+  className = "",
+  onScroll
+}, ref) {
+  const highlighted = highlightedCode(value, language);
+  const codeClass = highlighted.language
+    ? `hljs language-${highlighted.language}`
+    : "hljs";
+  return (
+    <pre
+      ref={ref}
+      className={className}
+      onScroll={onScroll}
+      onWheel={handleNestedVerticalScroll}
+    >
+      <code
+        className={codeClass}
+        dangerouslySetInnerHTML={{ __html: highlighted.html }}
+      />
+    </pre>
+  );
+}));
 
 function BlockStreamStatus({
   receiving,
@@ -2127,6 +2384,115 @@ function labelForKind(kind: string): string {
   return kind;
 }
 
+function toolPresentation(tool: ToolState): { label: string; subject?: string } {
+  const kind = filesystemToolKind(tool.name);
+  const label = kind ? filesystemToolLabels[kind] : tool.name;
+  const args = isRecord(tool.arguments) ? tool.arguments : undefined;
+  const subject = args
+    ? optionalRecordString(args.file_path)
+      ?? optionalRecordString(args.path)
+      ?? optionalRecordString(args.directory)
+      ?? optionalRecordString(args.pattern)
+    : undefined;
+  return { label, subject };
+}
+
+const filesystemToolLabels: Record<string, string> = {
+  read_file: "Read file",
+  write_file: "Write file",
+  edit_file: "Edit file",
+  list_dir: "List directory",
+  glob: "Glob",
+  grep: "Grep",
+  run_shell: "Shell"
+};
+
+function filesystemToolKind(name: string): string | null {
+  const canonical = name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name;
+  return Object.prototype.hasOwnProperty.call(filesystemToolLabels, canonical)
+    ? canonical
+    : null;
+}
+
+function optionalRecordString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function formatCount(value: unknown, singular: string, plural: string): string {
+  const count = typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (count === undefined) return "";
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatTextStats(value: string): string {
+  const lineCount = value ? value.split("\n").length : 0;
+  const charCount = Array.from(value).length;
+  return `${lineCount} ${lineCount === 1 ? "line" : "lines"} · ${charCount} chars`;
+}
+
+function clampedScrollOffset(sourceOffset: number, targetMax: number): number {
+  if (targetMax <= 0) return 0;
+  return Math.min(sourceOffset, targetMax);
+}
+
+function normalizeReadFileContent(content: string, language?: string): { content: string; language?: string } {
+  let normalized = stripReadFileHeader(content);
+  const fenced = unwrapSingleFencedCodeBlock(normalized);
+  if (fenced) {
+    normalized = fenced.content;
+  }
+  return {
+    content: normalized,
+    language: fenced?.language ?? language
+  };
+}
+
+function stripReadFileHeader(content: string): string {
+  return content.replace(/^\[(?:Lines \d+-\d+ of \d+|language: [^\]\n]+)(?: \| (?:Lines \d+-\d+ of \d+|language: [^\]\n]+))*\]\n/, "");
+}
+
+function unwrapSingleFencedCodeBlock(content: string): { language?: string; content: string } | null {
+  const match = content.match(/^```([A-Za-z0-9_+.-]*)\n([\s\S]*?)\n?```\s*$/);
+  if (!match) return null;
+  return {
+    language: match[1] || undefined,
+    content: match[2]
+  };
+}
+
+function detectLanguageFromPath(filePath?: string): string | undefined {
+  if (!filePath) return undefined;
+  const filename = filePath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  if (!filename) return undefined;
+  if (filename === "dockerfile" || filename.startsWith("dockerfile.")) return "dockerfile";
+  if (filename === "makefile") return "makefile";
+  if (filename.endsWith(".d.ts")) return "typescript";
+  const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")) : "";
+  return extensionLanguageMap[extension];
+}
+
+const extensionLanguageMap: Record<string, string> = {
+  ".bash": "bash",
+  ".css": "css",
+  ".js": "javascript",
+  ".json": "json",
+  ".jsonc": "json",
+  ".jsx": "javascript",
+  ".md": "markdown",
+  ".py": "python",
+  ".sh": "bash",
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".xml": "xml",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+  ".zsh": "bash"
+};
+
 function isConversationNode(node: ChatNode): boolean {
   return node.kind === "user"
     || node.kind === "agent"
@@ -2303,6 +2669,15 @@ function highlightCode(value: string, language: string): string {
     return codeBlock(result.value, normalizedLanguage);
   }
   return codeBlock(escapeHtml(value));
+}
+
+function highlightedCode(value: string, language?: string): { html: string; language?: string } {
+  const normalizedLanguage = language ? normalizeHighlightLanguage(language) : null;
+  if (normalizedLanguage) {
+    const result = hljs.highlight(value, { language: normalizedLanguage, ignoreIllegals: true });
+    return { html: result.value, language: normalizedLanguage };
+  }
+  return { html: escapeHtml(value) };
 }
 
 function normalizeHighlightLanguage(language: string): string | null {

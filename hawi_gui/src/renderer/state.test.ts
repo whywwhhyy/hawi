@@ -540,6 +540,79 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.resultPreview).toContain('"title": "hello"');
   });
 
+  it("keeps structured filesystem results while using readable previews", () => {
+    const readOutput = {
+      type: "text",
+      file: {
+        filePath: "/tmp/example.py",
+        content: "   1|print('hi')\n",
+        numLines: 1,
+        startLine: 0,
+        totalLines: 1,
+        language: "python"
+      }
+    };
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-fs",
+      tool_call_id: "tc-read",
+      tool_name: "read_file"
+    }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      tool_call_id: "tc-read",
+      tool_name: "read_file",
+      success: true,
+      output: readOutput
+    }));
+
+    expect(state.nodes[0].tool?.resultData).toEqual(readOutput);
+    expect(state.nodes[0].tool?.resultPreview).toBe("   1|print('hi')");
+
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-fs",
+      tool_call_id: "tc-list",
+      tool_name: "list_dir"
+    }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      tool_call_id: "tc-list",
+      tool_name: "list_dir",
+      success: true,
+      output: {
+        type: "ls_output",
+        text: "total 0\n-rw-r--r--  1 hayden  staff  0 May 14 12:00 a.py\n",
+        numEntries: 1,
+        isTruncated: false
+      }
+    }));
+
+    expect(state.nodes[1].tool?.resultPreview).toBe("total 0\n-rw-r--r--  1 hayden  staff  0 May 14 12:00 a.py");
+  });
+
+  it("loads JSON string tool arguments from session history for specialized renderers", () => {
+    const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
+      message_history: [
+        {
+          run_id: "run-history-tool",
+          role: "assistant",
+          content: [
+            {
+              type: "tool_call",
+              id: "tc-edit-history",
+              name: "edit_file",
+              arguments: "{\"file_path\":\"src/app.ts\",\"old_string\":\"old\",\"new_string\":\"new\"}"
+            }
+          ]
+        }
+      ]
+    }));
+
+    expect(state.nodes[0].tool?.arguments).toEqual({
+      file_path: "src/app.ts",
+      old_string: "old",
+      new_string: "new"
+    });
+  });
+
   it("updates status, metadata, retry, and error nodes", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("core.status", {

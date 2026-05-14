@@ -29,6 +29,8 @@ export interface ToolState {
   argsState: "pending" | "streaming" | "complete";
   arguments?: unknown;
   resultPreview: string;
+  /** 原始 tool result output 结构化数据（仅保持最近的完整结果） */
+  resultData?: unknown;
   streamStartedAt?: number;
   streamFinishedAt?: number;
   streamDurationMs?: number;
@@ -429,6 +431,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           resultPreview: payload.is_part === true
             ? tool.resultPreview + text
             : text || tool.resultPreview,
+          resultData: payload.is_part === true ? tool.resultData : payload.output,
           durationMs: Number(payload.duration_ms ?? tool.durationMs ?? 0)
         }, eventAt);
       });
@@ -777,8 +780,9 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         const toolCallId = optionalString(part.id) ?? "";
         const name = optionalString(part.name) ?? "tool";
         const args = part.arguments ?? part.args;
-        const argsRaw = isRecord(args) || Array.isArray(args)
-          ? JSON.stringify(args)
+        const normalizedArgs = normalizeHistoryToolArguments(args);
+        const argsRaw = normalizedArgs !== undefined
+          ? formatToolValue(normalizedArgs)
           : optionalString(args) ?? "";
         const node: ChatNode = {
           id: nodeId("tool-history", `${baseId}-${toolIndex}`),
@@ -791,7 +795,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
             status: "running",
             argsRaw,
             argsState: "complete",
-            arguments: isRecord(args) || Array.isArray(args) ? args : undefined,
+            arguments: normalizedArgs,
             resultPreview: ""
           }
         };
@@ -812,7 +816,8 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
       existing.tool = {
         ...existing.tool,
         status: result.isError ? "fail" : "success",
-        resultPreview: result.text
+        resultPreview: result.text,
+        resultData: result.data
       };
       return;
     }
@@ -830,11 +835,19 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         status: result.isError ? "fail" : "success",
         argsRaw: "",
         argsState: "complete",
-        resultPreview: result.text
+        resultPreview: result.text,
+        resultData: result.data
       }
     });
   });
   return nodes;
+}
+
+function normalizeHistoryToolArguments(value: unknown): unknown | undefined {
+  if (isRecord(value) || Array.isArray(value)) return value;
+  if (typeof value !== "string") return undefined;
+  const parsed = tryParseJson(value.trim());
+  return parsed.ok ? parsed.value : undefined;
 }
 
 function historyAssistantText(content: unknown[]): string {
@@ -885,6 +898,7 @@ function historyToolResult(content: unknown[]): {
   name: string;
   text: string;
   isError: boolean;
+  data?: unknown;
 } {
   const part = content.filter(isRecord).find((item) => item.type === "tool_result");
   if (!part) {
@@ -899,11 +913,13 @@ function historyToolResult(content: unknown[]): {
     ? historyContentText(part.content)
     : formatToolValue(part.content);
   const toolCallId = optionalString(part.tool_call_id) ?? "";
+  const data = part.output ?? part.data;
   return {
     toolCallId,
     name: toolCallId || "tool_result",
     text: nested,
-    isError: part.is_error === true
+    isError: part.is_error === true,
+    data
   };
 }
 
@@ -1724,7 +1740,15 @@ function formatToolResultText(payload: Record<string, unknown>): string {
   if (payload.is_part === true) {
     return formatToolValue(payload.part);
   }
-  const output = formatToolValue(payload.output).trim();
+
+  // 提取结构化输出的纯文本内容（如 list_dir 的 ls_output 类型）
+  const rawOutput = payload.output;
+  const toolName = optionalString(payload.tool_name);
+  const formattedOutput = formatStructuredToolOutput(rawOutput, toolName);
+  const output = shouldPreserveToolOutputLeadingWhitespace(rawOutput, toolName)
+    ? formattedOutput.replace(/\s+$/, "")
+    : formattedOutput.trim();
+
   if (payload.success !== false) {
     return output || formatToolValue(payload.part).trim();
   }
@@ -1736,6 +1760,47 @@ function formatToolResultText(payload: Record<string, unknown>): string {
     return `Error: ${error}`;
   }
   return output;
+}
+
+function formatStructuredToolOutput(value: unknown, toolName?: string): string {
+  const canonicalToolName = toolName?.includes("__")
+    ? toolName.slice(toolName.lastIndexOf("__") + 2)
+    : toolName;
+  if (!isRecord(value)) {
+    return formatToolValue(value);
+  }
+  if (value.type === "ls_output") {
+    return String(value.text ?? "");
+  }
+  if (value.type === "file_unchanged" && isRecord(value.file)) {
+    const filePath = optionalString(value.file.filePath);
+    return filePath ? `File unchanged: ${filePath}` : "File unchanged";
+  }
+  if (value.type === "text" && isRecord(value.file)) {
+    return String(value.file.content ?? "");
+  }
+  if (canonicalToolName === "grep" && typeof value.content === "string") {
+    return value.content || "No matches.";
+  }
+  if (canonicalToolName === "glob" && Array.isArray(value.matches)) {
+    return value.matches.length > 0
+      ? value.matches.map((item) => String(item)).join("\n")
+      : "No matches.";
+  }
+  return formatToolValue(value);
+}
+
+function shouldPreserveToolOutputLeadingWhitespace(value: unknown, toolName?: string): boolean {
+  const canonicalToolName = toolName?.includes("__")
+    ? toolName.slice(toolName.lastIndexOf("__") + 2)
+    : toolName;
+  if (canonicalToolName === "grep" || canonicalToolName === "glob") {
+    return true;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  return value.type === "ls_output" || value.type === "text";
 }
 
 function formatToolValue(value: unknown): string {

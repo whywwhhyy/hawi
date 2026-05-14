@@ -1011,6 +1011,21 @@ button:disabled {
   white-space: nowrap;
 }
 
+.tool-subject {
+  min-width: 0;
+  max-width: 280px;
+  padding: 1px 6px;
+  border: 1px solid #d7e0e2;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #526168;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-actions {
   display: inline-flex;
   align-items: center;
@@ -1293,6 +1308,11 @@ button:disabled {
   white-space: pre;
 }
 
+.tool-result-view {
+  margin-top: 8px;
+  min-width: 0;
+}
+
 .tool-result-block {
   max-height: min(640px, calc(100vh - 180px));
   overflow: auto;
@@ -1300,6 +1320,159 @@ button:disabled {
   scrollbar-gutter: stable;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.tool-result-meta {
+  display: block;
+  min-width: 0;
+  margin: 0 0 6px;
+  padding: 5px 8px;
+  border: 1px solid #dce4e6;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #607078;
+  font-size: 11px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.tool-result-block.nowrap,
+.tool-content-block,
+.tool-diff-block {
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+.tool-result-block code,
+.tool-content-block code,
+.tool-diff-block code {
+  display: block;
+  min-width: max-content;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+/* write_file: content 可滚动框 */
+.tool-content-section {
+  margin-top: 8px;
+  border-top: 1px solid #e0e0e0;
+  padding-top: 8px;
+}
+
+.tool-content-label {
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.tool-content-block {
+  max-height: min(480px, calc(100vh - 240px));
+  overflow: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 8px 12px;
+  white-space: pre;
+  overflow-wrap: normal;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+/* edit_file: old/new 水平分屏 */
+.tool-diff-section {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  border-top: 1px solid #e0e0e0;
+  padding-top: 8px;
+}
+
+.tool-diff-section.sync {
+  align-items: stretch;
+}
+
+.tool-diff-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tool-diff-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.tool-diff-label small {
+  min-width: 0;
+  color: #7b878c;
+  font-size: 11px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-diff-block {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: min(480px, calc(100vh - 240px));
+  overflow: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+  background: #fafafa;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 8px 12px;
+  white-space: pre;
+  overflow-wrap: normal;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+.tool-diff-pane.old .tool-diff-block,
+.tool-diff-pane:first-child .tool-diff-block {
+  background: #fff5f5;
+  border-color: #ffcccc;
+}
+
+.tool-diff-pane.new .tool-diff-block,
+.tool-diff-pane:last-child .tool-diff-block {
+  background: #f0fff4;
+  border-color: #b3e6cc;
+}
+
+/* run_shell: 终端风格 */
+.tool-result-block.terminal {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85em;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.tool-result-block.search {
+  background: #f7faf9;
+  border-color: #d7e4df;
+  color: #263238;
 }
 
 .hljs {
@@ -1461,6 +1634,11 @@ button:disabled {
   color: #263238;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.argument-list.compact {
+  padding: 7px 9px;
+  font-size: 12px;
 }
 
 .argument-row {

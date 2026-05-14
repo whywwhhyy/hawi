@@ -99,7 +99,7 @@ export class CoreProcess {
       "--extra-tool-parameter",
       "tool_call_purpose",
       "str",
-      "用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。",
+      "【必填】用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。每次调用工具都必须包含此参数，否则调用会被拒绝。",
       "--log-file",
       this.backendLogPath
     ]);

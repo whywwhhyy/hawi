@@ -115,11 +115,16 @@ export function loadConfig(configPath: string, metadata: InspectPayload): Persis
 }
 
 export function defaultConfig(metadata: InspectPayload): PersistedConfig {
+  const pluginCatalog = metadata.plugin_catalog ?? [];
+  const environPromptKey = "environ_prompt";
+  const defaultPlugins = pluginCatalog.some((item) => item.key === environPromptKey)
+    ? [environPromptKey]
+    : [];
   return {
     version: 1,
     modelName: metadata.models[0] ?? "",
     systemPrompt: metadata.default_system_prompt,
-    selectedPlugins: [],
+    selectedPlugins: defaultPlugins,
     pluginConfigs: {},
     showDebug: true
   };
