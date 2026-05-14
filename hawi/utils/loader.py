@@ -94,7 +94,7 @@ class ModuleLoader(Generic[T]):
                 continue
             value = extractor(module) if extractor else module  # type: ignore[assignment]
             if value is not None:
-                results.append(value)
+                results.append(value)  # type: ignore[arg-type]
         return results
 
 

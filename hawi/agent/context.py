@@ -18,6 +18,7 @@ from hawi.models.message import (
     CachePoint,
     ContentPart,
     Message,
+    MessageMetadata,
     MessageRequest,
     ToolDefinition,
     ToolCallPart,
@@ -512,7 +513,7 @@ class AgentContext:
 
         Args:
             content: Text string or content parts
-            metadata: Optional message metadata
+            metadata: Optional message metadata.
         """
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
@@ -521,7 +522,7 @@ class AgentContext:
             "role": "user",
             "content": content,
             "name": None,
-            "metadata": dict(metadata) if metadata else None,
+            "metadata": cast("MessageMetadata | None", metadata),
         })
 
     def add_assistant_message(
@@ -540,7 +541,7 @@ class AgentContext:
             "role": "assistant",
             "content": content,
             "name": None,
-            "metadata": dict(metadata) if metadata else None,
+            "metadata": cast("MessageMetadata | None", metadata),
         })
 
     def add_tool_result(

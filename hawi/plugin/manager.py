@@ -237,7 +237,7 @@ class PluginManager:
             return schema
 
         if not schema:
-            schema = {"type": "object"}
+            schema = {"type": "object", "properties": {}, "required": []}
         if schema.get("type", "object") != "object":
             raise ValueError(
                 f"Cannot inject parameters into non-object schema for tool '{tool.name}'"

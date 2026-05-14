@@ -121,8 +121,10 @@ def export_message_history_to_markdown(
         role = str(record.get("role") or "message")
         timestamp = str(record.get("timestamp") or "")
         run_id = str(record.get("run_id") or "")
-        content = record.get("content") if isinstance(record.get("content"), list) else []
-        metadata_obj = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        content_raw = record.get("content")
+        content: list[Any] = content_raw if isinstance(content_raw, list) else []
+        metadata_raw = record.get("metadata")
+        metadata_obj: dict[str, Any] = metadata_raw if isinstance(metadata_raw, dict) else {}
 
         lines.extend(["", "---", ""])
         heading = f"## {index:03d} · {_role_label(role)}"

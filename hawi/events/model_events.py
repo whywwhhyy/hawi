@@ -409,8 +409,8 @@ class ModelMetadataEvent(Event):
     completed_at: float | None = None
     ttft_ms: float | None = None
     decode_ms: float | None = None
-    prefill_tokens: int | None = None
-    decode_tokens: int | None = None
+    prefill_tokens: float | int | None = None
+    decode_tokens: float | int | None = None
     prefill_tokens_per_second: float | None = None
     decode_tokens_per_second: float | None = None
     context_tokens: int | None = None
@@ -429,8 +429,8 @@ class ModelMetadataEvent(Event):
         completed_at: float | None = None,
         ttft_ms: float | None = None,
         decode_ms: float | None = None,
-        prefill_tokens: int | None = None,
-        decode_tokens: int | None = None,
+        prefill_tokens: float | int | None = None,
+        decode_tokens: float | int | None = None,
         prefill_tokens_per_second: float | None = None,
         decode_tokens_per_second: float | None = None,
         context_tokens: int | None = None,

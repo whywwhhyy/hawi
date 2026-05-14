@@ -471,7 +471,7 @@ class AnthropicModel(Model):
             effective_thinking_type not in {"adaptive", "disabled"}
             and bool(effective_thinking_budget)
         )
-        if manual_thinking_enabled and effective_thinking_budget >= effective_max_tokens:
+        if manual_thinking_enabled and effective_thinking_budget is not None and effective_thinking_budget >= effective_max_tokens:
             if max_tokens_was_explicit:
                 raise ValidationError(
                     "Anthropic thinking_budget must be less than max_output_tokens "

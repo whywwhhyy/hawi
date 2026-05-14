@@ -155,7 +155,7 @@ def tool(
     context: str = "",
     timeout: float | None = None,
     tags: list[str] | None = None,
-) -> Callable[[Callable[P, R]], FunctionAgentTool]:
+) -> Callable[[Callable[P, Any]], FunctionAgentTool]:
     """Decorator usage with parentheses: @tool() or @tool(name=...)"""
     ...
 

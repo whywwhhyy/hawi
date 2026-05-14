@@ -210,7 +210,6 @@ __all__ = [
     "ModelRegistry",
     "model_registry",
     "ModelOverrideConfig",
-    "TemplateConfig",
     "CircularDependencyError",
     "UnknownModelError",
     "UnknownTemplateError",
@@ -218,7 +217,6 @@ __all__ = [
     "InvalidInheritanceError",
     # Convenience functions
     "create_model",
-    "get_model_arguments",
     "get_model_adapter",
     "load_config",
     "list_models",

@@ -109,6 +109,8 @@ class HookDispatcher:
                 rank_by_part_id,
             )
         )
+        # context is guaranteed to be non-None here because parts was a list above
+        assert context is not None
         context.system_prompt = [part for _, part in indexed_parts]
 
     @staticmethod

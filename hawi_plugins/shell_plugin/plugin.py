@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal, TextIO
+from typing import IO, Literal
 
 from hawi.plugin import HawiPlugin, tool
 from hawi.tool import ToolResult
@@ -325,7 +325,7 @@ class ShellPlugin(HawiPlugin):
 
 
 def _start_reader(
-    pipe: TextIO | None,
+    pipe: IO[str] | None,
     chunks: list[str],
     lock: threading.Lock,
     name: str,
