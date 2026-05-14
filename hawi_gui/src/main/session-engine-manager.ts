@@ -23,7 +23,7 @@ interface EngineRecord {
   loadedAt: number;
   lastFinishedAt?: number;
   agentState: string;
-  schedulerState: string;
+  runnerState: string;
   suppressEvents: boolean;
   stopping: boolean;
 }
@@ -350,7 +350,7 @@ export class SessionEngineManager {
       launchProfile,
       loadedAt: Date.now(),
       agentState: "IDLE",
-      schedulerState: "IDLE",
+      runnerState: "IDLE",
       suppressEvents: Boolean(options.suppressEvents),
       stopping: false
     });
@@ -436,15 +436,15 @@ export class SessionEngineManager {
     const payload = framePayload(frame);
     if (frame.type === "core.ready" && isRecord(payload.status)) {
       record.agentState = String(payload.status.agent_state ?? record.agentState);
-      record.schedulerState = String(payload.status.scheduler_state ?? record.schedulerState);
+      record.runnerState = String(payload.status.runner_state ?? record.runnerState);
     } else if (frame.type === "core.status") {
       record.agentState = String(payload.agent_state ?? record.agentState);
-      record.schedulerState = String(payload.scheduler_state ?? record.schedulerState);
+      record.runnerState = String(payload.runner_state ?? record.runnerState);
     } else if (frame.type === "run.start") {
       record.agentState = "RUNNING";
     } else if (frame.type === "run.stop") {
       record.agentState = "IDLE";
-      record.schedulerState = "IDLE";
+      record.runnerState = "IDLE";
       record.lastFinishedAt = Date.now();
     }
   }

@@ -16,7 +16,7 @@ def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
         return _model_retry_entry(event)
     if event.type in {"model.error", "agent.error"}:
         return _error_entry(event)
-    if event.type in {"scheduler.interrupt", "agent.interrupt"}:
+    if event.type in {"runner.interrupt", "agent.interrupt"}:
         return _interrupt_entry(event)
     if event.type != "agent.message_added":
         return None
@@ -80,7 +80,8 @@ def _error_entry(event: Event) -> dict[str, Any] | None:
     except Exception:
         logger.exception("failed to serialize error history event")
         return None
-    error = data.get("error") if isinstance(data.get("error"), dict) else {}
+    raw_error = data.get("error")
+    error = raw_error if isinstance(raw_error, dict) else {}
     message = str(error.get("message") or "Unknown error")
     return {
         "version": 1,
@@ -103,7 +104,7 @@ def _interrupt_entry(event: Event) -> dict[str, Any] | None:
     except Exception:
         logger.exception("failed to serialize interrupt history event")
         return None
-    if event.type == "scheduler.interrupt":
+    if event.type == "runner.interrupt":
         text = f"执行被中断: {data.get('reason', '')}"
     else:
         text = f"Agent 中断: {data.get('interrupt_type', '')}"

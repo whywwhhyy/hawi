@@ -14,7 +14,7 @@ from hawi_engine.protocol import VERSION, make_ack, make_frame
 from hawi_engine.runtime import CoreRuntime, load_model_configs, parse_extra_tool_parameter, parse_extra_tool_parameters
 from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
-from hawi.agent import HawiAgent, HawiScheduler
+from hawi.agent import HawiAgent, AgentRunner
 from hawi.models import model_registry
 from hawi.session import SessionManager
 from hawi.tool import AgentTool, ToolResult
@@ -85,13 +85,21 @@ class DummyAgent:
         self.loaded_runtime = data
 
 
-class DummyScheduler:
+class DummyAgentRunner:
     state = DummyState()
 
     def __init__(self) -> None:
         self._executor = DummyExecutor()
         self.agent = DummyAgent()
         self.enqueued: list[tuple[Any, str, dict[str, Any]]] = []
+
+    @property
+    def agent_state(self) -> DummyState:
+        return self._executor.state
+
+    @property
+    def is_idle(self) -> bool:
+        return self._executor.is_idle
 
     def get_queue_lengths(self) -> dict[str, int]:
         return {"normal": 0, "high_prio": 0, "urgent": 0}
@@ -245,15 +253,15 @@ async def test_start_does_not_queue_duplicate_initial_ready() -> None:
     client = FakeClient()
     wait_forever = asyncio.create_task(asyncio.Event().wait())
 
-    async def build_scheduler(**_: Any) -> tuple[DummyScheduler, asyncio.Task, list[Any]]:
-        return DummyScheduler(), wait_forever, []
+    async def build_runner(**_: Any) -> tuple[DummyAgentRunner, asyncio.Task, list[Any]]:
+        return DummyAgentRunner(), wait_forever, []
 
-    async def stop_scheduler(*_: Any) -> None:
+    async def stop_runner(*_: Any) -> None:
         wait_forever.cancel()
         await asyncio.gather(wait_forever, return_exceptions=True)
 
-    runtime._build_scheduler = build_scheduler  # type: ignore[method-assign]
-    runtime._stop_scheduler = stop_scheduler  # type: ignore[method-assign]
+    runtime._build_runner = build_runner  # type: ignore[method-assign]
+    runtime._stop_runner = stop_runner  # type: ignore[method-assign]
 
     await runtime.start()
     await runtime.register_client(client)
@@ -298,8 +306,8 @@ async def test_hello_with_token_required() -> None:
 async def test_enqueue_command_returns_message_id() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
     client = FakeClient(authenticated=True)
-    scheduler = DummyScheduler()
-    runtime._scheduler = scheduler  # type: ignore[assignment]
+    runner = DummyAgentRunner()
+    runtime._runner = runner  # type: ignore[assignment]
 
     await runtime.handle_frame(
         client,
@@ -309,7 +317,7 @@ async def test_enqueue_command_returns_message_id() -> None:
 
     assert client.sent[-1]["type"] == "ack"
     assert client.sent[-1]["payload"]["message_id"] == "msg-123"
-    assert scheduler.enqueued == [("hi", "high_prio", {"queue_kind": "high_prio"})]
+    assert runner.enqueued == [("hi", "high_prio", {"queue_kind": "high_prio"})]
 
 
 @pytest.mark.asyncio
@@ -454,9 +462,9 @@ async def test_session_delete_removes_non_current_session() -> None:
 async def test_session_new_resets_live_state_without_materializing_history() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
     client = FakeClient(authenticated=True)
-    scheduler = DummyScheduler()
+    runner = DummyAgentRunner()
     sm = DummySessionManager()
-    runtime._scheduler = scheduler  # type: ignore[assignment]
+    runtime._runner = runner  # type: ignore[assignment]
     runtime._session_manager = sm  # type: ignore[assignment]
 
     await runtime.handle_frame(
@@ -473,18 +481,18 @@ async def test_session_new_resets_live_state_without_materializing_history() -> 
     assert payload["command"] == "session_new"
     assert payload["session_id"] == "new-session"
     assert sm.new_session_name == "fresh"
-    assert scheduler.agent.cleared is True
-    assert scheduler.agent.loaded_steer == []
-    assert scheduler.agent.loaded_runtime["current_tool_calls"] == []
+    assert runner.agent.cleared is True
+    assert runner.agent.loaded_steer == []
+    assert runner.agent.loaded_runtime["current_tool_calls"] == []
 
 
 @pytest.mark.asyncio
 async def test_session_fork_command_returns_forked_history() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
     client = FakeClient(authenticated=True)
-    scheduler = DummyScheduler()
+    runner = DummyAgentRunner()
     sm = DummySessionManager()
-    runtime._scheduler = scheduler  # type: ignore[assignment]
+    runtime._runner = runner  # type: ignore[assignment]
     runtime._session_manager = sm  # type: ignore[assignment]
 
     await runtime.handle_frame(
@@ -506,46 +514,46 @@ async def test_session_fork_command_returns_forked_history() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_switch_after_scheduler_replace_uses_live_event_bus(tmp_path) -> None:
+async def test_session_switch_after_runner_replace_uses_live_event_bus(tmp_path) -> None:
     runtime = CoreRuntime(model_name="test-model", token=None, status_interval=60)
     client = FakeClient(authenticated=True)
     runtime._loop = asyncio.get_running_loop()
 
-    old_scheduler = HawiScheduler(HawiAgent(model=MagicMock()))
+    old_runner = AgentRunner(HawiAgent(model=MagicMock()))
     old_task = asyncio.create_task(asyncio.Event().wait())
-    runtime._scheduler = old_scheduler
-    runtime._scheduler_task = old_task
+    runtime._runner = old_runner
+    runtime._runner_task = old_task
     runtime._plugins = []
 
     sm = SessionManager(root=tmp_path / "sessions")
-    sm.attach(old_scheduler.agent, old_scheduler, event_bus=old_scheduler.agent.event_bus)
+    sm.attach(old_runner.agent, old_runner, event_bus=old_runner.agent.event_bus)
     runtime._session_manager = sm
 
     current_session_id = sm.new_session(name="current")
-    old_scheduler.agent.context.add_user_message("current")
+    old_runner.agent.context.add_user_message("current")
     sm.save_now()
 
-    old_scheduler.agent.context.clear()
+    old_runner.agent.context.clear()
     saved_session_id = sm.new_session(name="saved")
-    old_scheduler.agent.context.add_user_message("saved")
+    old_runner.agent.context.add_user_message("saved")
     sm.save_now()
 
     sm.load_session(current_session_id)
 
-    new_scheduler = HawiScheduler(HawiAgent(model=MagicMock()))
+    new_runner = AgentRunner(HawiAgent(model=MagicMock()))
     new_task = asyncio.create_task(asyncio.Event().wait())
 
-    async def build_scheduler(**_: Any) -> tuple[HawiScheduler, asyncio.Task, list[Any]]:
-        return new_scheduler, new_task, []
+    async def build_runner(**_: Any) -> tuple[AgentRunner, asyncio.Task, list[Any]]:
+        return new_runner, new_task, []
 
-    runtime._build_scheduler = build_scheduler  # type: ignore[method-assign]
+    runtime._build_runner = build_runner  # type: ignore[method-assign]
 
     try:
-        await runtime._replace_scheduler(
+        await runtime._replace_runner(
             model_name="test-model",
             selected_plugins=[],
             plugin_configs={},
-            preserve_context=old_scheduler.agent.context.copy(),
+            preserve_context=old_runner.agent.context.copy(),
         )
 
         await runtime.handle_frame(
@@ -562,15 +570,15 @@ async def test_session_switch_after_scheduler_replace_uses_live_event_bus(tmp_pa
         assert client.sent[-1]["payload"]["session_id"] == saved_session_id
     finally:
         sm.detach()
-        await runtime._stop_scheduler(runtime._scheduler, runtime._scheduler_task, [])
-        runtime._scheduler = None
-        runtime._scheduler_task = None
+        await runtime._stop_runner(runtime._runner, runtime._runner_task, [])
+        runtime._runner = None
+        runtime._runner_task = None
 
 
 def test_status_payload_includes_queue_messages() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
-    scheduler = DummyScheduler()
-    scheduler.get_queue_messages = lambda: {  # type: ignore[method-assign]
+    runner = DummyAgentRunner()
+    runner.get_queue_messages = lambda: {  # type: ignore[method-assign]
         "normal": [
             {
                 "id": "msg-1",
@@ -591,7 +599,7 @@ def test_status_payload_includes_queue_messages() -> None:
             }
         ],
     }
-    scheduler.agent.get_pending_input_messages = lambda: [  # type: ignore[attr-defined]
+    runner.agent.get_pending_input_messages = lambda: [  # type: ignore[attr-defined]
         {
             "id": "steer-plain",
             "queue": "normal",
@@ -607,7 +615,7 @@ def test_status_payload_includes_queue_messages() -> None:
             "metadata": {},
         }
     ]
-    runtime._scheduler = scheduler  # type: ignore[assignment]
+    runtime._runner = runner  # type: ignore[assignment]
 
     payload = runtime._status_payload()
 

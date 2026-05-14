@@ -1,5 +1,5 @@
 
-"""Event interceptor for HawiScheduler.
+"""Event interceptor for AgentRunner.
 
 Provides event filtering and transformation capabilities:
 - PASS_THROUGH: Let event through unchanged
@@ -11,9 +11,12 @@ Provides event filtering and transformation capabilities:
 from __future__ import annotations
 
 from enum import Enum, auto
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from hawi.events import Event
+
+if TYPE_CHECKING:
+    from .runner import AgentRunner
 
 
 class EventMode(Enum):
@@ -28,9 +31,9 @@ class EventMode(Enum):
 class EventInterceptor:
     """Intercepts and processes events from the EventBus."""
 
-    def __init__(self, scheduler: "HawiScheduler") -> None:
+    def __init__(self, runner: "AgentRunner") -> None:
         """Initialize the event interceptor."""
-        self._scheduler = scheduler
+        self._runner = runner
         self._handlers: dict[str, Callable[[Event], EventMode]] = {}
         self._transforms: dict[str, Callable[[Event], Event | None]] = {}
 
@@ -101,7 +104,7 @@ class EventInterceptor:
                 return EventMode.SUPPRESS
             if new_event is not event:
                 # Emit the transformed event
-                await self._scheduler._emit_event(new_event)
+                await self._runner._emit_event(new_event)
                 return EventMode.REPROCESS
 
         # Check for handler

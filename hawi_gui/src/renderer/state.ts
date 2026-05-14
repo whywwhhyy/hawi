@@ -122,7 +122,7 @@ export interface AppState {
   runs: Record<string, RunState>;
   toolNodeByCallId: Record<string, string>;
   activeRunId?: string;
-  schedulerState: string;
+  runnerState: string;
   agentState: string;
   queueLengths: Record<QueueKind, number>;
   queueMessages: Record<QueueKind, QueueMessageState[]>;
@@ -145,7 +145,7 @@ export function createInitialState(): AppState {
     nodes: [],
     runs: {},
     toolNodeByCallId: {},
-    schedulerState: "IDLE",
+    runnerState: "IDLE",
     agentState: "IDLE",
     queueLengths: { normal: 0, high_prio: 0, urgent: 0 },
     queueMessages: { normal: [], high_prio: [], urgent: [] },
@@ -425,7 +425,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         { clearProcessing: false }
       );
 
-    case "scheduler.interrupt":
+    case "runner.interrupt":
       return addSystem(state, `执行被中断: ${String(payload.reason ?? "")}`);
 
     case "agent.interrupt":
@@ -482,7 +482,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 }
 
 function updateStatus(state: AppState, payload: Record<string, unknown>): AppState {
-  const schedulerState = String(payload.scheduler_state ?? state.schedulerState);
+  const runnerState = String(payload.runner_state ?? state.runnerState);
   const agentState = String(payload.agent_state ?? state.agentState);
   const queueLengths = normalizeQueueLengths(payload.queue_lengths, state.queueLengths);
   const queueMessages = normalizeQueueMessages(
@@ -494,7 +494,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     parseStatusContextUsage(payload.context_usage)
   );
   if (
-    schedulerState === state.schedulerState
+    runnerState === state.runnerState
     && agentState === state.agentState
     && sameQueueLengths(queueLengths, state.queueLengths)
     && sameQueueMessages(queueMessages, state.queueMessages)
@@ -504,7 +504,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
   }
   return {
     ...state,
-    schedulerState,
+    runnerState,
     agentState,
     queueLengths,
     queueMessages,

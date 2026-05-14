@@ -9,7 +9,7 @@ SubAgent 是 Hawi 的 core 级编排原语：主 agent、插件和工作流都�
 - 支持从父 agent fork 上下文创建子 agent。
 - 支持创建全新上下文的子 agent。
 - 创建时可配置模型、插件、system prompt、工作目录、初始任务、预算和输出协议。
-- 子 agent 默认后台运行，由 scheduler 驱动，并能查询状态、继续对话、读取结果和关闭。
+- 子 agent 默认后台运行，由 runner 驱动，并能查询状态、继续对话、读取结果和关闭。
 - 事件、审计和持久化预留明确落点，但不把 multi-agent 变成默认执行架构。
 
 ## 已有基础
@@ -17,7 +17,7 @@ SubAgent 是 Hawi 的 core 级编排原语：主 agent、插件和工作流都�
 现有代码已经提供了几块可复用能力：
 
 - `HawiAgent.clone()` / `fork()` 会复制上下文、克隆插件、复用模型配置。
-- `HawiScheduler` 已经能后台消费队列、支持普通/高优先级/紧急消息、支持中断。
+- `AgentRunner` 已经能后台消费队列、支持普通/高优先级/紧急消息、支持中断。
 - `PluginManager.clone()` 和 `plugin_factories` 已经能让插件在 fork 时获得隔离实例。
 - `AgentContext.snapshot/load_snapshot` 和 `SessionManager` 已经建立了持久化模式。
 - `WorkflowPlugin` 当前的 `SubAgentReviewer` 已经用 `agent.clone()` 做过最小 sub-agent reviewer，但缺少统一生命周期和状态管理。
@@ -33,7 +33,7 @@ from hawi.agent.subagent import SubAgentManager, SubAgentSpec
 
 模块划分：
 
-- `manager.py`：`SubAgentManager` 生命周期、scheduler wiring、事件转发。
+- `manager.py`：`SubAgentManager` 生命周期、runner wiring、事件转发。
 - `types.py`：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、limits、plugin policy。
 - `prompts.py`：内置角色 system prompt。
 - `utils.py`：fork context 清理、event/content preview helper。
@@ -140,8 +140,8 @@ SubAgentHandle
   id
   spec
   agent: HawiAgent
-  scheduler: HawiScheduler
-  scheduler_task: asyncio.Task
+  runner: AgentRunner
+  runner_task: asyncio.Task
   state
   created_at / updated_at / closed_at
   last_result
@@ -161,8 +161,8 @@ CREATED -> IDLE -> RUNNING -> IDLE
 `spawn(initial_prompt=...)` 的默认行为：
 
 1. 创建 child agent。
-2. 创建 child scheduler。
-3. 启动 `scheduler.run_forever()` 后台 task。
+2. 创建 child runner。
+3. 启动 `runner.run_forever()` 后台 task。
 4. 如果有 `initial_prompt` 或 `initial_plan`，入 `normal` 队列。
 5. 返回 `SubAgentHandle`，不阻塞等待最终结果。
 
@@ -233,7 +233,7 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
 | `read_subagent` | 查询状态、最近输出、最终结果和错误 |
 | `close_subagent` | 中断、取消或关闭子 agent |
 
-不建议默认暴露完整 scheduler 队列操作，也不建议把所有生命周期动作塞进一个 `subagent_control(action=...)` 万能工具。少量专用工具的 schema 更短，模型误用成本也低。
+不建议默认暴露完整 runner 队列操作，也不建议把所有生命周期动作塞进一个 `subagent_control(action=...)` 万能工具。少量专用工具的 schema 更短，模型误用成本也低。
 
 `read_subagent` 可用 `view` 参数控制返回量：
 
@@ -287,7 +287,7 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
 - manager registry snapshot。
 - 每个 child 的 `AgentContext.snapshot()`。
 - 每个 child 的 `message_history.jsonl`，作为 Markdown export 和 GUI child chat 的唯一可见历史来源。
-- 每个 child scheduler 的 queue snapshot。
+- 每个 child runner 的 queue snapshot。
 - child runtime snapshot。
 - 插件状态 snapshot。
 - 未完成子 agent 的恢复策略：默认补合成 error tool result，并让父 agent 看到该子任务需要重启或关闭。
@@ -333,7 +333,7 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
 
 1. [x] Core types：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、`SubAgentManager`。
 2. [x] `HawiAgent` 持有 `subagents` manager，并提供兼容代理方法。
-3. [x] 实现 `fork` / `fresh` 创建路径、后台 scheduler task、send/status/wait/interrupt/close。
+3. [x] 实现 `fork` / `fresh` 创建路径、后台 runner task、send/status/wait/interrupt/close。
 4. [x] 增加最小事件转发 payload。
 5. [x] 新增 `SubAgentPlugin`，暴露 4 个 agent tools。
 6. [ ] 将 `WorkflowPlugin` 的 `SubAgentReviewer` 改为复用 core API。

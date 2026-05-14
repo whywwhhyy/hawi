@@ -9,7 +9,7 @@ from hawi.events import Event
 from hawi.models import ContentPart
 
 
-def drop_trailing_unanswered_tool_call_turn(messages: list[dict[str, Any]]) -> int:
+def drop_trailing_unanswered_tool_call_turn(messages: list[Any]) -> int:
     """Drop the trailing parent tool-call turn if it is still in progress.
 
     Forking can happen while a parent tool is still executing. At that moment

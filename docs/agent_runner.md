@@ -1,8 +1,8 @@
-# HawiScheduler 调度器
+# AgentRunner 运行器
 
 ## 概述
 
-HawiScheduler 是 HawiAgent 的调度层扩展，支持复杂消息处理和编排。主要面向两个场景：
+AgentRunner 是 HawiAgent 的运行驱动层，支持复杂消息处理和编排。主要面向两个场景：
 
 1. **Always-on Background Agent** - 持续运行、等待消息的守护 Agent
 2. **Multi-agent System** - 多 Agent 协作、消息路由
@@ -17,24 +17,24 @@ HawiScheduler 是 HawiAgent 的调度层扩展，支持复杂消息处理和编�
 ## 快速开始
 
 ```python
-from hawi.agent import HawiAgent, HawiScheduler, QueueType
+from hawi.agent import HawiAgent, AgentRunner, QueueType
 from hawi.models import model_registry
 
 # 创建 Agent
 model = model_registry.create_model("deepseek-chat")
 agent = HawiAgent(model=model)
 
-# 创建调度器
-scheduler = HawiScheduler(agent)
+# 创建运行器
+runner = AgentRunner(agent)
 
 # 消息入队（默认普通队列）
-scheduler.enqueue("请介绍一下 Python")
-scheduler.enqueue("[重要] 这个问题更优先", "high_prio")
-scheduler.enqueue("[紧急] 立即停止当前任务", "urgent")
+runner.enqueue("请介绍一下 Python")
+runner.enqueue("[重要] 这个问题更优先", "high_prio")
+runner.enqueue("[紧急] 立即停止当前任务", "urgent")
 
 # 启动守护循环
 import asyncio
-await scheduler.run_forever(poll_interval=0.5)
+await runner.run_forever(poll_interval=0.5)
 ```
 
 ## 三种消息队列
@@ -56,7 +56,7 @@ await scheduler.run_forever(poll_interval=0.5)
 
 ```python
 # URGENT 会立即打断当前执行
-scheduler.enqueue("停止当前任务，立即回答这个问题", "urgent")
+runner.enqueue("停止当前任务，立即回答这个问题", "urgent")
 ```
 
 **HIGH_PRIO（高优先级队列）**：
@@ -66,7 +66,7 @@ scheduler.enqueue("停止当前任务，立即回答这个问题", "urgent")
 
 ```python
 # HIGH_PRIO 会智能合并
-scheduler.enqueue("请先回答这个问题", "high_prio")
+runner.enqueue("请先回答这个问题", "high_prio")
 ```
 
 **NORMAL（普通队列）**：
@@ -75,65 +75,65 @@ scheduler.enqueue("请先回答这个问题", "high_prio")
 
 ```python
 # 普通消息入队
-scheduler.enqueue("帮我查一下天气")
+runner.enqueue("帮我查一下天气")
 ```
 
 ## 原子操作 API
 
 ```python
 # 入队消息，返回 message_id
-msg_id = scheduler.enqueue("content", "normal")
+msg_id = runner.enqueue("content", "normal")
 
 # 移除指定消息
-scheduler.remove_message(msg_id)
+runner.remove_message(msg_id)
 
 # 清空指定队列
-scheduler.clear_queue("normal")
+runner.clear_queue("normal")
 
 # 清空所有队列
-scheduler.clear_all_queues()
+runner.clear_all_queues()
 
 # 获取队列长度
-lengths = scheduler.get_queue_lengths()
+lengths = runner.get_queue_lengths()
 # {'normal': 0, 'high_prio': 0, 'urgent': 0}
 ```
 
 ## 事件系统
 
-Scheduler 产生以下事件类型：
+AgentRunner 产生以下事件类型：
 
 ```python
 from hawi.events import (
-    SchedulerEnqueueEvent,   # 消息入队
-    SchedulerDequeueEvent,  # 消息出队
-    SchedulerInterruptEvent, # 调度器打断
+    AgentRunnerEnqueueEvent,   # 消息入队
+    AgentRunnerDequeueEvent,  # 消息出队
+    AgentRunnerInterruptEvent, # 运行器打断
     AgentInterruptEvent,    # Agent 被请求打断
 )
 ```
 
-### 订阅 Scheduler 事件
+### 订阅 AgentRunner 事件
 
 ```python
-from hawi.events import EventBus, SchedulerEnqueueEvent
+from hawi.events import EventBus, AgentRunnerEnqueueEvent
 
 bus = EventBus()
 
 @bus.subscribe
-async def on_enqueue(event: SchedulerEnqueueEvent):
+async def on_enqueue(event: AgentRunnerEnqueueEvent):
     print(f"消息入队: {event.message_id}, 队列: {event.queue_type}")
 
-scheduler.subscribe(bus)
+runner.subscribe(bus)
 ```
 
 ## 错误处理
 
-Scheduler 提供三种错误处理 Hook：
+AgentRunner 提供三种错误处理 Hook：
 
 ```python
-from hawi.agent.scheduler import (
+from hawi.agent.runner import (
     ModelErrorHook,
     AgentErrorHook,
-    SchedulerErrorHook,
+    AgentRunnerErrorHook,
     ErrorAction,
 )
 
@@ -148,8 +148,8 @@ class MyAgentHook:
     async def on_agent_error(self, error, message, context):
         return ErrorAction.RETRY  # 重试当前消息
 
-scheduler.set_model_error_hook(MyModelHook())
-scheduler.set_agent_error_hook(MyAgentHook())
+runner.set_model_error_hook(MyModelHook())
+runner.set_agent_error_hook(MyAgentHook())
 ```
 
 ### ErrorAction 选项
@@ -157,25 +157,17 @@ scheduler.set_agent_error_hook(MyAgentHook())
 | 选项 | 说明 |
 |------|------|
 | `RETRY` | 重试当前消息 |
-| `ABORT` | 终止 Scheduler |
+| `ABORT` | 终止 AgentRunner |
 | `CONTINUE` | 记录错误，继续处理下一条消息（默认） |
 
 ## EventInterceptor - 事件拦截
 
-EventInterceptor 可以拦截、转换或阻止事件传播：
+EventInterceptor 是 AgentRunner 内部使用的事件处理组件，可以拦截、转换或阻止事件传播。当前公开 API 主要通过 `AgentRunner` 的事件输出消费这些事件；如需开放外部注册入口，应先补一层稳定的 runner 方法，而不是直接依赖内部字段。
 
 ```python
-from hawi.agent.scheduler import EventInterceptor, EventMode
+from hawi.agent.runner import EventMode
 
-interceptor = EventInterceptor()
-
-# 拦截特定事件
-async def my_handler(event):
-    print(f"拦截: {event.type}")
-    return EventMode.PASS_THROUGH  # 放行
-
-interceptor.register_handler("agent.*", my_handler)
-scheduler = HawiScheduler(agent, event_interceptor=interceptor)
+# EventMode 定义内部处理结果：透传、拦截、转换、丢弃。
 ```
 
 ### EventMode
@@ -189,7 +181,7 @@ scheduler = HawiScheduler(agent, event_interceptor=interceptor)
 
 ## 状态机
 
-Scheduler 内部维护以下状态：
+AgentRunner 内部维护以下状态：
 
 ```
 IDLE ──(enqueue)──▶ READY ──(execute)──▶ RUNNING
@@ -209,17 +201,7 @@ IDLE ──(enqueue)──▶ READY ──(execute)──▶ RUNNING
 
 ## 与 Plugin Manager 集成
 
-Scheduler 与 Plugin 系统集成，支持生命周期 Hook：
-
-```python
-from hawi.plugin import HawiPlugin
-
-class MyPlugin(HawiPlugin):
-    @hook("scheduler.before_enqueue")
-    async def before_enqueue(self, scheduler, message):
-        print(f"即将入队: {message.content[:20]}...")
-        return message  # 可以修改消息
-```
+AgentRunner 不直接定义额外的 plugin hook；插件仍通过 `HawiAgent` 的 hook 与 tool 机制影响单次 run。Runner 层只负责把队列消息驱动成 agent run，并把 `runner.*` 事件暴露给观察者和持久化层。
 
 ## 使用示例
 
@@ -227,42 +209,33 @@ class MyPlugin(HawiPlugin):
 
 ```python
 import asyncio
-from hawi.agent import HawiAgent, HawiScheduler
+from hawi.agent import HawiAgent, AgentRunner
 
 async def main():
     agent = HawiAgent(model=model)
-    scheduler = HawiScheduler(agent)
+    runner = AgentRunner(agent)
     
     # 启动守护循环
-    await scheduler.run_forever(poll_interval=0.5)
+    await runner.run_forever(poll_interval=0.5)
 
 # 后台运行
 asyncio.create_task(main())
 
 # 从外部入队消息
-scheduler.enqueue("处理这个任务", "normal")
+runner.enqueue("处理这个任务", "normal")
 ```
 
-### Interactive Demo
-
-```bash
-# 运行交互式演示
-uv run python scheduler_demo.py
-
-# 自动演示模式
-uv run python scheduler_demo.py --demo auto
-```
+将 `main()` 放入任意脚本后，可用 `uv run python <script>.py` 运行。
 
 ## API 参考
 
-### HawiScheduler
+### AgentRunner
 
 ```python
-class HawiScheduler:
+class AgentRunner:
     def __init__(
         self,
         agent: HawiAgent,
-        event_interceptor: EventInterceptor | None = None,
     ): ...
 
     # 消息队列操作
@@ -285,7 +258,7 @@ class HawiScheduler:
     # 错误处理
     def set_model_error_hook(self, hook: ModelErrorHook): ...
     def set_agent_error_hook(self, hook: AgentErrorHook): ...
-    def set_scheduler_error_hook(self, hook: SchedulerErrorHook): ...
+    def set_runner_error_hook(self, hook: AgentRunnerErrorHook): ...
 ```
 
 ### QueuedMessage
@@ -305,4 +278,3 @@ class QueuedMessage:
 
 - [Event 系统](./event_system.md) - 事件系统使用指南
 - [Hook 系统](./hook_system.md) - 钩子系统使用指南
-- [设计文档](./designs/scheduler.md) - Scheduler 详细设计决策

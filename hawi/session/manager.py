@@ -49,7 +49,7 @@ from .writer import SessionWriter, WriteJob
 
 if TYPE_CHECKING:
     from hawi.agent.agent import HawiAgent
-    from hawi.agent.scheduler.scheduler import HawiScheduler
+    from hawi.agent.runner.runner import AgentRunner
 
 logger = logging.getLogger(__name__)
 SESSION_ID_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
@@ -77,9 +77,9 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
     "agent.compact_stop": (layout.COMPONENT_CONTEXT,),
     "model.retry": (layout.COMPONENT_RUNTIME,),
     "model.error": (layout.COMPONENT_RUNTIME,),
-    "scheduler.enqueue": (layout.COMPONENT_QUEUES,),
-    "scheduler.dequeue": (layout.COMPONENT_QUEUES,),
-    "scheduler.interrupt": (layout.COMPONENT_RUNTIME,),
+    "runner.enqueue": (layout.COMPONENT_QUEUES,),
+    "runner.dequeue": (layout.COMPONENT_QUEUES,),
+    "runner.interrupt": (layout.COMPONENT_RUNTIME,),
 }
 
 
@@ -104,7 +104,7 @@ class SessionManager:
     Typical lifecycle::
 
         sm = SessionManager()
-        sm.attach(agent, scheduler)
+        sm.attach(agent, runner)
         sm.new_session(name="my chat")
         # ... agent runs, checkpoints flow automatically ...
         sm.save_now()             # or rely on exit hook
@@ -130,7 +130,7 @@ class SessionManager:
         self._lock = threading.RLock()
 
         self._agent: HawiAgent | None = None
-        self._scheduler: HawiScheduler | None = None
+        self._runner: AgentRunner | None = None
         self._event_bus: EventBus | None = None
         self._session_id: str | None = None
         self._session_name: str | None = None
@@ -146,18 +146,18 @@ class SessionManager:
     def attach(
         self,
         agent: HawiAgent,
-        scheduler: HawiScheduler | None = None,
+        runner: AgentRunner | None = None,
         *,
         event_bus: EventBus | None = None,
     ) -> None:
-        """Wire SessionManager into an agent + scheduler.
+        """Wire SessionManager into an agent + runner.
 
         Subscribes to boundary events, starts the writer thread, and registers
         the final-flush exit hook.
         """
         with self._lock:
             self._agent = agent
-            self._scheduler = scheduler
+            self._runner = runner
             bus = event_bus or getattr(agent, "_event_bus", None) or getattr(
                 agent, "event_bus", None
             )
@@ -189,7 +189,7 @@ class SessionManager:
             self._event_bus = None
             self._writer._event_bus = None
             self._agent = None
-            self._scheduler = None
+            self._runner = None
             if self._exit_hook_registered:
                 ExitHandler.get_instance().unregister(self._final_flush)
                 self._exit_hook_registered = False
@@ -316,11 +316,11 @@ class SessionManager:
                     loaded_system_prompt = "system_prompt" in ctx_data
 
                 queues_path = layout.queues_path(session_dir)
-                if queues_path.exists() and self._scheduler is not None:
+                if queues_path.exists() and self._runner is not None:
                     queues_data = json.loads(queues_path.read_text(encoding="utf-8"))
-                    qm = self._scheduler_queue_manager()
-                    if qm is not None and "scheduler" in queues_data:
-                        qm.load_snapshot(queues_data["scheduler"])
+                    qm = self._runner_queue_manager()
+                    if qm is not None and "runner" in queues_data:
+                        qm.load_snapshot(queues_data["runner"])
                         qm.rebind_event_bus(self._event_bus)
                     if "pending_steer_inputs" in queues_data:
                         self._agent.load_steer(queues_data["pending_steer_inputs"])
@@ -619,9 +619,9 @@ class SessionManager:
 
         if layout.COMPONENT_QUEUES in components:
             queues_payload: dict[str, Any] = {"version": layout.QUEUES_VERSION}
-            qm = self._scheduler_queue_manager()
+            qm = self._runner_queue_manager()
             if qm is not None:
-                queues_payload["scheduler"] = qm.snapshot()
+                queues_payload["runner"] = qm.snapshot()
             queues_payload["pending_steer_inputs"] = self._agent.snapshot_steer()
             queues_payload["pending_audit_tool_calls"] = [
                 {
@@ -869,11 +869,11 @@ class SessionManager:
             return False
         return should_persist_message(message.get("metadata"))
 
-    def _scheduler_queue_manager(self) -> Any:
-        if self._scheduler is None:
+    def _runner_queue_manager(self) -> Any:
+        if self._runner is None:
             return None
-        for attr in ("_queue_manager", "queue_manager", "queues"):
-            qm = getattr(self._scheduler, attr, None)
+        for attr in ("queue_manager", "queues", "_queue_manager"):
+            qm = getattr(self._runner, attr, None)
             if qm is not None and hasattr(qm, "snapshot"):
                 return qm
         return None

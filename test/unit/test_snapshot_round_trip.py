@@ -11,7 +11,7 @@ import json
 
 from hawi.agent.agent import SteerPartMergeMode
 from hawi.agent.context import AgentContext
-from hawi.agent.scheduler.queue import (
+from hawi.agent.runner.queue import (
     MessageQueueManager,
     QueueType,
 )

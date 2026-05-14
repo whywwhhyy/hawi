@@ -826,7 +826,7 @@ async def _invoke_user_message_hook(
 #### 边界条件
 
 1. **`arun(message=None)` 不触发 hook**：当用户调 `arun()` 不带 message
-   （比如恢复运行、scheduler 驱动），`message is None` 分支跳过 hook。
+   （比如恢复运行、runner 驱动），`message is None` 分支跳过 hook。
    插件需要拦截这种入口请用 `before_session`。
 2. **`before_session` 与本 hook 时序**：当前 `before_session` 在 add_user_message
    之后。本 phase 不动 `before_session` 时序。新顺序：
@@ -1577,7 +1577,7 @@ def _estimate_pinned_tokens(self, draft: CompactDraft) -> int:
 
 Phase 3 强依赖 todo.md "Message 类型增加一等公民 id" 项目。该项目落地前：
 - `pinned_message_ids` 仍可用，但只能钉住 **metadata 中已有 `message_id`**
-  的消息（scheduler/steer 路径已在传，但普通 user/assistant message 暂时
+  的消息（runner/steer 路径已在传，但普通 user/assistant message 暂时
   没有）
 - 普通插件钉不住"之前模型生成的 assistant 消息"
 - 文档明示这一限制
@@ -1675,7 +1675,7 @@ def on_interrupt(func):
         ctx: HookContext with run_id, iteration.
 
     Triggered by:
-        - agent.interrupt() / scheduler.interrupt()
+        - agent.interrupt() / runner.interrupt()
         - asyncio.CancelledError during the agent loop
 
     Returns:
@@ -1806,7 +1806,7 @@ except Exception as e:
 - `hawi/plugin/hook_context.py` — `_ALLOWED_ACTIONS["on_interrupt"] = frozenset()`
 - `hawi/agent/agent.py` — interrupt 路径 + 错误事件发布
 - `hawi/events/agent_events.py` — 两个新事件
-- `hawi/agent/scheduler/event_interceptor.py`（如有事件类型注册）
+- `hawi/agent/runner/interceptor.py`（如有事件类型注册）
 
 ### 4.5 测试
 

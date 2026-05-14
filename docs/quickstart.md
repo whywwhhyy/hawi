@@ -225,17 +225,17 @@ Hawi 提供了基于 Electron 的图形界面，支持流式对话、工具调�
 
 ### GUI 架构
 
-GUI 通过 `SchedulerThread` 在后台运行异步调度器，与 tkinter 主线程通过队列通信：
+GUI 通过 `AgentRunnerThread` 在后台运行异步运行器，与 tkinter 主线程通过队列通信：
 
 ```
 ┌─────────────┐     queues      ┌─────────────────┐
-│  tkinter    │ ◄────────────► │ SchedulerThread │
+│  tkinter    │ ◄────────────► │ AgentRunnerThread │
 │    UI       │   (thread-safe) │  (asyncio loop) │
 └─────────────┘                 └─────────────────┘
                                         │
                                         ▼
                                 ┌───────────────┐
-                                │ HawiScheduler │
+                                │ AgentRunner │
                                 │   + Agent     │
                                 └───────────────┘
 ```

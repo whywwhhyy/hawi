@@ -1,14 +1,14 @@
 - [ ] 重写 agent 为多队列单循环：
-    - [x] 插队消息队列：scheduler 已有 `urgent` / `high_prio`
-    - [x] 用户消息队列：scheduler 已有 `normal`
-    - [x] scheduler 已有 `run_forever()` 单循环消费队列
+    - [x] 插队消息队列：runner 已有 `urgent` / `high_prio`
+    - [x] 用户消息队列：runner 已有 `normal`
+    - [x] runner 已有 `run_forever()` 单循环消费队列
     - [x] 工具执行逻辑已抽出 `ToolExecutor`，agent loop 不再直接承载工具调用细节
     - [ ] 工具调用请求队列：将 tool call request 显式队列化，而不是只在 agent loop 内顺序执行
-    - [ ] agent 内部执行循环与 scheduler 队列模型进一步统一
+    - [ ] agent 内部执行循环与 runner 队列模型进一步统一
     - [ ] 明确 urgent / high_prio / normal 在 tool 执行中、model streaming 中、空闲时的完整语义
 
 - [ ] agent messages 提供标签和 id 功能，以支持插件和工具实现便捷的上下文管理方法
-    - [x] scheduler / steer 路径已经通过 message metadata 传递 `message_id`
+    - [x] runner / steer 路径已经通过 message metadata 传递 `message_id`
     - [x] `AgentMessageAddedEvent` 已携带 message metadata
     - [x] `AgentContext.save/load` 会保留 message metadata
     - [ ] `Message` 类型增加一等公民 `id`
@@ -42,14 +42,14 @@
     - [ ] `hawi_gui/src/renderer/App.tsx`：拆成 session header、timeline、composer、plugin config、artifacts/subagent panels 等组件
     - [ ] `hawi_gui/src/renderer/state.ts`：按 session、runtime status、plugin catalog、subagent/runtime events、artifacts 拆分 state slice 与 action
     - [ ] `hawi/agent/context.py`：拆出 token accounting、snapshot/restore、message rendering、compaction/recovery helpers
-    - [ ] `hawi_engine/runtime.py`：拆出 command handlers、session commands、plugin catalog/loading、scheduler lifecycle、subagent protocol
+    - [ ] `hawi_engine/runtime.py`：拆出 command handlers、session commands、plugin catalog/loading、runner lifecycle、subagent protocol
     - [ ] `hawi_plugins/workflow_plugin/plugin.py`：拆出 workflow state、工具定义、gate review、持久化和 subagent reviewer adapter
     - [ ] 后续评估 provider/model adapter 与大型 plugin：`hawi/models/*/_model.py`、`hawi/models/model.py`、`hawi_plugins/python_interpreter`、`filesystem_plugin`、`mcp_plugin`
 
 - [x] 还需要提供持久化机制，确保 agent 可以做到不管什么时候 crash 再拉起来都可以恢复 session
     - [x] `AgentContext.save/load` 已支持 JSON 保存/恢复 messages、system prompt、cache 配置、compaction records
     - [x] core runtime 在切换插件时已支持 preserve context
-    - [x] 持久化 scheduler 队列：urgent / high_prio / normal（`MessageQueueManager.snapshot/load_snapshot`，`event_bus` 引用 rebind）
+    - [x] 持久化 runner 队列：urgent / high_prio / normal（`MessageQueueManager.snapshot/load_snapshot`，`event_bus` 引用 rebind）
     - [x] 持久化 pending steer inputs（`HawiAgent.snapshot_steer/load_steer`）
     - [x] 持久化 pending audit tool calls（`AgentContext.snapshot` 含 `pending_tool_calls`）
     - [x] 持久化插件状态：PlanPlugin、WorkflowPlugin、PythonInterpreterPlugin 已实现 `save_state/load_state`；ShellPlugin 因 command 本质短暂不持久化
@@ -62,7 +62,7 @@
     - [x] GUI Renderer 增加 Session 区：消息数、当前 session id、列表弹框、切换、新建、删除非当前 session
     - [x] 空 session 懒写盘：启动/New/切换空会话不会物化目录
     - [x] SessionManager 异步写盘 + ExitHandler 优先级保证最后 flush（`EXIT_PRIORITY_SESSION_FLUSH`）
-    - [x] scheduler replace 后会重新绑定 `SessionManager` / `EventBus`，避免切换插件后 session 操作使用已关闭 EventBus
+    - [x] runner replace 后会重新绑定 `SessionManager` / `EventBus`，避免切换插件后 session 操作使用已关闭 EventBus
 
 - [ ] subagent 顶层 API：作为 multi-agent workflow 与插件编排的基础原语
     - [x] 完成初版设计文档：`docs/subagents.md`
@@ -72,14 +72,14 @@
     - [x] 支持设计：fork 上下文创建 subagent
     - [x] 支持设计：fresh 全新上下文创建 subagent
     - [x] 支持设计：创建时配置插件、system prompt、工作目录、初始 plan/prompt、角色、预算、ownership、结果协议、metadata
-    - [x] 支持设计：后台 scheduler 运行引擎、状态查询、对话指导、生命周期管理
+    - [x] 支持设计：后台 runner 运行引擎、状态查询、对话指导、生命周期管理
     - [x] 新增 core types：`SubAgentSpec`、`SubAgentHandle`、`SubAgentStatus`、`SubAgentManager`
     - [x] `SubAgentManager` 已从单文件拆到 `hawi.agent.subagent.manager`，spec/status/handle 等类型在 `types.py`，角色 prompt 与上下文清理 helper 独立成模块
     - [x] `HawiAgent` 持有 `subagents` manager，并提供兼容代理方法
-    - [x] 实现 `fork` / `fresh` 创建路径、后台 `HawiScheduler` task、send/status/wait/interrupt/close
+    - [x] 实现 `fork` / `fresh` 创建路径、后台 `AgentRunner` task、send/status/wait/interrupt/close
     - [x] 实现角色默认 system prompt：general、planner、reviewer、explorer、implementer、critic、summarizer
     - [x] 实现插件策略第一版：继承父插件、禁用继承、追加插件/工厂
-    - [x] 实现基础 limits：最大运行时间、最大递归深度、最大子 agent 数（tool call 数仍待 scheduler/tool budget 接入）
+    - [x] 实现基础 limits：最大运行时间、最大递归深度、最大子 agent 数（tool call 数仍待 runner/tool budget 接入）
     - [x] 实现最小事件转发：child events 以 `plugin.event` 关联 `subagent_id`
     - [x] 新增 `SubAgentPlugin`，暴露 5 个 agent tools
     - [x] engine/GUI 插件目录注册 `SubAgentPlugin`，GUI 插件弹窗可选择 subagent 工具
@@ -89,7 +89,7 @@
     - [x] `read_subagent(view="context_tail")` 在运行中追加 partial assistant message，支持看到子 agent 正在输出什么
     - [x] `status.last_result_text` 修正为最近一次完成 run 的结果，而不是一直停留在第一次结果
     - [ ] 明确产品语义：subagent 默认服务一次性任务，但底层按可持续多轮 child session/thread 设计
-    - [ ] 引入 `SubAgentSession` 概念：parent session 下的 child session tree，独立 context、scheduler、event log、权限集、manifest
+    - [ ] 引入 `SubAgentSession` 概念：parent session 下的 child session tree，独立 context、runner、event log、权限集、manifest
     - [ ] 引入 `SubAgentTurn` 模型：每次 `send` 生成 `turn_id`，追踪 QUEUED/RUNNING/COMPLETED/FAILED/INTERRUPTED/CANCELLED
     - [ ] 将 `send_subagent_message` 返回值升级为 `turn_id` + `message_id`，避免多轮时只依赖 `last_result`
     - [ ] 增加 `wait_turn(subagent_id, turn_id)` / `read_subagent(view="turns")`，支持按轮次等待和查看结果
@@ -154,10 +154,10 @@
     - [ ] 评估是否落在 WorkflowPlugin、PlanPlugin，还是新增 MultiAgentPlugin / MultiAgentPlanningPlugin
 
 - [x] agent 打断接口
-    - [x] 添加打断接口：`HawiAgent.interrupt()` / `HawiScheduler.interrupt()`
+    - [x] 添加打断接口：`HawiAgent.interrupt()` / `AgentRunner.interrupt()`
     - [x] core runtime 已提供 `interrupt` 命令
     - [x] 中断/取消时会补缺失的 tool result，避免 provider message history 损坏
-    - [x] scheduler urgent 消息会触发当前执行中断
+    - [x] runner urgent 消息会触发当前执行中断
 
 - [x] 增加 retry 事件
     - [x] 已有 `ModelRetryEvent`
@@ -252,7 +252,7 @@
     - [ ] GUI / CLI / headless runtime 使用同一确认协议
 
 - [ ] 参考 Claude Code 逆向文章：https://zhuanlan.zhihu.com/p/1943399204027373513?share_code=1roZMkugobZJr&utm_psn=2020735776124667643
-    - [x] 单一主循环 / 扁平消息历史：HawiAgent + scheduler 已有基础形态
+    - [x] 单一主循环 / 扁平消息历史：HawiAgent + runner 已有基础形态
     - [x] 朴素 To-Do：PlanPlugin 已提供显式计划工具
     - [x] LLM 像人一样搜索：FileSystemPlugin / ShellPlugin 已提供 grep、glob、shell 等低层能力
     - [x] 高/中/低层工具组合：shell、filesystem、web、workflow、plan 已初步覆盖

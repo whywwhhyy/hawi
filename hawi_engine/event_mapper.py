@@ -38,7 +38,7 @@ class SemanticEventMapper:
                 )
             ]
 
-        if etype == "scheduler.enqueue":
+        if etype == "runner.enqueue":
             event = event  # type: ignore[assignment]
             queue_type = str(getattr(event, "queue_type", ""))
             message_id = str(getattr(event, "message_id", ""))
@@ -57,7 +57,7 @@ class SemanticEventMapper:
                 )
             ]
 
-        if etype == "scheduler.dequeue":
+        if etype == "runner.dequeue":
             event = event  # type: ignore[assignment]
             queue_type = str(getattr(event, "queue_type", "normal"))
             message_id = str(getattr(event, "message_id", ""))
@@ -75,10 +75,10 @@ class SemanticEventMapper:
                 )
             ]
 
-        if etype == "scheduler.interrupt":
+        if etype == "runner.interrupt":
             return [
                 make_frame(
-                    "scheduler.interrupt",
+                    "runner.interrupt",
                     {
                         "reason": getattr(event, "reason", ""),
                         "interrupted_tool_calls": getattr(event, "interrupted_tool_calls", []),

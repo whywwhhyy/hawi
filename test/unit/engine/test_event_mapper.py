@@ -18,9 +18,9 @@ from hawi.events import (
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockStopEvent,
     PluginEvent,
-    SchedulerDequeueEvent,
-    SchedulerEnqueueEvent,
-    SchedulerInterruptEvent,
+    AgentRunnerDequeueEvent,
+    AgentRunnerEnqueueEvent,
+    AgentRunnerInterruptEvent,
 )
 from hawi.errors import ModelError
 from hawi.models.message import DeltaPart, TokenUsage
@@ -36,7 +36,7 @@ def test_mapper_only_logs_high_priority_message_on_enqueue() -> None:
     mapper = SemanticEventMapper()
 
     frames = mapper.map(
-        SchedulerEnqueueEvent.create("steer-1", "high_prio", "new priority")
+        AgentRunnerEnqueueEvent.create("steer-1", "high_prio", "new priority")
     )
 
     assert [frame["type"] for frame in frames] == ["debug.info"]
@@ -47,7 +47,7 @@ def test_mapper_does_not_display_normal_message_on_enqueue() -> None:
     mapper = SemanticEventMapper()
 
     frames = mapper.map(
-        SchedulerEnqueueEvent.create("msg-1", "normal", "queued normal")
+        AgentRunnerEnqueueEvent.create("msg-1", "normal", "queued normal")
     )
 
     assert [frame["type"] for frame in frames] == ["debug.info"]
@@ -156,7 +156,7 @@ def test_mapper_emits_elapsed_wait_before_model_error() -> None:
 def test_mapper_falls_back_to_run_queue_without_message_metadata() -> None:
     mapper = SemanticEventMapper()
 
-    mapper.map(SchedulerDequeueEvent.create("msg-plain", "high_prio"))
+    mapper.map(AgentRunnerDequeueEvent.create("msg-plain", "high_prio"))
     mapper.map(AgentRunStartEvent.create("run-plain"))
     frames = mapper.map(
         AgentMessageAddedEvent.create(
@@ -176,7 +176,7 @@ def test_mapper_falls_back_to_run_queue_without_message_metadata() -> None:
 def test_mapper_displays_materialized_high_priority_message_as_normal() -> None:
     mapper = SemanticEventMapper()
 
-    mapper.map(SchedulerDequeueEvent.create("msg-plain", "high_prio"))
+    mapper.map(AgentRunnerDequeueEvent.create("msg-plain", "high_prio"))
     frames = mapper.map(
         AgentMessageAddedEvent.create(
             "run-plain",
@@ -235,7 +235,7 @@ def test_mapper_displays_materialized_steer_message() -> None:
 def test_mapper_uses_message_metadata_queue_override() -> None:
     mapper = SemanticEventMapper()
 
-    mapper.map(SchedulerDequeueEvent.create("msg-2", "urgent"))
+    mapper.map(AgentRunnerDequeueEvent.create("msg-2", "urgent"))
     mapper.map(AgentRunStartEvent.create("run-2"))
     frames = mapper.map(
         AgentMessageAddedEvent.create(
@@ -254,7 +254,7 @@ def test_mapper_uses_message_metadata_queue_override() -> None:
 def test_mapper_uses_message_metadata_message_id_override() -> None:
     mapper = SemanticEventMapper()
 
-    mapper.map(SchedulerDequeueEvent.create("pending-inputs", "high_prio"))
+    mapper.map(AgentRunnerDequeueEvent.create("pending-inputs", "high_prio"))
     mapper.map(AgentRunStartEvent.create("run-3"))
     frames = mapper.map(
         AgentMessageAddedEvent.create(
@@ -574,7 +574,7 @@ def test_stream_accumulator_flushes_pending_start_on_block_end() -> None:
     )
 
 
-def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:
+def test_mapper_emits_model_metadata_and_runner_interrupt() -> None:
     mapper = SemanticEventMapper()
     mapper.map(AgentRunStartEvent.create("run-4"))
 
@@ -622,8 +622,8 @@ def test_mapper_emits_model_metadata_and_scheduler_interrupt() -> None:
     assert metadata[0]["payload"]["decode_tokens_per_second"] == 6.25
     assert len(metadata) == 1
 
-    interrupted = mapper.map(SchedulerInterruptEvent.create("user", ["tc-9"]))
-    assert interrupted[0]["type"] == "scheduler.interrupt"
+    interrupted = mapper.map(AgentRunnerInterruptEvent.create("user", ["tc-9"]))
+    assert interrupted[0]["type"] == "runner.interrupt"
     assert interrupted[0]["payload"]["interrupted_tool_calls"] == ["tc-9"]
 
 

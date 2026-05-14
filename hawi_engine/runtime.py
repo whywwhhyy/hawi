@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, Sequence, cast
 
-from hawi.agent import AutoCompactConfig, HawiAgent, HawiScheduler
+from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.events import Event
 from hawi.models import model_registry
@@ -147,7 +147,7 @@ class RuntimeClient(Protocol):
 
 
 class CoreRuntime:
-    """Owns the Hawi agent scheduler and command/event protocol handling."""
+    """Owns the Hawi agent runner and command/event protocol handling."""
 
     def __init__(
         self,
@@ -185,8 +185,8 @@ class CoreRuntime:
         self._blob_store: BlobStore | None = blob_store
         self._status_interval = status_interval
 
-        self._scheduler: HawiScheduler | None = None
-        self._scheduler_task: asyncio.Task | None = None
+        self._runner: AgentRunner | None = None
+        self._runner_task: asyncio.Task | None = None
         self._status_task: asyncio.Task | None = None
         self._broadcast_task: asyncio.Task | None = None
         self._plugins: list[Any] = []
@@ -206,29 +206,29 @@ class CoreRuntime:
         return self._shutdown_requested.is_set()
 
     async def start(self) -> None:
-        """Build the agent scheduler and start background runtime tasks."""
+        """Build the agent runner and start background runtime tasks."""
         if self._started:
             return
         self._loop = asyncio.get_running_loop()
         if self._blob_store is not None:
             await self._blob_store.start()
-        scheduler, scheduler_task, plugins = await self._build_scheduler(
+        runner, runner_task, plugins = await self._build_runner(
             model_name=self.model_name,
             selected_plugins=self._selected_plugins,
             plugin_configs=self._plugin_configs,
             context_to_restore=None,
         )
-        self._scheduler = scheduler
-        self._scheduler_task = scheduler_task
+        self._runner = runner
+        self._runner_task = runner_task
         self._plugins = plugins
         self._session_manager = SessionManager(
             keep_session_system_prompt=self._keep_session_system_prompt,
             manifest_metadata_provider=self._session_manifest_metadata,
         )
         self._session_manager.attach(
-            scheduler.agent,
-            scheduler,
-            event_bus=getattr(scheduler.agent, "_event_bus", None),
+            runner.agent,
+            runner,
+            event_bus=getattr(runner.agent, "_event_bus", None),
         )
         # Auto-create an initial in-memory session id. SessionManager writes it
         # to disk lazily once the conversation has a user-visible message, so
@@ -245,7 +245,7 @@ class CoreRuntime:
         self._started = True
 
     async def stop(self) -> None:
-        """Stop scheduler, clients, plugins, and runtime tasks."""
+        """Stop runner, clients, plugins, and runtime tasks."""
         if self._shutdown_requested.is_set():
             return
         self._shutdown_requested.set()
@@ -254,9 +254,9 @@ class CoreRuntime:
             self._status_task.cancel()
             await asyncio.gather(self._status_task, return_exceptions=True)
 
-        await self._stop_scheduler(self._scheduler, self._scheduler_task, self._plugins)
-        self._scheduler = None
-        self._scheduler_task = None
+        await self._stop_runner(self._runner, self._runner_task, self._plugins)
+        self._runner = None
+        self._runner_task = None
         self._plugins = []
 
         if self._session_manager is not None:
@@ -509,7 +509,7 @@ class CoreRuntime:
             await client.send(make_frame("core.ready", self._ready_payload()))
 
     async def _handle_enqueue(self, client: RuntimeClient, command: CoreCommand) -> None:
-        scheduler = self._require_scheduler()
+        runner = self._require_runner()
         content = command.payload.get("content")
         if not isinstance(content, (str, list)):
             raise ValueError("'enqueue.payload.content' must be a string or content part list")
@@ -520,7 +520,7 @@ class CoreRuntime:
         if not isinstance(metadata, dict):
             raise ValueError("'enqueue.payload.metadata' must be an object")
         metadata = {**metadata, "queue_kind": queue}
-        message_id = scheduler.enqueue(content, queue, metadata=metadata)
+        message_id = runner.enqueue(content, queue, metadata=metadata)
         await client.send(
             make_ack(
                 "enqueue",
@@ -530,11 +530,11 @@ class CoreRuntime:
         )
 
     async def _handle_interrupt(self, client: RuntimeClient, command: CoreCommand) -> None:
-        scheduler = self._require_scheduler()
+        runner = self._require_runner()
         reason = command.payload.get("reason", "user")
         if not isinstance(reason, str):
             raise ValueError("'interrupt.payload.reason' must be a string")
-        interrupted_ids = await scheduler.interrupt(reason)
+        interrupted_ids = await runner.interrupt(reason)
         await client.send(
             make_ack(
                 "interrupt",
@@ -548,7 +548,7 @@ class CoreRuntime:
         client: RuntimeClient,
         command: CoreCommand,
     ) -> None:
-        self._require_scheduler().agent.context.clear()
+        self._require_runner().agent.context.clear()
         await client.send(make_ack("clear_context", request_id=command.id))
 
     async def _handle_clear_queue(
@@ -556,12 +556,12 @@ class CoreRuntime:
         client: RuntimeClient,
         command: CoreCommand,
     ) -> None:
-        scheduler = self._require_scheduler()
+        runner = self._require_runner()
         queue = command.payload.get("queue", "all")
         if queue == "all":
-            cleared = scheduler.clear_all_queues()
+            cleared = runner.clear_all_queues()
         else:
-            cleared = scheduler.clear_queue(self._queue_kind(queue))
+            cleared = runner.clear_queue(self._queue_kind(queue))
         await client.send(
             make_ack(
                 "clear_queue",
@@ -579,7 +579,7 @@ class CoreRuntime:
         if not isinstance(system_prompt, str):
             raise ValueError("'set_system_prompt.payload.system_prompt' must be a string")
         self.system_prompt = system_prompt
-        self._require_scheduler().agent.context.set_system_prompt(system_prompt)
+        self._require_runner().agent.context.set_system_prompt(system_prompt)
         self._update_gui_launch_profile(system_prompt=system_prompt)
         await client.send(make_ack("set_system_prompt", request_id=command.id))
 
@@ -591,7 +591,7 @@ class CoreRuntime:
         model_name = command.payload.get("model_name")
         if not isinstance(model_name, str) or not model_name.strip():
             raise ValueError("'switch_model.payload.model_name' must be a non-empty string")
-        self._require_scheduler().agent.set_model(model_name)
+        self._require_runner().agent.set_model(model_name)
         self.model_name = model_name
         self._update_gui_launch_profile(model_name=model_name)
         await client.send(
@@ -635,11 +635,11 @@ class CoreRuntime:
         client: RuntimeClient,
         command: CoreCommand,
     ) -> None:
-        scheduler = self._require_scheduler()
-        if not scheduler._executor.is_idle:
+        runner = self._require_runner()
+        if not runner.is_idle:
             await client.send(
                 make_error(
-                    "Agent is running. Apply plugins when the scheduler is idle.",
+                    "Agent is running. Apply plugins when the runner is idle.",
                     request_id=command.id,
                     code="busy",
                 )
@@ -663,8 +663,8 @@ class CoreRuntime:
         if not isinstance(plugin_configs, dict):
             raise ValueError("'apply_plugins.payload.plugin_configs' must be an object")
 
-        context_copy = scheduler.agent.context.copy()
-        await self._replace_scheduler(
+        context_copy = runner.agent.context.copy()
+        await self._replace_runner(
             model_name=self.model_name,
             selected_plugins=list(selected_plugins),
             plugin_configs={
@@ -737,11 +737,11 @@ class CoreRuntime:
         command: CoreCommand,
     ) -> None:
         sm = self._require_session_manager()
-        scheduler = self._require_scheduler()
-        if not scheduler._executor.is_idle:
+        runner = self._require_runner()
+        if not runner.is_idle:
             await client.send(
                 make_error(
-                    "Agent is running. Create a new session when the scheduler is idle.",
+                    "Agent is running. Create a new session when the runner is idle.",
                     request_id=command.id,
                     code="busy",
                 )
@@ -750,10 +750,10 @@ class CoreRuntime:
         name = command.payload.get("name")
         if name is not None and not isinstance(name, str):
             raise ValueError("'session_new.payload.name' must be a string when present")
-        scheduler.agent.context.clear()
-        scheduler.clear_all_queues()
-        scheduler.agent.load_steer([])
-        scheduler.agent.load_runtime(
+        runner.agent.context.clear()
+        runner.clear_all_queues()
+        runner.agent.load_steer([])
+        runner.agent.load_runtime(
             {
                 "version": 1,
                 "current_tool_calls": [],
@@ -777,11 +777,11 @@ class CoreRuntime:
         command: CoreCommand,
     ) -> None:
         sm = self._require_session_manager()
-        scheduler = self._require_scheduler()
-        if not scheduler._executor.is_idle:
+        runner = self._require_runner()
+        if not runner.is_idle:
             await client.send(
                 make_error(
-                    "Agent is running. Fork a session when the scheduler is idle.",
+                    "Agent is running. Fork a session when the runner is idle.",
                     request_id=command.id,
                     code="busy",
                 )
@@ -956,7 +956,7 @@ class CoreRuntime:
             )
         )
 
-    async def _replace_scheduler(
+    async def _replace_runner(
         self,
         *,
         model_name: str,
@@ -964,7 +964,7 @@ class CoreRuntime:
         plugin_configs: dict[str, dict[str, Any]],
         preserve_context: AgentContext | None,
     ) -> None:
-        new_scheduler, new_task, new_plugins = await self._build_scheduler(
+        new_runner, new_task, new_plugins = await self._build_runner(
             model_name=model_name,
             selected_plugins=selected_plugins,
             plugin_configs=plugin_configs,
@@ -973,9 +973,9 @@ class CoreRuntime:
         session_manager = self._session_manager
         if session_manager is not None:
             session_manager.detach()
-        await self._stop_scheduler(self._scheduler, self._scheduler_task, self._plugins)
-        self._scheduler = new_scheduler
-        self._scheduler_task = new_task
+        await self._stop_runner(self._runner, self._runner_task, self._plugins)
+        self._runner = new_runner
+        self._runner_task = new_task
         self._plugins = new_plugins
         self._selected_plugins = list(selected_plugins)
         self._plugin_configs = {name: dict(cfg) for name, cfg in plugin_configs.items()}
@@ -985,20 +985,20 @@ class CoreRuntime:
         )
         if session_manager is not None:
             session_manager.attach(
-                new_scheduler.agent,
-                new_scheduler,
-                event_bus=getattr(new_scheduler.agent, "_event_bus", None),
+                new_runner.agent,
+                new_runner,
+                event_bus=getattr(new_runner.agent, "_event_bus", None),
             )
         self.emit(make_frame("core.ready", self._ready_payload()))
 
-    async def _build_scheduler(
+    async def _build_runner(
         self,
         *,
         model_name: str,
         selected_plugins: list[str],
         plugin_configs: dict[str, dict[str, Any]],
         context_to_restore: AgentContext | None,
-    ) -> tuple[HawiScheduler, asyncio.Task, list[Any]]:
+    ) -> tuple[AgentRunner, asyncio.Task, list[Any]]:
         model_overrides: dict[str, Any] = {}
         if self._max_context_tokens is not None:
             model_overrides["max_context_tokens"] = self._max_context_tokens
@@ -1023,10 +1023,10 @@ class CoreRuntime:
             agent.set_context(context_to_restore.copy())
             agent.context.tool_call_context = ToolCallContext(agent)
 
-        scheduler = HawiScheduler(agent)
+        runner = AgentRunner(agent)
         agent.event_bus.subscribe(self._on_hawi_event)
-        scheduler_task = asyncio.create_task(scheduler.run_forever(poll_interval=0.1))
-        return scheduler, scheduler_task, plugins
+        runner_task = asyncio.create_task(runner.run_forever(poll_interval=0.1))
+        return runner, runner_task, plugins
 
     def _apply_extra_tool_parameters(self, agent: HawiAgent) -> None:
         for parameter in self._extra_tool_parameters:
@@ -1048,28 +1048,28 @@ class CoreRuntime:
             "description": parameter.description,
         }
 
-    async def _stop_scheduler(
+    async def _stop_runner(
         self,
-        scheduler: HawiScheduler | None,
-        scheduler_task: asyncio.Task | None,
+        runner: AgentRunner | None,
+        runner_task: asyncio.Task | None,
         plugins: list[Any],
     ) -> None:
-        if scheduler is not None:
+        if runner is not None:
             try:
-                await scheduler.interrupt("shutdown")
+                await runner.interrupt("shutdown")
             except Exception:
-                logger.exception("Failed to interrupt scheduler during shutdown")
-            scheduler.stop()
-        if scheduler_task and not scheduler_task.done():
-            scheduler_task.cancel()
-            await asyncio.gather(scheduler_task, return_exceptions=True)
-        if scheduler is not None:
-            scheduler.agent.event_bus.unsubscribe(self._on_hawi_event)
-        if scheduler is not None:
+                logger.exception("Failed to interrupt runner during shutdown")
+            runner.stop()
+        if runner_task and not runner_task.done():
+            runner_task.cancel()
+            await asyncio.gather(runner_task, return_exceptions=True)
+        if runner is not None:
+            runner.agent.event_bus.unsubscribe(self._on_hawi_event)
+        if runner is not None:
             try:
-                scheduler.agent.event_bus.close(wait=True, timeout=2.0)
+                runner.agent.event_bus.close(wait=True, timeout=2.0)
             except Exception:
-                logger.exception("Failed to close scheduler event bus")
+                logger.exception("Failed to close runner event bus")
         await self._close_plugins(plugins)
 
     async def _create_plugins(
@@ -1107,10 +1107,10 @@ class CoreRuntime:
         for frame in self._mapper.map(event):
             self.emit(frame)
 
-    def _require_scheduler(self) -> HawiScheduler:
-        if self._scheduler is None:
+    def _require_runner(self) -> AgentRunner:
+        if self._runner is None:
             raise RuntimeError("Core runtime is not ready")
-        return self._scheduler
+        return self._runner
 
     @staticmethod
     def _queue_kind(value: Any) -> QueueKind:
@@ -1127,29 +1127,30 @@ class CoreRuntime:
         }
 
     def _status_payload(self) -> dict[str, Any]:
-        if self._scheduler is None:
+        if self._runner is None:
             return {
                 "ready": False,
-                "scheduler_state": "STOPPED",
+                "runner_state": "STOPPED",
                 "agent_state": "STOPPED",
                 "queue_lengths": {"normal": 0, "high_prio": 0, "urgent": 0},
                 "queue_messages": {"normal": [], "high_prio": [], "urgent": []},
                 "model_name": self.model_name,
             }
-        queue_messages_getter = getattr(self._scheduler, "get_queue_messages", None)
-        queue_messages = (
+        queue_messages_getter = getattr(self._runner, "get_queue_messages", None)
+        queue_messages: dict[str, list[dict[str, Any]]] = cast(
+            dict[str, list[dict[str, Any]]],
             queue_messages_getter()
             if callable(queue_messages_getter)
             else {"normal": [], "high_prio": [], "urgent": []}
         )
         queue_messages = {**queue_messages, "urgent": []}
         pending_input_getter = getattr(
-            self._scheduler.agent,
+            self._runner.agent,
             "get_pending_input_messages",
             None,
         )
         if callable(pending_input_getter):
-            pending_inputs = pending_input_getter()
+            pending_inputs = cast(list[dict[str, Any]], pending_input_getter())
             if pending_inputs:
                 queue_messages = {**queue_messages}
                 for pending in pending_inputs:
@@ -1162,9 +1163,9 @@ class CoreRuntime:
                     ]
         payload = {
             "ready": True,
-            "scheduler_state": self._scheduler.state.name,
-            "agent_state": self._scheduler._executor.state.name,
-            "queue_lengths": self._scheduler.get_queue_lengths(),
+            "runner_state": self._runner.state.name,
+            "agent_state": self._runner.agent_state.name,
+            "queue_lengths": self._runner.get_queue_lengths(),
             "queue_messages": queue_messages,
             "model_name": self.model_name,
         }
@@ -1213,16 +1214,16 @@ class CoreRuntime:
         self._gui_launch_profile = profile
 
     def _agent_context_usage(self) -> dict[str, Any] | None:
-        if self._scheduler is None:
+        if self._runner is None:
             return None
-        context = getattr(self._scheduler.agent, "context", None)
+        context = getattr(self._runner.agent, "context", None)
         saved_getter = getattr(context, "context_usage_snapshot", None)
         if callable(saved_getter):
             saved_snapshot = saved_getter()
             to_dict = getattr(saved_snapshot, "to_dict", None)
             if callable(to_dict):
                 return to_json_safe(to_dict())
-        getter = getattr(self._scheduler.agent, "context_usage", None)
+        getter = getattr(self._runner.agent, "context_usage", None)
         if not callable(getter):
             return None
         snapshot = getter()

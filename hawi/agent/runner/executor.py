@@ -1,4 +1,4 @@
-"""Agent executor for HawiScheduler.
+"""Agent executor for AgentRunner.
 
 Manages agent execution lifecycle and interruption.
 """
@@ -11,17 +11,17 @@ from typing import TYPE_CHECKING
 
 from hawi.agent.result import AgentRunResult
 from hawi.events import EventBus
-from hawi.events.scheduler_events import SchedulerInterruptEvent
+from hawi.events.runner_events import AgentRunnerInterruptEvent
 from hawi.models.message import ContentPart
 from .queue import QueuedMessage, QueueType
 
 if TYPE_CHECKING:
     from hawi.agent.agent import HawiAgent
-    from .scheduler import HawiScheduler
+    from .runner import AgentRunner
 
 
-class SchedulerState(Enum):
-    """Scheduler execution states."""
+class AgentRunnerState(Enum):
+    """AgentRunner execution states."""
 
     IDLE = auto()  # Waiting for messages
     READY = auto()  # Has message, checking priority
@@ -40,32 +40,32 @@ class ErrorAction(Enum):
 class AgentExecutor:
     """Executes agent runs with support for interruption."""
 
-    def __init__(self, agent: HawiAgent, scheduler: HawiScheduler) -> None:
+    def __init__(self, agent: HawiAgent, runner: AgentRunner) -> None:
         """Initialize the agent executor."""
         self._agent = agent
-        self._scheduler = scheduler
-        self._state = SchedulerState.IDLE
+        self._runner = runner
+        self._state = AgentRunnerState.IDLE
         self._current_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._last_result: AgentRunResult | None = None
         self._current_event_bus: EventBus | None = None
 
     @property
-    def state(self) -> SchedulerState:
+    def state(self) -> AgentRunnerState:
         """Get current execution state."""
         return self._state
 
     @property
     def is_idle(self) -> bool:
         """Check if executor is idle."""
-        return self._state == SchedulerState.IDLE and (
+        return self._state == AgentRunnerState.IDLE and (
             self._current_task is None or self._current_task.done()
         )
 
     @property
     def is_running(self) -> bool:
         """Check if executor is running."""
-        return self._state == SchedulerState.RUNNING
+        return self._state == AgentRunnerState.RUNNING
 
     @property
     def last_result(self) -> AgentRunResult | None:
@@ -77,7 +77,7 @@ class AgentExecutor:
         """Get the event bus override for the current execution."""
         return self._current_event_bus
 
-    def _set_state(self, state: SchedulerState) -> None:
+    def _set_state(self, state: AgentRunnerState) -> None:
         """Update execution state."""
         self._state = state
 
@@ -91,17 +91,17 @@ class AgentExecutor:
             List of interrupted tool call IDs
         """
         async with self._lock:
-            if self._state == SchedulerState.IDLE:
+            if self._state == AgentRunnerState.IDLE:
                 return []
 
-            self._set_state(SchedulerState.INTERRUPTING)
+            self._set_state(AgentRunnerState.INTERRUPTING)
 
             # Call agent interrupt
             interrupted_ids = self._agent.interrupt(reason)
 
             # Emit interrupt event
-            await self._scheduler._emit_event(
-                SchedulerInterruptEvent.create(
+            await self._runner._emit_event(
+                AgentRunnerInterruptEvent.create(
                     reason=reason,
                     interrupted_tool_calls=interrupted_ids,
                 ),
@@ -114,14 +114,14 @@ class AgentExecutor:
                 current_task.cancel()
                 await asyncio.gather(current_task, return_exceptions=True)
 
-            self._set_state(SchedulerState.IDLE)
+            self._set_state(AgentRunnerState.IDLE)
             return interrupted_ids
 
     def execute(self, message: QueuedMessage) -> asyncio.Task | None:
         """Execute a queued message (non-blocking).
 
         This method starts the execution as a background task and returns
-        immediately, allowing the scheduler to continue processing.
+        immediately, allowing the runner to continue processing.
 
         Args:
             message: Message to execute
@@ -154,7 +154,7 @@ class AgentExecutor:
 
         # Clear any previous interrupt state
         self._agent.clear_interrupt_state()
-        self._set_state(SchedulerState.RUNNING)
+        self._set_state(AgentRunnerState.RUNNING)
         self._last_result = None
         self._current_event_bus = message.event_bus
 
@@ -185,9 +185,9 @@ class AgentExecutor:
             # Execution was cancelled (interrupted)
             self._last_result = None
         except Exception as e:
-            # Handle error through scheduler error hook
+            # Handle error through runner error hook
             self._last_result = None
-            action = await self._scheduler._on_agent_error(e, message)
+            action = await self._runner._on_agent_error(e, message)
             if action == ErrorAction.RETRY:
                 # Retry execution
                 await self._execute_with_error_handling(message, content)
@@ -196,7 +196,7 @@ class AgentExecutor:
                 raise
             # CONTINUE - just finish
         finally:
-            self._set_state(SchedulerState.IDLE)
+            self._set_state(AgentRunnerState.IDLE)
             self._current_event_bus = None
 
     @staticmethod

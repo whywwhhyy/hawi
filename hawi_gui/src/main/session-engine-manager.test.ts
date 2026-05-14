@@ -38,7 +38,7 @@ interface FakeRecord {
   loadedAt: number;
   lastFinishedAt?: number;
   agentState: string;
-  schedulerState: string;
+  runnerState: string;
   suppressEvents: boolean;
   stopping: boolean;
 }
@@ -264,7 +264,7 @@ function fakeRecord(
     loadedAt: index * 1000,
     lastFinishedAt: undefined,
     agentState: "IDLE",
-    schedulerState: "IDLE",
+    runnerState: "IDLE",
     suppressEvents: false,
     stopping: false
   };

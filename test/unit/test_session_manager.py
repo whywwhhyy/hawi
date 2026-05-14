@@ -20,7 +20,7 @@ import pytest
 
 from hawi.agent import HawiAgent
 from hawi.agent.context import AgentContext
-from hawi.agent.scheduler.queue import MessageQueueManager
+from hawi.agent.runner.queue import MessageQueueManager
 from hawi.errors import DeniedError, ToolExecutionError
 from hawi.events import (
     AgentErrorEvent,
@@ -29,7 +29,7 @@ from hawi.events import (
     EventBus,
     ModelErrorEvent,
     ModelRetryEvent,
-    SchedulerInterruptEvent,
+    AgentRunnerInterruptEvent,
     SessionWriteFailedEvent,
 )
 from hawi.models import Model
@@ -47,11 +47,11 @@ from hawi.utils.lifecycle import (
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: stubs that mimic the agent / scheduler surface SessionManager uses
+# Fixtures: stubs that mimic the agent / runner surface SessionManager uses
 # ---------------------------------------------------------------------------
 
 
-class _StubScheduler:
+class _StubAgentRunner:
     def __init__(self) -> None:
         self._queue_manager = MessageQueueManager()
 
@@ -155,10 +155,10 @@ def session_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def stub_setup(session_root: Path):
     agent = _StubAgent()
-    scheduler = _StubScheduler()
+    runner = _StubAgentRunner()
     sm = SessionManager(root=session_root)
-    sm.attach(agent, scheduler, event_bus=agent.event_bus)
-    yield sm, agent, scheduler
+    sm.attach(agent, runner, event_bus=agent.event_bus)
+    yield sm, agent, runner
     sm.detach()
 
 
@@ -217,7 +217,7 @@ class TestSessionWriter:
                     session_dir=sd,
                     snapshots={
                         layout.COMPONENT_CONTEXT: {"version": "1.0", "messages": []},
-                        layout.COMPONENT_QUEUES: {"version": 1, "scheduler": {}},
+                        layout.COMPONENT_QUEUES: {"version": 1, "runner": {}},
                         layout.COMPONENT_RUNTIME: {"version": 1, "iteration": 0},
                     },
                     fsync=True,
@@ -390,9 +390,9 @@ class TestSessionManager:
 
     def test_save_now_round_trip(self, session_root: Path) -> None:
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             agent.context.add_user_message("hello session")
             sid = sm.new_session(name="rt")
@@ -403,9 +403,9 @@ class TestSessionManager:
 
         # Fresh agent picks up the persisted state.
         agent2 = _StubAgent()
-        scheduler2 = _StubScheduler()
+        runner2 = _StubAgentRunner()
         sm2 = SessionManager(root=session_root)
-        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
         try:
             sm2.load_session(sid)
             assert len(agent2.context.messages) == 1
@@ -424,12 +424,12 @@ class TestSessionManager:
             "pluginConfigs": {"filesystem": {"root": "."}},
         }
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(
             root=session_root,
             manifest_metadata_provider=lambda: {"gui_launch_profile": profile},
         )
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             sid = sm.new_session(name="profiled")
             agent.context.add_user_message("hello")
@@ -449,9 +449,9 @@ class TestSessionManager:
         session_root: Path,
     ) -> None:
         agent = HawiAgent(model=object(), plugins=[_PromptHookPlugin()])
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             agent.context.system_prompt = [{"type": "text", "text": "saved prompt"}]
             agent.context.add_user_message("hello")
@@ -462,9 +462,9 @@ class TestSessionManager:
 
         plugin2 = _PromptHookPlugin()
         agent2 = HawiAgent(model=object(), plugins=[plugin2])
-        scheduler2 = _StubScheduler()
+        runner2 = _StubAgentRunner()
         sm2 = SessionManager(root=session_root)
-        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
         try:
             sm2.load_session(sid)
             await agent2._invoke_session_hook(
@@ -485,9 +485,9 @@ class TestSessionManager:
         session_root: Path,
     ) -> None:
         agent = HawiAgent(model=object(), plugins=[_PromptHookPlugin()])
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             agent.context.system_prompt = [{"type": "text", "text": "saved prompt"}]
             agent.context.add_user_message("hello")
@@ -498,12 +498,12 @@ class TestSessionManager:
 
         plugin2 = _PromptHookPlugin()
         agent2 = HawiAgent(model=object(), plugins=[plugin2])
-        scheduler2 = _StubScheduler()
+        runner2 = _StubAgentRunner()
         sm2 = SessionManager(
             root=session_root,
             keep_session_system_prompt=False,
         )
-        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
         try:
             sm2.load_session(sid)
             await agent2._invoke_session_hook(
@@ -574,9 +574,9 @@ class TestSessionManager:
 
     def test_locked_session_rejects_second_loader(self, session_root: Path) -> None:
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             agent.context.add_user_message("locked")
             sid = sm.new_session(name="locked")
@@ -590,9 +590,9 @@ class TestSessionManager:
             metadata=make_lock_metadata("external"),
         ).acquire()
         agent2 = _StubAgent()
-        scheduler2 = _StubScheduler()
+        runner2 = _StubAgentRunner()
         sm2 = SessionManager(root=session_root)
-        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
         try:
             metas = {m.session_id: m for m in sm2.list_sessions()}
             assert metas[sid].locked is True
@@ -607,9 +607,9 @@ class TestSessionManager:
         session_root: Path,
     ) -> None:
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             agent.context.add_user_message("fork source")
             sid = sm.new_session(name="source")
@@ -623,9 +623,9 @@ class TestSessionManager:
             metadata=make_lock_metadata("external"),
         ).acquire()
         agent2 = _StubAgent()
-        scheduler2 = _StubScheduler()
+        runner2 = _StubAgentRunner()
         sm2 = SessionManager(root=session_root)
-        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
         try:
             forked = sm2.fork_session(sid, name="forked")
 
@@ -669,9 +669,9 @@ class TestSessionManager:
         error results so GUI snapshots taken right after load are
         provider-valid (no orphan tool_calls)."""
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             # Build a context that mimics a crash mid-tool-call: assistant
             # message with a tool_call but no tool result.
@@ -691,9 +691,9 @@ class TestSessionManager:
             sm.detach()
 
         agent2 = _StubAgent()
-        scheduler2 = _StubScheduler()
+        runner2 = _StubAgentRunner()
         sm2 = SessionManager(root=session_root)
-        sm2.attach(agent2, scheduler2, event_bus=agent2.event_bus)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
         try:
             sm2.load_session(sid)
             tool_results = [
@@ -710,9 +710,9 @@ class TestSessionManager:
 
     def test_event_triggers_checkpoint(self, session_root: Path) -> None:
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             sid = sm.new_session()
             from hawi.events import AgentRunStartEvent
@@ -740,9 +740,9 @@ class TestSessionManager:
         re-loading a session with tools showed only text/thinking blocks.
         """
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             sid = sm.new_session()
             # First emit a user message so the session is "non-empty" and
@@ -814,9 +814,9 @@ class TestSessionManager:
 
     def test_message_added_appends_visible_history_only(self, session_root: Path) -> None:
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             sid = sm.new_session()
             agent.event_bus.publish(
@@ -852,9 +852,9 @@ class TestSessionManager:
         session_root: Path,
     ) -> None:
         agent = _StubAgent()
-        scheduler = _StubScheduler()
+        runner = _StubAgentRunner()
         sm = SessionManager(root=session_root)
-        sm.attach(agent, scheduler, event_bus=agent.event_bus)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
             sid = sm.new_session()
             agent.event_bus.publish(
@@ -885,7 +885,7 @@ class TestSessionManager:
                 )
             )
             agent.event_bus.publish(
-                SchedulerInterruptEvent.create("user", ["tc-1"])
+                AgentRunnerInterruptEvent.create("user", ["tc-1"])
             )
             agent.event_bus.publish(
                 AgentInterruptEvent.create(interrupt_type="user", run_id="r1")

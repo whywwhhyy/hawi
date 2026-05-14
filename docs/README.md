@@ -28,7 +28,7 @@ Hawi Agent 框架的官方文档。
 | [context.md](./context.md) | AgentContext 使用指南 |
 | [resources.md](./resources.md) | MCP 兼容资源系统 |
 | [errors.md](./errors.md) | 错误处理指南 |
-| [scheduler.md](./scheduler.md) | HawiScheduler 调度器 |
+| [agent_runner.md](./agent_runner.md) | AgentRunner 运行器 |
 | [subagents.md](./subagents.md) | SubAgent core API 与工具设计草案 |
 
 ## 快速导航

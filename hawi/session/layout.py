@@ -6,7 +6,7 @@ Each session lives in its own directory under ``root``::
         session.json           # manifest (written last on every checkpoint)
         context.json           # AgentContext snapshot
         message_history.jsonl  # append-only user-visible messages
-        queues.json            # scheduler queues + steer + audit
+        queues.json            # runner queues + steer + audit
         runtime.json           # in-flight run state + last unsent results
         plugins/<name>.json    # one per plugin returning non-None state
         exports/<id>/...       # session-internal markdown export bundles

@@ -1,28 +1,28 @@
-"""Tests for HawiScheduler module."""
+"""Tests for AgentRunner module."""
 
 import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from hawi.events import EventBus
-from hawi.agent.scheduler import (
+from hawi.agent.runner import (
     QueueType,
     QueuedMessage,
     MessageQueueManager,
     EventMode,
     EventInterceptor,
     AgentExecutor,
-    SchedulerState,
+    AgentRunnerState,
     ErrorAction,
-    HawiScheduler,
-    SchedulerError,
+    AgentRunner,
+    AgentRunnerError,
 )
 from hawi.agent.agent import SteerPartMergeMode
 from hawi.errors import ConfigurationError
 from hawi.events import (
-    SchedulerEnqueueEvent,
-    SchedulerDequeueEvent,
-    SchedulerInterruptEvent,
+    AgentRunnerEnqueueEvent,
+    AgentRunnerDequeueEvent,
+    AgentRunnerInterruptEvent,
 )
 from hawi.models.message import (
     ContentPart
@@ -208,35 +208,35 @@ class TestEventInterceptor:
     """Test EventInterceptor."""
 
     def test_register_handler(self):
-        mock_scheduler = MagicMock()
-        interceptor = EventInterceptor(mock_scheduler)
+        mock_runner = MagicMock()
+        interceptor = EventInterceptor(mock_runner)
         handler = lambda e: EventMode.PASS_THROUGH
         interceptor.register_handler("test.event", handler)
         assert "test.event" in interceptor._handlers
 
     def test_register_transform(self):
-        mock_scheduler = MagicMock()
-        interceptor = EventInterceptor(mock_scheduler)
+        mock_runner = MagicMock()
+        interceptor = EventInterceptor(mock_runner)
         transform = lambda e: e
         interceptor.register_transform("test.event", transform)
         assert "test.event" in interceptor._transforms
 
     def test_unregister_handler(self):
-        mock_scheduler = MagicMock()
-        interceptor = EventInterceptor(mock_scheduler)
+        mock_runner = MagicMock()
+        interceptor = EventInterceptor(mock_runner)
         interceptor.register_handler("test.event", lambda e: EventMode.PASS_THROUGH)
         assert interceptor.unregister_handler("test.event") is True
         assert interceptor.unregister_handler("test.event") is False
 
 
-class TestSchedulerState:
-    """Test SchedulerState enum."""
+class TestAgentRunnerState:
+    """Test AgentRunnerState enum."""
 
     def test_states(self):
-        assert SchedulerState.IDLE
-        assert SchedulerState.READY
-        assert SchedulerState.RUNNING
-        assert SchedulerState.INTERRUPTING
+        assert AgentRunnerState.IDLE
+        assert AgentRunnerState.READY
+        assert AgentRunnerState.RUNNING
+        assert AgentRunnerState.INTERRUPTING
 
 
 class TestErrorAction:
@@ -248,8 +248,8 @@ class TestErrorAction:
         assert ErrorAction.CONTINUE
 
 
-class TestHawiSchedulerBasic:
-    """Test HawiScheduler basic functionality."""
+class TestAgentRunnerBasic:
+    """Test AgentRunner basic functionality."""
 
     @pytest.fixture
     def mock_agent(self):
@@ -268,51 +268,51 @@ class TestHawiSchedulerBasic:
         agent.steer = MagicMock(return_value="steer-1234")
         return agent
 
-    def test_scheduler_init(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        assert scheduler.agent is mock_agent
-        assert scheduler.state == SchedulerState.IDLE
+    def test_runner_init(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        assert runner.agent is mock_agent
+        assert runner.state == AgentRunnerState.IDLE
 
-    def test_scheduler_reuses_agent_event_bus(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        assert scheduler.event_bus is mock_agent.event_bus
+    def test_runner_reuses_agent_event_bus(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        assert runner.event_bus is mock_agent.event_bus
 
-    def test_scheduler_enqueue_normal(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        msg_id = scheduler.enqueue("test message", "normal")
+    def test_runner_enqueue_normal(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        msg_id = runner.enqueue("test message", "normal")
         assert msg_id
-        assert scheduler.get_queue_lengths()["normal"] == 1
+        assert runner.get_queue_lengths()["normal"] == 1
 
-    def test_scheduler_enqueue_high_prio(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        msg_id = scheduler.enqueue("test message", "high_prio")
+    def test_runner_enqueue_high_prio(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        msg_id = runner.enqueue("test message", "high_prio")
         assert msg_id
-        assert scheduler.get_queue_lengths()["high_prio"] == 1
+        assert runner.get_queue_lengths()["high_prio"] == 1
 
-    def test_scheduler_steers_high_prio_message_during_active_tool(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler._executor._state = SchedulerState.RUNNING
+    def test_runner_steers_high_prio_message_during_active_tool(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner._executor._state = AgentRunnerState.RUNNING
         mock_agent.has_active_tool_calls = True
 
-        msg_id = scheduler.enqueue(
+        msg_id = runner.enqueue(
             "new steer",
             "high_prio",
             metadata={"steer_merge_mode": SteerPartMergeMode.USER_MESSAGE_TEMPLATE},
         )
 
         assert msg_id == "steer-1234"
-        assert scheduler.get_queue_lengths()["high_prio"] == 0
+        assert runner.get_queue_lengths()["high_prio"] == 0
         mock_agent.steer.assert_called_once_with(
             "new steer",
             merge_mode=SteerPartMergeMode.USER_MESSAGE_TEMPLATE,
         )
 
-    def test_scheduler_resolves_new_steer_merge_mode_from_string(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler._executor._state = SchedulerState.RUNNING
+    def test_runner_resolves_new_steer_merge_mode_from_string(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner._executor._state = AgentRunnerState.RUNNING
         mock_agent.has_active_tool_calls = True
 
-        msg_id = scheduler.enqueue(
+        msg_id = runner.enqueue(
             "new steer",
             "high_prio",
             metadata={
@@ -330,12 +330,12 @@ class TestHawiSchedulerBasic:
             ),
         )
 
-    def test_scheduler_leaves_missing_steer_merge_mode_to_model(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler._executor._state = SchedulerState.RUNNING
+    def test_runner_leaves_missing_steer_merge_mode_to_model(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner._executor._state = AgentRunnerState.RUNNING
         mock_agent.has_active_tool_calls = True
 
-        msg_id = scheduler.enqueue("new steer", "high_prio")
+        msg_id = runner.enqueue("new steer", "high_prio")
 
         assert msg_id == "steer-1234"
         mock_agent.steer.assert_called_once_with(
@@ -343,69 +343,69 @@ class TestHawiSchedulerBasic:
             merge_mode=None,
         )
 
-    def test_scheduler_rejects_invalid_steer_merge_mode(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler._executor._state = SchedulerState.RUNNING
+    def test_runner_rejects_invalid_steer_merge_mode(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner._executor._state = AgentRunnerState.RUNNING
         mock_agent.has_active_tool_calls = True
 
         with pytest.raises(ConfigurationError, match="Invalid high_prio steer_merge_mode"):
-            scheduler.enqueue(
+            runner.enqueue(
                 "new steer",
                 "high_prio",
                 metadata={"steer_merge_mode": "missing_default"},
             )
 
-    def test_scheduler_enqueue_urgent(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        msg_id = scheduler.enqueue("test message", "urgent")
+    def test_runner_enqueue_urgent(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        msg_id = runner.enqueue("test message", "urgent")
         assert msg_id
-        assert scheduler.get_queue_lengths()["urgent"] == 1
+        assert runner.get_queue_lengths()["urgent"] == 1
 
-    def test_scheduler_remove_message(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        msg_id = scheduler.enqueue("test", "normal")
-        assert scheduler.remove_message(msg_id) is True
-        assert scheduler.get_queue_lengths()["normal"] == 0
+    def test_runner_remove_message(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        msg_id = runner.enqueue("test", "normal")
+        assert runner.remove_message(msg_id) is True
+        assert runner.get_queue_lengths()["normal"] == 0
 
-    def test_scheduler_clear_queue(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler.enqueue("test", "normal")
-        count = scheduler.clear_queue("normal")
+    def test_runner_clear_queue(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner.enqueue("test", "normal")
+        count = runner.clear_queue("normal")
         assert count == 1
-        assert scheduler.get_queue_lengths()["normal"] == 0
+        assert runner.get_queue_lengths()["normal"] == 0
 
-    def test_scheduler_clear_all_queues(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler.enqueue("n", "normal")
-        scheduler.enqueue("h", "high_prio")
-        scheduler.enqueue("u", "urgent")
-        result = scheduler.clear_all_queues()
+    def test_runner_clear_all_queues(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner.enqueue("n", "normal")
+        runner.enqueue("h", "high_prio")
+        runner.enqueue("u", "urgent")
+        result = runner.clear_all_queues()
         assert result == {"normal": 1, "high_prio": 1, "urgent": 1}
-        assert scheduler.get_queue_lengths() == {"normal": 0, "high_prio": 0, "urgent": 0}
+        assert runner.get_queue_lengths() == {"normal": 0, "high_prio": 0, "urgent": 0}
 
-    def test_scheduler_subscribe_proxies_to_agent(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-
-        def handler(_event):
-            return None
-
-        scheduler.subscribe(handler, ["scheduler.enqueue"])
-        mock_agent.subscribe.assert_called_once_with(handler, ["scheduler.enqueue"])
-
-    def test_scheduler_unsubscribe_proxies_to_agent(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
+    def test_runner_subscribe_proxies_to_agent(self, mock_agent):
+        runner = AgentRunner(mock_agent)
 
         def handler(_event):
             return None
 
-        assert scheduler.unsubscribe(handler) is True
+        runner.subscribe(handler, ["runner.enqueue"])
+        mock_agent.subscribe.assert_called_once_with(handler, ["runner.enqueue"])
+
+    def test_runner_unsubscribe_proxies_to_agent(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+
+        def handler(_event):
+            return None
+
+        assert runner.unsubscribe(handler) is True
         mock_agent.unsubscribe.assert_called_once_with(handler)
 
     @pytest.mark.asyncio
-    async def test_scheduler_emits_dequeue_and_passes_event_bus_to_agent(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
+    async def test_runner_emits_dequeue_and_passes_event_bus_to_agent(self, mock_agent):
+        runner = AgentRunner(mock_agent)
         override_bus = EventBus()
-        msg = scheduler._queue_manager.enqueue_normal("test", event_bus=override_bus)
+        msg = runner._queue_manager.enqueue_normal("test", event_bus=override_bus)
 
         executed_messages: list[QueuedMessage] = []
 
@@ -413,58 +413,58 @@ class TestHawiSchedulerBasic:
             executed_messages.append(message)
             return object()
 
-        scheduler._executor.execute = MagicMock(side_effect=fake_execute)
+        runner._executor.execute = MagicMock(side_effect=fake_execute)
 
-        started = await scheduler._start_message_execution(msg)
+        started = await runner._start_message_execution(msg)
 
         assert started is True
         assert executed_messages == [msg]
         mock_agent._emit_event.assert_awaited_once()
         emitted_event = mock_agent._emit_event.await_args.args[0]
         emitted_bus = mock_agent._emit_event.await_args.args[1]
-        assert emitted_event.type == "scheduler.dequeue"
+        assert emitted_event.type == "runner.dequeue"
         assert emitted_event.message_id == msg.id
         assert emitted_bus is override_bus
 
     @pytest.mark.asyncio
-    async def test_scheduler_starts_pending_inputs_before_queued_messages(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler._executor.execute_pending_inputs = MagicMock(return_value=object())
+    async def test_runner_starts_pending_inputs_before_queued_messages(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner._executor.execute_pending_inputs = MagicMock(return_value=object())
 
-        started = await scheduler._start_pending_input_execution()
+        started = await runner._start_pending_input_execution()
 
         assert started is True
-        scheduler._executor.execute_pending_inputs.assert_called_once_with()
+        runner._executor.execute_pending_inputs.assert_called_once_with()
         mock_agent._emit_event.assert_awaited_once()
         emitted_event = mock_agent._emit_event.await_args.args[0]
-        assert emitted_event.type == "scheduler.dequeue"
+        assert emitted_event.type == "runner.dequeue"
         assert emitted_event.message_id == "pending-inputs"
         assert emitted_event.queue_type == "high_prio"
 
     @pytest.mark.asyncio
-    async def test_scheduler_executes_urgent_message_after_consuming_queue(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        scheduler.enqueue("stop now", "urgent")
-        scheduler._executor.execute = MagicMock(return_value=object())
+    async def test_runner_executes_urgent_message_after_consuming_queue(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner.enqueue("stop now", "urgent")
+        runner._executor.execute = MagicMock(return_value=object())
 
         async def stop_soon() -> None:
             await asyncio.sleep(0.01)
-            scheduler.stop()
+            runner.stop()
 
         await asyncio.gather(
-            scheduler.run_forever(poll_interval=0.001),
+            runner.run_forever(poll_interval=0.001),
             stop_soon(),
         )
 
-        assert scheduler.get_queue_lengths()["urgent"] == 0
-        scheduler._executor.execute.assert_called_once()
-        executed_message = scheduler._executor.execute.call_args.args[0]
+        assert runner.get_queue_lengths()["urgent"] == 0
+        runner._executor.execute.assert_called_once()
+        executed_message = runner._executor.execute.call_args.args[0]
         assert executed_message.content == "stop now"
         assert executed_message.queue_type == QueueType.URGENT
 
 
-class TestHawiSchedulerErrorHooks:
-    """Test HawiScheduler error hooks."""
+class TestAgentRunnerErrorHooks:
+    """Test AgentRunner error hooks."""
 
     @pytest.fixture
     def mock_agent(self):
@@ -484,22 +484,22 @@ class TestHawiSchedulerErrorHooks:
 
     @pytest.mark.asyncio
     async def test_on_model_error_default(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        action = await scheduler._on_model_error(Exception("test"), None)
+        runner = AgentRunner(mock_agent)
+        action = await runner._on_model_error(Exception("test"), None)
         assert action == ErrorAction.CONTINUE
 
     @pytest.mark.asyncio
     async def test_on_agent_error_default(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        from hawi.agent.scheduler.queue import QueuedMessage
+        runner = AgentRunner(mock_agent)
+        from hawi.agent.runner.queue import QueuedMessage
         msg = QueuedMessage.create("test", QueueType.NORMAL)
-        action = await scheduler._on_agent_error(Exception("test"), msg)
+        action = await runner._on_agent_error(Exception("test"), msg)
         assert action == ErrorAction.CONTINUE
 
     @pytest.mark.asyncio
-    async def test_on_scheduler_error_default(self, mock_agent):
-        scheduler = HawiScheduler(mock_agent)
-        action = await scheduler._on_scheduler_error(Exception("test"))
+    async def test_on_runner_error_default(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        action = await runner._on_runner_error(Exception("test"))
         assert action == ErrorAction.CONTINUE
 
 
@@ -509,8 +509,8 @@ class TestAgentExecutorEventBus:
         agent = MagicMock()
         agent._arun_internal = AsyncMock(return_value=MagicMock())
         agent.clear_interrupt_state = MagicMock()
-        scheduler = MagicMock()
-        executor = AgentExecutor(agent, scheduler)
+        runner = MagicMock()
+        executor = AgentExecutor(agent, runner)
         event_bus = EventBus()
         message = QueuedMessage.create("hello", QueueType.NORMAL, event_bus=event_bus)
 
@@ -533,8 +533,8 @@ class TestAgentExecutorEventBus:
         agent = MagicMock()
         agent._arun_internal = AsyncMock(return_value=MagicMock())
         agent.clear_interrupt_state = MagicMock()
-        scheduler = MagicMock()
-        executor = AgentExecutor(agent, scheduler)
+        runner = MagicMock()
+        executor = AgentExecutor(agent, runner)
         message = QueuedMessage.create(
             "hello",
             QueueType.HIGH_PRIO,
@@ -563,8 +563,8 @@ class TestAgentExecutorEventBus:
         agent = MagicMock()
         agent._arun_internal = AsyncMock(return_value=MagicMock())
         agent.clear_interrupt_state = MagicMock()
-        scheduler = MagicMock()
-        executor = AgentExecutor(agent, scheduler)
+        runner = MagicMock()
+        executor = AgentExecutor(agent, runner)
         event_bus = EventBus()
 
         task = executor.execute_pending_inputs(event_bus=event_bus)

@@ -83,7 +83,7 @@ EVENT_TYPES = {
     "agent.compact_start",
     "agent.compact_stop",
     "agent.interrupt",
-    "scheduler.interrupt",
+    "runner.interrupt",
     "debug.info",
     "plugin.event",
     "plugin.message",

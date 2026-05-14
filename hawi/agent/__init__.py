@@ -30,18 +30,21 @@ from .subagent import (
     SubAgentTimeoutAction,
 )
 
-# Re-export scheduler classes
-from .scheduler import (
-    HawiScheduler,
-    SchedulerError,
+# Re-export runner classes
+from .runner import (
+    AgentErrorHook,
+    AgentRunner,
+    AgentRunnerError,
+    AgentRunnerErrorHook,
     QueueType,
     QueuedMessage,
     MessageQueueManager,
     EventMode,
     EventInterceptor,
     AgentExecutor,
-    SchedulerState,
+    AgentRunnerState,
     ErrorAction,
+    ModelErrorHook,
 )
 
 __all__ = [
@@ -73,15 +76,18 @@ __all__ = [
     "SubAgentSpec",
     "SubAgentStatus",
     "SubAgentTimeoutAction",
-    # Scheduler
-    "HawiScheduler",
-    "SchedulerError",
+    # AgentRunner
+    "AgentErrorHook",
+    "AgentRunner",
+    "AgentRunnerError",
+    "AgentRunnerErrorHook",
     "QueueType",
     "QueuedMessage",
     "MessageQueueManager",
     "EventMode",
     "EventInterceptor",
     "AgentExecutor",
-    "SchedulerState",
+    "AgentRunnerState",
     "ErrorAction",
+    "ModelErrorHook",
 ]

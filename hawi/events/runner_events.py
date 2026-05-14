@@ -1,7 +1,7 @@
 """
-Scheduler events for Hawi Event System.
+AgentRunner events for Hawi Event System.
 
-Scheduler events are produced by the HawiScheduler for message queue
+AgentRunner events are produced by the AgentRunner for message queue
 operations, interruptions, and multi-agent coordination.
 """
 
@@ -12,8 +12,8 @@ from typing import Any
 from .event import Event
 
 
-class SchedulerEnqueueEvent(Event):
-    """Message enqueued to scheduler"""
+class AgentRunnerEnqueueEvent(Event):
+    """Message enqueued to runner"""
     message_id: str
     queue_type: str
     content_preview: str
@@ -24,18 +24,18 @@ class SchedulerEnqueueEvent(Event):
         message_id: str,
         queue_type: str,
         content_preview: str,
-    ) -> SchedulerEnqueueEvent:
+    ) -> AgentRunnerEnqueueEvent:
         return cls(
-            type="scheduler.enqueue",
-            source="scheduler",
+            type="runner.enqueue",
+            source="runner",
             message_id=message_id,
             queue_type=queue_type,
             content_preview=content_preview,
         )
 
 
-class SchedulerDequeueEvent(Event):
-    """Message dequeued from scheduler"""
+class AgentRunnerDequeueEvent(Event):
+    """Message dequeued from runner"""
     message_id: str
     queue_type: str
 
@@ -44,17 +44,17 @@ class SchedulerDequeueEvent(Event):
         cls,
         message_id: str,
         queue_type: str,
-    ) -> SchedulerDequeueEvent:
+    ) -> AgentRunnerDequeueEvent:
         return cls(
-            type="scheduler.dequeue",
-            source="scheduler",
+            type="runner.dequeue",
+            source="runner",
             message_id=message_id,
             queue_type=queue_type,
         )
 
 
-class SchedulerInterruptEvent(Event):
-    """Scheduler interrupted agent execution"""
+class AgentRunnerInterruptEvent(Event):
+    """AgentRunner interrupted agent execution"""
     reason: str
     interrupted_tool_calls: list[str]
 
@@ -63,10 +63,10 @@ class SchedulerInterruptEvent(Event):
         cls,
         reason: str,
         interrupted_tool_calls: list[str],
-    ) -> SchedulerInterruptEvent:
+    ) -> AgentRunnerInterruptEvent:
         return cls(
-            type="scheduler.interrupt",
-            source="scheduler",
+            type="runner.interrupt",
+            source="runner",
             reason=reason,
             interrupted_tool_calls=interrupted_tool_calls,
         )
@@ -74,7 +74,7 @@ class SchedulerInterruptEvent(Event):
 
 class AgentInterruptEvent(Event):
     """Agent was requested to interrupt"""
-    interrupt_type: str  # "user" | "scheduler" | "error"
+    interrupt_type: str  # "user" | "runner" | "error"
     run_id: str
 
     @classmethod
@@ -91,45 +91,45 @@ class AgentInterruptEvent(Event):
         )
 
 
-class SchedulerYieldEvent(Event):
-    """Scheduler yields control, waiting for external input
+class AgentRunnerYieldEvent(Event):
+    """AgentRunner yields control, waiting for external input
 
     Used for multi-agent coordination.
     """
-    scheduler_id: str
+    runner_id: str
     yield_reason: str  # "waiting_message", "waiting_signal", "idle"
 
     @classmethod
     def create(
         cls,
-        scheduler_id: str,
+        runner_id: str,
         yield_reason: str,
-    ) -> SchedulerYieldEvent:
+    ) -> AgentRunnerYieldEvent:
         return cls(
-            type="scheduler.yield",
-            source="scheduler",
-            scheduler_id=scheduler_id,
+            type="runner.yield",
+            source="runner",
+            runner_id=runner_id,
             yield_reason=yield_reason,
         )
 
 
-class SchedulerResumeEvent(Event):
-    """External source resumed Scheduler execution
+class AgentRunnerResumeEvent(Event):
+    """External source resumed AgentRunner execution
 
     Used for multi-agent coordination.
     """
-    scheduler_id: str
+    runner_id: str
     resume_data: dict[str, Any]
 
     @classmethod
     def create(
         cls,
-        scheduler_id: str,
+        runner_id: str,
         resume_data: dict[str, Any] | None = None,
-    ) -> SchedulerResumeEvent:
+    ) -> AgentRunnerResumeEvent:
         return cls(
-            type="scheduler.resume",
-            source="scheduler",
-            scheduler_id=scheduler_id,
+            type="runner.resume",
+            source="runner",
+            runner_id=runner_id,
             resume_data=resume_data or {},
         )

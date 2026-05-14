@@ -16,7 +16,7 @@ from ..result import AgentRunResult
 
 if TYPE_CHECKING:
     from ..agent import HawiAgent
-    from ..scheduler import HawiScheduler
+    from ..runner import AgentRunner
 
 
 SubAgentMode = Literal["fork", "fresh"]
@@ -60,7 +60,7 @@ class SubAgentLimits:
 
     Only ``max_runtime_seconds`` and ``max_children`` are enforced in the first
     implementation. The rest are explicit API placeholders for the next
-    scheduler/tool-call budget pass.
+    runner/tool-call budget pass.
     """
 
     max_runtime_seconds: float | None = None
@@ -111,7 +111,7 @@ class SubAgentStatus:
     name: str
     role: str
     state: str
-    scheduler_state: str
+    runner_state: str
     executor_state: str
     queue_lengths: dict[str, int]
     created_at: float
@@ -129,7 +129,7 @@ class SubAgentStatus:
             "name": self.name,
             "role": self.role,
             "state": self.state,
-            "scheduler_state": self.scheduler_state,
+            "runner_state": self.runner_state,
             "executor_state": self.executor_state,
             "queue_lengths": self.queue_lengths,
             "created_at": self.created_at,
@@ -149,8 +149,8 @@ class SubAgentHandle:
     id: str
     spec: SubAgentSpec
     agent: HawiAgent
-    scheduler: HawiScheduler
-    scheduler_task: asyncio.Task[None]
+    runner: AgentRunner
+    runner_task: asyncio.Task[None]
     event_bus: EventBus
     state: SubAgentLifecycleState = SubAgentLifecycleState.CREATED
     created_at: float = field(default_factory=time.time)

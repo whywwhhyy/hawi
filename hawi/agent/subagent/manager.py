@@ -11,10 +11,10 @@ import uuid
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 from hawi.events import Event, EventBus, PluginEvent
-from hawi.models import ContentPart
+from hawi.models import ContentPart, Message
 from hawi.session import layout as session_layout
 from hawi.session.markdown_export import (
     MarkdownExport,
@@ -86,7 +86,7 @@ class SubAgentManager:
         spec: SubAgentSpec | None = None,
         **kwargs: Any,
     ) -> SubAgentHandle:
-        """Create a sub-agent, start its scheduler, and optionally enqueue work."""
+        """Create a sub-agent, start its runner, and optionally enqueue work."""
         spec = self._coerce_spec(spec, kwargs)
         async with self._lock:
             self._validate_spawn(spec)
@@ -96,11 +96,11 @@ class SubAgentManager:
             child_event_bus = EventBus()
             child_agent = self._create_child_agent(spec, child_event_bus)
 
-            from ..scheduler import HawiScheduler
+            from ..runner import AgentRunner
 
-            scheduler = HawiScheduler(child_agent)
-            scheduler_task = asyncio.create_task(
-                scheduler.run_forever(poll_interval=self._poll_interval),
+            runner = AgentRunner(child_agent)
+            runner_task = asyncio.create_task(
+                runner.run_forever(poll_interval=self._poll_interval),
                 name=f"hawi-subagent-{subagent_id}",
             )
 
@@ -108,8 +108,8 @@ class SubAgentManager:
                 id=subagent_id,
                 spec=spec,
                 agent=child_agent,
-                scheduler=scheduler,
-                scheduler_task=scheduler_task,
+                runner=runner,
+                runner_task=runner_task,
                 event_bus=child_event_bus,
                 state=SubAgentLifecycleState.IDLE,
                 parent_session_id=self._current_parent_session_id(),
@@ -147,12 +147,12 @@ class SubAgentManager:
         queue: SubAgentQueue = "normal",
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Send a message to a running sub-agent scheduler."""
+        """Send a message to a running sub-agent runner."""
         handle = self._require_handle(subagent_id)
         if handle.state == SubAgentLifecycleState.CLOSED:
             raise SubAgentError(f"Sub-agent is closed: {subagent_id}")
 
-        message_id = handle.scheduler.enqueue(
+        message_id = handle.runner.enqueue(
             message,
             queue=queue,
             metadata={
@@ -174,9 +174,9 @@ class SubAgentManager:
         """Return a serializable status snapshot."""
         handle = self._require_handle(subagent_id)
         result = self._latest_result(handle)
-        scheduler_state = handle.scheduler.state.name
-        executor_state = handle.scheduler.executor_state.name
-        queue_lengths = handle.scheduler.get_queue_lengths()
+        runner_state = handle.runner.state.name
+        executor_state = handle.runner.executor_state.name
+        queue_lengths = handle.runner.get_queue_lengths()
         state = self._derive_state(handle, queue_lengths, executor_state)
         model_id = getattr(handle.agent.model, "model_id", None)
         return SubAgentStatus(
@@ -184,7 +184,7 @@ class SubAgentManager:
             name=handle.name,
             role=handle.role,
             state=state.value,
-            scheduler_state=scheduler_state,
+            runner_state=runner_state,
             executor_state=executor_state,
             queue_lengths=queue_lengths,
             created_at=handle.created_at,
@@ -212,7 +212,7 @@ class SubAgentManager:
         while True:
             self._latest_result(handle)
 
-            queue_lengths = handle.scheduler.get_queue_lengths()
+            queue_lengths = handle.runner.get_queue_lengths()
             if self._is_settled(handle, queue_lengths):
                 if handle.last_error and raise_on_error:
                     raise SubAgentError(handle.last_error)
@@ -296,7 +296,7 @@ class SubAgentManager:
     async def interrupt(self, subagent_id: str, reason: str = "parent") -> list[str]:
         """Interrupt the sub-agent's current run."""
         handle = self._require_handle(subagent_id)
-        interrupted = await handle.scheduler.interrupt(reason)
+        interrupted = await handle.runner.interrupt(reason)
         handle.state = SubAgentLifecycleState.INTERRUPTING
         handle.updated_at = time.time()
         return interrupted
@@ -308,24 +308,24 @@ class SubAgentManager:
         reason: str = "closed",
         interrupt: bool = True,
     ) -> SubAgentStatus:
-        """Stop scheduler tasks and close a sub-agent."""
+        """Stop runner tasks and close a sub-agent."""
         handle = self._require_handle(subagent_id)
         if handle.state == SubAgentLifecycleState.CLOSED:
             return self.status(subagent_id)
 
         if interrupt:
             with contextlib.suppress(asyncio.CancelledError):
-                await handle.scheduler.interrupt(reason)
+                await handle.runner.interrupt(reason)
 
-        handle.scheduler.stop()
+        handle.runner.stop()
         if handle.monitor_task and not handle.monitor_task.done():
             handle.monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await handle.monitor_task
-        if not handle.scheduler_task.done():
-            handle.scheduler_task.cancel()
+        if not handle.runner_task.done():
+            handle.runner_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await handle.scheduler_task
+                await handle.runner_task
 
         if handle.event_handler is not None:
             handle.event_bus.unsubscribe(handle.event_handler)
@@ -645,7 +645,7 @@ class SubAgentManager:
                 handle.state = SubAgentLifecycleState.FAILED
                 handle.last_error = summary.get("error") or "Sub-agent failed"
                 self._clear_partial_assistant(handle)
-            elif event.type == "scheduler.interrupt":
+            elif event.type == "runner.interrupt":
                 handle.state = SubAgentLifecycleState.INTERRUPTING
 
             await self._emit_manager_event(
@@ -682,7 +682,7 @@ class SubAgentManager:
         )
 
     def _latest_result(self, handle: SubAgentHandle) -> AgentRunResult | None:
-        result = handle.scheduler.last_result
+        result = handle.runner.last_result
         if result is not None:
             handle.last_result = result
             return result
@@ -827,7 +827,7 @@ class SubAgentManager:
     def _partial_assistant_message(
         self,
         handle: SubAgentHandle,
-    ) -> dict[str, Any] | None:
+    ) -> Message | None:
         content: list[ContentPart] = []
         if handle.partial_reasoning:
             content.append({
@@ -841,15 +841,16 @@ class SubAgentManager:
             })
         if not content:
             return None
-        return {
+        return cast(Message, {
             "role": "assistant",
             "content": content,
+            "name": None,
             "metadata": {
                 "subagent_id": handle.id,
                 "subagent_partial": True,
                 "updated_at": handle.partial_updated_at,
             },
-        }
+        })
 
     async def _enforce_runtime_limit(
         self,
@@ -865,7 +866,7 @@ class SubAgentManager:
             SubAgentLifecycleState.CANCELLED,
         }:
             return
-        await handle.scheduler.interrupt("subagent_runtime_limit")
+        await handle.runner.interrupt("subagent_runtime_limit")
         handle.state = SubAgentLifecycleState.CANCELLED
         handle.last_error = "Sub-agent runtime limit exceeded"
         handle.updated_at = time.time()
@@ -905,7 +906,7 @@ class SubAgentManager:
             SubAgentLifecycleState.INTERRUPTING,
         }:
             return False
-        return handle.scheduler.executor_is_idle and not any(queue_lengths.values())
+        return handle.runner.executor_is_idle and not any(queue_lengths.values())
 
     def _require_handle(self, subagent_id: str) -> SubAgentHandle:
         try:

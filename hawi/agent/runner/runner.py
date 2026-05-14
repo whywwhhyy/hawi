@@ -1,5 +1,5 @@
 
-"""HawiScheduler - Message scheduling and agent orchestration.
+"""AgentRunner - Message scheduling and agent orchestration.
 
 Provides always-on agent capabilities with:
 - Three-tier message queue (NORMAL, HIGH_PRIO, URGENT)
@@ -19,21 +19,21 @@ from hawi.agent.state import SteerPartMergeMode
 from hawi.errors import ConfigurationError
 from hawi.agent.result import AgentRunResult
 from hawi.events import Event, EventBus
-from hawi.events.scheduler_events import (
-    SchedulerEnqueueEvent,
-    SchedulerDequeueEvent,
+from hawi.events.runner_events import (
+    AgentRunnerEnqueueEvent,
+    AgentRunnerDequeueEvent,
 )
 from hawi.models.message import ContentPart
 
 from .queue import QueueMessageSnapshot, QueueType, QueuedMessage, MessageQueueManager
 from .interceptor import EventMode, EventInterceptor
-from .executor import AgentExecutor, SchedulerState, ErrorAction
+from .executor import AgentExecutor, AgentRunnerState, ErrorAction
 
 logger = logging.getLogger(__name__)
 
 
-class SchedulerError(Exception):
-    """Error raised by HawiScheduler."""
+class AgentRunnerError(Exception):
+    """Error raised by AgentRunner."""
     pass
 
 
@@ -58,16 +58,16 @@ class AgentErrorHook:
         return ErrorAction.CONTINUE
 
 
-class SchedulerErrorHook:
-    """Protocol for scheduler error handling hook."""
+class AgentRunnerErrorHook:
+    """Protocol for runner error handling hook."""
 
-    async def on_scheduler_error(self, error: Exception) -> ErrorAction:
-        """Handle scheduler internal error."""
+    async def on_runner_error(self, error: Exception) -> ErrorAction:
+        """Handle runner internal error."""
         return ErrorAction.CONTINUE
 
 
-class HawiScheduler:
-    """Scheduler for managing agent execution with message queues.
+class AgentRunner:
+    """AgentRunner for managing agent execution with message queues.
 
     Features:
     - Three-tier message queue system (NORMAL, HIGH_PRIO, URGENT)
@@ -81,7 +81,7 @@ class HawiScheduler:
         self,
         agent: HawiAgent,
     ) -> None:
-        """Initialize the scheduler.
+        """Initialize the runner.
 
         Args:
             agent: Agent to schedule
@@ -99,12 +99,12 @@ class HawiScheduler:
 
         # State
         self._running = False
-        self._state = SchedulerState.IDLE
+        self._state = AgentRunnerState.IDLE
 
         # Error hooks
         self._model_error_hook: ModelErrorHook | None = None
         self._agent_error_hook: AgentErrorHook | None = None
-        self._scheduler_error_hook: SchedulerErrorHook | None = None
+        self._runner_error_hook: AgentRunnerErrorHook | None = None
 
         # Result callback for multi-agent coordination
         self._result_callback: Callable[[str, AgentRunResult], None] | None = None
@@ -123,19 +123,34 @@ class HawiScheduler:
         return self._agent.event_bus
 
     @property
-    def state(self) -> SchedulerState:
-        """Get current scheduler state."""
+    def state(self) -> AgentRunnerState:
+        """Get current runner state."""
         return self._state
 
     @property
-    def executor_state(self) -> SchedulerState:
+    def executor_state(self) -> AgentRunnerState:
         """Get the current executor state."""
+        return self._executor.state
+
+    @property
+    def agent_state(self) -> AgentRunnerState:
+        """Get the current managed agent execution state."""
         return self._executor.state
 
     @property
     def executor_is_idle(self) -> bool:
         """Whether the underlying executor is idle."""
         return self._executor.is_idle
+
+    @property
+    def is_idle(self) -> bool:
+        """Whether the runner has no active agent execution."""
+        return self._executor.is_idle
+
+    @property
+    def queue_manager(self) -> MessageQueueManager:
+        """Expose queue persistence and inspection for session storage."""
+        return self._queue_manager
 
     @property
     def last_result(self) -> AgentRunResult | None:
@@ -150,9 +165,9 @@ class HawiScheduler:
         """Set agent error handling hook."""
         self._agent_error_hook = hook
 
-    def set_scheduler_error_hook(self, hook: SchedulerErrorHook) -> None:
-        """Set scheduler error handling hook."""
-        self._scheduler_error_hook = hook
+    def set_runner_error_hook(self, hook: AgentRunnerErrorHook) -> None:
+        """Set runner error handling hook."""
+        self._runner_error_hook = hook
 
     def set_result_callback(
         self, callback: Callable[[str, AgentRunResult], None]
@@ -181,7 +196,7 @@ class HawiScheduler:
             Message ID
 
         Raises:
-            SchedulerError: If enqueue fails
+            AgentRunnerError: If enqueue fails
         """
         if queue == "urgent":
             msg = self._queue_manager.enqueue_urgent(
@@ -311,11 +326,11 @@ class HawiScheduler:
     async def _on_agent_idle(self) -> None:
         """Handle agent idle state.
 
-        Called when agent run stops. Only updates scheduler state,
+        Called when agent run stops. Only updates runner state,
         actual message execution is handled by run_forever() main loop.
         """
         # Just update state, let run_forever handle next message
-        self._state = SchedulerState.IDLE
+        self._state = AgentRunnerState.IDLE
 
     # Error handling
 
@@ -341,13 +356,13 @@ class HawiScheduler:
         logger.error(f"Agent error: {error}")
         return ErrorAction.CONTINUE
 
-    async def _on_scheduler_error(self, error: Exception) -> ErrorAction:
-        """Handle scheduler internal error."""
-        if self._scheduler_error_hook:
-            action = await self._scheduler_error_hook.on_scheduler_error(error)
+    async def _on_runner_error(self, error: Exception) -> ErrorAction:
+        """Handle runner internal error."""
+        if self._runner_error_hook:
+            action = await self._runner_error_hook.on_runner_error(error)
             if action is not None:
                 return action
-        logger.error(f"Scheduler error: {error}")
+        logger.error(f"AgentRunner error: {error}")
         return ErrorAction.CONTINUE
 
     # Event emission
@@ -357,7 +372,7 @@ class HawiScheduler:
         event: Event,
         event_bus: EventBus | None = None,
     ) -> None:
-        """Emit scheduler event via the agent's event pipeline."""
+        """Emit runner event via the agent's event pipeline."""
         await self._agent._emit_event(event, event_bus)
 
     def _resolve_steer_merge_mode(
@@ -411,7 +426,7 @@ class HawiScheduler:
             asyncio.get_running_loop()
             asyncio.create_task(
                 self._emit_event(
-                    SchedulerEnqueueEvent.create(
+                    AgentRunnerEnqueueEvent.create(
                         message_id=message_id,
                         queue_type=queue_type,
                         content_preview=self._build_content_preview(content),
@@ -426,7 +441,7 @@ class HawiScheduler:
         """Emit dequeue event and hand the message to the executor."""
         queue_name = msg.queue_type.name.lower()
         await self._emit_event(
-            SchedulerDequeueEvent.create(
+            AgentRunnerDequeueEvent.create(
                 message_id=msg.id,
                 queue_type=queue_name,
             ),
@@ -435,14 +450,14 @@ class HawiScheduler:
 
         task = self._executor.execute(msg)
         if task:
-            self._state = SchedulerState.RUNNING
+            self._state = AgentRunnerState.RUNNING
             return True
         return False
 
     async def _start_pending_input_execution(self) -> bool:
         """Run agent pending steer inputs before moving on to queued messages."""
         await self._emit_event(
-            SchedulerDequeueEvent.create(
+            AgentRunnerDequeueEvent.create(
                 message_id="pending-inputs",
                 queue_type="high_prio",
             ),
@@ -451,7 +466,7 @@ class HawiScheduler:
 
         task = self._executor.execute_pending_inputs()
         if task:
-            self._state = SchedulerState.RUNNING
+            self._state = AgentRunnerState.RUNNING
             return True
         return False
 
@@ -462,7 +477,7 @@ class HawiScheduler:
     # Main loop
 
     async def run_forever(self, poll_interval: float = 0.1) -> None:
-        """Run scheduler in always-on mode.
+        """Run runner in always-on mode.
 
         Args:
             poll_interval: Interval between queue checks (seconds)
@@ -482,7 +497,7 @@ class HawiScheduler:
                             continue
 
                 # Drain steered inputs that survived an interruption before
-                # continuing with scheduler-owned queues.
+                # continuing with runner-owned queues.
                 if self._executor.is_idle and self._agent_has_pending_inputs():
                     if await self._start_pending_input_execution():
                         continue
@@ -503,7 +518,7 @@ class HawiScheduler:
 
                 # Update state to idle if executor is idle
                 if self._executor.is_idle:
-                    self._state = SchedulerState.IDLE
+                    self._state = AgentRunnerState.IDLE
 
                 # No messages - wait
                 await asyncio.sleep(poll_interval)
@@ -511,16 +526,16 @@ class HawiScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                action = await self._on_scheduler_error(e)
+                action = await self._on_runner_error(e)
                 if action == ErrorAction.ABORT:
                     break
 
     def stop(self) -> None:
-        """Stop the scheduler loop."""
+        """Stop the runner loop."""
         self._running = False
 
     async def interrupt(self, reason: str = "user") -> list[str]:
-        """Interrupt current executor run without stopping scheduler loop."""
+        """Interrupt current executor run without stopping runner loop."""
         return await self._executor.interrupt(reason)
 
     # Multi-agent coordination

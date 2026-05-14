@@ -9,7 +9,7 @@ Hawi Event System
 命名规范：
 - Model*Event: 由 Model 产生的事件
 - Agent*Event: 由 Agent 产生的事件
-- Scheduler*Event: 由 Scheduler 产生的事件
+- AgentRunner*Event: 由 AgentRunner 产生的事件
 """
 
 from .event import (
@@ -18,7 +18,7 @@ from .event import (
     EventType,
     ModelEventType,
     AgentEventType,
-    SchedulerEventType,
+    AgentRunnerEventType,
     PluginEventType,
     SessionEventType,
 )
@@ -47,13 +47,13 @@ from .agent_events import (
     AgentCompactStopEvent,
     AgentErrorEvent,
 )
-from .scheduler_events import (
-    SchedulerEnqueueEvent,
-    SchedulerDequeueEvent,
-    SchedulerInterruptEvent,
+from .runner_events import (
+    AgentRunnerEnqueueEvent,
+    AgentRunnerDequeueEvent,
+    AgentRunnerInterruptEvent,
     AgentInterruptEvent,
-    SchedulerYieldEvent,
-    SchedulerResumeEvent,
+    AgentRunnerYieldEvent,
+    AgentRunnerResumeEvent,
 )
 from .plugin_events import (
     PLUGIN_EVENT_TYPES,
@@ -84,7 +84,7 @@ __all__ = [
     "EventType",
     "ModelEventType",
     "AgentEventType",
-    "SchedulerEventType",
+    "AgentRunnerEventType",
     "PluginEventType",
     "SessionEventType",
     # Model
@@ -110,13 +110,13 @@ __all__ = [
     "AgentCompactStartEvent",
     "AgentCompactStopEvent",
     "AgentErrorEvent",
-    # Scheduler
-    "SchedulerEnqueueEvent",
-    "SchedulerDequeueEvent",
-    "SchedulerInterruptEvent",
+    # AgentRunner
+    "AgentRunnerEnqueueEvent",
+    "AgentRunnerDequeueEvent",
+    "AgentRunnerInterruptEvent",
     "AgentInterruptEvent",
-    "SchedulerYieldEvent",
-    "SchedulerResumeEvent",
+    "AgentRunnerYieldEvent",
+    "AgentRunnerResumeEvent",
     # Plugin
     "PLUGIN_EVENT_TYPES",
     "PluginEvent",

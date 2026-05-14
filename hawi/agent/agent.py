@@ -232,7 +232,7 @@ class HawiAgent:
         self._active_execution_state: _ExecutionState | None = None
 
         # Core sub-agent lifecycle manager. Imported lazily to avoid module
-        # cycles with the scheduler package during HawiAgent import.
+        # cycles with the runner package during HawiAgent import.
         from .subagent import SubAgentManager
         self._subagents = SubAgentManager(self)
 

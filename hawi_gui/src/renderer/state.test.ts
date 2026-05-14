@@ -515,7 +515,7 @@ describe("core event reducer", () => {
   it("updates status, metadata, retry, and error nodes", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("core.status", {
-      scheduler_state: "RUNNING",
+      runner_state: "RUNNING",
       agent_state: "RUNNING",
       queue_lengths: { urgent: 1, high_prio: 2, normal: 3 },
       queue_messages: {
@@ -542,7 +542,7 @@ describe("core event reducer", () => {
     state = reduceCoreEvent(state, frame("model.retry", { attempt: 1, max_retries: 3, error_type: "network", error_message: "retrying" }));
     state = reduceCoreEvent(state, frame("error", { message: "boom" }));
 
-    expect(state.schedulerState).toBe("RUNNING");
+    expect(state.runnerState).toBe("RUNNING");
     expect(state.queueLengths).toEqual({ urgent: 1, high_prio: 2, normal: 3 });
     expect(state.queueMessages.urgent[0].contentPreview).toBe("stop now");
     expect(state.queueMessages.high_prio[0].contentPreview).toBe("merge this");
@@ -582,7 +582,7 @@ describe("core event reducer", () => {
       context_source: "provider_usage"
     }));
     state = reduceCoreEvent(state, frame("core.status", {
-      scheduler_state: "IDLE",
+      runner_state: "IDLE",
       agent_state: "IDLE",
       queue_lengths: { urgent: 0, high_prio: 0, normal: 0 },
       context_usage: {
@@ -656,7 +656,7 @@ describe("core event reducer", () => {
 
   it("clears visible chat while preserving status", () => {
     let state = createInitialState();
-    state = reduceCoreEvent(state, frame("core.status", { scheduler_state: "RUNNING", agent_state: "RUNNING", queue_lengths: { urgent: 1, high_prio: 0, normal: 0 } }));
+    state = reduceCoreEvent(state, frame("core.status", { runner_state: "RUNNING", agent_state: "RUNNING", queue_lengths: { urgent: 1, high_prio: 0, normal: 0 } }));
     state = reduceCoreEvent(state, frame("run.start", { run_id: "run-4", user_content: "hi", queue: "normal" }));
     state = reduceCoreEvent(state, frame("debug.info", { message: "debug" }));
 
@@ -664,7 +664,7 @@ describe("core event reducer", () => {
 
     expect(state.nodes).toEqual([]);
     expect(state.debugLines).toEqual([]);
-    expect(state.schedulerState).toBe("RUNNING");
+    expect(state.runnerState).toBe("RUNNING");
     expect(state.queueLengths).toEqual({ urgent: 1, high_prio: 0, normal: 0 });
   });
 });

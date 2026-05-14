@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Overview
 
-**Hawi** is an AI Agent framework with model compatibility layers for multiple LLM providers. It provides persistent Python interpreter execution, a plugin-based tool system, a unified event system, and a scheduler for agent orchestration.
+**Hawi** is an AI Agent framework with model compatibility layers for multiple LLM providers. It provides persistent Python interpreter execution, a plugin-based tool system, a unified event system, and an agent runner for queue-driven execution.
 
 ## Development Commands
 
@@ -41,7 +41,7 @@ tool           # Tool layer - core abstractions and registries
     ↓
 models         # Model layer - unified LLM adapter interface
     ↓
-events         # Event system - EventBus, Model/Agent/Scheduler events
+events         # Event system - EventBus, Model/Agent/AgentRunner events
     ↓
 utils          # Infrastructure layer - lifecycle, loader, terminal UI
 ```
@@ -133,7 +133,7 @@ from hawi.events import EventBus
 EventBus().subscribe(callback, event_types=["agent.tool_call"])
 ```
 
-Event types: `Model*Event`, `Agent*Event`, `Scheduler*Event`.
+Event types: `Model*Event`, `Agent*Event`, `AgentRunner*Event`.
 
 **Event vs Hook:**
 - **Events**: Non-blocking, read-only, multi-consumer (for logging, UI updates)
@@ -153,11 +153,11 @@ context = AgentContext(
 )
 ```
 
-#### Scheduler (`hawi/agent/scheduler/`)
+#### Agent Runner (`hawi/agent/runner/`)
 
 Message queue management and agent orchestration.
 
-- **`HawiScheduler`**: Main scheduler
+- **`AgentRunner`**: Single-agent queue runner
 - **`AgentExecutor`**: Executes agents with queue support
 - **`EventInterceptor`**: Intercepts and routes events
 
@@ -169,7 +169,7 @@ hawi/
 │   ├── agent.py        # HawiAgent main class
 │   ├── context.py      # AgentContext, ToolCallContext
 │   ├── result.py       # AgentRunResult, ToolCallRecord
-│   ├── scheduler/      # HawiScheduler, AgentExecutor, queues
+│   ├── runner/      # AgentRunner, AgentExecutor, queues
 │   ├── printers/       # Output printers (plain, rich)
 │   └── stream_accumulator.py
 ├── models/             # Model layer
@@ -198,7 +198,7 @@ hawi/
 │   ├── event_bus.py
 │   ├── agent_events.py
 │   ├── model_events.py
-│   └── scheduler_events.py
+│   └── runner_events.py
 ├── errors/             # Error types
 │   ├── agent_errors.py
 │   ├── model_errors.py

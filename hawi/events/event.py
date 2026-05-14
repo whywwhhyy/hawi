@@ -4,7 +4,7 @@ Event base class for Hawi Event System.
 
 Events are:
 - Read-only and immutable
-- Produced by Model, Agent, and Scheduler
+- Produced by Model, Agent, and AgentRunner
 - Non-blocking, multi-consumer
 """
 
@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ConfigDict
 logger = logging.getLogger(__name__)
 
 
-EventSource = Literal["model", "agent", "scheduler", "plugin"]
+EventSource = Literal["model", "agent", "runner", "plugin"]
 
 ModelEventType = Literal[
     "model.stream_start",
@@ -48,13 +48,13 @@ AgentEventType = Literal[
     "agent.error",
 ]
 
-SchedulerEventType = Literal[
-    "scheduler.enqueue",
-    "scheduler.dequeue",
-    "scheduler.interrupt",
+AgentRunnerEventType = Literal[
+    "runner.enqueue",
+    "runner.dequeue",
+    "runner.interrupt",
     "agent.interrupt",
-    "scheduler.yield",
-    "scheduler.resume",
+    "runner.yield",
+    "runner.resume",
 ]
 
 PluginEventType = Literal[
@@ -78,7 +78,7 @@ SessionEventType = Literal[
 EventType = (
     ModelEventType
     | AgentEventType
-    | SchedulerEventType
+    | AgentRunnerEventType
     | PluginEventType
     | SessionEventType
 )
@@ -118,7 +118,7 @@ __all__ = [
     "EventType",
     "ModelEventType",
     "AgentEventType",
-    "SchedulerEventType",
+    "AgentRunnerEventType",
     "PluginEventType",
     "SessionEventType",
 ]

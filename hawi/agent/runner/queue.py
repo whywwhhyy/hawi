@@ -1,5 +1,5 @@
 
-"""Message queue management for HawiScheduler."""
+"""Message queue management for AgentRunner."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class QueueType(Enum):
 
 @dataclass
 class QueuedMessage:
-    """Message in the scheduler queue."""
+    """Message in the runner queue."""
 
     id: str
     content: str | list[ContentPart]
