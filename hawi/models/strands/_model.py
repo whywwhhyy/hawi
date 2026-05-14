@@ -444,8 +444,7 @@ class StrandsModel(Model):
                     is_start=True,
                     is_end=True,
                 )
-            # TODO: Aggregate tool calls properly
-            for tc in tool_calls:
+            for tc in self._aggregate_tool_call_deltas(tool_calls):
                 yield tc
 
             yield DeltaFinishPart(
@@ -497,6 +496,44 @@ class StrandsModel(Model):
             stop_reason=result.stop_reason or "end_turn",
             usage=result.usage,
         )
+
+    @staticmethod
+    def _aggregate_tool_call_deltas(
+        tool_calls: Sequence[DeltaToolCallPart],
+    ) -> Iterator[DeltaToolCallPart]:
+        """Collapse streamed tool-call deltas into complete tool-call blocks."""
+        by_index: dict[int, dict[str, Any]] = {}
+        ordered_indices: list[int] = []
+
+        for part in tool_calls:
+            index = part["index"]
+            if index not in by_index:
+                by_index[index] = {
+                    "id": None,
+                    "name": None,
+                    "arguments_delta": "",
+                }
+                ordered_indices.append(index)
+
+            current = by_index[index]
+            if part.get("id"):
+                current["id"] = part["id"]
+            if part.get("name"):
+                current["name"] = part["name"]
+            if part.get("arguments_delta"):
+                current["arguments_delta"] += part["arguments_delta"]
+
+        for index in ordered_indices:
+            current = by_index[index]
+            yield DeltaToolCallPart(
+                type="tool_call_delta",
+                index=index,
+                id=current["id"],
+                name=current["name"],
+                arguments_delta=current["arguments_delta"],
+                is_start=True,
+                is_end=True,
+            )
 
     async def _astream_impl(self, request: MessageRequest) -> AsyncGenerator[DeltaPart, None]:
         """Async streaming implementation."""

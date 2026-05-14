@@ -7,6 +7,7 @@ Tests the Hawi StrandsModel adapter to ensure it correctly:
 4. Converts between Hawi and Strands message formats
 """
 
+import asyncio
 import pytest
 from typing import Any, cast
 from unittest.mock import Mock, MagicMock
@@ -253,6 +254,38 @@ class TestStrandsModelStreaming:
         assert parts[0]["id"] == "tool-123"
         assert parts[0]["name"] == "calculator"
 
+    def test_content_block_stop_preserves_tool_use_type_without_input_delta(self):
+        """ToolUse blocks should end as tool_call_delta even with empty input."""
+        mock_strands_model = Mock()
+        mock_strands_model.config = {"model_id": "test-model"}
+
+        model = StrandsModel(mock_strands_model)
+
+        state = {"index": 0, "block_started": False, "pending_usage": None}
+        start_event = {
+            "contentBlockStart": {
+                "start": {
+                    "toolUse": {
+                        "toolUseId": "tool-123",
+                        "name": "calculator",
+                    }
+                },
+            },
+        }
+        list(model._convert_strands_event_to_stream_part(start_event, state))
+
+        stop_parts = list(
+            model._convert_strands_event_to_stream_part(
+                {"contentBlockStop": {}},
+                state,
+            )
+        )
+
+        assert len(stop_parts) == 1
+        assert stop_parts[0]["type"] == "tool_call_delta"
+        assert stop_parts[0]["is_end"] is True
+        assert state["index"] == 1
+
     def test_content_block_delta_tool_input(self):
         """Convert contentBlockDelta with toolUse input to tool_call_delta."""
         mock_strands_model = Mock()
@@ -324,6 +357,75 @@ class TestStrandsModelStreaming:
         assert parts[0]["stop_reason"] == "end_turn"
         assert parts[0]["usage"] == pending_usage
         assert state["pending_usage"] is None  # Should be cleared
+
+    def test_object_message_stop_event_uses_stop_reason_attribute(self):
+        """Object-format Strands events should read stopReason directly."""
+        mock_strands_model = Mock()
+        mock_strands_model.config = {"model_id": "test-model"}
+
+        model = StrandsModel(mock_strands_model)
+
+        class MessageStopEvent:
+            type = "messageStop"
+            stopReason = "tool_use"
+
+        state = {"index": 0, "block_started": False, "pending_usage": None}
+        parts = list(
+            model._convert_strands_event_to_stream_part(
+                MessageStopEvent(),
+                state,
+            )
+        )
+
+        assert len(parts) == 1
+        assert parts[0]["type"] == "finish"
+        assert parts[0]["stop_reason"] == "tool_use"
+
+    def test_ainvoke_stream_fallback_aggregates_tool_call_deltas(self):
+        """Non-streaming async fallback should emit one complete tool call block."""
+
+        class StreamOnlyToolModel:
+            config = {"model_id": "test-model"}
+
+            def stream(self, **kwargs: Any):
+                yield {
+                    "contentBlockStart": {
+                        "start": {
+                            "toolUse": {
+                                "toolUseId": "tool-123",
+                                "name": "search",
+                            }
+                        },
+                    },
+                }
+                yield {
+                    "contentBlockDelta": {
+                        "delta": {"toolUse": {"input": '{"query": "py'}}
+                    },
+                }
+                yield {
+                    "contentBlockDelta": {
+                        "delta": {"toolUse": {"input": 'thon"}'}}
+                    },
+                }
+                yield {"contentBlockStop": {}}
+                yield {"messageStop": {"stopReason": "tool_use"}}
+
+        async def collect_parts():
+            model = StrandsModel(StreamOnlyToolModel())
+            request = MessageRequest(messages=[])
+            return [part async for part in model._ainvoke_impl(request)]
+
+        parts = asyncio.run(collect_parts())
+        tool_parts = [part for part in parts if part["type"] == "tool_call_delta"]
+
+        assert len(tool_parts) == 1
+        tool_part = tool_parts[0]
+        assert tool_part["id"] == "tool-123"
+        assert tool_part["name"] == "search"
+        assert tool_part["arguments_delta"] == '{"query": "python"}'
+        assert tool_part["is_start"] is True
+        assert tool_part["is_end"] is True
 
     def test_stop_reason_mapping(self):
         """Test stop reason mapping from Strands to Hawi format."""

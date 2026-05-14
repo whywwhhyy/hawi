@@ -114,7 +114,7 @@ def _convert_strands_event_to_stream_part(
         if hasattr(event, "start"):
             event_data["start"] = event.start
         if hasattr(event, "stopReason"):
-            event_data["stopReason"] = event.stopReasonReason
+            event_data["stopReason"] = event.stopReason
         if hasattr(event, "metadata"):
             event_data["metadata"] = event.metadata
 
@@ -206,7 +206,7 @@ def _convert_strands_event_to_stream_part(
                     is_end=False,
                 )
                 state["block_started"] = True
-                state["block"] = "tool_use"
+                state["block_type"] = "tool_use"
 
     elif event_type == "contentBlockStop":
         # Strands block end event - send is_end marker

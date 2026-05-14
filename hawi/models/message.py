@@ -130,8 +130,8 @@ class DocumentPart(TypedDict):
     context: str | None
 
 
-class ToolCallPart(TypedDict): # TODO: ToolCall arguments也可能支持流式
-    """工具调用"""
+class ToolCallPart(TypedDict):
+    """完整工具调用；流式参数增量使用 DeltaToolCallPart.arguments_delta 表示。"""
 
     type: Literal["tool_call"]
     id: str  # 工具调用唯一标识
@@ -619,9 +619,10 @@ class Message(TypedDict):
 
 def transcribe_audio(audio_source: AudioSource) -> str:
     """
-    语音识别接口 - 将音频转换为文本
+    音频降级接口 - 返回已有转录文本或 provider-neutral 占位文本。
 
-    TODO: 当前为占位实现，后续接入实际语音识别引擎（如 Whisper）
+    Hawi 的消息层不直接绑定语音识别后端；调用方可以在降级前填充
+    ``AudioSource.transcript``，或在更高层插件中接入实际转写服务。
 
     Args:
         audio_source: 音频数据源
@@ -633,9 +634,6 @@ def transcribe_audio(audio_source: AudioSource) -> str:
     transcript = audio_source.get("transcript")
     if transcript:
         return transcript
-
-    # TODO: 接入实际的语音识别引擎
-    # 示例: return whisper_client.transcribe(audio_source["data"])
 
     return "[语音消息 - 暂不支持语音识别，请使用支持音频的模型]"
 

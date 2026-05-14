@@ -199,6 +199,14 @@
     - [ ] 对超大文件提供结构化分页、折叠、symbol/section 级读取
     - [ ] 给 grep/glob/read/edit 补充更完整的工具说明与正反示例
 
+- [ ] 模型消息层流式工具调用与音频降级收敛
+    - [x] `ToolCallPart` 明确为完整工具调用表示，流式参数片段使用 `DeltaToolCallPart.arguments_delta`
+    - [x] Strands async 非流式兜底会聚合同一 tool call 的流式参数片段，再产出完整工具调用 delta
+    - [x] Strands `contentBlockStart(toolUse)` 即使没有 input delta，也会以 `tool_call_delta` 结束
+    - [x] 文档说明 `AudioPart` 降级语义：消息层不绑定语音识别后端，优先使用 `source.transcript`
+    - [ ] 设计可配置 speech-to-text 后端或插件入口，用于把音频内容转写后写回 `AudioSource.transcript`
+    - [ ] 为音频降级路径补充 provider adapter 级集成测试
+
 - [ ] 重构渐进式加载的 tool 设计，新增 `brief` 字段，使用 `tool_help` 获得 tool 的详细介绍，`run_tool` 执行 tool
     - [ ] `AgentTool` 增加 `brief` 字段：短描述，用于默认暴露给模型
     - [ ] 保留 `description` 作为长说明：详细行为、边界、示例、安全约束

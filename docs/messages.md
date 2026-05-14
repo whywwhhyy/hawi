@@ -67,6 +67,23 @@ doc_part: DocumentPart = {
 }
 ```
 
+#### AudioPart - 音频
+
+```python
+from hawi.models import AudioPart
+
+audio_part: AudioPart = {
+    "type": "audio",
+    "source": {
+        "data": "base64encoded...",
+        "format": "wav",
+        "transcript": "Optional existing transcript"
+    }
+}
+```
+
+当目标模型不支持音频输入时，Hawi 会把 `AudioPart` 降级为文本。消息层不会直接绑定语音识别后端；如果已经有转录文本，应在 `source.transcript` 中提供，否则会生成一个明确的“暂不支持语音识别”占位文本。
+
 ### 工具相关类型
 
 #### ToolCallPart - 工具调用
@@ -81,6 +98,8 @@ tool_call: ToolCallPart = {
     "arguments": {"expression": "1 + 1"}
 }
 ```
+
+`ToolCallPart` 表示已经收齐参数后的完整工具调用。流式模型输出工具参数时使用 `DeltaToolCallPart.arguments_delta` 传递片段，累积完成后再形成 `ToolCallPart.arguments`。
 
 #### ToolResultPart - 工具结果
 
@@ -279,6 +298,8 @@ tool_delta: DeltaToolCallPart = {
     "is_end": False
 }
 ```
+
+非流式调用如果需要通过流式 provider API 兜底，会先按 `index` 聚合同一工具调用的多个 `tool_call_delta` 片段，再对外产出完整的工具调用 delta。
 
 ## 完整示例
 
