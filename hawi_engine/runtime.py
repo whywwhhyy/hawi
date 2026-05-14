@@ -55,7 +55,14 @@ DEFAULT_SYSTEM_PROMPT = "你是Hawi，一个通用agent"
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-SERVER_CAPS: frozenset[str] = frozenset({"last_event_id", "tlv_v1"})
+SERVER_CAPS: frozenset[str] = frozenset({
+    "last_event_id",
+    "tlv_v1",
+    "resume_v1",
+    "runner_pause_v1",
+    "queue_edit_v1",
+    "message_intent_v1",
+})
 """Capabilities the server advertises during hello negotiation. Plans 3-5 grow this set."""
 
 
@@ -343,6 +350,18 @@ class CoreRuntime:
                 await self._handle_enqueue(client, command)
             elif command.type == "interrupt":
                 await self._handle_interrupt(client, command)
+            elif command.type == "stop":
+                await self._handle_stop(client, command)
+            elif command.type == "resume":
+                await self._handle_resume(client, command)
+            elif command.type == "queue_task_add":
+                await self._handle_queue_task_add(client, command)
+            elif command.type == "queue_task_update":
+                await self._handle_queue_task_update(client, command)
+            elif command.type == "queue_task_remove":
+                await self._handle_queue_task_remove(client, command)
+            elif command.type == "queue_task_reorder":
+                await self._handle_queue_task_reorder(client, command)
             elif command.type == "clear_context":
                 await self._handle_clear_context(client, command)
             elif command.type == "clear_queue":
@@ -535,12 +554,156 @@ class CoreRuntime:
         reason = command.payload.get("reason", "user")
         if not isinstance(reason, str):
             raise ValueError("'interrupt.payload.reason' must be a string")
-        interrupted_ids = await runner.interrupt(reason)
+        pause = command.payload.get("pause", False)
+        if not isinstance(pause, bool):
+            raise ValueError("'interrupt.payload.pause' must be a boolean when present")
+        interrupted_ids = await runner.interrupt(reason, pause=pause)
         await client.send(
             make_ack(
                 "interrupt",
                 request_id=command.id,
-                payload={"interrupted_tool_calls": interrupted_ids},
+                payload={
+                    "interrupted_tool_calls": interrupted_ids,
+                    "control": runner.control_snapshot(),
+                },
+            )
+        )
+
+    async def _handle_stop(self, client: RuntimeClient, command: CoreCommand) -> None:
+        runner = self._require_runner()
+        reason = str(command.payload.get("reason", "user"))
+        message = command.payload.get("message")
+        if message is not None and not isinstance(message, (str, list)):
+            raise ValueError("'stop.payload.message' must be a string or content part list when present")
+        metadata = command.payload.get("metadata", {})
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            raise ValueError("'stop.payload.metadata' must be an object when present")
+        result = await runner.stop_execution(
+            reason=reason,
+            message=message,
+            event_bus=None,
+            metadata=dict(metadata),
+        )
+        await client.send(
+            make_ack(
+                "stop",
+                request_id=command.id,
+                payload={
+                    "interrupted_tool_calls": result["interrupted_tool_calls"],
+                    "message_id": result["message_id"],
+                    "control": result["control"],
+                },
+            )
+        )
+
+    async def _handle_resume(self, client: RuntimeClient, command: CoreCommand) -> None:
+        runner = self._require_runner()
+        message = command.payload.get("message")
+        if message is not None and not isinstance(message, (str, list)):
+            raise ValueError("'resume.payload.message' must be a string or content part list when present")
+
+        DEFAULT_RESUME_PROMPT = (
+            "请从刚才中断或停止的位置继续。"
+            "如果无法可靠继续，请说明当前状态并等待我的下一步指示。"
+        )
+        content = message if message else DEFAULT_RESUME_PROMPT
+        msg_id = runner.submit_immediate_message(
+            content,
+            intent="resume",
+            metadata={"intent": "resume", "display_message_type": "resume", "auto_generated": message is None},
+        )
+        await client.send(
+            make_ack(
+                "resume",
+                request_id=command.id,
+                payload={
+                    "message_id": msg_id,
+                    "queue": "high_prio",
+                },
+            )
+        )
+
+    async def _handle_queue_task_add(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        content = command.payload.get("content")
+        if not isinstance(content, str):
+            raise ValueError("'queue_task_add.payload.content' must be a string")
+        msg = runner._queue_manager.enqueue_normal(
+            content,
+            metadata={"intent": "queue_task", "source": "gui_queue_panel"},
+        )
+        await client.send(
+            make_ack(
+                "queue_task_add",
+                request_id=command.id,
+                payload={"message_id": msg.id, "queue": "normal"},
+            )
+        )
+
+    async def _handle_queue_task_update(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        message_id = command.payload.get("message_id")
+        if not isinstance(message_id, str):
+            raise ValueError("'queue_task_update.payload.message_id' must be a string")
+        content = command.payload.get("content")
+        if content is not None and not isinstance(content, str):
+            raise ValueError("'queue_task_update.payload.content' must be a string when present")
+        metadata = command.payload.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("'queue_task_update.payload.metadata' must be an object when present")
+        ok = runner._queue_manager.update_message(
+            message_id,
+            content=content,
+            metadata=metadata,
+        )
+        if not ok:
+            raise ValueError(f"Message {message_id!r} not found or cannot be updated")
+        await client.send(
+            make_ack("queue_task_update", request_id=command.id, payload={"message_id": message_id})
+        )
+
+    async def _handle_queue_task_remove(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        message_id = command.payload.get("message_id")
+        if not isinstance(message_id, str):
+            raise ValueError("'queue_task_remove.payload.message_id' must be a string")
+        ok = runner._queue_manager.remove_message(message_id)
+        if not ok:
+            raise ValueError(f"Message {message_id!r} not found")
+        await client.send(
+            make_ack("queue_task_remove", request_id=command.id, payload={"message_id": message_id})
+        )
+
+    async def _handle_queue_task_reorder(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        message_ids = command.payload.get("message_ids")
+        if not isinstance(message_ids, list) or not all(isinstance(mid, str) for mid in message_ids):
+            raise ValueError("'queue_task_reorder.payload.message_ids' must be a list of strings")
+        from hawi.agent.runner.queue import QueueType
+        new_order = runner._queue_manager.reorder_queue(QueueType.NORMAL, message_ids)
+        await client.send(
+            make_ack(
+                "queue_task_reorder",
+                request_id=command.id,
+                payload={"message_ids": new_order},
             )
         )
 
@@ -1183,6 +1346,7 @@ class CoreRuntime:
             "queue_lengths": self._runner.get_queue_lengths(),
             "queue_messages": queue_messages,
             "model_name": self.model_name,
+            "control": self._runner.control_snapshot(),
         }
         context_usage = self._agent_context_usage()
         if context_usage is not None:

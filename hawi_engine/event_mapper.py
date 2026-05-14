@@ -86,6 +86,28 @@ class SemanticEventMapper:
                 )
             ]
 
+        if etype == "runner.paused":
+            return [
+                make_frame(
+                    "runner.paused",
+                    {
+                        "reason": getattr(event, "reason", getattr(event, "pause_reason", "")),
+                        "resumable": getattr(event, "resumable", True),
+                        "last_error_message": getattr(event, "last_error_message", None),
+                    },
+                )
+            ]
+
+        if etype == "runner.resumed":
+            return [
+                make_frame(
+                    "runner.resumed",
+                    {
+                        "source": getattr(event, "source", "resume"),
+                    },
+                )
+            ]
+
         if etype == "agent.run_start":
             run_id = str(getattr(event, "run_id", ""))
             self._active_run_id = run_id

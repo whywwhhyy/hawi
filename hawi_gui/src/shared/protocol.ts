@@ -6,11 +6,22 @@ export interface QueueMessageSnapshot {
   id: string;
   queue: QueueKind;
   content_preview: string;
+  content?: string;
   created_at?: number;
   metadata?: Record<string, unknown>;
 }
 
 export type QueueMessagesSnapshot = Record<QueueKind, QueueMessageSnapshot[]>;
+
+export interface RuntimeControlState {
+  paused: boolean;
+  pause_reason?: string | null;
+  resumable: boolean;
+  paused_at?: number | null;
+  last_error_message?: string | null;
+}
+
+export type DisplayMessageType = "normal" | "steer" | "urgent" | "resume";
 
 export type SessionLoadState = "unloaded" | "loaded" | "running";
 
@@ -18,8 +29,14 @@ export type CoreCommandType =
   | "hello"
   | "enqueue"
   | "interrupt"
+  | "stop"
+  | "resume"
   | "clear_context"
   | "clear_queue"
+  | "queue_task_add"
+  | "queue_task_update"
+  | "queue_task_remove"
+  | "queue_task_reorder"
   | "set_system_prompt"
   | "switch_model"
   | "refresh_models"
