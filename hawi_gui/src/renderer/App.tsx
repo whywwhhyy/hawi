@@ -1374,7 +1374,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           {(tool.resultPreview || tool.status === "fail") && (
             <details open>
               <summary>Result {tool.durationMs ? `· ${tool.durationMs.toFixed(0)}ms` : ""}</summary>
-              <pre>{tool.resultPreview || "Tool failed without an error message."}</pre>
+              <pre className="tool-result-block">{tool.resultPreview || "Tool failed without an error message."}</pre>
             </details>
           )}
         </div>

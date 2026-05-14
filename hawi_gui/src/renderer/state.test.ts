@@ -431,6 +431,21 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.resultPreview).toBe("Error: Parameter validation failed");
   });
 
+  it("preserves full long tool results for scrollable rendering", () => {
+    const output = `${"line\n".repeat(300)}final line`;
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-long-result", tool_call_id: "tc-long-result", tool_name: "shell" }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      tool_call_id: "tc-long-result",
+      tool_name: "shell",
+      success: true,
+      output
+    }));
+
+    expect(state.nodes[0].tool?.resultPreview).toBe(output);
+    expect(state.nodes[0].tool?.resultPreview).toContain("final line");
+  });
+
   it("shows failed tool output when error is empty", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-output-fail", tool_call_id: "tc-output-fail", tool_name: "shell" }));

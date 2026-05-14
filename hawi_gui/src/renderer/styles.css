@@ -1251,6 +1251,15 @@ button:disabled {
   white-space: pre;
 }
 
+.tool-result-block {
+  max-height: min(640px, calc(100vh - 180px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .hljs {
   background: transparent;
   color: #263238;

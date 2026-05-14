@@ -2,7 +2,6 @@ import type { CoreFrame, PluginArtifactPayload, QueueKind } from "../shared/prot
 
 const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
-const MAX_RESULT_PREVIEW_LENGTH = 1200;
 
 export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider";
 export type DisplayMessageType = "normal" | "steer" | "urgent";
@@ -404,8 +403,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           name: String(payload.tool_name || tool.name),
           description: optionalToolPurpose(payload) ?? tool.description,
           resultPreview: payload.is_part === true
-            ? truncate(tool.resultPreview + text)
-            : truncate(text || tool.resultPreview),
+            ? tool.resultPreview + text
+            : text || tool.resultPreview,
           durationMs: Number(payload.duration_ms ?? tool.durationMs ?? 0)
         }, eventAt);
       });
@@ -645,7 +644,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
       existing.tool = {
         ...existing.tool,
         status: result.isError ? "fail" : "success",
-        resultPreview: truncate(result.text)
+        resultPreview: result.text
       };
       return;
     }
@@ -663,7 +662,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         status: result.isError ? "fail" : "success",
         argsRaw: "",
         argsState: "complete",
-        resultPreview: truncate(result.text)
+        resultPreview: result.text
       }
     });
   });
@@ -1507,11 +1506,6 @@ function formatRunStop(payload: Record<string, unknown>): string {
     return reason;
   }
   return `${reason} · ${(durationMs / 1000).toFixed(1)}s`;
-}
-
-function truncate(value: string, max = MAX_RESULT_PREVIEW_LENGTH): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max)}...`;
 }
 
 function formatToolResultText(payload: Record<string, unknown>): string {
