@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from hawi.plugin import (
     HawiPlugin,
@@ -26,6 +26,7 @@ from hawi.plugin import (
     tool,
 )
 from hawi.tool import ToolResult
+from hawi.utils.debug import debug_assert
 
 from hawi_plugins.workflow_plugin.models import (
     NodeExecution,
@@ -284,9 +285,12 @@ class WorkflowPlugin(HawiPlugin):
         if execution is None:
             return None
 
+        wf = self._workflow
+        debug_assert(wf is not None, "_current_node returned non-None, so workflow must be loaded")
+        wf = cast(Workflow, wf)
         self._sync_artifact(run)
         return HookResult.reinvoke(
-            f"Workflow '{self._workflow.name}' is still active.\n\n"
+            f"Workflow '{wf.name}' is still active.\n\n"
             f"Current gate: {node.name} ({node.id})\n"
             f"Attempt: {execution.attempt_count}/{node.max_retries}\n\n"
             f"Your task: {node.prompt}\n\n"
@@ -396,6 +400,8 @@ class WorkflowPlugin(HawiPlugin):
                 return r
 
         wf = self._workflow
+        debug_assert(wf is not None, "load_workflow should have populated self._workflow")
+        wf = cast(Workflow, wf)
         if not wf.start_node_id or wf.start_node_id not in wf.nodes:
             return ToolResult(success=False, error=f"Invalid start_node_id: {wf.start_node_id}")
 
@@ -665,6 +671,9 @@ class WorkflowPlugin(HawiPlugin):
         )]
 
     async def _on_approved(self, agent, run, node, execution, decision) -> HookResult | None:
+        wf = self._workflow
+        debug_assert(wf is not None, "called only from gate_guard after _current_node() check")
+        wf = cast(Workflow, wf)
         output = (execution.output or "").strip()
 
         # ── Detect STATUS: FAILED — execution-level failure with retry ──
@@ -679,7 +688,7 @@ class WorkflowPlugin(HawiPlugin):
                 self.emit_plugin_event("plugin.event", {
                     "event_name": "workflow.failed", "run_id": run.id,
                     "node_id": node.id, "node_name": node.name,
-                    "title": f"Workflow failed: {self._workflow.name}",
+                    "title": f"Workflow failed: {wf.name}",
                     "message": (
                         f"Gate '{node.name}' failed after "
                         f"{execution.attempt_count} attempts."
@@ -688,7 +697,7 @@ class WorkflowPlugin(HawiPlugin):
                 return HookResult.reinvoke(
                     f"Gate '{node.name}' FAILED after {execution.attempt_count} "
                     f"attempts (max {node.max_retries}). ❌\n\n"
-                    f"Workflow '{self._workflow.name}' has been stopped.\n\n"
+                    f"Workflow '{wf.name}' has been stopped.\n\n"
                     f"Last output:\n{output[:2000]}\n\n"
                     f"Please fix the issue manually, then run the workflow again."
                 )
@@ -722,7 +731,7 @@ class WorkflowPlugin(HawiPlugin):
         run.global_context[node.id] = execution.output
         run.status = "running"
 
-        downstream = self._workflow.downstream_node_ids(node.id)
+        downstream = wf.downstream_node_ids(node.id)
         route_source = "reviewer" if decision.next_node_id else ""
         next_node_id = decision.next_node_id
         routing_reason = ""
@@ -749,20 +758,20 @@ class WorkflowPlugin(HawiPlugin):
             self._sync_artifact(run)
             self.emit_plugin_event("plugin.event", {
                 "event_name": "workflow.completed", "run_id": run.id,
-                "workflow_name": self._workflow.name,
-                "title": f"Workflow completed: {self._workflow.name}",
+                "workflow_name": wf.name,
+                "title": f"Workflow completed: {wf.name}",
                 "message": f"All gates passed.",
             })
             return None
 
-        if next_node_id not in self._workflow.nodes:
+        if next_node_id not in wf.nodes:
             run.status = "failed"
             self._sync_artifact(run)
             return HookResult.reinvoke(
                 f"Workflow error: next node '{next_node_id}' not found. Workflow failed.")
 
         run.current_node_id = next_node_id
-        next_node = self._workflow.nodes[next_node_id]
+        next_node = wf.nodes[next_node_id]
         next_exec = run.node_executions[next_node_id]
         next_exec.status = "active"
         next_exec.started_at = time.time()
@@ -789,6 +798,9 @@ class WorkflowPlugin(HawiPlugin):
         )
 
     def _on_rejected(self, run, node, execution, decision) -> HookResult | None:
+        wf = self._workflow
+        debug_assert(wf is not None, "called only from gate_guard after _current_node() check")
+        wf = cast(Workflow, wf)
         run.status = "running"
         if execution.attempt_count >= node.max_retries:
             execution.status = "rejected"
@@ -798,13 +810,13 @@ class WorkflowPlugin(HawiPlugin):
             self.emit_plugin_event("plugin.event", {
                 "event_name": "workflow.failed", "run_id": run.id,
                 "node_id": node.id, "node_name": node.name,
-                "title": f"Workflow failed: {self._workflow.name}",
+                "title": f"Workflow failed: {wf.name}",
                 "message": f"Gate '{node.name}' rejected after {execution.attempt_count} attempts.",
             })
             return HookResult.reinvoke(
                 f"Gate '{node.name}' REJECTED after {execution.attempt_count} "
                 f"attempts (max {node.max_retries}). ❌\n\n"
-                f"Workflow '{self._workflow.name}' has FAILED.\n\n"
+                f"Workflow '{wf.name}' has FAILED.\n\n"
                 f"Final feedback: {decision.feedback}"
             )
 
@@ -935,14 +947,15 @@ class WorkflowPlugin(HawiPlugin):
         )
 
     def _sync_artifact(self, run: WorkflowRun | None = None) -> None:
-        if not self._workflow:
+        wf = self._workflow
+        if not wf:
             return
         status = "idle"
-        content_lines = [f"# Workflow: {self._workflow.name}\n"]
+        content_lines = [f"# Workflow: {wf.name}\n"]
         if run:
             status = run.status
             content_lines.append(f"**Status**: {run.status}\n")
-            for nid, node in self._workflow.nodes.items():
+            for nid, node in wf.nodes.items():
                 ne = run.node_executions.get(nid)
                 mark = {
                     "completed": "✅", "active": "🔄", "reviewing": "⏳",
@@ -951,44 +964,46 @@ class WorkflowPlugin(HawiPlugin):
                 content_lines.append(f"- {mark} {node.name} ({nid})")
         else:
             content_lines.append("**Status**: idle (no active run)\n")
-            for nid, node in self._workflow.nodes.items():
+            for nid, node in wf.nodes.items():
                 content_lines.append(f"- ⬜ {node.name} ({nid})")
 
         self.upsert_artifact(
             "current-workflow", artifact_type="workflow",
-            title=f"Workflow: {self._workflow.name}",
+            title=f"Workflow: {wf.name}",
             content="\n".join(content_lines),
             language="markdown", mime_type="text/markdown", status=status,
             metadata={
-                "workflow": self._workflow.to_dict(),
+                "workflow": wf.to_dict(),
                 "run": run.to_dict() if run else None,
             },
         )
 
     def _sync_artifact_definition(self) -> None:
-        if not self._workflow:
+        wf = self._workflow
+        if not wf:
             return
+        wf = cast(Workflow, wf)
         lines = [
-            f"# Workflow: {self._workflow.name}",
-            f"**ID**: {self._workflow.id}",
-            f"**Description**: {self._workflow.description}",
-            f"**Start**: {self._workflow.start_node_id}",
+            f"# Workflow: {wf.name}",
+            f"**ID**: {wf.id}",
+            f"**Description**: {wf.description}",
+            f"**Start**: {wf.start_node_id}",
             "", "## Nodes",
         ]
-        for node in self._workflow.nodes.values():
+        for node in wf.nodes.values():
             lines.append(
                 f"- **{node.name}** (`{node.id}`): {node.description} "
                 f"[review: {node.review.type}, retries: {node.max_retries}]"
             )
         lines.extend(["", "## Edges"])
-        for edge in self._workflow.edges:
+        for edge in wf.edges:
             label = f" ({edge.label})" if edge.label else ""
             lines.append(f"- {edge.from_node_id} → {edge.to_node_id}{label}")
 
         self.upsert_artifact(
             "current-workflow-def", artifact_type="workflow_definition",
-            title=f"Workflow Definition: {self._workflow.name}",
+            title=f"Workflow Definition: {wf.name}",
             content="\n".join(lines), language="markdown",
             mime_type="text/markdown", status="defined",
-            metadata={"workflow": self._workflow.to_dict()},
+            metadata={"workflow": wf.to_dict()},
         )

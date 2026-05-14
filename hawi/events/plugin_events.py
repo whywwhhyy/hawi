@@ -34,8 +34,8 @@ class PluginEvent(Event):
     it without knowing the plugin-specific schema.
     """
 
-    type: PluginEventType
-    source: Literal["plugin"]
+    type: PluginEventType  # type: ignore[reportIncompatibleVariableOverride]
+    source: Literal["plugin"]  # type: ignore[reportIncompatibleVariableOverride]
     plugin_name: str
     plugin_id: str | None = None
     run_id: str | None = None

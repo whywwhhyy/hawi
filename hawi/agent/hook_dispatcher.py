@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Protocol
+from typing import Any, Callable, Protocol
 
 from hawi.models import Model
 from hawi.models.message import MessageResponse
@@ -54,7 +54,7 @@ class HookDispatcher:
                 return result
         return None
 
-    def _should_skip_system_prompt_hook(self, hook_type: str, hook: object) -> bool:
+    def _should_skip_system_prompt_hook(self, hook_type: str, hook: Callable[..., Any]) -> bool:
         if hook_type not in {"before_session", "before_conversation"}:
             return False
         if not getattr(self._agent, "_suppress_system_prompt_hooks", False):

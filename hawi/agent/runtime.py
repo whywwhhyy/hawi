@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from hawi.errors import ContextLengthError
 from hawi.events import AgentMessageAddedEvent, AgentToolResultEvent, EventBus
@@ -522,7 +522,7 @@ class AgentRuntime:
             metadata = self.steer_message_metadata(pending_input, matched_tool_call_id)
             agent._context.add_user_message(content, metadata=metadata)
             materialized_messages.append(
-                MaterializedSteerMessage(content=content, metadata=metadata)
+                MaterializedSteerMessage(content=cast(list[ContentPart], content), metadata=metadata)
             )
         return materialized_messages
 

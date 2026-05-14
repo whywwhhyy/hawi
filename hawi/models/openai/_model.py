@@ -565,8 +565,9 @@ class OpenAIModel(Model):
 
         for part in content:
             if part.get("type") == "reasoning":
-                part["reasoning"] = part.get("reasoning") or ""
-                response.reasoning_content = part["reasoning"]
+                rp = cast(ReasoningPart, part)
+                rp["reasoning"] = rp.get("reasoning") or ""
+                response.reasoning_content = rp["reasoning"]
                 response.content = content
                 return
 

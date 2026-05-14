@@ -95,7 +95,7 @@ def convert_system_prompt(
             continue
 
         if part.get("type") == "text":
-            block = {"type": "text", "text": cast(TextPart, part)["text"]}
+            block: dict[str, Any] = {"type": "text", "text": cast(TextPart, part)["text"]}
             if pending_cache_point is not None:
                 block["cache_control"] = convert_cache_point(pending_cache_point)
                 pending_cache_point = None

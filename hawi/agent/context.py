@@ -643,9 +643,10 @@ class AgentContext:
                     and part.get("type") == "tool_result"
                     and part.get("tool_call_id") == tool_call_id
                 ):
-                    part["content"] = replacement
+                    trp = cast(ToolResultPart, part)
+                    trp["content"] = replacement
                     if is_error is not None:
-                        part["is_error"] = is_error
+                        trp["is_error"] = is_error
                     return True
         return False
 
