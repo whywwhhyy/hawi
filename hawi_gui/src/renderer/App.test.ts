@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
+import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -160,6 +160,32 @@ describe("isNearChatBottom", () => {
 
   it("does not allow auto scroll when the chat is 5px or more from the bottom", () => {
     expect(isNearChatBottom({ scrollHeight: 1000, scrollTop: 595, clientHeight: 400 })).toBe(false);
+  });
+});
+
+describe("shouldBubbleNestedVerticalScroll", () => {
+  it("keeps wheel events inside a nested scroller while it can scroll down", () => {
+    expect(shouldBubbleNestedVerticalScroll({ scrollHeight: 1000, scrollTop: 200, clientHeight: 400 }, 20)).toBe(false);
+  });
+
+  it("bubbles wheel events once a nested scroller reaches the bottom", () => {
+    expect(shouldBubbleNestedVerticalScroll({ scrollHeight: 1000, scrollTop: 600, clientHeight: 400 }, 20)).toBe(true);
+  });
+
+  it("bubbles wheel events when the current wheel delta would cross the bottom", () => {
+    expect(shouldBubbleNestedVerticalScroll({ scrollHeight: 1000, scrollTop: 580, clientHeight: 400 }, 40)).toBe(true);
+  });
+
+  it("bubbles wheel events once a nested scroller reaches the top", () => {
+    expect(shouldBubbleNestedVerticalScroll({ scrollHeight: 1000, scrollTop: 0, clientHeight: 400 }, -20)).toBe(true);
+  });
+
+  it("bubbles wheel events when the current wheel delta would cross the top", () => {
+    expect(shouldBubbleNestedVerticalScroll({ scrollHeight: 1000, scrollTop: 10, clientHeight: 400 }, -20)).toBe(true);
+  });
+
+  it("bubbles wheel events when nested content is not scrollable", () => {
+    expect(shouldBubbleNestedVerticalScroll({ scrollHeight: 400, scrollTop: 0, clientHeight: 400 }, 20)).toBe(true);
   });
 });
 

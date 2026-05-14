@@ -1260,7 +1260,7 @@ button:disabled {
 .tool-result-block {
   max-height: min(640px, calc(100vh - 180px));
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
   scrollbar-gutter: stable;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

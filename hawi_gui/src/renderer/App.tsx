@@ -1389,7 +1389,10 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           {(tool.resultPreview || tool.status === "fail") && (
             <details open>
               <summary>Result {tool.durationMs ? `· ${tool.durationMs.toFixed(0)}ms` : ""}</summary>
-              <pre className="tool-result-block">{tool.resultPreview || "Tool failed without an error message."}</pre>
+              <pre
+                className="tool-result-block"
+                onWheel={handleNestedVerticalScroll}
+              >{tool.resultPreview || "Tool failed without an error message."}</pre>
             </details>
           )}
         </div>
@@ -2158,6 +2161,16 @@ export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "sc
   return element.scrollHeight - element.scrollTop - element.clientHeight < AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
+export function shouldBubbleNestedVerticalScroll(
+  element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">,
+  deltaY: number
+): boolean {
+  if (deltaY === 0 || element.scrollHeight <= element.clientHeight) return true;
+  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+  if (deltaY < 0) return element.scrollTop <= Math.abs(deltaY);
+  return maxScrollTop - element.scrollTop <= deltaY + 1;
+}
+
 export function resolveFollowTailOnScroll(
   currentFollowTail: boolean,
   nearBottom: boolean,
@@ -2317,4 +2330,10 @@ function escapeHtml(value: string): string {
 
 function escapeText(value: string): string {
   return escapeHtml(value).replace(/\n/g, "<br />");
+}
+
+function handleNestedVerticalScroll(event: WheelEvent<HTMLElement>) {
+  if (!shouldBubbleNestedVerticalScroll(event.currentTarget, event.deltaY)) {
+    event.stopPropagation();
+  }
 }
