@@ -74,6 +74,7 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
     "agent.message_added": (layout.COMPONENT_CONTEXT,),
     "agent.error": (layout.COMPONENT_RUNTIME,),
     "agent.interrupt": (layout.COMPONENT_RUNTIME,),
+    "agent.compact_start": (layout.COMPONENT_RUNTIME,),
     "agent.compact_stop": (layout.COMPONENT_CONTEXT,),
     "model.retry": (layout.COMPONENT_RUNTIME,),
     "model.error": (layout.COMPONENT_RUNTIME,),

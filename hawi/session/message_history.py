@@ -18,6 +18,8 @@ def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
         return _error_entry(event)
     if event.type in {"runner.interrupt", "agent.interrupt"}:
         return _interrupt_entry(event)
+    if event.type in {"agent.compact_start", "agent.compact_stop"}:
+        return _context_compaction_entry(event)
     if event.type != "agent.message_added":
         return None
     try:
@@ -120,6 +122,51 @@ def _interrupt_entry(event: Event) -> dict[str, Any] | None:
             "persist_session": True,
         },
     }
+
+
+def _context_compaction_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize context compaction history event")
+        return None
+
+    metadata = {
+        "display_message_type": "context_compaction",
+        "event_type": event.type,
+        "mode": data.get("mode"),
+        "status": data.get("status"),
+        "tokens_before": data.get("tokens_before"),
+        "tokens_after": data.get("tokens_after"),
+        "message_count_before": data.get("message_count_before"),
+        "message_count_after": data.get("message_count_after"),
+        "replaced_message_count": data.get("replaced_message_count"),
+        "kept_message_count": data.get("kept_message_count"),
+        "error": data.get("error"),
+        "persist_session": True,
+    }
+    text = (
+        "Compressing context..."
+        if event.type == "agent.compact_start"
+        else _context_compaction_stop_text(data)
+    )
+    return {
+        "version": 1,
+        "timestamp": data.get("timestamp"),
+        "run_id": data.get("run_id"),
+        "role": "event",
+        "content": [{"type": "text", "text": text}],
+        "metadata": metadata,
+    }
+
+
+def _context_compaction_stop_text(data: dict[str, Any]) -> str:
+    status = data.get("status")
+    if status == "success":
+        return "Context compacted"
+    if status == "skipped":
+        return "Context compaction skipped"
+    return "Context compaction failed"
 
 
 def should_persist_message(metadata: Any) -> bool:

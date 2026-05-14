@@ -14,7 +14,7 @@ import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText,
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
+import { createInitialState, reduceCoreEvent, type ChatNode, type ContextCompressionState, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -706,7 +706,7 @@ export default function App() {
             open={queuePopoverOpen}
             onToggle={() => setQueuePopoverOpen((value) => !value)}
           />
-          <ContextUsageCell usage={state.contextUsage} />
+          <ContextUsageCell usage={state.contextUsage} compression={state.contextCompression} />
           <SessionStatusCell
             messageCount={state.sessionMessageCount}
             runningCount={sessionStats.running}
@@ -906,19 +906,26 @@ function PriorityStatusCell({
   );
 }
 
-function ContextUsageCell({ usage }: { usage?: ContextUsageState }) {
+function ContextUsageCell({ usage, compression }: { usage?: ContextUsageState; compression?: ContextCompressionState }) {
+  const compressing = compression?.active === true;
   const ratio = usage?.ratio ?? 0;
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(ratio * 100)}%`;
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
   const usageLabel = `${usage?.source === "estimate" ? "~" : ""}${used}/${max}`;
+  const title = compressing ? `Context compressing ${usageLabel}` : `Context ${usageLabel}`;
   return (
-    <div className="context-status" title={`Context ${usageLabel}`}>
-      <span>Context</span>
-      <strong>{percent}</strong>
-      <div className="context-meter" aria-hidden="true">
-        <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
-      </div>
+    <div className={`context-status ${compressing ? "compressing" : ""}`} title={title}>
+      <span>
+        {compressing && <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />}
+        {compressing ? "Compressing" : "Context"}
+      </span>
+      {!compressing && <strong>{percent}</strong>}
+      {!compressing && (
+        <div className="context-meter" aria-hidden="true">
+          <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+        </div>
+      )}
       <small>{usageLabel}</small>
     </div>
   );
@@ -1157,6 +1164,14 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   if (node.kind === "divider") {
     return (
       <div className="run-divider">
+        <span>{node.content}</span>
+      </div>
+    );
+  }
+  if (node.kind === "compact") {
+    return (
+      <div className={`run-divider context-compact ${node.complete === false ? "active" : "complete"}`}>
+        {node.complete === false && <LiveSpinner title="Compressing context" />}
         <span>{node.content}</span>
       </div>
     );
@@ -2108,7 +2123,8 @@ function isConversationNode(node: ChatNode): boolean {
     || node.kind === "agent"
     || node.kind === "thinking"
     || node.kind === "tool"
-    || node.kind === "divider";
+    || node.kind === "divider"
+    || node.kind === "compact";
 }
 
 export function thinkingExcerpt(value: string, maxChars = 120): string {

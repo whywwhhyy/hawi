@@ -59,10 +59,13 @@ class AutoCompactConfig:
     max_context_tokens: int = 128_000
     trigger_tokens: int | None = None
     trigger_ratio: float = 0.8
+    max_trigger_ratio: float = 0.95
+    compression_budget: int = 20_000
     keep_last_messages: int = 8
     min_messages: int = 12
-    summary_max_output_tokens: int = 2048
-    max_transcript_chars: int = 120_000
+    summary_max_output_tokens: int = 1024
+    summary_max_chars: int = 4_000
+    max_transcript_chars: int = 12_000
     prompt: str = CONTEXT_COMPACTION_PROMPT
     summary_prefix: str = CONTEXT_COMPACTION_SUMMARY_PREFIX
 
@@ -70,4 +73,7 @@ class AutoCompactConfig:
         """Return the estimated-token threshold that triggers compaction."""
         if self.trigger_tokens is not None:
             return self.trigger_tokens
-        return max(1, int(self.max_context_tokens * self.trigger_ratio))
+        ratio_limit = int(self.max_context_tokens * self.trigger_ratio)
+        max_ratio_limit = int(self.max_context_tokens * self.max_trigger_ratio)
+        budget_limit = self.max_context_tokens - max(0, self.compression_budget)
+        return max(1, min(max_ratio_limit, max(ratio_limit, budget_limit)))

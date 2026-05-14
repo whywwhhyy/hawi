@@ -23,6 +23,7 @@ class _ExecutionState:
     run_id: str = ""
     stop_reason: str | None = None
     pending_reinvoke_message: str | list[ContentPart] | None = None
+    last_auto_compact_iteration: int | None = None
 
 
 @dataclass

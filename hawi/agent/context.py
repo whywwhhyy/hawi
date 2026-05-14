@@ -39,7 +39,10 @@ CONTEXT_COMPACTION_PROMPT = (
     "- Current progress and key decisions made\n"
     "- Important context, constraints, or user preferences\n"
     "- What remains to be done (clear next steps)\n"
-    "- Any critical data, examples, or references needed to continue\n\n"
+    "- Any critical data, examples, or references needed to continue\n"
+    "- Preserve the original language of the conversation in the summary; "
+    "for mixed-language context, keep each item in its original language "
+    "unless translating is necessary for clarity\n\n"
     "Be concise, structured, and focused on helping the next LLM seamlessly "
     "continue the work."
 )
@@ -715,8 +718,9 @@ class AgentContext:
     def compaction_tail_start(self, keep_last: int) -> int:
         """Return a safe start index for the recent suffix to keep.
 
-        The returned boundary is moved left to the nearest user message so a
-        compacted history does not begin inside a tool-call exchange.
+        The boundary is allowed to start at an assistant message. This lets
+        compaction summarize long single-turn tool loops while still preserving
+        provider-valid tool_call/tool_result adjacency.
         """
         if keep_last <= 0:
             desired_start = len(self.messages)
@@ -728,10 +732,34 @@ class AgentContext:
         if desired_start >= len(self.messages):
             return len(self.messages)
 
+        return self._safe_tool_exchange_tail_start(desired_start)
+
+    def _safe_tool_exchange_tail_start(self, desired_start: int) -> int:
+        """Move a suffix boundary left only when tool exchange validity needs it."""
         start = desired_start
-        while start > 0 and self.messages[start]["role"] != "user":
-            start -= 1
-        return start
+        attempted: set[int] = set()
+
+        while start not in attempted:
+            attempted.add(start)
+            if start <= 0:
+                return 0
+            if self.messages[start]["role"] == "tool":
+                start -= 1
+                continue
+
+            missing_tool_calls = self._missing_tool_call_ids_in_suffix(start)
+            if not missing_tool_calls:
+                return start
+
+            provider_index = self._latest_tool_call_provider_before(
+                start,
+                missing_tool_calls,
+            )
+            if provider_index is None:
+                return 0
+            start = provider_index
+
+        return max(0, start)
 
     def compact_with_summary(
         self,
@@ -810,6 +838,16 @@ class AgentContext:
         ]
 
     @staticmethod
+    def _tool_call_ids(message: Message) -> set[str]:
+        return {
+            str(part.get("id") or "")
+            for part in message["content"]
+            if isinstance(part, dict)
+            and part.get("type") == "tool_call"
+            and part.get("id")
+        }
+
+    @staticmethod
     def _tool_result_ids(message: Message) -> set[str]:
         return {
             str(part.get("tool_call_id") or "")
@@ -818,6 +856,26 @@ class AgentContext:
             and part.get("type") == "tool_result"
             and part.get("tool_call_id")
         }
+
+    def _missing_tool_call_ids_in_suffix(self, start: int) -> set[str]:
+        seen_tool_calls: set[str] = set()
+        missing_tool_calls: set[str] = set()
+        for message in self.messages[start:]:
+            seen_tool_calls.update(self._tool_call_ids(message))
+            for tool_call_id in self._tool_result_ids(message):
+                if tool_call_id not in seen_tool_calls:
+                    missing_tool_calls.add(tool_call_id)
+        return missing_tool_calls
+
+    def _latest_tool_call_provider_before(
+        self,
+        start: int,
+        tool_call_ids: set[str],
+    ) -> int | None:
+        for index in range(start - 1, -1, -1):
+            if self._tool_call_ids(self.messages[index]) & tool_call_ids:
+                return index
+        return None
 
     def collapse(self, start: int, end: int, summary: str) -> None:
         """Collapse a range of messages into a summary.

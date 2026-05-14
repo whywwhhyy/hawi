@@ -3,7 +3,7 @@ import type { CoreFrame, PluginArtifactPayload, QueueKind } from "../shared/prot
 const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 
-export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider";
+export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "compact";
 export type DisplayMessageType = "normal" | "steer" | "urgent";
 
 export interface ChatNode {
@@ -95,6 +95,19 @@ export interface ContextUsageState {
   source?: "estimate" | "provider_usage";
 }
 
+export interface ContextCompressionState {
+  active: boolean;
+  nodeId?: string;
+  mode?: string;
+  status?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  messageCountBefore?: number;
+  messageCountAfter?: number;
+  startedAt?: number;
+  updatedAt?: number;
+}
+
 export interface QueueMessageState {
   id: string;
   queue: QueueKind;
@@ -127,6 +140,7 @@ export interface AppState {
   queueMessages: Record<QueueKind, QueueMessageState[]>;
   metadataLines: string[];
   contextUsage?: ContextUsageState;
+  contextCompression?: ContextCompressionState;
   debugLines: string[];
   errors: string[];
   artifacts: Record<string, PluginArtifactState>;
@@ -150,6 +164,7 @@ export function createInitialState(): AppState {
     queueMessages: { normal: [], high_prio: [], urgent: [] },
     metadataLines: [],
     contextUsage: undefined,
+    contextCompression: undefined,
     debugLines: [],
     errors: [],
     artifacts: {},
@@ -174,6 +189,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         activeRunId: undefined,
         metadataLines: [],
         contextUsage: undefined,
+        contextCompression: undefined,
         debugLines: [],
         errors: [],
         artifacts: {},
@@ -197,6 +213,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         activeRunId: undefined,
         metadataLines: [],
         contextUsage,
+        contextCompression: undefined,
         debugLines: [],
         errors: [],
         artifacts: {},
@@ -277,7 +294,12 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "run.stop": {
       const runId = String(payload.run_id ?? "");
-      const completedState = completeOpenRunNodesForRun(state, runId, frameTime(frame));
+      const eventAt = frameTime(frame);
+      const completedState = completeActiveCompressionOnRunStop(
+        completeOpenRunNodesForRun(state, runId, eventAt),
+        payload,
+        eventAt
+      );
       const withDivider = appendChatNode(completedState, {
         id: nodeId("divider", `${runId}-${Date.now()}`),
         kind: "divider",
@@ -417,6 +439,89 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       return addMeta(nextState, formatModelMetadata(payload));
     }
 
+    case "agent.compact_start": {
+      const eventAt = frameTime(frame);
+      const runId = String(payload.run_id ?? state.activeRunId ?? "manual");
+      const existingNodeId = state.contextCompression?.active
+        ? state.contextCompression.nodeId
+        : undefined;
+      const nodeIdForCompression = existingNodeId
+        ?? nodeId("compact", `${runId}-${state.nodes.length}`);
+      const base = existingNodeId
+        ? updateChatNode(state, existingNodeId, (node) => ({
+            ...node,
+            kind: "compact",
+            content: "Compressing context...",
+            complete: false,
+            streamStartedAt: node.streamStartedAt ?? eventAt,
+            streamFinishedAt: undefined,
+            streamDurationMs: undefined
+          }))
+        : appendChatNode(state, {
+            id: nodeIdForCompression,
+            kind: "compact",
+            content: "Compressing context...",
+            complete: false,
+            streamStartedAt: eventAt
+          });
+      return {
+        ...base,
+        sessionMessageCount: existingNodeId
+          ? base.sessionMessageCount
+          : base.sessionMessageCount + 1,
+        contextCompression: {
+          active: true,
+          nodeId: nodeIdForCompression,
+          mode: optionalString(payload.mode),
+          tokensBefore: optionalNumber(payload.tokens_before),
+          messageCountBefore: optionalNumber(payload.message_count_before),
+          startedAt: eventAt,
+          updatedAt: eventAt
+        }
+      };
+    }
+
+    case "agent.compact_stop": {
+      const eventAt = frameTime(frame);
+      const nodeIdForCompression = state.contextCompression?.nodeId;
+      const content = formatContextCompactionStop(payload);
+      const base = nodeIdForCompression
+        ? updateChatNode(state, nodeIdForCompression, (node) => (
+            node.kind === "compact"
+              ? completeChatNodeStream({
+                  ...node,
+                  content,
+                  complete: true
+                }, eventAt)
+              : node
+          ))
+        : appendChatNode(state, {
+            id: nodeId("compact", `${String(payload.run_id ?? state.activeRunId ?? "manual")}-${state.nodes.length}`),
+            kind: "compact",
+            content,
+            complete: true,
+            streamStartedAt: eventAt,
+            streamFinishedAt: eventAt,
+            streamDurationMs: 0
+          });
+      return {
+        ...base,
+        sessionMessageCount: base.sessionMessageCount + 1,
+        contextCompression: {
+          ...(state.contextCompression ?? { active: false }),
+          active: false,
+          nodeId: nodeIdForCompression,
+          mode: optionalString(payload.mode) ?? state.contextCompression?.mode,
+          status: optionalString(payload.status),
+          tokensBefore: optionalNumber(payload.tokens_before) ?? state.contextCompression?.tokensBefore,
+          tokensAfter: optionalNumber(payload.tokens_after),
+          messageCountBefore: optionalNumber(payload.message_count_before) ?? state.contextCompression?.messageCountBefore,
+          messageCountAfter: optionalNumber(payload.message_count_after),
+          updatedAt: eventAt
+        }
+      };
+    }
+
     case "model.retry":
       return addSystem(
         state,
@@ -513,7 +618,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
 
 interface SessionHistoryRecord {
   runId: string;
-  role: "user" | "assistant" | "tool" | "system" | "error";
+  role: "user" | "assistant" | "tool" | "system" | "error" | "event";
   content: unknown[];
   metadata?: Record<string, unknown>;
 }
@@ -530,6 +635,7 @@ function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
         && role !== "tool"
         && role !== "system"
         && role !== "error"
+        && role !== "event"
       ) {
         return null;
       }
@@ -554,9 +660,49 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
   // assistant record that issued them; tool results update the existing
   // node's status + resultPreview rather than producing a new node.
   const toolNodesByCallId = new Map<string, ChatNode>();
+  const compactNodesByRunId = new Map<string, ChatNode[]>();
 
   history.forEach((record, index) => {
     const baseId = `${record.runId}-${index}`;
+    if (record.role === "event") {
+      const eventType = optionalString(record.metadata?.event_type);
+      if (eventType === "agent.compact_start") {
+        const node: ChatNode = {
+          id: nodeId("compact-history", baseId),
+          kind: "compact",
+          content: "Compressing context...",
+          complete: false
+        };
+        nodes.push(node);
+        const stack = compactNodesByRunId.get(record.runId) ?? [];
+        stack.push(node);
+        compactNodesByRunId.set(record.runId, stack);
+        return;
+      }
+      if (eventType === "agent.compact_stop") {
+        const content = historyContentText(record.content) || "Context compacted";
+        const stack = compactNodesByRunId.get(record.runId) ?? [];
+        const existing = stack.pop();
+        if (existing) {
+          existing.content = content;
+          existing.complete = true;
+          return;
+        }
+        nodes.push({
+          id: nodeId("compact-history", baseId),
+          kind: "compact",
+          content,
+          complete: true
+        });
+        return;
+      }
+      nodes.push({
+        id: nodeId("event-history", baseId),
+        kind: "system",
+        content: historyContentText(record.content)
+      });
+      return;
+    }
     if (record.role === "system" || record.role === "error") {
       nodes.push({
         id: nodeId(`${record.role}-history`, baseId),
@@ -764,8 +910,14 @@ function sameContextUsage(a?: ContextUsageState, b?: ContextUsageState): boolean
 
 function chooseContextUsage(current: ContextUsageState | undefined, incoming: ContextUsageState | undefined): ContextUsageState | undefined {
   if (!incoming) return current;
-  if (current?.source === "provider_usage" && incoming.source === "estimate") {
-    return current;
+  if (
+    current?.source === "provider_usage"
+    && incoming.source === "estimate"
+  ) {
+    if (incoming.usedTokens <= current.usedTokens) {
+      return current;
+    }
+    return { ...incoming, source: "provider_usage" };
   }
   return incoming;
 }
@@ -938,6 +1090,33 @@ function completeOpenRunNodesForRun(state: AppState, runId: string, finishedAt: 
     "agent",
     finishedAt
   );
+}
+
+function completeActiveCompressionOnRunStop(
+  state: AppState,
+  payload: Record<string, unknown>,
+  eventAt: number,
+): AppState {
+  if (!state.contextCompression?.active || !state.contextCompression.nodeId) {
+    return state;
+  }
+  const content = String(payload.stop_reason ?? "") === "interrupted"
+    ? "Context compaction interrupted"
+    : "Context compaction stopped";
+  const updated = updateChatNode(state, state.contextCompression.nodeId, (node) => (
+    node.kind === "compact"
+      ? completeChatNodeStream({ ...node, content, complete: true }, eventAt)
+      : node
+  ));
+  return {
+    ...updated,
+    contextCompression: {
+      ...state.contextCompression,
+      active: false,
+      status: String(payload.stop_reason ?? "stopped"),
+      updatedAt: eventAt
+    }
+  };
 }
 
 function completeRunNodeForRun(
@@ -1506,6 +1685,17 @@ function formatRunStop(payload: Record<string, unknown>): string {
     return reason;
   }
   return `${reason} · ${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function formatContextCompactionStop(payload: Record<string, unknown>): string {
+  const status = optionalString(payload.status);
+  if (status === "success") {
+    return "Context compacted";
+  }
+  if (status === "skipped") {
+    return "Context compaction skipped";
+  }
+  return "Context compaction failed";
 }
 
 function formatToolResultText(payload: Record<string, unknown>): string {

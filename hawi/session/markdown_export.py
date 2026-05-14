@@ -436,6 +436,7 @@ def _role_label(role: str) -> str:
         "user": "User",
         "assistant": "Assistant",
         "tool": "Tool",
+        "event": "Event",
     }.get(role, role.title())
 
 

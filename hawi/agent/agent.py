@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from dataclasses import replace
 from typing import Any, Optional, Literal, Callable
 
 
@@ -265,6 +266,33 @@ class HawiAgent:
             self._context_limit_for_model(model or self._default_model)
         )
 
+    def _refresh_context_usage_snapshot(
+        self,
+        model: Model | None = None,
+        *,
+        preserve_provider: bool = True,
+    ) -> ContextUsageSnapshot:
+        """Persist current context usage for UI/status snapshots."""
+        snapshot = self.context_usage(model)
+        current = self._context.context_usage_snapshot()
+        if (
+            preserve_provider
+            and current is not None
+            and current.source == "provider_usage"
+            and current.max_context_tokens == snapshot.max_context_tokens
+        ):
+            if current.used_tokens >= snapshot.used_tokens:
+                return current
+            snapshot = ContextUsageSnapshot(
+                used_tokens=snapshot.used_tokens,
+                max_context_tokens=snapshot.max_context_tokens,
+                usage_ratio=snapshot.usage_ratio,
+                remaining_tokens=snapshot.remaining_tokens,
+                source="provider_usage",
+            )
+        self._context.set_context_usage(snapshot)
+        return snapshot
+
     def set_context(self, context: AgentContext) -> None:
         """Replace the agent's context.
 
@@ -309,6 +337,11 @@ class HawiAgent:
         # Reset current model state before replacing
         self._default_model.reset()
         self._default_model = model
+        self._auto_compact = self._normalize_auto_compact(
+            self._auto_compact,
+            model,
+        )
+        self._refresh_context_usage_snapshot(model, preserve_provider=False)
 
     @staticmethod
     def _validate_model_steer_merge_mode(model: Any, *, source: str) -> None:
@@ -417,29 +450,113 @@ class HawiAgent:
         model: Model | None = None,
     ) -> AutoCompactConfig:
         """Normalize user-facing auto-compact options."""
-        model_max_context_tokens = None
-        if model is not None:
-            getter = getattr(model, "get_max_context_tokens", None)
-            if callable(getter):
-                value = getter()
-                if isinstance(value, int) and value > 0:
-                    model_max_context_tokens = value
+        model_max_context_tokens = HawiAgent._model_max_context_tokens(model)
         if isinstance(config, AutoCompactConfig):
-            return config
+            return HawiAgent._clamp_auto_compact_config_to_model(
+                config,
+                model_max_context_tokens,
+            )
         if isinstance(config, dict):
             values = dict(config)
             if model_max_context_tokens is not None and "max_context_tokens" not in values:
                 values["max_context_tokens"] = model_max_context_tokens
-            return AutoCompactConfig(**values)
-        if isinstance(config, bool):
-            return AutoCompactConfig(
-                enabled=config,
-                max_context_tokens=model_max_context_tokens or 128_000,
+            return HawiAgent._clamp_auto_compact_config_to_model(
+                AutoCompactConfig(**values),
+                model_max_context_tokens,
             )
-        return AutoCompactConfig(
-            enabled=True,
-            max_context_tokens=model_max_context_tokens or 128_000,
+        if isinstance(config, bool):
+            return HawiAgent._clamp_auto_compact_config_to_model(
+                AutoCompactConfig(
+                    enabled=config,
+                    max_context_tokens=model_max_context_tokens or 128_000,
+                ),
+                model_max_context_tokens,
+            )
+        return HawiAgent._clamp_auto_compact_config_to_model(
+            AutoCompactConfig(
+                enabled=True,
+                max_context_tokens=model_max_context_tokens or 128_000,
+            ),
+            model_max_context_tokens,
         )
+
+    @staticmethod
+    def _model_max_context_tokens(model: Model | None) -> int | None:
+        if model is None:
+            return None
+        getter = getattr(model, "get_max_context_tokens", None)
+        if not callable(getter):
+            return None
+        value = getter()
+        if isinstance(value, int) and value > 0:
+            return value
+        return None
+
+    @staticmethod
+    def _clamp_auto_compact_config_to_model(
+        config: AutoCompactConfig,
+        model_max_context_tokens: int | None,
+    ) -> AutoCompactConfig:
+        if (
+            model_max_context_tokens is not None
+            and (
+                config.max_context_tokens <= 0
+                or config.max_context_tokens > model_max_context_tokens
+            )
+        ):
+            return replace(
+                config,
+                max_context_tokens=model_max_context_tokens,
+            )
+        return config
+
+    def _apply_context_length_limit_from_error(
+        self,
+        model: Model,
+        error: ContextLengthError,
+    ) -> None:
+        provider_limit = error.max_context_tokens
+        if not isinstance(provider_limit, int) or provider_limit <= 0:
+            return
+        if (
+            self._auto_compact.max_context_tokens <= 0
+            or provider_limit < self._auto_compact.max_context_tokens
+        ):
+            self._auto_compact = replace(
+                self._auto_compact,
+                max_context_tokens=provider_limit,
+            )
+        setter = getattr(model, "configure_max_context_tokens", None)
+        if callable(setter):
+            current_limit = self._model_max_context_tokens(model)
+            if current_limit is None or provider_limit < current_limit:
+                setter(provider_limit)
+
+    async def _force_auto_compact_for_context_length_error(
+        self,
+        model: Model,
+        state: _ExecutionState,
+        event_bus: EventBus | None,
+        error: ContextLengthError,
+    ) -> bool:
+        cfg = self._auto_compact
+        if not cfg.enabled or self.has_active_tool_calls:
+            return False
+        self._apply_context_length_limit_from_error(model, error)
+        try:
+            record = await self._compactor.acompact(
+                model=model,
+                config=self._auto_compact,
+                event_bus=event_bus,
+                run_id=state.run_id,
+                mode="auto",
+            )
+        except Exception:
+            return False
+        if record is None:
+            return False
+        state.last_auto_compact_iteration = state.iteration
+        return True
 
     def _context_limit_for_model(self, model: Model) -> int | None:
         getter = getattr(model, "get_max_context_tokens", None)
@@ -507,6 +624,7 @@ class HawiAgent:
     ) -> None:
         if len(self._context.messages) > message_count_before:
             self._mark_model_input_started(started_at)
+            self._refresh_context_usage_snapshot()
 
     @classmethod
     def _model_timing_metadata(
@@ -762,11 +880,15 @@ class HawiAgent:
         prompt: str,
         max_output_tokens: int,
         max_transcript_chars: int,
+        compression_budget: int = 20_000,
+        max_summary_chars: int = 4_000,
     ) -> str:
         return await self._compactor._generate_compaction_summary(
             model,
             prompt=prompt,
+            compression_budget=compression_budget,
             max_output_tokens=max_output_tokens,
+            max_summary_chars=max_summary_chars,
             max_transcript_chars=max_transcript_chars,
         )
 
@@ -1077,6 +1199,7 @@ class HawiAgent:
             
             message_metadata = dict(message_metadata) if message_metadata else None
             self._context.add_user_message(message, metadata=message_metadata)
+            self._refresh_context_usage_snapshot(model)
             await self._emit_event(
                 AgentMessageAddedEvent.create(
                     run_id=run_id,
@@ -1427,6 +1550,7 @@ class HawiAgent:
                 # Add assistant message to context
                 # tool_calls are now included in content as ToolCallPart items
                 self._context.add_assistant_message(content=response_content)
+                self._refresh_context_usage_snapshot(m)
                 inflight_assistant_message_added = True
 
                 # Emit event for assistant message added
@@ -1446,6 +1570,14 @@ class HawiAgent:
                 if not tool_calls:
                     if await self._drain_pending_inputs_to_context(run_id, event_bus):
                         continue
+                    if (
+                        state.last_auto_compact_iteration != state.iteration
+                        and await self._maybe_auto_compact(m, state, event_bus)
+                    ):
+                        initial_message_count = min(
+                            initial_message_count,
+                            len(self._context.messages),
+                        )
                     # No tool calls, we're done
                     duration_ms = (time.time() - start_time) * 1000
                     await self._emit_event(
@@ -1684,6 +1816,7 @@ class HawiAgent:
 
         attempt = 0
         context_retry_attempt = 0
+        context_compact_attempted = False
         max_context_retries = 3
         while attempt <= max_retries:
             try:
@@ -1704,6 +1837,26 @@ class HawiAgent:
 
             except ModelError as e:
                 last_error = e
+
+                if isinstance(e, ContextLengthError) and not context_compact_attempted:
+                    context_compact_attempted = True
+                    if await self._force_auto_compact_for_context_length_error(
+                        model,
+                        state,
+                        event_bus,
+                        e,
+                    ):
+                        if event_bus:
+                            await event_bus.publish_async(
+                                ModelRetryEvent.create(
+                                    request_id=request_id,
+                                    error_type=e.error_type,
+                                    attempt=1,
+                                    max_retries=max_context_retries,
+                                    error_message=str(e),
+                                )
+                            )
+                        continue
 
                 if (
                     isinstance(e, ContextLengthError)

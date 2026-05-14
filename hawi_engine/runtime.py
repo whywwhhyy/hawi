@@ -17,6 +17,7 @@ from hawi.events import Event
 from hawi.models import model_registry
 from hawi.session import SessionLockedError, SessionManager
 from hawi.tool import ToolParameterInjection
+from hawi.utils.debug import debug_assert
 
 from .blob import BlobStore
 from .blob.commands import dispatch_blob_command
@@ -1003,12 +1004,16 @@ class CoreRuntime:
         if self._max_context_tokens is not None:
             model_overrides["max_context_tokens"] = self._max_context_tokens
         model = model_registry.create_model(model_name, **model_overrides)
-        auto_compact = None
-        if self._max_context_tokens is not None:
-            auto_compact = AutoCompactConfig(
-                enabled=True,
-                max_context_tokens=self._max_context_tokens,
-            )
+        auto_compact = AutoCompactConfig(
+            enabled=True,
+            max_context_tokens=self._explicit_context_limit_for_model(model),
+        )
+        # Debug assert: the GUI/core runtime should never rely on HawiAgent's
+        # implicit auto-compact default.
+        debug_assert(
+            auto_compact is not None,
+            "CoreRuntime must pass an explicit AutoCompactConfig to HawiAgent",
+        )
         plugins = await self._create_plugins(selected_plugins, plugin_configs)
         agent = HawiAgent(
             model=model,
@@ -1027,6 +1032,16 @@ class CoreRuntime:
         agent.event_bus.subscribe(self._on_hawi_event)
         runner_task = asyncio.create_task(runner.run_forever(poll_interval=0.1))
         return runner, runner_task, plugins
+
+    def _explicit_context_limit_for_model(self, model: Any) -> int:
+        if self._max_context_tokens is not None:
+            return self._max_context_tokens
+        getter = getattr(model, "get_max_context_tokens", None)
+        if callable(getter):
+            value = getter()
+            if isinstance(value, int) and value > 0:
+                return value
+        return AutoCompactConfig().max_context_tokens
 
     def _apply_extra_tool_parameters(self, agent: HawiAgent) -> None:
         for parameter in self._extra_tool_parameters:

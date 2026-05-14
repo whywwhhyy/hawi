@@ -694,6 +694,27 @@ def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
     assert "- priority (integer, required): Priority from 1 to 5" in description
 
 
+@pytest.mark.asyncio
+async def test_runtime_passes_explicit_auto_compact_config_from_model_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = MagicMock()
+    model.get_max_context_tokens.return_value = 64_000
+    monkeypatch.setattr(model_registry, "create_model", lambda *args, **kwargs: model)
+    runtime = CoreRuntime(model_name="test-model", token=None)
+
+    runner, runner_task, _ = await runtime._build_runner(
+        model_name="test-model",
+        selected_plugins=[],
+        plugin_configs={},
+        context_to_restore=None,
+    )
+    try:
+        assert runner.agent._auto_compact.max_context_tokens == 64_000
+    finally:
+        runner.stop()
+        runner_task.cancel()
+        await asyncio.gather(runner_task, return_exceptions=True)
+
+
 def test_load_model_configs_can_skip_user_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"

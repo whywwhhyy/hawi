@@ -65,6 +65,18 @@ describe("core event reducer", () => {
           role: "error",
           content: [{ type: "text", text: "Anthropic authentication failed" }],
           metadata: { display_message_type: "model.error" }
+        },
+        {
+          run_id: "run-1",
+          role: "event",
+          content: [{ type: "text", text: "Compressing context..." }],
+          metadata: { display_message_type: "context_compaction", event_type: "agent.compact_start" }
+        },
+        {
+          run_id: "run-1",
+          role: "event",
+          content: [{ type: "text", text: "Context compacted" }],
+          metadata: { display_message_type: "context_compaction", event_type: "agent.compact_stop" }
         }
       ],
       context_usage: {
@@ -75,13 +87,14 @@ describe("core event reducer", () => {
       }
     }));
 
-    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent", "system", "error"]);
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent", "system", "error", "compact"]);
     expect(state.nodes[0].content).toBe("hello");
     expect(state.nodes[1]).toMatchObject({ content: "thinking", complete: true });
     expect(state.nodes[2]).toMatchObject({ content: "answer", complete: true });
     expect(state.nodes[3].content).toContain("模型重试 1/10");
     expect(state.nodes[4].content).toBe("Anthropic authentication failed");
-    expect(state.sessionMessageCount).toBe(4);
+    expect(state.nodes[5]).toMatchObject({ content: "Context compacted", complete: true });
+    expect(state.sessionMessageCount).toBe(6);
     expect(state.contextUsage).toEqual({
       usedTokens: 42,
       maxContextTokens: 1000,
@@ -609,6 +622,114 @@ describe("core event reducer", () => {
     }));
 
     expect(state.contextUsage).toEqual({ usedTokens: 900, maxContextTokens: 1000, ratio: 0.9, source: "provider_usage" });
+  });
+
+  it("keeps provider label while accepting higher context growth estimates", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      context_tokens: 900,
+      max_context_tokens: 1000,
+      context_ratio: 0.9,
+      context_source: "provider_usage"
+    }));
+    state = reduceCoreEvent(state, frame("core.status", {
+      runner_state: "RUNNING",
+      agent_state: "RUNNING",
+      queue_lengths: { urgent: 0, high_prio: 0, normal: 0 },
+      context_usage: {
+        used_tokens: 950,
+        max_context_tokens: 1000,
+        usage_ratio: 0.95,
+        source: "estimate"
+      }
+    }));
+
+    expect(state.contextUsage).toEqual({ usedTokens: 950, maxContextTokens: 1000, ratio: 0.95, source: "provider_usage" });
+  });
+
+  it("tracks active context compression for the status strip", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("agent.compact_start", {
+      run_id: "run-compact",
+      mode: "auto",
+      tokens_before: 1000,
+      message_count_before: 20
+    }, 100));
+
+    expect(state.contextCompression).toMatchObject({
+      active: true,
+      nodeId: state.nodes[0].id,
+      mode: "auto",
+      tokensBefore: 1000,
+      messageCountBefore: 20,
+      startedAt: 100000,
+      updatedAt: 100000
+    });
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0]).toMatchObject({
+      kind: "compact",
+      content: "Compressing context...",
+      complete: false,
+      streamStartedAt: 100000
+    });
+    expect(state.sessionMessageCount).toBe(1);
+
+    state = reduceCoreEvent(state, frame("agent.compact_stop", {
+      run_id: "run-compact",
+      mode: "auto",
+      status: "success",
+      tokens_before: 1000,
+      tokens_after: 250,
+      message_count_before: 20,
+      message_count_after: 5
+    }, 110));
+
+    expect(state.contextCompression).toMatchObject({
+      active: false,
+      mode: "auto",
+      status: "success",
+      tokensBefore: 1000,
+      tokensAfter: 250,
+      messageCountBefore: 20,
+      messageCountAfter: 5,
+      startedAt: 100000,
+      updatedAt: 110000
+    });
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0]).toMatchObject({
+      kind: "compact",
+      content: "Context compacted",
+      complete: true,
+      streamFinishedAt: 110000,
+      streamDurationMs: 10000
+    });
+    expect(state.sessionMessageCount).toBe(2);
+  });
+
+  it("clears active context compression when a run stops", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-compact-stop", user_content: "hi", queue: "normal" }, 20));
+    state = reduceCoreEvent(state, frame("agent.compact_start", {
+      run_id: "run-compact-stop",
+      mode: "auto",
+      tokens_before: 1000,
+      message_count_before: 20
+    }, 21));
+    state = reduceCoreEvent(state, frame("run.stop", {
+      run_id: "run-compact-stop",
+      stop_reason: "interrupted"
+    }, 22));
+
+    expect(state.contextCompression).toMatchObject({
+      active: false,
+      status: "interrupted",
+      updatedAt: 22000
+    });
+    expect(state.nodes.some((node) => (
+      node.kind === "compact"
+      && node.content === "Context compaction interrupted"
+      && node.complete === true
+    ))).toBe(true);
   });
 
   it("adds debug output as low-emphasis chat notes", () => {

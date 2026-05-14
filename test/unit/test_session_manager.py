@@ -24,6 +24,8 @@ from hawi.agent.runner.queue import MessageQueueManager
 from hawi.errors import DeniedError, ToolExecutionError
 from hawi.events import (
     AgentErrorEvent,
+    AgentCompactStartEvent,
+    AgentCompactStopEvent,
     AgentInterruptEvent,
     AgentMessageAddedEvent,
     EventBus,
@@ -843,6 +845,56 @@ class TestSessionManager:
             sd = layout.session_dir(session_root, sid)
             assert layout.context_path(sd).exists()
             manifest = json.loads(layout.manifest_path(sd).read_text())
+            assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
+        finally:
+            sm.detach()
+
+    def test_context_compaction_events_append_message_history(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        runner = _StubAgentRunner()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            agent.event_bus.publish(
+                AgentCompactStartEvent.create(
+                    run_id="r1",
+                    mode="auto",
+                    keep_last_messages=8,
+                    tokens_before=25_000,
+                    message_count_before=18,
+                )
+            )
+            agent.event_bus.publish(
+                AgentCompactStopEvent.create(
+                    run_id="r1",
+                    mode="auto",
+                    status="success",
+                    duration_ms=1234,
+                    tokens_before=25_000,
+                    tokens_after=8_000,
+                    message_count_before=18,
+                    message_count_after=7,
+                    replaced_message_count=12,
+                    kept_message_count=6,
+                )
+            )
+            sm._writer.wait_idle(timeout=2.0)
+
+            entries = sm.read_message_history(sid)
+            assert [entry["role"] for entry in entries] == ["event", "event"]
+            assert entries[0]["content"][0]["text"] == "Compressing context..."
+            assert entries[0]["metadata"]["event_type"] == "agent.compact_start"
+            assert entries[1]["content"][0]["text"] == "Context compacted"
+            assert entries[1]["metadata"]["event_type"] == "agent.compact_stop"
+            assert entries[1]["metadata"]["tokens_after"] == 8_000
+
+            manifest = json.loads(
+                layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
+            )
             assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
         finally:
             sm.detach()

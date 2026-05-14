@@ -78,6 +78,10 @@ class AgentRuntime:
         agent = self._owner
         content = self.interrupt_tool_result_content(reason)
         recovered = agent._context.add_missing_tool_results(content)
+        if recovered:
+            refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
+            if callable(refresher):
+                refresher()
         agent._last_interrupt_reason = None
         if not emit_events or not run_id:
             return
@@ -379,6 +383,9 @@ class AgentRuntime:
                 "materialized_as": "plain_user_message",
             }
             agent._context.add_user_message(pending.content, metadata=metadata)
+            refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
+            if callable(refresher):
+                refresher()
             await agent._emit_event(
                 AgentMessageAddedEvent.create(
                     run_id=run_id,
@@ -442,6 +449,9 @@ class AgentRuntime:
             cache_point=cache_point,
             cache_point_source=cache_point_source,
         )
+        refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
+        if callable(refresher):
+            refresher()
 
         if materialize_pending_steer:
             return self.materialize_pending_steer_for_tool_results([tool_call_id])
@@ -524,6 +534,10 @@ class AgentRuntime:
             materialized_messages.append(
                 MaterializedSteerMessage(content=cast(list[ContentPart], content), metadata=metadata)
             )
+        if materialized_messages:
+            refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
+            if callable(refresher):
+                refresher()
         return materialized_messages
 
     @staticmethod

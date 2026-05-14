@@ -183,6 +183,12 @@ button:disabled {
   color: var(--color-primary);
 }
 
+.context-status-spinner {
+  flex: 0 0 auto;
+  color: var(--color-primary);
+  animation: status-spin 0.9s linear infinite;
+}
+
 .context-status small {
   color: #69777d;
   font-size: 11px;
@@ -1518,6 +1524,20 @@ button:disabled {
 
 .run-divider span {
   white-space: nowrap;
+}
+
+.run-divider.context-compact {
+  color: #607479;
+}
+
+.run-divider.context-compact .live-spinner {
+  width: 16px;
+  height: 16px;
+  margin-right: -4px;
+}
+
+.run-divider.context-compact.active span {
+  color: #52656a;
 }
 
 .prompt-row label,
