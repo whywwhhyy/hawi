@@ -152,6 +152,7 @@ export default function App() {
   });
   const [sessionBusy, setSessionBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  const [debugMenuOpen, setDebugMenuOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -735,6 +736,34 @@ export default function App() {
         <button className="tool-button" title="切换模型" onClick={() => setModelDialogOpen(true)}>
           <Bot size={17} /> Model: {selectedModel}
         </button>
+        <div className="toolbar-menu">
+          <button
+            className={`tool-button ${debugMenuOpen ? "active" : ""}`}
+            title="菜单"
+            onClick={() => setDebugMenuOpen((v) => !v)}
+          >
+            <span style={{ letterSpacing: "1px", fontWeight: 700 }}>···</span>
+          </button>
+          {debugMenuOpen && (
+            <div className="menu-popover">
+              <label className="menu-item">
+                <input
+                  type="checkbox"
+                  checked={showDebug}
+                  onChange={(event) => {
+                    const next = { ...config, showDebug: event.target.checked };
+                    setConfig(next);
+                    void saveGlobalAndSet(next);
+                  }}
+                />
+                Debug 信息
+              </label>
+              <button className="menu-item" onClick={() => restartWith(config)}>
+                <RotateCcw size={15} /> 重启 Engine
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       <section className={`prompt-row ${systemPromptLocked ? "locked" : ""}`}>
@@ -786,24 +815,6 @@ export default function App() {
         />
       </section>
 
-      <section className="control-row">
-        <label className="debug-toggle">
-          <input
-            type="checkbox"
-            checked={showDebug}
-            onChange={(event) => {
-              const next = { ...config, showDebug: event.target.checked };
-              setConfig(next);
-              void saveGlobalAndSet(next);
-            }}
-          />
-          Debug
-        </label>
-        <button className="icon-button" title="重启 Core 进程并应用当前配置" onClick={() => restartWith(config)}>
-          <RotateCcw size={17} />
-        </button>
-      </section>
-
       <footer className="input-row">
         <textarea
           ref={inputRef}
@@ -824,7 +835,7 @@ export default function App() {
             }
           }}
         />
-        <button className="primary-button" onClick={submitInput}>
+        <button className="primary-button" disabled={!input.trim()} onClick={submitInput}>
           <Send size={18} /> 发送
         </button>
         {state.control.paused && state.control.resumable ? (
@@ -832,7 +843,11 @@ export default function App() {
             <Play size={16} /> 继续
           </button>
         ) : (
-          <button className="danger-button" onClick={() => sendCommand("stop", { reason: "user" })}>
+          <button
+            className="danger-button"
+            disabled={state.runnerState !== "RUNNING" && state.runnerState !== "INTERRUPTING"}
+            onClick={() => sendCommand("stop", { reason: "user" })}
+          >
             <Square size={16} /> 停止
           </button>
         )}
