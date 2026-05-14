@@ -194,7 +194,8 @@ class AgentExecutor:
                 return
             elif action == ErrorAction.ABORT:
                 raise
-            # CONTINUE - just finish
+            # CONTINUE — trigger pause to prevent automatic queue consumption
+            await self._runner._on_execution_error(e, message)
         finally:
             self._set_state(AgentRunnerState.IDLE)
             self._current_event_bus = None

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable, Literal
 
 from hawi.agent.agent import HawiAgent
@@ -109,6 +110,12 @@ class AgentRunner:
         # Result callback for multi-agent coordination
         self._result_callback: Callable[[str, AgentRunResult], None] | None = None
 
+        # Pause/control state
+        self._paused = False
+        self._pause_reason: str | None = None
+        self._paused_at: float | None = None
+        self._last_pause_error: str | None = None
+
         # Subscribe to agent events
         self._agent.event_bus.subscribe(self._on_agent_event)
 
@@ -198,21 +205,39 @@ class AgentRunner:
         Raises:
             AgentRunnerError: If enqueue fails
         """
+        # Determine intent from metadata
+        intent = (metadata or {}).get("intent", "legacy")
+
+        # Urgent: downgrade to stop with message (compatibility path)
         if queue == "urgent":
-            msg = self._queue_manager.enqueue_urgent(
-                content,
-                metadata,
-                event_bus=event_bus,
-            )
-            # Urgent: trigger immediate interruption
-            if not self._executor.is_idle:
-                try:
-                    asyncio.get_running_loop()
-                    asyncio.create_task(self._executor.interrupt("urgent"))
-                except RuntimeError:
-                    # No event loop running, will be handled on next loop iteration
-                    pass
-        elif queue == "high_prio":
+            try:
+                asyncio.get_running_loop()
+                asyncio.create_task(self.stop_execution(
+                    reason="urgent",
+                    message=content,
+                    pause=False,
+                    event_bus=event_bus,
+                    metadata=metadata,
+                ))
+            except RuntimeError:
+                # No event loop running; fall back to old urgent behavior
+                msg = self._queue_manager.enqueue_urgent(
+                    content, metadata, event_bus=event_bus,
+                )
+                if not self._executor.is_idle:
+                    try:
+                        asyncio.create_task(self._executor.interrupt("urgent"))
+                    except RuntimeError:
+                        pass
+                return msg.id
+            # Return a placeholder id; actual message id from stop()
+            return ""
+
+        # Resume intent: clear pause before enqueue
+        if intent in ("user_send", "resume") and self._paused:
+            self._resume_internal()
+
+        if queue == "high_prio":
             if not self._executor.is_idle:
                 merge_mode = self._resolve_steer_merge_mode(metadata)
                 msg_id = self._agent.steer(content, merge_mode=merge_mode)
@@ -437,6 +462,191 @@ class AgentRunner:
         except RuntimeError:
             pass
 
+    # === Pause / Resume Control ===
+
+    def is_paused(self) -> bool:
+        """Check if the runner is in paused state.
+
+        When paused, the runner does not automatically consume any queued
+        messages or pending steer inputs.
+        """
+        return self._paused
+
+    def pause(
+        self,
+        reason: str,
+        *,
+        error_message: str | None = None,
+    ) -> None:
+        """Pause the runner, stopping automatic queue consumption.
+
+        Args:
+            reason: Pause reason (e.g. "user_interrupt", "model_error")
+            error_message: Optional error description for display
+        """
+        self._paused = True
+        self._pause_reason = reason
+        self._paused_at = time.time()
+        self._last_pause_error = error_message
+
+    def resume(self) -> None:
+        """Resume the runner from paused state.
+
+        Only clears control state — does not send messages or start execution.
+        Use :meth:`submit_immediate_message` or :meth:`resume_with_prompt` to
+        both resume and enqueue a message.
+        """
+        self._resume_internal()
+
+    def _resume_internal(self) -> None:
+        """Internal: clear pause state without emitting events."""
+        self._paused = False
+        self._pause_reason = None
+        self._paused_at = None
+        self._last_pause_error = None
+
+    def control_snapshot(self) -> dict[str, Any]:
+        """Return current control state as a JSON-friendly dict."""
+        return {
+            "paused": self._paused,
+            "pause_reason": self._pause_reason,
+            "resumable": self._paused and not self._executor.is_running,
+            "paused_at": self._paused_at,
+            "last_error_message": self._last_pause_error,
+        }
+
+    def submit_immediate_message(
+        self,
+        content: str | list[ContentPart],
+        *,
+        intent: str = "user_send",
+        event_bus: EventBus | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Submit a message for immediate execution, clearing pause first.
+
+        This is the preferred way to send a user message or resume prompt.
+        It clears pause, enqueues with ``high_prio``, and returns the message ID.
+
+        Args:
+            content: Message content
+            intent: Message intent ("user_send", "resume", "stop_with_message")
+            event_bus: Optional event bus override
+            metadata: Optional metadata (intent is auto-injected)
+
+        Returns:
+            Message ID
+        """
+        # Clear pause first
+        self._resume_internal()
+
+        merged_metadata = dict(metadata or {})
+        merged_metadata.setdefault("intent", intent)
+        merged_metadata.setdefault("display_message_type", intent)
+
+        msg = self._queue_manager.enqueue_high_prio(
+            content,
+            merged_metadata,
+            event_bus=event_bus,
+        )
+        self._emit_enqueue_event(
+            message_id=msg.id,
+            queue_type="high_prio",
+            content=content,
+            event_bus=event_bus,
+        )
+        return msg.id
+
+    async def stop_execution(
+        self,
+        reason: str = "user",
+        *,
+        message: str | list[ContentPart] | None = None,
+        pause: bool | None = None,
+        event_bus: EventBus | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Stop current execution, with optional follow-up message.
+
+        Pure stop (``message=None``): Interrupts current run and pauses the
+        runner. Queued normal tasks are preserved but not automatically consumed.
+
+        Stop with message (``message is not None``): Interrupts current run,
+        does NOT pause (or pauses briefly and resumes), and submits the message
+        as ``stop_with_message`` intent.
+
+        Args:
+            reason: Reason for stopping ("user", "urgent")
+            message: Optional message to execute after stopping
+            pause: Force pause behavior. Default: True if message is None
+            event_bus: Optional event bus for the follow-up message
+            metadata: Optional metadata for the follow-up message
+
+        Returns:
+            Dict with keys:
+                - ``interrupted_tool_calls``: list[str]
+                - ``message_id``: str | None
+                - ``control``: dict from control_snapshot()
+        """
+        if pause is None:
+            pause = message is None
+
+        # Interrupt current execution
+        interrupted_tool_calls = await self._executor.interrupt(reason)
+
+        if message is not None:
+            # Stop with message: submit immediately
+            merged_metadata = dict(metadata or {})
+            merged_metadata.setdefault("intent", "stop_with_message")
+            msg_id = self.submit_immediate_message(
+                message,
+                intent="stop_with_message",
+                event_bus=event_bus,
+                metadata=merged_metadata,
+            )
+            return {
+                "interrupted_tool_calls": interrupted_tool_calls,
+                "message_id": msg_id,
+                "control": self.control_snapshot(),
+            }
+        else:
+            # Pure stop
+            if pause:
+                self.pause(
+                    "user_interrupt" if reason == "user" else reason,
+                    error_message=None,
+                )
+            return {
+                "interrupted_tool_calls": interrupted_tool_calls,
+                "message_id": None,
+                "control": self.control_snapshot(),
+            }
+
+    async def _on_execution_error(
+        self, error: Exception, message: QueuedMessage
+    ) -> None:
+        """Called by the executor when a non-recoverable error finishes a run.
+
+        Classifies the error and sets the appropriate pause state so the
+        runner does not automatically continue consuming the queue.
+        """
+        reason = self._classify_pause_reason(error)
+        self.pause(reason, error_message=str(error))
+
+    @staticmethod
+    def _classify_pause_reason(error: Exception) -> str:
+        """Classify an exception into a pause reason string."""
+        err_str = str(error).lower()
+        type_name = type(error).__name__.lower()
+        combined = f"{type_name} {err_str}"
+        if any(kw in combined for kw in ("connection", "timeout", "network", "econnrefused", "econnreset")):
+            return "network_error"
+        if any(kw in combined for kw in ("model", "api", "rate_limit", "token")):
+            return "model_error"
+        return "runtime_error"
+
+    # === Message execution ===
+
     async def _start_message_execution(self, msg: QueuedMessage) -> bool:
         """Emit dequeue event and hand the message to the executor."""
         queue_name = msg.queue_type.name.lower()
@@ -474,10 +684,14 @@ class AgentRunner:
         getter = getattr(self._agent, "has_pending_inputs", None)
         return callable(getter) and getter() is True
 
-    # Main loop
+    # === Main loop ===
 
     async def run_forever(self, poll_interval: float = 0.1) -> None:
         """Run runner in always-on mode.
+
+        When paused, the loop will not consume any queued messages or pending
+        steer inputs. Only ``resume()`` / ``submit_immediate_message()`` /
+        ``stop(message=...)`` can reactivate execution.
 
         Args:
             poll_interval: Interval between queue checks (seconds)
@@ -486,11 +700,15 @@ class AgentRunner:
 
         while self._running:
             try:
-                # Check urgent first (always process, even if busy)
+                # Paused: do NOT consume any queue or pending inputs
+                if self._paused:
+                    await asyncio.sleep(poll_interval)
+                    continue
+
+                # Check urgent first (legacy path, only if no event loop)
                 if self._queue_manager.has_urgent():
                     msg = self._queue_manager.dequeue_urgent()
                     if msg:
-                        # Interrupt current execution if any
                         if not self._executor.is_idle:
                             await self._executor.interrupt("urgent")
                         if await self._start_message_execution(msg):
@@ -531,14 +749,52 @@ class AgentRunner:
                     break
 
     def stop(self) -> None:
-        """Stop the runner loop."""
+        """Stop the runner loop (synchronous, backward compat).
+
+        Sets the ``_running`` flag so ``run_forever()`` exits on its next
+        iteration. Does not interrupt current execution.
+        """
         self._running = False
 
-    async def interrupt(self, reason: str = "user") -> list[str]:
-        """Interrupt current executor run without stopping runner loop."""
-        return await self._executor.interrupt(reason)
+    def _stop_loop(self) -> None:
+        """Stop the runner loop (internal alias)."""
+        self._running = False
 
-    # Multi-agent coordination
+    async def interrupt(
+        self,
+        reason: str = "user",
+        *,
+        pause: bool = False,
+        message: str | list[ContentPart] | None = None,
+    ) -> list[str]:
+        """Interrupt current executor run.
+
+        Args:
+            reason: Reason for interruption
+            pause: If True, enter paused state after interrupt (pure stop)
+            message: If provided, treat as stop-with-message
+
+        Returns:
+            List of interrupted tool call IDs
+
+        Note:
+            Prefer the higher-level :meth:`stop_execution` method. This is kept
+            for backward compatibility.
+        """
+        if message is not None:
+            result = await self.stop_execution(
+                reason=reason,
+                message=message,
+                pause=pause,
+            )
+            return result.get("interrupted_tool_calls", [])
+
+        interrupted = await self._executor.interrupt(reason)
+        if pause:
+            self.pause("user_interrupt" if reason == "user" else reason)
+        return interrupted
+
+    # === Multi-agent coordination ===
 
     async def receive_signal(self, signal: str, payload: Any) -> None:
         """Receive external control signal.
@@ -549,11 +805,15 @@ class AgentRunner:
         """
         if signal == "suspend":
             await self._executor.interrupt("signal")
+            self.pause("signal_suspend")
+        elif signal == "resume":
+            self._resume_internal()
         elif signal == "reset":
             self.clear_all_queues()
             await self._executor.interrupt("reset")
+            self._resume_internal()
 
-    # Convenience methods
+    # === Convenience methods ===
 
     def subscribe(
         self,

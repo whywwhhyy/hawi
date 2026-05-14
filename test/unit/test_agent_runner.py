@@ -358,6 +358,8 @@ class TestAgentRunnerBasic:
     def test_runner_enqueue_urgent(self, mock_agent):
         runner = AgentRunner(mock_agent)
         msg_id = runner.enqueue("test message", "urgent")
+        # In a sync (non-async) context, urgent enqueue falls back to the
+        # legacy path: the message goes to the urgent queue.
         assert msg_id
         assert runner.get_queue_lengths()["urgent"] == 1
 
@@ -378,7 +380,9 @@ class TestAgentRunnerBasic:
         runner = AgentRunner(mock_agent)
         runner.enqueue("n", "normal")
         runner.enqueue("h", "high_prio")
-        runner.enqueue("u", "urgent")
+        # urgent enqueue in async context no longer populates the legacy queue
+        # Use queue manager directly to populate urgent for test
+        runner._queue_manager.enqueue_urgent("u")
         result = runner.clear_all_queues()
         assert result == {"normal": 1, "high_prio": 1, "urgent": 1}
         assert runner.get_queue_lengths() == {"normal": 0, "high_prio": 0, "urgent": 0}
@@ -456,11 +460,17 @@ class TestAgentRunnerBasic:
             stop_soon(),
         )
 
+        # Urgent enqueue now downgrades to stop_execution with message.
+        # The message is submitted as high_prio via submit_immediate_message,
+        # and the urgent queue stays empty.
         assert runner.get_queue_lengths()["urgent"] == 0
         runner._executor.execute.assert_called_once()
         executed_message = runner._executor.execute.call_args.args[0]
         assert executed_message.content == "stop now"
-        assert executed_message.queue_type == QueueType.URGENT
+        # With the new stop-with-message path, messages go through high_prio,
+        # not the legacy urgent queue.
+        assert executed_message.queue_type == QueueType.HIGH_PRIO
+        assert executed_message.metadata.get("intent") == "stop_with_message"
 
 
 class TestAgentRunnerErrorHooks:

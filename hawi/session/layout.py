@@ -41,7 +41,7 @@ SUBAGENTS_DIRNAME = "subagents"
 
 # Top-level versions for migration handling.
 MANIFEST_VERSION = 1
-QUEUES_VERSION = 1
+QUEUES_VERSION = 2
 RUNTIME_VERSION = 1
 PLUGIN_FILE_VERSION = 1
 # Context already uses string "1.0" — keep that for backward compat with

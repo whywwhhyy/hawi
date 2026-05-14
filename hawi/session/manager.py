@@ -325,6 +325,15 @@ class SessionManager:
                         qm.rebind_event_bus(self._event_bus)
                     if "pending_steer_inputs" in queues_data:
                         self._agent.load_steer(queues_data["pending_steer_inputs"])
+                    # Restore runner control state (pause/resume) for v2+
+                    runner_control = queues_data.get("runner_control")
+                    if runner_control is not None and isinstance(runner_control, dict):
+                        if runner_control.get("paused") and hasattr(self._runner, "pause"):
+                            reason = runner_control.get("pause_reason", "session_restored")
+                            self._runner.pause(
+                                reason,
+                                error_message=runner_control.get("last_error_message"),
+                            )
                     loaded.append(layout.COMPONENT_QUEUES)
 
                 runtime_path = layout.runtime_path(session_dir)
@@ -624,7 +633,7 @@ class SessionManager:
             if qm is not None:
                 queues_payload["runner"] = qm.snapshot()
             queues_payload["pending_steer_inputs"] = self._agent.snapshot_steer()
-            queues_payload["pending_audit_tool_calls"] = [
+            queues_payload["pending_audit_tool_calls" if layout.QUEUES_VERSION >= 2 else "pending_audit_tool_calls"] = [
                 {
                     "tool_call_id": p.tool_call_id,
                     "tool_name": p.tool_name,
@@ -633,6 +642,9 @@ class SessionManager:
                 }
                 for p in self._agent.context.get_pending_tool_calls()
             ]
+            # Save runner control state (pause/resume) for v2+
+            if layout.QUEUES_VERSION >= 2 and self._runner is not None:
+                queues_payload["runner_control"] = self._runner.control_snapshot()
             snapshots[layout.COMPONENT_QUEUES] = queues_payload
 
         if layout.COMPONENT_RUNTIME in components:

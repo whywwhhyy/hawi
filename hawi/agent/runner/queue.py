@@ -180,15 +180,173 @@ class MessageQueueManager:
             ],
         }
 
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: str | list[ContentPart] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Update an unexecuted queued message's content and/or metadata.
+
+        Only messages in the normal queue (queue tasks) can be updated.
+        Already-executed or current messages cannot be modified.
+
+        Args:
+            message_id: Message ID to update
+            content: New content (None = keep existing)
+            metadata: New metadata (None = keep existing)
+
+        Returns:
+            True if message was found and updated
+        """
+        if self._pending_urgent and self._pending_urgent.id == message_id:
+            return False  # urgent messages are transient, don't update
+        for msg in self._high_prio_queue:
+            if msg.id == message_id:
+                return False  # high_prio are steer, don't update
+        for msg in self._normal_queue:
+            if msg.id == message_id:
+                if content is not None:
+                    msg.content = content
+                if metadata is not None:
+                    msg.metadata = metadata
+                return True
+        return False
+
+    def reorder_queue(
+        self,
+        queue_type: QueueType,
+        message_ids: list[str],
+    ) -> list[str]:
+        """Reorder a queue by message IDs.
+
+        ``message_ids`` must contain *all* current message IDs for the given
+        queue, preserving or changing their relative order. Unknown or missing
+        IDs cause a ``ValueError``.
+
+        Args:
+            queue_type: Which queue to reorder (only NORMAL supported)
+            message_ids: Desired order of message IDs
+
+        Returns:
+            The new message ID order
+
+        Raises:
+            ValueError: If message_ids don't match existing queue contents
+        """
+        if queue_type == QueueType.NORMAL:
+            current = self._normal_queue
+        elif queue_type == QueueType.HIGH_PRIO:
+            current = self._high_prio_queue
+        else:
+            raise ValueError(f"Reordering {queue_type.name} is not supported")
+
+        if len(message_ids) != len(current):
+            raise ValueError(
+                f"Expected {len(current)} message IDs, got {len(message_ids)}"
+            )
+
+        current_ids = {m.id for m in current}
+        given_ids = set(message_ids)
+        if current_ids != given_ids:
+            missing = current_ids - given_ids
+            unknown = given_ids - current_ids
+            parts = []
+            if missing:
+                parts.append(f"missing: {sorted(missing)}")
+            if unknown:
+                parts.append(f"unknown: {sorted(unknown)}")
+            raise ValueError(f"Message ID mismatch: {'; '.join(parts)}")
+
+        # Build a lookup and reorder
+        lookup = {m.id: m for m in current}
+        current.clear()
+        for mid in message_ids:
+            current.append(lookup[mid])
+
+        return list(message_ids)
+
+    def move_message(
+        self,
+        message_id: str,
+        *,
+        before_id: str | None = None,
+        after_id: str | None = None,
+        index: int | None = None,
+    ) -> bool:
+        """Move a single message to a new position within its queue.
+
+        Exactly one of ``before_id``, ``after_id``, or ``index`` must be given.
+
+        Args:
+            message_id: Message ID to move
+            before_id: Move before this message ID
+            after_id: Move after this message ID
+            index: Move to this 0-based index
+
+        Returns:
+            True if move succeeded
+        """
+        # Find the message in normal queue (only normal supports moves)
+        target_msg = None
+        for msg in self._normal_queue:
+            if msg.id == message_id:
+                target_msg = msg
+                break
+        if target_msg is None:
+            return False
+
+        # Remove from current position
+        self._normal_queue.remove(target_msg)
+
+        if index is not None:
+            # Clamp to valid range
+            index = max(0, min(index, len(self._normal_queue)))
+            self._normal_queue.insert(index, target_msg)
+        elif before_id is not None:
+            for i, msg in enumerate(self._normal_queue):
+                if msg.id == before_id:
+                    self._normal_queue.insert(i, target_msg)
+                    break
+            else:
+                # before_id not found, append
+                self._normal_queue.append(target_msg)
+        elif after_id is not None:
+            for i, msg in enumerate(self._normal_queue):
+                if msg.id == after_id:
+                    self._normal_queue.insert(i + 1, target_msg)
+                    break
+            else:
+                self._normal_queue.append(target_msg)
+        else:
+            raise ValueError("One of before_id, after_id, or index is required")
+
+        return True
+
     @staticmethod
     def _message_snapshot(msg: QueuedMessage) -> QueueMessageSnapshot:
-        return {
+        snapshot: QueueMessageSnapshot = {
             "id": msg.id,
             "queue": msg.queue_type.name.lower(),
             "content_preview": msg.get_content_preview(240),
             "created_at": msg.created_at,
             "metadata": dict(msg.metadata),
         }
+        # Include full content so GUI can edit queue tasks
+        if isinstance(msg.content, str):
+            snapshot["content"] = msg.content
+        else:
+            # For content parts, only include text parts
+            text_parts = [
+                p for p in msg.content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            if text_parts and len(text_parts) == 1:
+                snapshot["content"] = text_parts[0].get("text", "")
+            else:
+                snapshot["content_preview"] = msg.get_content_preview(240)
+        return snapshot
 
     def remove_message(self, message_id: str) -> bool:
         if self._pending_urgent and self._pending_urgent.id == message_id:
