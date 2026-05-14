@@ -37,6 +37,7 @@ interface FakeRecord {
   launchProfile: SessionLaunchProfile;
   loadedAt: number;
   lastFinishedAt?: number;
+  hasVisibleMessages: boolean;
   agentState: string;
   runnerState: string;
   suppressEvents: boolean;
@@ -47,6 +48,7 @@ interface ManagerInternals {
   loaded: Map<string, FakeRecord>;
   currentSessionId: string | null;
   handleEngineEmit(record: FakeRecord, channel: string, payload: unknown): void;
+  emitSessionRuntimeStatus(sessionId: string): void;
   enforceLoadedLimit(): Promise<void>;
   sessionListFrame(): Promise<CoreFrame>;
 }
@@ -124,6 +126,42 @@ describe("SessionEngineManager", () => {
         payload: { message: "hello", session_id: "session-a" }
       }
     });
+  });
+
+  it("reports empty loaded sessions as not visibly materialized", () => {
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const manager = makeManager(events);
+    const internals = manager as unknown as ManagerInternals;
+    const record = fakeRecord("session-empty", 1);
+    internals.loaded.set(record.sessionId, record);
+    internals.currentSessionId = record.sessionId;
+
+    internals.emitSessionRuntimeStatus(record.sessionId);
+
+    const status = events[0].payload as CoreFrame;
+    expect(status.type).toBe("gui.session_status");
+    expect((status.payload as Record<string, unknown>).has_visible_messages).toBe(false);
+  });
+
+  it("reports sessions as visible after the first run starts", () => {
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const manager = makeManager(events);
+    const internals = manager as unknown as ManagerInternals;
+    const record = fakeRecord("session-new", 1);
+    internals.loaded.set(record.sessionId, record);
+
+    internals.handleEngineEmit(record, "core:event", {
+      version: VERSION,
+      type: "run.start",
+      payload: { run_id: "run-1", user_content: "hello", queue: "normal" }
+    });
+
+    const status = events.find((event) => (
+      event.channel === "core:event"
+      && (event.payload as CoreFrame).type === "gui.session_status"
+    ))?.payload as CoreFrame | undefined;
+    expect(status?.type).toBe("gui.session_status");
+    expect((status?.payload as Record<string, unknown> | undefined)?.has_visible_messages).toBe(true);
   });
 
   it("routes commands to the targeted loaded session", async () => {
@@ -237,6 +275,42 @@ describe("SessionEngineManager", () => {
     expect(saved?.load_state).toBe("loaded");
     expect(saved?.gui_launch_profile).toMatchObject({ modelName: "kimi" });
   });
+
+  it("omits loaded sessions that have not started a conversation", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const empty = fakeRecord("session-empty", 1);
+    const active = fakeRecord("session-active", 2);
+    active.hasVisibleMessages = true;
+    internals.currentSessionId = empty.sessionId;
+    internals.loaded.set(empty.sessionId, empty);
+    internals.loaded.set(active.sessionId, active);
+
+    const frame = await internals.sessionListFrame();
+    const sessions = (frame.payload as Record<string, unknown>).sessions as Array<Record<string, unknown>>;
+
+    expect(sessions.map((session) => session.session_id)).toEqual(["session-active"]);
+    expect((frame.payload as Record<string, unknown>).current_session_id).toBe("session-empty");
+  });
+
+  it("shows a new loaded session after the first user message starts", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const record = fakeRecord("session-new", 1);
+    internals.currentSessionId = record.sessionId;
+    internals.loaded.set(record.sessionId, record);
+
+    internals.handleEngineEmit(record, "core:event", {
+      version: VERSION,
+      type: "run.start",
+      payload: { run_id: "run-1", user_content: "hello", queue: "normal" }
+    });
+
+    const frame = await internals.sessionListFrame();
+    const sessions = (frame.payload as Record<string, unknown>).sessions as Array<Record<string, unknown>>;
+
+    expect(sessions.map((session) => session.session_id)).toContain("session-new");
+  });
 });
 
 function makeManager(events: Array<{ channel: string; payload: unknown }>): SessionEngineManager {
@@ -263,6 +337,7 @@ function fakeRecord(
     launchProfile,
     loadedAt: index * 1000,
     lastFinishedAt: undefined,
+    hasVisibleMessages: false,
     agentState: "IDLE",
     runnerState: "IDLE",
     suppressEvents: false,

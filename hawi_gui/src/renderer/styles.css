@@ -1019,11 +1019,21 @@ button:disabled {
   border-radius: 4px;
   background: #ffffff;
   color: #526168;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-subject.purpose {
+  max-width: 360px;
+  background: #f7faf9;
+  color: #4c5b61;
+  font-family: inherit;
+}
+
+.tool-subject.path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .tool-actions {

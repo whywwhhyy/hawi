@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt } from "./App";
+import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -114,6 +114,26 @@ describe("session runtime display helpers", () => {
 
     expect(states["session-a"].nodes[0].content).toBe("hello a");
     expect(states["session-b"].nodes[0].content).toBe("hello b");
+  });
+
+  it("does not create a session-list item from empty runtime status", () => {
+    const sessions = upsertSessionRuntime([], "session-empty", {
+      load_state: "loaded",
+      loaded_at: 1000,
+      last_finished_at: undefined
+    });
+
+    expect(sessions).toEqual([]);
+  });
+
+  it("creates a session-list item once runtime status is visibly materialized", () => {
+    const sessions = upsertSessionRuntime([], "session-active", {
+      load_state: "running",
+      loaded_at: 1000,
+      last_finished_at: undefined
+    }, { createIfMissing: true });
+
+    expect(sessions.map((session) => session.session_id)).toEqual(["session-active"]);
   });
 });
 

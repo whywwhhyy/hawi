@@ -22,6 +22,7 @@ interface EngineRecord {
   launchProfile: SessionLaunchProfile;
   loadedAt: number;
   lastFinishedAt?: number;
+  hasVisibleMessages: boolean;
   agentState: string;
   runnerState: string;
   suppressEvents: boolean;
@@ -236,6 +237,7 @@ export class SessionEngineManager {
     record.sessionId = forkedSessionId;
     record.suppressEvents = false;
     record.loadedAt = Date.now();
+    record.hasVisibleMessages = true;
     this.loaded.set(forkedSessionId, record);
     this.currentSessionId = forkedSessionId;
     this.emitSessionRuntimeStatus(forkedSessionId);
@@ -349,6 +351,7 @@ export class SessionEngineManager {
       core,
       launchProfile,
       loadedAt: Date.now(),
+      hasVisibleMessages: false,
       agentState: "IDLE",
       runnerState: "IDLE",
       suppressEvents: Boolean(options.suppressEvents),
@@ -442,6 +445,7 @@ export class SessionEngineManager {
       record.runnerState = String(payload.runner_state ?? record.runnerState);
     } else if (frame.type === "run.start") {
       record.agentState = "RUNNING";
+      record.hasVisibleMessages = true;
     } else if (frame.type === "run.stop") {
       record.agentState = "IDLE";
       record.runnerState = "IDLE";
@@ -461,6 +465,9 @@ export class SessionEngineManager {
     }
     for (const record of this.loaded.values()) {
       const existing = byId.get(record.sessionId);
+      if (!existing && !record.hasVisibleMessages) {
+        continue;
+      }
       byId.set(record.sessionId, {
         session_id: record.sessionId,
         name: existing?.name || record.sessionId,
@@ -561,6 +568,7 @@ export class SessionEngineManager {
         load_state: overrideState ?? (record ? loadStateForRecord(record) : "unloaded"),
         loaded_at: record?.loadedAt,
         last_finished_at: record?.lastFinishedAt,
+        has_visible_messages: record?.hasVisibleMessages ?? false,
         current_session_id: this.currentSessionId,
         running_session_count: this.runningSessionCount(),
         loaded_session_count: this.loaded.size,

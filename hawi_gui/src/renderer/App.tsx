@@ -285,6 +285,8 @@ export default function App() {
       load_state: loadState,
       loaded_at: optionalPayloadNumber(payload.loaded_at),
       last_finished_at: optionalPayloadNumber(payload.last_finished_at)
+    }, {
+      createIfMissing: payload.has_visible_messages === true
     }));
   }
 
@@ -1353,8 +1355,11 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
               receivingTitle="正在接收工具调用"
             />
           </span>
-          {presentation.subject && <span className="tool-subject">{presentation.subject}</span>}
-          {tool.description && <span className="tool-description">{tool.description}</span>}
+          {presentation.detail && (
+            <span className={`tool-subject ${presentation.detailKind}`}>
+              {presentation.detail}
+            </span>
+          )}
         </span>
         <span className="tool-actions">
           <strong>{running ? "running" : tool.status}</strong>
@@ -2251,13 +2256,17 @@ function frameSessionId(frame: CoreFrame): string | null {
   return framePayload(frame) ? optionalPayloadString(framePayload(frame)?.session_id) : null;
 }
 
-function upsertSessionRuntime(
+export function upsertSessionRuntime(
   sessions: SessionMetaPayload[],
   sessionId: string,
-  patch: Pick<SessionMetaPayload, "load_state" | "loaded_at" | "last_finished_at">
+  patch: Pick<SessionMetaPayload, "load_state" | "loaded_at" | "last_finished_at">,
+  options: { createIfMissing?: boolean } = {}
 ): SessionMetaPayload[] {
   const index = sessions.findIndex((session) => session.session_id === sessionId);
   if (index < 0) {
+    if (!options.createIfMissing) {
+      return sessions;
+    }
     return [
       {
         session_id: sessionId,
@@ -2384,17 +2393,20 @@ function labelForKind(kind: string): string {
   return kind;
 }
 
-function toolPresentation(tool: ToolState): { label: string; subject?: string } {
+function toolPresentation(tool: ToolState): { label: string; detail?: string; detailKind: "purpose" | "path" } {
   const kind = filesystemToolKind(tool.name);
   const label = kind ? filesystemToolLabels[kind] : tool.name;
   const args = isRecord(tool.arguments) ? tool.arguments : undefined;
-  const subject = args
+  const pathDetail = args
     ? optionalRecordString(args.file_path)
       ?? optionalRecordString(args.path)
       ?? optionalRecordString(args.directory)
       ?? optionalRecordString(args.pattern)
     : undefined;
-  return { label, subject };
+  if (tool.description) {
+    return { label, detail: tool.description, detailKind: "purpose" };
+  }
+  return { label, detail: pathDetail, detailKind: "path" };
 }
 
 const filesystemToolLabels: Record<string, string> = {
