@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
@@ -139,7 +139,6 @@ export default function App() {
   const [config, setConfig] = useState<PersistedConfig | null>(null);
   const [statesBySession, dispatchSessionState] = useReducer(reduceSessionStates, {});
   const [input, setInput] = useState("");
-  const [queue, setQueue] = useState<QueueKind>("high_prio");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
   const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
@@ -573,7 +572,7 @@ export default function App() {
       return;
     }
     setInput("");
-    await sendCommand("enqueue", { content: text, queue, metadata: {} });
+    await sendCommand("enqueue", { content: text, queue: "high_prio", metadata: { intent: "user_send", source: "gui_main_input" } });
   }
 
   function startInputComposition() {
@@ -788,16 +787,6 @@ export default function App() {
       </section>
 
       <section className="control-row">
-        <span className="label">优先级:</span>
-        {(["normal", "high_prio", "urgent"] as QueueKind[]).map((key) => (
-          <button
-            key={key}
-            className={`segment ${queue === key ? "active" : ""}`}
-            onClick={() => setQueue(key)}
-          >
-            {queueLabels[key]}
-          </button>
-        ))}
         <label className="debug-toggle">
           <input
             type="checkbox"
@@ -833,18 +822,20 @@ export default function App() {
               void submitInput();
               return;
             }
-            if (event.key === "Tab" && event.shiftKey) {
-              event.preventDefault();
-              setQueue(queue === "normal" ? "high_prio" : queue === "high_prio" ? "urgent" : "normal");
-            }
           }}
         />
         <button className="primary-button" onClick={submitInput}>
           <Send size={18} /> 发送
         </button>
-        <button className="danger-button" onClick={() => sendCommand("interrupt", { reason: "user" })}>
-          <Square size={16} /> 停止
-        </button>
+        {state.control.paused && state.control.resumable ? (
+          <button className="primary-button" onClick={() => sendCommand("resume", {})}>
+            <Play size={16} /> 继续
+          </button>
+        ) : (
+          <button className="danger-button" onClick={() => sendCommand("stop", { reason: "user" })}>
+            <Square size={16} /> 停止
+          </button>
+        )}
       </footer>
 
       {modelDialogOpen && (
