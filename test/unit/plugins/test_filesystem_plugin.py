@@ -590,3 +590,116 @@ class TestFileSystemPlugin:
         assert result.success is True
         matches = result.output["matches"]
         assert any("x.py" in m for m in matches)
+
+    def test_read_file_structure_python(self, plugin, temp_dir):
+        """read_file_structure extracts functions and classes from Python files."""
+        file_path = os.path.join(temp_dir, "sample.py")
+        content = "\n".join([
+            "import os",
+            "",
+            "def hello(name):",
+            "    print(f'Hello {name}')",
+            "",
+            "class Calculator:",
+            "    def add(self, a, b):",
+            "        return a + b",
+            "",
+            "async def fetch_data(url):",
+            "    pass",
+        ])
+        with open(file_path, "w") as f:
+            f.write(content)
+
+        result = plugin.read_file(file_path, mode="structure")
+        assert result.success is True
+        assert result.output["type"] == "structure"
+        assert result.output["language"] == "python"
+        assert result.output["numSymbols"] == 4
+
+        # Check symbol types and names
+        symbols = result.output["symbols"]
+        assert symbols[0]["type"] == "function"
+        assert symbols[0]["name"] == "hello"
+        assert symbols[0]["line"] == 3  # 1-based
+
+        assert symbols[1]["type"] == "class"
+        assert symbols[1]["name"] == "Calculator"
+
+        assert symbols[2]["type"] == "function"
+        assert symbols[2]["name"] == "add"  # Nested method within class
+
+        assert symbols[3]["type"] == "function"
+        assert symbols[3]["name"] == "fetch_data"
+
+    def test_read_file_structure_file_not_found(self, plugin, temp_dir):
+        """read_file_structure fails for missing files."""
+        result = plugin.read_file(os.path.join(temp_dir, "missing.py"), mode="structure")
+        assert result.success is False
+        assert "File not found" in result.error
+
+    def test_read_file_structure_binary(self, plugin, temp_dir):
+        """read_file_structure fails for binary files."""
+        file_path = os.path.join(temp_dir, "data.bin")
+        with open(file_path, "wb") as f:
+            f.write(b"\x00\x01\x02\xff")
+        result = plugin.read_file(file_path, mode="structure")
+        assert result.success is False
+        assert "binary" in result.error.lower()
+
+    def test_read_file_structure_markdown_sections(self, plugin, temp_dir):
+        """read_file_structure should recognize Markdown headings."""
+        file_path = os.path.join(temp_dir, "doc.md")
+        content = "\n".join([
+            "# Title",
+            "Some text",
+            "## Section 1",
+            "Content here",
+            "### Sub-section",
+            "More content",
+        ])
+        with open(file_path, "w") as f:
+            f.write(content)
+
+        result = plugin.read_file(file_path, mode="structure")
+        assert result.success is True
+        assert result.output["numSymbols"] == 3
+
+        symbols = result.output["symbols"]
+        assert symbols[0]["type"] == "section"
+        assert "Title" in symbols[0]["name"]
+        assert symbols[1]["type"] == "section"
+        assert "Section 1" in symbols[1]["name"]
+
+    def test_read_file_structure_empty_file(self, plugin, temp_dir):
+        """read_file_structure returns empty symbols for empty file."""
+        file_path = os.path.join(temp_dir, "empty.py")
+        with open(file_path, "w") as f:
+            f.write("")
+
+        result = plugin.read_file(file_path, mode="structure")
+        assert result.success is True
+        assert result.output["numSymbols"] == 0
+
+    def test_read_file_language_header(self, plugin, temp_dir):
+        """read_file includes language in header for recognized languages."""
+        file_path = os.path.join(temp_dir, "script.py")
+        with open(file_path, "w") as f:
+            f.write("print('hello')\n")
+
+        result = plugin.read_file(file_path)
+        assert result.success is True
+        content = result.output["file"]["content"]
+        # Header should contain language annotation
+        assert "language: python" in content or "python" in content
+
+    def test_read_file_no_line_numbers_fenced(self, plugin, temp_dir):
+        """read_file with show_line_numbers=False wraps content in code fence."""
+        file_path = os.path.join(temp_dir, "code.py")
+        with open(file_path, "w") as f:
+            f.write("def foo():\n    pass\n")
+
+        result = plugin.read_file(file_path, show_line_numbers=False)
+        assert result.success is True
+        content = result.output["file"]["content"]
+        # Should be wrapped in python fenced code block after language header
+        assert "```python" in content

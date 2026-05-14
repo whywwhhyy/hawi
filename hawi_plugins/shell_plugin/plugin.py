@@ -67,7 +67,7 @@ class ShellPlugin(HawiPlugin):
     def gui_default_config(cls) -> dict:
         return {}
 
-    @tool
+    @tool(name="run_shell")
     def run_shell(self, command: str, notify_timeout: float = DEFAULT_NOTIFY_TIMEOUT_SECONDS) -> ToolResult:
         """
         运行 shell 命令。
@@ -130,7 +130,7 @@ class ShellPlugin(HawiPlugin):
         except Exception as e:
             return ToolResult(success=False, error=f"Error running command: {type(e).__name__}: {e}")
 
-    @tool
+    @tool(name="shell_control")
     def shell_control(
         self,
         command_id: str,

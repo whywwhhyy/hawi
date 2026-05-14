@@ -108,7 +108,7 @@ class SkillsPlugin(HawiPlugin):
             "text": f"\n\n{skills_list_str}\n",
         })
 
-    @tool
+    @tool(name="use_skill")
     def use_skill(self, name: str) -> str:
         """
         Load a skill's instructions into the context.

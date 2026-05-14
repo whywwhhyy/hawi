@@ -191,13 +191,13 @@
     - [x] ShellPlugin 独立负责 terminal/shell command
     - [x] GUI/runtime 已能分别选择 `skills` 与 `shell`
 
-- [ ] filesystem plugin:
+- [x] filesystem plugin:
     - [x] `read_file` 已返回 `language` 元数据
     - [x] 已有基于文件名/扩展名的基础 language detection
-    - [ ] `read_file` 增加语言相关的高亮/标注能力
-    - [ ] 评估是否需要和 Claude Code 一样补充更完整的 language detection 策略
-    - [ ] 对超大文件提供结构化分页、折叠、symbol/section 级读取
-    - [ ] 给 grep/glob/read/edit 补充更完整的工具说明与正反示例
+    - [x] `read_file` 增加语言相关的高亮/标注能力
+    - [x] 评估是否需要和 Claude Code 一样补充更完整的 language detection 策略
+    - [x] 对超大文件提供结构化分页、折叠、symbol/section 级读取
+    - [x] 给 grep/glob/read/edit 补充更完整的工具说明与正反示例
 
 - [ ] 模型消息层流式工具调用与音频降级收敛
     - [x] `ToolCallPart` 明确为完整工具调用表示，流式参数片段使用 `DeltaToolCallPart.arguments_delta`

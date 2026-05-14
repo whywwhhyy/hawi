@@ -128,7 +128,7 @@ class TestShellPlugin:
         assert result.error == "Unknown shell command id: shell-missing"
 
     def test_run_shell_description_explains_notify_timeout(self, plugin):
-        run_shell_tool = next(tool for tool in plugin.tools if tool.name.endswith("__run_shell"))
+        run_shell_tool = next(tool for tool in plugin.tools if tool.name == "run_shell")
 
         assert "notify_timeout" in run_shell_tool.description
         assert "前台等待命令完成并通知 agent 的秒数" in run_shell_tool.description
@@ -136,14 +136,14 @@ class TestShellPlugin:
         assert "shell_control" in run_shell_tool.description
 
     def test_run_shell_schema_uses_notify_timeout_parameter(self, plugin):
-        run_shell_tool = next(tool for tool in plugin.tools if tool.name.endswith("__run_shell"))
+        run_shell_tool = next(tool for tool in plugin.tools if tool.name == "run_shell")
         properties = run_shell_tool.parameters_schema["properties"]
 
         assert "notify_timeout" in properties
         assert "timeout" not in properties
 
     def test_shell_control_schema_uses_notify_timeout_parameter(self, plugin):
-        shell_control_tool = next(tool for tool in plugin.tools if tool.name.endswith("__shell_control"))
+        shell_control_tool = next(tool for tool in plugin.tools if tool.name == "shell_control")
         properties = shell_control_tool.parameters_schema["properties"]
 
         assert "notify_timeout" in properties
