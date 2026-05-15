@@ -143,6 +143,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
+  const [contextCompactDialogOpen, setContextCompactDialogOpen] = useState(false);
   const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
@@ -157,6 +158,7 @@ export default function App() {
     maxLoaded: 5
   });
   const [sessionBusy, setSessionBusy] = useState(false);
+  const [contextCompactBusy, setContextCompactBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -777,6 +779,24 @@ export default function App() {
     await sendCommand("clear_context", {});
   }
 
+  async function compactContextManually() {
+    if (contextCompactBusy) return;
+    setContextCompactBusy(true);
+    try {
+      const frame = await sendCommand("compact_context", {});
+      if (!frame) return;
+      setContextCompactDialogOpen(false);
+      applySessionHistoryFromFrame(frame);
+      const status = optionalPayloadString(framePayload(frame)?.status);
+      if (status === "skipped") {
+        dispatch(metaFrame("没有可压缩的旧上下文"));
+      }
+      await refreshRuntimeStatus();
+    } finally {
+      setContextCompactBusy(false);
+    }
+  }
+
   function applySystemPrompt(nextConfig: PersistedConfig) {
     pendingSystemPromptConfigRef.current = nextConfig;
     if (applyingSystemPromptRef.current) return;
@@ -895,7 +915,13 @@ export default function App() {
             onTaskMove={moveQueueTask}
             onTaskClear={clearNormalQueue}
           />
-          <ContextUsageCell usage={state.contextUsage} compression={state.contextCompression} />
+          <ContextUsageCell
+            usage={state.contextUsage}
+            compression={state.contextCompression}
+            busy={contextCompactBusy}
+            disabled={!coreRunning || state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING"}
+            onRequestCompact={() => setContextCompactDialogOpen(true)}
+          />
           <SessionStatusCell
             messageCount={state.sessionMessageCount}
             runningCount={sessionStats.running}
@@ -1060,6 +1086,16 @@ export default function App() {
           onApply={applyPlugins}
         />
       )}
+      {contextCompactDialogOpen && (
+        <ContextCompactDialog
+          usage={state.contextUsage}
+          busy={contextCompactBusy}
+          onClose={() => {
+            if (!contextCompactBusy) setContextCompactDialogOpen(false);
+          }}
+          onConfirm={compactContextManually}
+        />
+      )}
     </div>
   );
 }
@@ -1158,16 +1194,39 @@ function QueueStatusCell({
   );
 }
 
-function ContextUsageCell({ usage, compression }: { usage?: ContextUsageState; compression?: ContextCompressionState }) {
+function ContextUsageCell({
+  usage,
+  compression,
+  busy,
+  disabled,
+  onRequestCompact
+}: {
+  usage?: ContextUsageState;
+  compression?: ContextCompressionState;
+  busy: boolean;
+  disabled: boolean;
+  onRequestCompact: () => void;
+}) {
   const compressing = compression?.active === true;
   const ratio = usage?.ratio ?? 0;
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(ratio * 100)}%`;
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
   const usageLabel = `${usage?.source === "estimate" ? "~" : ""}${used}/${max}`;
-  const title = compressing ? `Context compressing ${usageLabel}` : `Context ${usageLabel}`;
+  const inactive = disabled || busy || compressing;
+  const title = compressing
+    ? `Context compressing ${usageLabel}`
+    : inactive
+      ? `Context ${usageLabel}`
+      : `Context ${usageLabel} · 点击手动压缩上下文`;
   return (
-    <div className={`context-status ${compressing ? "compressing" : ""}`} title={title}>
+    <button
+      type="button"
+      className={`context-status ${compressing ? "compressing" : ""}`}
+      title={title}
+      disabled={inactive}
+      onClick={onRequestCompact}
+    >
       <span>
         {compressing && <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />}
         {compressing ? "Compressing" : "Context"}
@@ -1179,7 +1238,7 @@ function ContextUsageCell({ usage, compression }: { usage?: ContextUsageState; c
         </div>
       )}
       <small>{usageLabel}</small>
-    </div>
+    </button>
   );
 }
 
@@ -2491,6 +2550,61 @@ function formatArtifactData(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function ContextCompactDialog({
+  usage,
+  busy,
+  onClose,
+  onConfirm
+}: {
+  usage?: ContextUsageState;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const used = usage ? compactNumber(usage.usedTokens) : "-";
+  const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
+  const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(usage.ratio * 100)}%`;
+  const estimated = usage?.source === "estimate";
+
+  return (
+    <Modal
+      title="手动压缩上下文"
+      className="confirm-modal context-compact-modal"
+      onClose={onClose}
+      footer={
+        <div className="modal-action-row">
+          <button className="tool-button" disabled={busy} onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={busy} onClick={onConfirm}>
+            {busy ? (
+              <>
+                <LoaderCircle className="inline-spinner" size={15} /> 压缩中
+              </>
+            ) : (
+              <>
+                <Brain size={15} /> 压缩
+              </>
+            )}
+          </button>
+        </div>
+      }
+    >
+      <div className="confirm-content">
+        <p>是否手动压缩当前上下文？</p>
+        <dl className="context-compact-stats">
+          <div>
+            <dt>Context</dt>
+            <dd>{estimated ? "~" : ""}{used}/{max}</dd>
+          </div>
+          <div>
+            <dt>占用</dt>
+            <dd>{percent}</dd>
+          </div>
+        </dl>
+      </div>
+    </Modal>
+  );
 }
 
 function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void; onRefresh: (provider: string) => Promise<void> }) {

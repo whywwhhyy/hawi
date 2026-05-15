@@ -40,6 +40,7 @@ COMMAND_TYPES = {
     "stop",
     "resume",
     "clear_context",
+    "compact_context",
     "clear_queue",
     "set_system_prompt",
     "switch_model",

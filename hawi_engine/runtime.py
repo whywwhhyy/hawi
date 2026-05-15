@@ -7,6 +7,7 @@ import inspect
 import logging
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, Sequence, cast
@@ -63,6 +64,7 @@ SERVER_CAPS: frozenset[str] = frozenset({
     "queue_edit_v1",
     "message_intent_v1",
     "context_branch_v1",
+    "manual_context_compact_v1",
 })
 """Capabilities the server advertises during hello negotiation. Plans 3-5 grow this set."""
 
@@ -365,6 +367,8 @@ class CoreRuntime:
                 await self._handle_queue_task_reorder(client, command)
             elif command.type == "clear_context":
                 await self._handle_clear_context(client, command)
+            elif command.type == "compact_context":
+                await self._handle_compact_context(client, command)
             elif command.type == "clear_queue":
                 await self._handle_clear_queue(client, command)
             elif command.type == "set_system_prompt":
@@ -717,6 +721,46 @@ class CoreRuntime:
     ) -> None:
         self._require_runner().agent.context.clear()
         await client.send(make_ack("clear_context", request_id=command.id))
+
+    async def _handle_compact_context(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        runner = self._require_runner()
+        if not runner.is_idle:
+            await client.send(
+                make_error(
+                    "Agent is running. Compact context when the runner is idle.",
+                    request_id=command.id,
+                    code="busy",
+                )
+            )
+            return
+
+        run_id = f"manual-compact-{command.id or uuid.uuid4().hex}"
+        record = await runner.agent.acompact(run_id=run_id, mode="manual")
+        sm.save_now()
+        context_usage = self._agent_context_usage()
+        message_history = sm.read_message_history(sm.current_session_id)
+        record_payload = None
+        if record is not None:
+            to_dict = getattr(record, "to_dict", None)
+            record_payload = to_json_safe(to_dict() if callable(to_dict) else record)
+        await client.send(
+            make_ack(
+                "compact_context",
+                request_id=command.id,
+                payload={
+                    "session_id": sm.current_session_id,
+                    "status": "success" if record is not None else "skipped",
+                    "record": record_payload,
+                    "message_history": message_history,
+                    "context_usage": context_usage,
+                },
+            )
+        )
 
     async def _handle_clear_queue(
         self,

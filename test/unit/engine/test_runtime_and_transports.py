@@ -57,6 +57,18 @@ class DummyState:
     name = "IDLE"
 
 
+class DummyCompactionRecord:
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary": "manual summary",
+            "replaced_messages": [],
+            "kept_messages": 2,
+            "tokens_before": 120,
+            "tokens_after": 48,
+            "created_at": 123.0,
+        }
+
+
 class DummyExecutor:
     state = DummyState()
     is_idle = True
@@ -68,6 +80,7 @@ class DummyAgent:
         self.model_name = ""
         self.loaded_steer: list[Any] | None = None
         self.loaded_runtime: dict[str, Any] | None = None
+        self.compact_calls: list[dict[str, Any]] = []
 
     def clear(self) -> None:
         self.cleared = True
@@ -83,6 +96,10 @@ class DummyAgent:
 
     def load_runtime(self, data: dict[str, Any]) -> None:
         self.loaded_runtime = data
+
+    async def acompact(self, **kwargs: Any) -> DummyCompactionRecord:
+        self.compact_calls.append(kwargs)
+        return DummyCompactionRecord()
 
 
 class DummyAgentRunner:
@@ -369,6 +386,54 @@ async def test_enqueue_command_returns_message_id() -> None:
     assert client.sent[-1]["type"] == "ack"
     assert client.sent[-1]["payload"]["message_id"] == "msg-123"
     assert runner.enqueued == [("hi", "high_prio", {"queue_kind": "high_prio"})]
+
+
+@pytest.mark.asyncio
+async def test_compact_context_command_runs_manual_compaction() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    sm = DummySessionManager()
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        '{"version":"%s","type":"compact_context","id":"compact","payload":{}}'
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "compact_context"
+    assert payload["status"] == "success"
+    assert payload["record"]["summary"] == "manual summary"
+    assert payload["session_id"] == "current-session"
+    assert payload["message_history"][0]["content"][0]["text"] == "current"
+    assert sm.saved_now is True
+    assert runner.agent.compact_calls == [
+        {"run_id": "manual-compact-compact", "mode": "manual"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_compact_context_command_rejects_busy_runner() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    runner._executor.is_idle = False
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = DummySessionManager()  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        '{"version":"%s","type":"compact_context","id":"compact","payload":{}}'
+        % VERSION,
+    )
+
+    assert client.sent[-1]["type"] == "error"
+    assert client.sent[-1]["payload"]["code"] == "busy"
+    assert runner.agent.compact_calls == []
 
 
 @pytest.mark.asyncio

@@ -72,6 +72,22 @@ def test_parse_session_rewind_command() -> None:
     assert command.payload["message_index"] == 3
 
 
+def test_parse_compact_context_command() -> None:
+    command = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "compact_context",
+                "id": "compact-1",
+                "payload": {},
+            }
+        )
+    )
+
+    assert command.type == "compact_context"
+    assert command.id == "compact-1"
+
+
 def test_parse_rejects_unknown_command() -> None:
     with pytest.raises(ProtocolError, match="Unknown command"):
         parse_frame(json.dumps({"version": VERSION, "type": "wat"}))

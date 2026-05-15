@@ -856,6 +856,9 @@ class HawiAgent:
         prompt: str | None = None,
         keep_last_messages: int | None = None,
         config: AutoCompactConfig | None = None,
+        event_bus: EventBus | None = None,
+        run_id: str | None = None,
+        mode: Literal["manual", "auto"] = "manual",
     ) -> ContextCompactionRecord | None:
         """Compact older context into a model-generated handoff summary."""
         return await self._compactor.acompact(
@@ -863,6 +866,9 @@ class HawiAgent:
             prompt=prompt,
             keep_last_messages=keep_last_messages,
             config=config,
+            event_bus=event_bus,
+            run_id=run_id,
+            mode=mode,
         )
 
     async def _maybe_auto_compact(

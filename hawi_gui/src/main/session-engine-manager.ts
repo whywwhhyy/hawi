@@ -15,6 +15,7 @@ import { CoreCommandError, CoreProcess, DEFAULT_COMMAND_TIMEOUT_MS, type EmitToR
 export const MAX_LOADED_SESSIONS = 5;
 const SESSION_COMMAND_TIMEOUT_MS = 30_000;
 const FORK_COMMAND_TIMEOUT_MS = 60_000;
+const COMPACT_COMMAND_TIMEOUT_MS = 120_000;
 
 interface EngineRecord {
   sessionId: string;
@@ -751,6 +752,9 @@ function normalizeLoadState(value: unknown): SessionLoadState | undefined {
 }
 
 function commandTimeout(type: CoreCommandType): number {
+  if (type === "compact_context") {
+    return COMPACT_COMMAND_TIMEOUT_MS;
+  }
   if (type === "session_export_markdown" || type === "session_history") {
     return SESSION_COMMAND_TIMEOUT_MS;
   }

@@ -32,6 +32,7 @@ export type CoreCommandType =
   | "stop"
   | "resume"
   | "clear_context"
+  | "compact_context"
   | "clear_queue"
   | "queue_task_add"
   | "queue_task_update"
