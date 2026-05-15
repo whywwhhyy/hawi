@@ -283,8 +283,8 @@ button:disabled {
   z-index: var(--layer-popover);
   top: calc(100% + 6px);
   right: 6px;
-  width: 280px;
-  max-height: 360px;
+  width: min(420px, calc(100vw - 24px));
+  max-height: 420px;
   overflow: hidden;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius);
@@ -308,16 +308,17 @@ button:disabled {
 
 .session-list {
   display: grid;
-  max-height: 320px;
+  max-height: 380px;
   overflow: auto;
   scrollbar-gutter: stable;
 }
 
 .session-option {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  min-height: 38px;
+  min-height: 50px;
   border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-surface);
   color: var(--color-text-strong);
@@ -333,12 +334,13 @@ button:disabled {
 
 .session-select {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 38px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  gap: 4px;
+  min-height: 50px;
   min-width: 0;
-  padding: 0 10px;
+  padding: 7px 10px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -350,7 +352,7 @@ button:disabled {
   background: var(--color-primary-tint);
 }
 
-.session-select span {
+.session-title {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -382,26 +384,37 @@ button:disabled {
   animation: status-spin 0.9s linear infinite;
 }
 
-.session-select span svg {
+.session-title svg {
   flex: 0 0 auto;
   color: #8b7665;
 }
 
-.session-select span svg.session-load-spinner {
+.session-title svg.session-load-spinner {
   color: var(--color-primary);
 }
 
-.session-select small {
+.session-date {
   color: #758188;
   font-size: 11px;
   white-space: nowrap;
 }
 
 .session-actions {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  right: 0;
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  margin-right: 5px;
+  padding: 0 5px 0 38px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.92) 34%, var(--color-surface) 100%);
+}
+
+.session-option:hover .session-actions,
+.session-option.current .session-actions {
+  background: linear-gradient(90deg, rgba(237, 247, 243, 0), rgba(237, 247, 243, 0.92) 34%, var(--color-primary-tint) 100%);
 }
 
 .session-action,

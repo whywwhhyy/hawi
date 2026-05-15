@@ -49,6 +49,7 @@ interface ManagerInternals {
   currentSessionId: string | null;
   handleEngineEmit(record: FakeRecord, channel: string, payload: unknown): void;
   emitSessionRuntimeStatus(sessionId: string): void;
+  discardCurrentEmptySession(): Promise<void>;
   enforceLoadedLimit(): Promise<void>;
   sessionListFrame(): Promise<CoreFrame>;
 }
@@ -141,6 +142,7 @@ describe("SessionEngineManager", () => {
     const status = events[0].payload as CoreFrame;
     expect(status.type).toBe("gui.session_status");
     expect((status.payload as Record<string, unknown>).has_visible_messages).toBe(false);
+    expect((status.payload as Record<string, unknown>).loaded_session_count).toBe(0);
   });
 
   it("reports sessions as visible after the first run starts", () => {
@@ -162,6 +164,38 @@ describe("SessionEngineManager", () => {
     ))?.payload as CoreFrame | undefined;
     expect(status?.type).toBe("gui.session_status");
     expect((status?.payload as Record<string, unknown> | undefined)?.has_visible_messages).toBe(true);
+    expect((status?.payload as Record<string, unknown> | undefined)?.loaded_session_count).toBe(1);
+  });
+
+  it("does not count hidden empty sessions in the manager snapshot", () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const empty = fakeRecord("session-empty", 1);
+    const active = fakeRecord("session-active", 2);
+    active.hasVisibleMessages = true;
+    internals.currentSessionId = empty.sessionId;
+    internals.loaded.set(empty.sessionId, empty);
+    internals.loaded.set(active.sessionId, active);
+
+    expect(manager.snapshot()).toMatchObject({
+      currentSessionId: "session-empty",
+      loadedSessionCount: 1,
+      coreRunning: true
+    });
+  });
+
+  it("discards the current empty session before creating another empty one", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const empty = fakeRecord("session-empty", 1);
+    internals.currentSessionId = empty.sessionId;
+    internals.loaded.set(empty.sessionId, empty);
+
+    await internals.discardCurrentEmptySession();
+
+    expect(empty.core.stoppedReason).toBe("replace-empty-session");
+    expect(internals.loaded.has(empty.sessionId)).toBe(false);
+    expect(internals.currentSessionId).toBeNull();
   });
 
   it("routes commands to the targeted loaded session", async () => {
@@ -219,6 +253,8 @@ describe("SessionEngineManager", () => {
     const internals = manager as unknown as ManagerInternals;
     const current = fakeRecord("session-current", 1);
     const next = fakeRecord("session-next", 2);
+    current.hasVisibleMessages = true;
+    next.hasVisibleMessages = true;
     internals.currentSessionId = current.sessionId;
     internals.loaded.set(current.sessionId, current);
     internals.loaded.set(next.sessionId, next);
@@ -274,6 +310,7 @@ describe("SessionEngineManager", () => {
 
     expect(saved?.load_state).toBe("loaded");
     expect(saved?.gui_launch_profile).toMatchObject({ modelName: "kimi" });
+    expect((frame.payload as Record<string, unknown>).loaded_session_count).toBe(1);
   });
 
   it("omits loaded sessions that have not started a conversation", async () => {
@@ -291,6 +328,7 @@ describe("SessionEngineManager", () => {
 
     expect(sessions.map((session) => session.session_id)).toEqual(["session-active"]);
     expect((frame.payload as Record<string, unknown>).current_session_id).toBe("session-empty");
+    expect((frame.payload as Record<string, unknown>).loaded_session_count).toBe(1);
   });
 
   it("shows a new loaded session after the first user message starts", async () => {
@@ -310,6 +348,7 @@ describe("SessionEngineManager", () => {
     const sessions = (frame.payload as Record<string, unknown>).sessions as Array<Record<string, unknown>>;
 
     expect(sessions.map((session) => session.session_id)).toContain("session-new");
+    expect((frame.payload as Record<string, unknown>).loaded_session_count).toBe(1);
   });
 });
 

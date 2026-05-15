@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -170,6 +170,20 @@ describe("sortSessionsByCreatedAt", () => {
       "newer",
       "older-but-updated"
     ]);
+  });
+});
+
+describe("formatSessionTimestamp", () => {
+  const now = Date.parse("2026-05-15T12:00:00Z");
+
+  it("uses compact relative labels for recent sessions", () => {
+    expect(formatSessionTimestamp("2026-05-15T11:59:40Z", now)).toBe("刚刚");
+    expect(formatSessionTimestamp("2026-05-15T11:55:00Z", now)).toBe("5分钟前");
+    expect(formatSessionTimestamp("2026-05-14T12:00:00Z", now)).toBe("昨天");
+  });
+
+  it("falls back to a compact date for older sessions", () => {
+    expect(formatSessionTimestamp("2026-05-01T12:00:00Z", now)).toMatch(/5.*1/);
   });
 });
 

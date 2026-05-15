@@ -63,7 +63,7 @@ export class SessionEngineManager {
     return {
       currentSessionId: this.currentSessionId,
       runningSessionCount: this.runningSessionCount(),
-      loadedSessionCount: this.loaded.size,
+      loadedSessionCount: this.visibleLoadedSessionCount(),
       maxLoadedSessions: MAX_LOADED_SESSIONS,
       coreRunning: this.loaded.size > 0
     };
@@ -113,6 +113,7 @@ export class SessionEngineManager {
       }
       throw error;
     }
+    record.hasVisibleMessages = true;
     this.emitSessionRuntimeStatus(sessionId);
     void this.enforceLoadedLimit();
   }
@@ -196,6 +197,7 @@ export class SessionEngineManager {
 
   private async createSession(payload: Record<string, unknown>): Promise<CoreFrame> {
     await this.saveCurrentSession();
+    await this.discardCurrentEmptySession();
     const sessionId = generateSessionId();
     const name = stringOrNull(payload.name) ?? sessionId;
     const profile = profileFromConfig(this.requireDefaultConfig());
@@ -252,6 +254,9 @@ export class SessionEngineManager {
     }
     if (this.loaded.has(sessionId)) {
       await this.saveCurrentSession();
+      if (sessionId !== this.currentSessionId) {
+        await this.discardCurrentEmptySession();
+      }
       this.currentSessionId = sessionId;
       this.emitSessionRuntimeStatus(sessionId);
       void this.enforceLoadedLimit();
@@ -262,6 +267,8 @@ export class SessionEngineManager {
     }
 
     const meta = await this.findSessionMeta(sessionId);
+    await this.saveCurrentSession();
+    await this.discardCurrentEmptySession();
     const profile = launchProfileFromUnknown(meta?.gui_launch_profile)
       ?? profileFromConfig(this.requireDefaultConfig());
     const record = this.startRecord(sessionId, profile, {});
@@ -272,7 +279,7 @@ export class SessionEngineManager {
       await this.stopRecord(record, "load-failed");
       throw error;
     }
-    await this.saveCurrentSession();
+    record.hasVisibleMessages = true;
     this.currentSessionId = sessionId;
     this.emitSessionRuntimeStatus(sessionId);
     void this.enforceLoadedLimit();
@@ -317,7 +324,7 @@ export class SessionEngineManager {
         session_id: sessionId,
         current_session_id: this.currentSessionId,
         running_session_count: this.runningSessionCount(),
-        loaded_session_count: this.loaded.size,
+        loaded_session_count: this.visibleLoadedSessionCount(),
         max_loaded_sessions: MAX_LOADED_SESSIONS
       }
     };
@@ -402,6 +409,15 @@ export class SessionEngineManager {
       .catch(() => undefined);
   }
 
+  private async discardCurrentEmptySession(): Promise<void> {
+    const current = this.currentRecord();
+    if (!current || current.hasVisibleMessages || isRunningAgentState(current.agentState)) {
+      return;
+    }
+    this.currentSessionId = null;
+    await this.stopRecord(current, "replace-empty-session");
+  }
+
   private handleEngineEmit(record: EngineRecord, channel: string, payload: unknown): void {
     if (channel === "core:event" && isCoreFrame(payload)) {
       if (record.suppressEvents) {
@@ -468,6 +484,9 @@ export class SessionEngineManager {
       if (!existing && !record.hasVisibleMessages) {
         continue;
       }
+      if (existing) {
+        record.hasVisibleMessages = true;
+      }
       byId.set(record.sessionId, {
         session_id: record.sessionId,
         name: existing?.name || record.sessionId,
@@ -488,7 +507,7 @@ export class SessionEngineManager {
       sessions: [...byId.values()].sort(compareSessionsByCreatedAt),
       current_session_id: this.currentSessionId,
       running_session_count: this.runningSessionCount(),
-      loaded_session_count: this.loaded.size,
+      loaded_session_count: this.visibleLoadedSessionCount(),
       max_loaded_sessions: MAX_LOADED_SESSIONS
     });
   }
@@ -530,7 +549,7 @@ export class SessionEngineManager {
 
   private nextCurrentSessionIdAfterDelete(deletedSessionId: string): string | null {
     return [...this.loaded.values()]
-      .filter((record) => record.sessionId !== deletedSessionId)
+      .filter((record) => record.sessionId !== deletedSessionId && record.hasVisibleMessages)
       .sort((a, b) => b.loadedAt - a.loadedAt)[0]?.sessionId ?? null;
   }
 
@@ -571,7 +590,7 @@ export class SessionEngineManager {
         has_visible_messages: record?.hasVisibleMessages ?? false,
         current_session_id: this.currentSessionId,
         running_session_count: this.runningSessionCount(),
-        loaded_session_count: this.loaded.size,
+        loaded_session_count: this.visibleLoadedSessionCount(),
         max_loaded_sessions: MAX_LOADED_SESSIONS
       }
     });
@@ -579,6 +598,10 @@ export class SessionEngineManager {
 
   private runningSessionCount(): number {
     return [...this.loaded.values()].filter((record) => isRunningAgentState(record.agentState)).length;
+  }
+
+  private visibleLoadedSessionCount(): number {
+    return [...this.loaded.values()].filter((record) => record.hasVisibleMessages).length;
   }
 
   private logPathForSession(sessionId: string): string {

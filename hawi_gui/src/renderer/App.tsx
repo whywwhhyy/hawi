@@ -1260,12 +1260,14 @@ function SessionStatusCell({
                     disabled={busy || isLocked}
                     onClick={() => onSelect(session.session_id)}
                   >
-                    <span>
+                    <small className="session-date">
+                      {formatSessionTimestamp(session.created_at || session.updated_at)}
+                    </small>
+                    <span className="session-title">
                       <SessionLoadIndicator state={session.load_state ?? "unloaded"} />
                       {isLocked && <Lock size={12} />}
                       {sessionDisplayName(session)}
                     </span>
-                    <small>{formatSessionTimestamp(session.created_at || session.updated_at)}</small>
                   </button>
                   {(!isCurrent || canShowDelete) && (
                     <div className="session-actions">
@@ -2871,15 +2873,24 @@ function sessionDisplayName(session: SessionMetaPayload): string {
   return session.name;
 }
 
-function formatSessionTimestamp(value: string): string {
+export function formatSessionTimestamp(value: string, now = Date.now()): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "unknown";
-  return date.toLocaleString([], {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
+  const diffSeconds = Math.round((date.getTime() - now) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 60) return "刚刚";
+  if (absSeconds < 3600) return formatRelativeTime(Math.round(diffSeconds / 60), "minute");
+  if (absSeconds < 86_400) return formatRelativeTime(Math.round(diffSeconds / 3600), "hour");
+  if (absSeconds < 172_800) return diffSeconds < 0 ? "昨天" : "明天";
+  if (absSeconds < 604_800) return formatRelativeTime(Math.round(diffSeconds / 86_400), "day");
+  return date.toLocaleDateString([], {
+    month: "numeric",
+    day: "numeric"
   });
+}
+
+function formatRelativeTime(value: number, unit: Intl.RelativeTimeFormatUnit): string {
+  return new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" }).format(value, unit);
 }
 
 function labelForKind(kind: string): string {
