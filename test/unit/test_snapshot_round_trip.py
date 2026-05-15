@@ -68,6 +68,61 @@ class TestAgentContextSnapshot:
         else:
             raise AssertionError("expected ValueError")
 
+    def test_truncate_after_user_message_pops_user(self) -> None:
+        ctx = AgentContext()
+        ctx.add_user_message("first")
+        ctx.add_assistant_message([{"type": "text", "text": "reply"}])
+        ctx.add_user_message("retry this")
+        ctx.add_assistant_message([{"type": "text", "text": "later"}])
+
+        result = ctx.truncate_after_message(2)
+
+        assert result.target_role == "user"
+        assert result.boundary_index == 2
+        assert result.popped_user_message is not None
+        assert result.popped_user_message["content"][0]["text"] == "retry this"
+        assert [m["role"] for m in ctx.messages] == ["user", "assistant"]
+
+    def test_truncate_after_tool_result_rejected(self) -> None:
+        ctx = AgentContext()
+        ctx.add_user_message("do it")
+        ctx.add_assistant_message([
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "tool",
+                "arguments": {},
+            }
+        ])
+        ctx.add_tool_result("call-1", "done")
+
+        try:
+            ctx.truncate_after_message(2)
+        except ValueError as exc:
+            assert "tool result" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+    def test_truncate_after_assistant_keeps_required_tool_results(self) -> None:
+        ctx = AgentContext()
+        ctx.add_user_message("do it")
+        ctx.add_assistant_message([
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "tool",
+                "arguments": {},
+            }
+        ])
+        ctx.add_tool_result("call-1", "done")
+        ctx.add_user_message("next")
+
+        result = ctx.truncate_after_message(1)
+
+        assert result.target_role == "assistant"
+        assert result.boundary_index == 3
+        assert [m["role"] for m in ctx.messages] == ["user", "assistant", "tool"]
+
 
 class TestQueueManagerSnapshot:
     def test_three_queues_round_trip(self) -> None:

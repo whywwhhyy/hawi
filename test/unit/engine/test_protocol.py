@@ -56,6 +56,22 @@ def test_parse_session_fork_command() -> None:
     assert command.payload["session_id"] == "abc"
 
 
+def test_parse_session_rewind_command() -> None:
+    command = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "session_rewind",
+                "id": "rewind-1",
+                "payload": {"message_index": 3},
+            }
+        )
+    )
+
+    assert command.type == "session_rewind"
+    assert command.payload["message_index"] == 3
+
+
 def test_parse_rejects_unknown_command() -> None:
     with pytest.raises(ProtocolError, match="Unknown command"):
         parse_frame(json.dumps({"version": VERSION, "type": "wat"}))

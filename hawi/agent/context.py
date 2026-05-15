@@ -219,6 +219,24 @@ class ContextCompactionRecord:
 
 
 @dataclass(frozen=True)
+class ContextMessageBoundaryResult:
+    """Result of truncating context at a user/assistant message boundary."""
+
+    message_index: int
+    target_role: Literal["user", "assistant"]
+    boundary_index: int
+    popped_user_message: Message | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "message_index": self.message_index,
+            "target_role": self.target_role,
+            "boundary_index": self.boundary_index,
+            "popped_user_message": self.popped_user_message,
+        }
+
+
+@dataclass(frozen=True)
 class ContextUsageSnapshot:
     """Estimated context-window occupancy for the current conversation."""
 
@@ -714,6 +732,76 @@ class AgentContext:
         if keep_last < 0:
             return
         self.messages = self.messages[-keep_last:]
+
+    def truncate_after_message(self, message_index: int) -> ContextMessageBoundaryResult:
+        """Truncate context at a user/assistant message boundary.
+
+        Targeting an assistant message keeps the conversation through that
+        assistant message and its contiguous tool-result replies, when any are
+        required for provider-valid history. Targeting a user message rewinds to
+        the point before that user input and returns the popped user message so
+        callers can offer it for editing/resubmission.
+        """
+        result = self.message_boundary_after(message_index)
+        self.messages = deepcopy(self.messages[:result.boundary_index])
+        self.context_usage = None
+        self.clear_pending_tool_calls()
+        return result
+
+    def message_boundary_after(self, message_index: int) -> ContextMessageBoundaryResult:
+        """Resolve the safe boundary represented by ``message_index``."""
+        if isinstance(message_index, bool) or not isinstance(message_index, int):
+            raise TypeError("message_index must be an integer")
+        if message_index < 0 or message_index >= len(self.messages):
+            raise IndexError(f"message_index out of range: {message_index}")
+
+        message = self.messages[message_index]
+        role = message.get("role")
+        if role == "tool":
+            raise ValueError("tool result messages do not support fork/rewind")
+        if role not in {"user", "assistant"}:
+            raise ValueError(
+                "only user and assistant messages support fork/rewind"
+            )
+
+        if role == "user":
+            return ContextMessageBoundaryResult(
+                message_index=message_index,
+                target_role="user",
+                boundary_index=message_index,
+                popped_user_message=deepcopy(message),
+            )
+
+        boundary_index = self._assistant_boundary_after(message_index)
+        return ContextMessageBoundaryResult(
+            message_index=message_index,
+            target_role="assistant",
+            boundary_index=boundary_index,
+        )
+
+    def _assistant_boundary_after(self, message_index: int) -> int:
+        message = self.messages[message_index]
+        required_tool_result_ids = self._tool_call_ids(message)
+        if not required_tool_result_ids:
+            return message_index + 1
+
+        boundary_index = message_index + 1
+        responded_ids: set[str] = set()
+        while (
+            boundary_index < len(self.messages)
+            and self.messages[boundary_index].get("role") == "tool"
+        ):
+            responded_ids.update(self._tool_result_ids(self.messages[boundary_index]))
+            boundary_index += 1
+
+        missing = sorted(required_tool_result_ids - responded_ids)
+        if missing:
+            joined = ", ".join(missing)
+            raise ValueError(
+                "cannot fork/rewind after assistant message with unresolved "
+                f"tool result(s): {joined}"
+            )
+        return boundary_index
 
     def compaction_tail_start(self, keep_last: int) -> int:
         """Return a safe start index for the recent suffix to keep.

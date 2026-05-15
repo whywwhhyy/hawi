@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +98,32 @@ class SessionMeta:
     locked: bool = False
     lock_owner: dict[str, Any] | None = None
     gui_launch_profile: dict[str, Any] | None = None
+
+
+@dataclass
+class SessionContextBranchResult:
+    """Metadata returned by session fork/rewind-at-message operations."""
+
+    session_id: str
+    source_session_id: str | None = None
+    message_index: int | None = None
+    target_role: str | None = None
+    boundary_index: int | None = None
+    popped_user_message: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"session_id": self.session_id}
+        if self.source_session_id is not None:
+            payload["source_session_id"] = self.source_session_id
+        if self.message_index is not None:
+            payload["message_index"] = self.message_index
+        if self.target_role is not None:
+            payload["target_role"] = self.target_role
+        if self.boundary_index is not None:
+            payload["boundary_index"] = self.boundary_index
+        if self.popped_user_message is not None:
+            payload["popped_user_message"] = self.popped_user_message
+        return payload
 
 
 class SessionManager:
@@ -405,9 +432,17 @@ class SessionManager:
         sid = session_id or self._session_id
         if sid is None:
             return []
-        return layout.read_jsonl(
+        entries = layout.read_jsonl(
             layout.message_history_path(layout.session_dir(self._root, sid))
         )
+        if sid == self._session_id and self._agent is not None:
+            messages = getattr(self._agent.context, "messages", None)
+        else:
+            context_snapshot = self._read_context_snapshot(sid)
+            messages = context_snapshot.get("messages")
+        if isinstance(messages, list):
+            return self._history_with_context_indices(entries, messages)
+        return entries
 
     def export_markdown(
         self,
@@ -468,6 +503,33 @@ class SessionManager:
         locked, so a second Hawi engine can fork a session that another engine
         is currently using instead of joining it.
         """
+        return self._fork_session(
+            session_id=session_id,
+            name=name,
+            after_message_index=None,
+        ).session_id
+
+    def fork_session_after_message(
+        self,
+        *,
+        session_id: str | None = None,
+        name: str | None = None,
+        after_message_index: int,
+    ) -> SessionContextBranchResult:
+        """Fork a session and truncate the fork at a user/assistant message."""
+        return self._fork_session(
+            session_id=session_id,
+            name=name,
+            after_message_index=after_message_index,
+        )
+
+    def _fork_session(
+        self,
+        *,
+        session_id: str | None,
+        name: str | None,
+        after_message_index: int | None,
+    ) -> SessionContextBranchResult:
         source_id = session_id or self._session_id
         if source_id is None:
             raise RuntimeError("No session available to fork")
@@ -487,6 +549,7 @@ class SessionManager:
                 dir=str(self._root),
             )
         )
+        branch_result: SessionContextBranchResult | None = None
         try:
             shutil.rmtree(temp_dir)
             shutil.copytree(
@@ -497,11 +560,19 @@ class SessionManager:
                     "*.tmp",
                 ),
             )
+            if after_message_index is not None:
+                branch_result = self._apply_context_message_boundary(
+                    temp_dir,
+                    session_id=fork_id,
+                    source_session_id=source_id,
+                    message_index=after_message_index,
+                )
             self._rewrite_fork_manifest(
                 temp_dir,
                 fork_id=fork_id,
                 source_id=source_id,
                 name=name,
+                branch_result=branch_result,
             )
             temp_dir.rename(fork_dir)
         except Exception:
@@ -510,7 +581,41 @@ class SessionManager:
             raise
 
         self.load_session(fork_id)
-        return fork_id
+        return branch_result or SessionContextBranchResult(
+            session_id=fork_id,
+            source_session_id=source_id,
+        )
+
+    def rewind_session_after_message(
+        self,
+        *,
+        after_message_index: int,
+    ) -> SessionContextBranchResult:
+        """Rewind the current session to a user/assistant message boundary."""
+        if self._session_id is None:
+            raise RuntimeError("No active session to rewind")
+        if self._agent is None:
+            raise RuntimeError("SessionManager.rewind_session requires attach() first")
+
+        self.save_now()
+        session_id = self._session_id
+        session_dir = layout.session_dir(self._root, session_id)
+        if not layout.manifest_path(session_dir).exists():
+            raise FileNotFoundError(f"session not found: {session_id}")
+
+        self._ensure_current_session_lock()
+        result = self._apply_context_message_boundary(
+            session_dir,
+            session_id=session_id,
+            source_session_id=session_id,
+            message_index=after_message_index,
+            manifest_event="session_rewind",
+        )
+        self.load_session(session_id)
+        self._session_has_visible_messages = self._session_dir_has_visible_messages(
+            session_dir
+        )
+        return result
 
     def delete_session(self, session_id: str) -> None:
         """Permanently delete a session directory.
@@ -734,6 +839,195 @@ class SessionManager:
             if not layout.session_dir(self._root, session_id).exists():
                 return session_id
 
+    def _apply_context_message_boundary(
+        self,
+        session_dir: Path,
+        *,
+        session_id: str,
+        source_session_id: str,
+        message_index: int,
+        manifest_event: str | None = None,
+    ) -> SessionContextBranchResult:
+        ctx_path = layout.context_path(session_dir)
+        if not ctx_path.exists():
+            raise FileNotFoundError(
+                f"context snapshot not found for session: {source_session_id}"
+            )
+
+        from hawi.agent.context import AgentContext
+
+        ctx_data = json.loads(ctx_path.read_text(encoding="utf-8"))
+        context = AgentContext()
+        context.load_snapshot(ctx_data)
+        original_messages = deepcopy(context.messages)
+        boundary_result = context.truncate_after_message(message_index)
+
+        layout.atomic_write_text(
+            ctx_path,
+            json.dumps(context.snapshot(), ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+
+        history_path = layout.message_history_path(session_dir)
+        history = layout.read_jsonl(history_path)
+        pruned_history = self._prune_history_to_context_boundary(
+            history,
+            original_messages,
+            boundary_result.boundary_index,
+        )
+        layout.write_jsonl(history_path, pruned_history, fsync=True)
+
+        if manifest_event is not None:
+            self._patch_manifest(
+                session_dir,
+                {
+                    "last_checkpoint_event": manifest_event,
+                    "rewound_after_message_index": boundary_result.message_index,
+                    "rewind_boundary_index": boundary_result.boundary_index,
+                    "rewind_target_role": boundary_result.target_role,
+                },
+                components=[
+                    layout.COMPONENT_CONTEXT,
+                    layout.COMPONENT_MESSAGE_HISTORY,
+                ],
+            )
+
+        return SessionContextBranchResult(
+            session_id=session_id,
+            source_session_id=source_session_id,
+            message_index=boundary_result.message_index,
+            target_role=boundary_result.target_role,
+            boundary_index=boundary_result.boundary_index,
+            popped_user_message=(
+                deepcopy(boundary_result.popped_user_message)
+                if boundary_result.popped_user_message is not None
+                else None
+            ),
+        )
+
+    def _prune_history_to_context_boundary(
+        self,
+        entries: list[dict[str, Any]],
+        messages: list[Any],
+        boundary_index: int,
+    ) -> list[dict[str, Any]]:
+        if boundary_index <= 0:
+            return []
+        annotated = self._history_with_context_indices(entries, messages)
+        last_included_pos = -1
+        for pos, entry in enumerate(annotated):
+            context_index = entry.get("context_message_index")
+            if isinstance(context_index, int) and context_index < boundary_index:
+                last_included_pos = pos
+        if last_included_pos < 0:
+            return []
+        return [
+            self._without_context_message_index(entry)
+            for entry in annotated[: last_included_pos + 1]
+        ]
+
+    @classmethod
+    def _history_with_context_indices(
+        cls,
+        entries: list[dict[str, Any]],
+        messages: list[Any],
+    ) -> list[dict[str, Any]]:
+        annotated: list[dict[str, Any]] = []
+        cursor = 0
+        for entry in entries:
+            record = dict(entry)
+            if record.get("role") in {"user", "assistant", "tool"}:
+                match = cls._find_matching_context_message(
+                    record,
+                    messages,
+                    start=cursor,
+                    strict_metadata=True,
+                )
+                if match is None:
+                    match = cls._find_matching_context_message(
+                        record,
+                        messages,
+                        start=cursor,
+                        strict_metadata=False,
+                    )
+                if match is not None:
+                    record["context_message_index"] = match
+                    cursor = match + 1
+            annotated.append(record)
+        return annotated
+
+    @classmethod
+    def _find_matching_context_message(
+        cls,
+        record: dict[str, Any],
+        messages: list[Any],
+        *,
+        start: int,
+        strict_metadata: bool,
+    ) -> int | None:
+        for index in range(start, len(messages)):
+            message = messages[index]
+            if cls._history_record_matches_context_message(
+                record,
+                message,
+                strict_metadata=strict_metadata,
+            ):
+                return index
+        return None
+
+    @staticmethod
+    def _history_record_matches_context_message(
+        record: dict[str, Any],
+        message: Any,
+        *,
+        strict_metadata: bool,
+    ) -> bool:
+        if not isinstance(message, dict):
+            return False
+        if record.get("role") != message.get("role"):
+            return False
+        if record.get("content") != message.get("content"):
+            return False
+        if not strict_metadata:
+            return True
+        record_metadata = record.get("metadata")
+        if not isinstance(record_metadata, dict):
+            record_metadata = None
+        message_metadata = message.get("metadata")
+        if not isinstance(message_metadata, dict):
+            message_metadata = None
+        return record_metadata == message_metadata
+
+    @staticmethod
+    def _without_context_message_index(entry: dict[str, Any]) -> dict[str, Any]:
+        copy = dict(entry)
+        copy.pop("context_message_index", None)
+        return copy
+
+    def _patch_manifest(
+        self,
+        session_dir: Path,
+        patch: dict[str, Any],
+        *,
+        components: list[str] | tuple[str, ...] = (),
+    ) -> None:
+        manifest_path = layout.manifest_path(session_dir)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+        manifest.setdefault("version", layout.MANIFEST_VERSION)
+        manifest.update(patch)
+        manifest["updated_at"] = datetime.now().isoformat()
+        components_present = set(manifest.get("components_present", []))
+        components_present.update(components)
+        manifest["components_present"] = sorted(components_present)
+        layout.atomic_write_text(
+            manifest_path,
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+
     def _rewrite_fork_manifest(
         self,
         session_dir: Path,
@@ -741,6 +1035,7 @@ class SessionManager:
         fork_id: str,
         source_id: str,
         name: str | None,
+        branch_result: SessionContextBranchResult | None = None,
     ) -> None:
         manifest_path = layout.manifest_path(session_dir)
         try:
@@ -761,6 +1056,14 @@ class SessionManager:
                 "last_checkpoint_event": "session_fork",
             }
         )
+        if branch_result is not None:
+            manifest.update(
+                {
+                    "forked_after_message_index": branch_result.message_index,
+                    "fork_boundary_index": branch_result.boundary_index,
+                    "fork_target_role": branch_result.target_role,
+                }
+            )
         layout.atomic_write_text(
             manifest_path,
             json.dumps(manifest, ensure_ascii=False, indent=2),

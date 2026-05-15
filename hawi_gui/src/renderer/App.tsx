@@ -542,12 +542,16 @@ export default function App() {
     }
   }
 
-  async function forkSession(sessionId?: string) {
+  async function forkSession(sessionId?: string, messageIndex?: number) {
     const sourceSessionId = sessionId || currentSessionId;
     if (!sourceSessionId) return;
     setSessionBusy(true);
     try {
-      const frame = await sendCommand("session_fork", { session_id: sourceSessionId });
+      const payload: Record<string, unknown> = { session_id: sourceSessionId };
+      if (typeof messageIndex === "number") {
+        payload.message_index = messageIndex;
+      }
+      const frame = await sendCommand("session_fork", payload);
       applySessionHistoryFromFrame(frame);
       followTailRef.current = true;
       const refreshed = await refreshSessions();
@@ -555,10 +559,26 @@ export default function App() {
       if (forkedSessionId) {
         syncConfigFromSession(forkedSessionId, refreshed);
       }
+      const poppedUserText = optionalPayloadString(framePayload(frame)?.popped_user_text);
+      if (poppedUserText) {
+        setInput(poppedUserText);
+        requestAnimationFrame(() => {
+          const inputElement = inputRef.current;
+          if (!inputElement) return;
+          inputElement.focus();
+          inputElement.setSelectionRange(inputElement.value.length, inputElement.value.length);
+        });
+      }
       setSessionDialogOpen(false);
     } finally {
       setSessionBusy(false);
     }
+  }
+
+  function forkMessage(node: ChatNode) {
+    if (sessionBusy || !currentSessionId) return;
+    if (typeof node.contextMessageIndex !== "number") return;
+    void forkSession(currentSessionId, node.contextMessageIndex);
   }
 
   async function saveGlobalAndSet(nextConfig: PersistedConfig) {
@@ -967,7 +987,7 @@ export default function App() {
           {state.nodes
             .filter((node) => showDebug || node.kind !== "debug")
             .map((node) => (
-              <ChatBubble node={node} key={node.id} />
+              <ChatBubble node={node} key={node.id} onForkMessage={forkMessage} />
             ))}
           {state.processing && <ProcessingLine processing={state.processing} />}
         </main>
@@ -1669,7 +1689,13 @@ function QueueTaskItem({
   );
 }
 
-const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
+const ChatBubble = memo(function ChatBubble({
+  node,
+  onForkMessage
+}: {
+  node: ChatNode;
+  onForkMessage: (node: ChatNode) => void;
+}) {
   if (node.kind === "divider") {
     return (
       <div className="run-divider">
@@ -1698,7 +1724,7 @@ const ChatBubble = memo(function ChatBubble({ node }: { node: ChatNode }) {
   if (node.kind === "thinking") {
     return <ThinkingBubble node={node} />;
   }
-  return <MessageBubble node={node} />;
+  return <MessageBubble node={node} onForkMessage={onForkMessage} />;
 });
 
 function ProcessingLine({ processing }: { processing: ProcessingState }) {
@@ -1710,13 +1736,20 @@ function ProcessingLine({ processing }: { processing: ProcessingState }) {
   );
 }
 
-const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) {
+const MessageBubble = memo(function MessageBubble({
+  node,
+  onForkMessage
+}: {
+  node: ChatNode;
+  onForkMessage: (node: ChatNode) => void;
+}) {
   const [collapsed, setCollapsed] = useState(false);
   const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
   const expandCollapsed = () => setCollapsed(false);
+  const canFork = node.canFork === true && typeof node.contextMessageIndex === "number";
 
   return (
     <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""}`}>
@@ -1730,6 +1763,19 @@ const MessageBubble = memo(function MessageBubble({ node }: { node: ChatNode }) 
           />
         </span>
         <span className="message-actions">
+          {canFork && (
+            <button
+              className="thinking-toggle message-fork"
+              title={node.kind === "user" ? "Fork 到这条用户消息前" : "Fork 到这条回复后"}
+              aria-label={node.kind === "user" ? "Fork 到这条用户消息前" : "Fork 到这条回复后"}
+              onClick={(event) => {
+                event.stopPropagation();
+                onForkMessage(node);
+              }}
+            >
+              <GitFork size={14} />
+            </button>
+          )}
           <CopyButton text={node.content} title="复制消息" />
           <button
             className="thinking-toggle message-toggle"

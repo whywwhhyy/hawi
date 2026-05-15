@@ -43,7 +43,8 @@ describe("core event reducer", () => {
           run_id: "run-1",
           role: "user",
           content: [{ type: "text", text: "hello" }],
-          metadata: { queue: "normal", display_message_type: "normal" }
+          metadata: { queue: "normal", display_message_type: "normal" },
+          context_message_index: 0
         },
         {
           run_id: "run-1",
@@ -52,7 +53,8 @@ describe("core event reducer", () => {
             { type: "reasoning", reasoning: "thinking" },
             { type: "text", text: "answer" }
           ],
-          metadata: null
+          metadata: null,
+          context_message_index: 1
         },
         {
           run_id: "run-1-1",
@@ -89,8 +91,14 @@ describe("core event reducer", () => {
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent", "system", "error", "compact"]);
     expect(state.nodes[0].content).toBe("hello");
+    expect(state.nodes[0]).toMatchObject({ canFork: true, contextMessageIndex: 0 });
     expect(state.nodes[1]).toMatchObject({ content: "thinking", complete: true });
-    expect(state.nodes[2]).toMatchObject({ content: "answer", complete: true });
+    expect(state.nodes[2]).toMatchObject({
+      content: "answer",
+      complete: true,
+      canFork: true,
+      contextMessageIndex: 1
+    });
     expect(state.nodes[3].content).toContain("模型重试 1/10");
     expect(state.nodes[4].content).toBe("Anthropic authentication failed");
     expect(state.nodes[5]).toMatchObject({ content: "Context compacted", complete: true });

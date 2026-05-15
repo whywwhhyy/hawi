@@ -62,6 +62,7 @@ SERVER_CAPS: frozenset[str] = frozenset({
     "runner_pause_v1",
     "queue_edit_v1",
     "message_intent_v1",
+    "context_branch_v1",
 })
 """Capabilities the server advertises during hello negotiation. Plans 3-5 grow this set."""
 
@@ -388,6 +389,8 @@ class CoreRuntime:
                 await self._handle_session_new(client, command)
             elif command.type == "session_fork":
                 await self._handle_session_fork(client, command)
+            elif command.type == "session_rewind":
+                await self._handle_session_rewind(client, command)
             elif command.type == "session_load":
                 await self._handle_session_load(client, command)
             elif command.type == "session_switch":
@@ -864,6 +867,19 @@ class CoreRuntime:
             )
         return session_id
 
+    @staticmethod
+    def _optional_message_index(command: CoreCommand) -> int | None:
+        raw = command.payload.get("message_index")
+        if raw is None:
+            raw = command.payload.get("after_message_index")
+        if raw is None:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            raise ValueError(
+                "payload.message_index must be a non-negative integer when present"
+            )
+        return raw
+
     async def _handle_session_list(
         self,
         client: RuntimeClient,
@@ -962,9 +978,26 @@ class CoreRuntime:
         if name is not None and not isinstance(name, str):
             raise ValueError("'session_fork.payload.name' must be a string when present")
         forked_from = source_session_id or sm.current_session_id
-        session_id = sm.fork_session(session_id=source_session_id, name=name)
+        message_index = self._optional_message_index(command)
+        branch_result = None
+        if message_index is None:
+            session_id = sm.fork_session(session_id=source_session_id, name=name)
+        else:
+            branch_result = sm.fork_session_after_message(
+                session_id=source_session_id,
+                name=name,
+                after_message_index=message_index,
+            )
+            session_id = branch_result.session_id
+            self._reset_runner_volatile_state()
+            sm.save_now()
         message_history = sm.read_message_history(session_id)
         context_usage = self._agent_context_usage()
+        branch_payload = (
+            self._context_branch_payload(branch_result)
+            if branch_result is not None
+            else {}
+        )
         await client.send(
             make_ack(
                 "session_fork",
@@ -975,6 +1008,46 @@ class CoreRuntime:
                     "name": name or session_id,
                     "message_history": message_history,
                     "context_usage": context_usage,
+                    **branch_payload,
+                },
+            )
+        )
+
+    async def _handle_session_rewind(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        runner = self._require_runner()
+        if not runner.is_idle:
+            await client.send(
+                make_error(
+                    "Agent is running. Rewind a session when the runner is idle.",
+                    request_id=command.id,
+                    code="busy",
+                )
+            )
+            return
+        message_index = self._optional_message_index(command)
+        if message_index is None:
+            raise ValueError("'session_rewind.payload.message_index' is required")
+        branch_result = sm.rewind_session_after_message(
+            after_message_index=message_index,
+        )
+        self._reset_runner_volatile_state()
+        sm.save_now()
+        message_history = sm.read_message_history(branch_result.session_id)
+        context_usage = self._agent_context_usage()
+        await client.send(
+            make_ack(
+                "session_rewind",
+                request_id=command.id,
+                payload={
+                    "session_id": branch_result.session_id,
+                    "message_history": message_history,
+                    "context_usage": context_usage,
+                    **self._context_branch_payload(branch_result),
                 },
             )
         )
@@ -1119,6 +1192,66 @@ class CoreRuntime:
                 },
             )
         )
+
+    def _reset_runner_volatile_state(self) -> None:
+        """Clear queues/runtime state after context is branched or rewound."""
+        runner = self._require_runner()
+        runner.clear_all_queues()
+        runner.agent.load_steer([])
+        runner.agent.load_runtime(
+            {
+                "version": 1,
+                "current_tool_calls": [],
+                "interrupted_tool_call_ids": [],
+                "last_unsent_tool_results": [],
+                "last_interrupt_reason": None,
+            }
+        )
+
+    def _context_branch_payload(self, branch_result: Any | None) -> dict[str, Any]:
+        if branch_result is None:
+            return {}
+        popped_user_message = getattr(branch_result, "popped_user_message", None)
+        payload = {
+            "message_index": getattr(branch_result, "message_index", None),
+            "target_role": getattr(branch_result, "target_role", None),
+            "boundary_index": getattr(branch_result, "boundary_index", None),
+            "popped_user_message": popped_user_message,
+        }
+        popped_text = self._message_plain_text(popped_user_message)
+        if popped_text is not None:
+            payload["popped_user_text"] = popped_text
+        return payload
+
+    @classmethod
+    def _message_plain_text(cls, message: Any) -> str | None:
+        if not isinstance(message, dict):
+            return None
+        content = message.get("content")
+        if not isinstance(content, list):
+            return None
+        text = cls._content_plain_text(content).strip()
+        return text or None
+
+    @classmethod
+    def _content_plain_text(cls, content: list[Any]) -> str:
+        chunks: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                chunks.append(str(part))
+                continue
+            part_type = part.get("type")
+            if part_type == "text":
+                chunks.append(str(part.get("text") or ""))
+            elif part_type == "steer" and isinstance(part.get("content"), list):
+                chunks.append(cls._content_plain_text(part["content"]))
+            elif part_type == "tool_result":
+                nested = part.get("content")
+                if isinstance(nested, list):
+                    chunks.append(cls._content_plain_text(nested))
+                elif nested is not None:
+                    chunks.append(str(nested))
+        return "\n\n".join(chunk for chunk in chunks if chunk)
 
     async def _replace_runner(
         self,

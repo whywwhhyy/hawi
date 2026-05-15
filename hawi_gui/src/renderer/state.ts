@@ -11,6 +11,8 @@ export interface ChatNode {
   kind: ChatKind;
   content: string;
   complete?: boolean;
+  contextMessageIndex?: number;
+  canFork?: boolean;
   streamStartedAt?: number;
   streamFinishedAt?: number;
   streamDurationMs?: number;
@@ -647,6 +649,7 @@ interface SessionHistoryRecord {
   role: "user" | "assistant" | "tool" | "system" | "error" | "event";
   content: unknown[];
   metadata?: Record<string, unknown>;
+  contextMessageIndex?: number;
 }
 
 function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
@@ -673,7 +676,8 @@ function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
         runId: optionalString(item.run_id ?? item.runId) ?? `history-${index}`,
         role,
         content,
-        metadata: isRecord(item.metadata) ? item.metadata : undefined
+        metadata: isRecord(item.metadata) ? item.metadata : undefined,
+        contextMessageIndex: optionalNumber(item.context_message_index ?? item.contextMessageIndex)
       };
     })
     .filter((item): item is SessionHistoryRecord => item !== null);
@@ -747,6 +751,8 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           record.metadata?.display_message_type,
           queue
         ),
+        contextMessageIndex: record.contextMessageIndex,
+        canFork: record.contextMessageIndex !== undefined,
         content: historyContentText(record.content)
       });
       return;
@@ -759,6 +765,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           id: nodeId("thinking-history", baseId),
           kind: "thinking",
           content: reasoning,
+          contextMessageIndex: record.contextMessageIndex,
           complete: true
         });
       }
@@ -767,6 +774,8 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           id: nodeId("agent-history", baseId),
           kind: "agent",
           content: answer,
+          contextMessageIndex: record.contextMessageIndex,
+          canFork: record.contextMessageIndex !== undefined,
           complete: true
         });
       }

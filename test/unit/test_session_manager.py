@@ -57,6 +57,9 @@ class _StubAgentRunner:
     def __init__(self) -> None:
         self._queue_manager = MessageQueueManager()
 
+    def control_snapshot(self) -> dict[str, Any]:
+        return {"paused": False, "resumable": False}
+
 
 class _StubPluginManager:
     def __init__(self, plugins: list | None = None) -> None:
@@ -642,6 +645,97 @@ class TestSessionManager:
         finally:
             sm2.detach()
             external_lock.release()
+
+    def test_fork_session_after_user_pops_user_and_prunes_history(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("first")
+        agent.context.add_assistant_message([{"type": "text", "text": "reply"}])
+        agent.context.add_user_message("second")
+        agent.context.add_assistant_message([{"type": "text", "text": "later"}])
+        sid = sm.new_session(name="source")
+        sm.save_now()
+        layout.write_jsonl(
+            layout.message_history_path(layout.session_dir(sm._root, sid)),
+            [
+                {
+                    "version": 1,
+                    "run_id": "r1",
+                    "role": message["role"],
+                    "content": message["content"],
+                    "metadata": message.get("metadata"),
+                }
+                for message in agent.context.messages
+            ],
+            fsync=True,
+        )
+
+        result = sm.fork_session_after_message(
+            session_id=sid,
+            after_message_index=2,
+        )
+
+        assert result.session_id != sid
+        assert result.target_role == "user"
+        assert result.boundary_index == 2
+        assert result.popped_user_message is not None
+        assert result.popped_user_message["content"][0]["text"] == "second"
+        assert [m["role"] for m in agent.context.messages] == ["user", "assistant"]
+        history = sm.read_message_history(result.session_id)
+        assert [entry["role"] for entry in history] == ["user", "assistant"]
+        assert [entry["context_message_index"] for entry in history] == [0, 1]
+
+    def test_rewind_session_after_assistant_keeps_tool_results(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("do it")
+        agent.context.add_assistant_message([
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "tool",
+                "arguments": {},
+            }
+        ])
+        agent.context.add_tool_result("call-1", "done")
+        agent.context.add_user_message("next")
+        sid = sm.new_session(name="source")
+        sm.save_now()
+        layout.write_jsonl(
+            layout.message_history_path(layout.session_dir(sm._root, sid)),
+            [
+                {
+                    "version": 1,
+                    "run_id": "r1",
+                    "role": message["role"],
+                    "content": message["content"],
+                    "metadata": message.get("metadata"),
+                }
+                for message in agent.context.messages
+            ],
+            fsync=True,
+        )
+
+        result = sm.rewind_session_after_message(after_message_index=1)
+
+        assert result.session_id == sid
+        assert result.target_role == "assistant"
+        assert result.boundary_index == 3
+        assert [m["role"] for m in agent.context.messages] == [
+            "user",
+            "assistant",
+            "tool",
+        ]
+        history = sm.read_message_history(sid)
+        assert [entry["role"] for entry in history] == [
+            "user",
+            "assistant",
+            "tool",
+        ]
 
     def test_delete_removes_directory(self, stub_setup) -> None:
         sm, agent, _ = stub_setup

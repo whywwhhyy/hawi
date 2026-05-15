@@ -47,6 +47,7 @@ export type CoreCommandType =
   | "session_list"
   | "session_new"
   | "session_fork"
+  | "session_rewind"
   | "session_load"
   | "session_switch"
   | "session_delete"

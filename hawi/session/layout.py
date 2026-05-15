@@ -176,6 +176,15 @@ def append_jsonl(path: Path, entries: list[dict[str, Any]], *, fsync: bool) -> N
             os.close(dir_fd)
 
 
+def write_jsonl(path: Path, entries: list[dict[str, Any]], *, fsync: bool) -> None:
+    """Replace ``path`` with newline-delimited JSON records atomically."""
+    text = "".join(
+        json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n"
+        for entry in entries
+    )
+    atomic_write_text(path, text, fsync=fsync)
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Read newline-delimited JSON records, skipping blank lines."""
     if not path.exists():

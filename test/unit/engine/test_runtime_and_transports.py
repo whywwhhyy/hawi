@@ -16,7 +16,7 @@ from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
 from hawi.agent import HawiAgent, AgentRunner
 from hawi.models import model_registry
-from hawi.session import SessionManager
+from hawi.session import SessionContextBranchResult, SessionManager
 from hawi.tool import AgentTool, ToolResult
 
 
@@ -103,6 +103,9 @@ class DummyAgentRunner:
 
     def get_queue_lengths(self) -> dict[str, int]:
         return {"normal": 0, "high_prio": 0, "urgent": 0}
+
+    def control_snapshot(self) -> dict[str, Any]:
+        return {"paused": False, "resumable": False}
 
     def get_queue_messages(self) -> dict[str, list[dict[str, Any]]]:
         return {
@@ -209,6 +212,54 @@ class DummySessionManager:
         self.current_session_id = "forked-session"
         self.histories["forked-session"] = list(self.histories[self.forked_from])
         return self.current_session_id
+
+    def fork_session_after_message(
+        self,
+        *,
+        session_id: str | None = None,
+        name: str | None = None,
+        after_message_index: int,
+    ) -> SessionContextBranchResult:
+        self.forked_after_message_index = after_message_index
+        forked = self.fork_session(session_id=session_id, name=name)
+        self.histories[forked] = self.histories[forked][:1]
+        return SessionContextBranchResult(
+            session_id=forked,
+            source_session_id=self.forked_from,
+            message_index=after_message_index,
+            target_role="user",
+            boundary_index=0,
+            popped_user_message={
+                "role": "user",
+                "content": [{"type": "text", "text": "popped"}],
+                "name": None,
+                "metadata": None,
+            },
+        )
+
+    def rewind_session_after_message(
+        self,
+        *,
+        after_message_index: int,
+    ) -> SessionContextBranchResult:
+        self.rewound_after_message_index = after_message_index
+        self.histories[self.current_session_id] = []
+        return SessionContextBranchResult(
+            session_id=self.current_session_id,
+            source_session_id=self.current_session_id,
+            message_index=after_message_index,
+            target_role="user",
+            boundary_index=0,
+            popped_user_message={
+                "role": "user",
+                "content": [{"type": "text", "text": "rewound"}],
+                "name": None,
+                "metadata": None,
+            },
+        )
+
+    def save_now(self) -> None:
+        self.saved_now = True
 
     def delete_session(self, session_id: str) -> None:
         self.deleted.append(session_id)
@@ -511,6 +562,66 @@ async def test_session_fork_command_returns_forked_history() -> None:
     assert payload["forked_from_session_id"] == "saved-session"
     assert payload["message_history"][0]["content"][0]["text"] == "saved"
     assert sm.fork_session_name == "copy"
+
+
+@pytest.mark.asyncio
+async def test_session_fork_command_accepts_message_index() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    sm = DummySessionManager()
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_fork","id":"fork",'
+            '"payload":{"session_id":"saved-session","message_index":2}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_fork"
+    assert payload["session_id"] == "forked-session"
+    assert payload["message_index"] == 2
+    assert payload["target_role"] == "user"
+    assert payload["popped_user_text"] == "popped"
+    assert sm.forked_after_message_index == 2
+    assert sm.saved_now is True
+    assert runner.agent.loaded_steer == []
+    assert runner.agent.loaded_runtime["current_tool_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_session_rewind_command_returns_popped_user_message() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    sm = DummySessionManager()
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_rewind","id":"rewind",'
+            '"payload":{"message_index":1}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_rewind"
+    assert payload["session_id"] == "current-session"
+    assert payload["message_index"] == 1
+    assert payload["popped_user_text"] == "rewound"
+    assert payload["message_history"] == []
+    assert sm.rewound_after_message_index == 1
+    assert sm.saved_now is True
 
 
 @pytest.mark.asyncio

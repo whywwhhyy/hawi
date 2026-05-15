@@ -16,12 +16,13 @@ Public surface:
 """
 
 from .lock import SessionLockedError
-from .manager import SessionManager, SessionMeta
+from .manager import SessionContextBranchResult, SessionManager, SessionMeta
 from .writer import SessionWriter, WriteJob
 
 __all__ = [
     "SessionManager",
     "SessionMeta",
+    "SessionContextBranchResult",
     "SessionLockedError",
     "SessionWriter",
     "WriteJob",
