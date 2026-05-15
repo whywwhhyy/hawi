@@ -622,7 +622,7 @@ describe("core event reducer", () => {
       queue_messages: {
         urgent: [{ id: "u1", queue: "urgent", content_preview: "stop now", created_at: 100 }],
         high_prio: [{ id: "h1", queue: "high_prio", content_preview: "merge this", created_at: 101 }],
-        normal: [{ id: "n1", queue: "normal", content_preview: "first", created_at: 102 }]
+        normal: [{ id: "n1", queue: "normal", content_preview: "first", content: "first full task", created_at: 102 }]
       }
     }));
     state = reduceCoreEvent(state, frame("model.metadata", {
@@ -648,6 +648,7 @@ describe("core event reducer", () => {
     expect(state.queueMessages.urgent[0].contentPreview).toBe("stop now");
     expect(state.queueMessages.high_prio[0].contentPreview).toBe("merge this");
     expect(state.queueMessages.normal[0].contentPreview).toBe("first");
+    expect(state.queueMessages.normal[0].content).toBe("first full task");
     expect(state.metadataLines[0]).toContain("cache_read=1");
     expect(state.metadataLines[0]).toContain("reasoning=2");
     expect(state.metadataLines[0]).toContain("ctx=128/1024 (13%)");

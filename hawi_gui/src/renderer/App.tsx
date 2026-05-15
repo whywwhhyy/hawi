@@ -10,8 +10,8 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
+import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type ChatNode, type ContextCompressionState, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
@@ -61,8 +61,8 @@ const MESSAGE_INPUT_MAX_ROWS = 5;
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const queueLabels: Record<QueueKind, string> = {
-  normal: "普通",
-  high_prio: "优先",
+  normal: "稍后任务",
+  high_prio: "待送达插话",
   urgent: "紧急"
 };
 
@@ -72,13 +72,15 @@ const userMessageTypeLabels = {
   urgent: "紧急消息"
 } as const;
 
-export function renderPriorityStatusText(
+export function renderQueueStatusText(
   queueLengths: Record<QueueKind, number>,
   queueMessages?: Record<QueueKind, QueueMessageState[]>
 ): string {
   const highPriorityCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
-  return `优先 ${highPriorityCount} · 普通 ${normalQueueCount(queueLengths, queueMessages)}`;
+  return `插话 ${highPriorityCount} · 排队 ${normalQueueCount(queueLengths, queueMessages)}`;
 }
+
+export const renderPriorityStatusText = renderQueueStatusText;
 
 export function shouldInitializeSessionState(metadata: GuiMetadata | null): boolean {
   return Boolean(metadata?.coreRunning);
@@ -145,6 +147,10 @@ export default function App() {
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [queueTaskDraft, setQueueTaskDraft] = useState("");
+  const [queueTaskBusy, setQueueTaskBusy] = useState(false);
+  const [editingQueueTaskId, setEditingQueueTaskId] = useState<string | null>(null);
+  const [queueTaskEditDraft, setQueueTaskEditDraft] = useState("");
   const [sessionStats, setSessionStats] = useState<SessionRuntimeStats>({
     running: 0,
     loaded: 0,
@@ -156,6 +162,7 @@ export default function App() {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const queueTaskDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const configRef = useRef<PersistedConfig | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
   const pendingSystemPromptConfigRef = useRef<PersistedConfig | null>(null);
@@ -168,6 +175,8 @@ export default function App() {
   const autoScrollFrameRef = useRef<number | null>(null);
   const inputComposingRef = useRef(false);
   const inputCompositionEndTimerRef = useRef<number | null>(null);
+  const queueTaskComposingRef = useRef(false);
+  const queueTaskCompositionEndTimerRef = useRef<number | null>(null);
   const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0;
   const fallbackState = useMemo(createInitialState, []);
   const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
@@ -238,6 +247,9 @@ export default function App() {
     cancelPendingAutoScroll();
     if (inputCompositionEndTimerRef.current !== null) {
       window.clearTimeout(inputCompositionEndTimerRef.current);
+    }
+    if (queueTaskCompositionEndTimerRef.current !== null) {
+      window.clearTimeout(queueTaskCompositionEndTimerRef.current);
     }
   }, []);
 
@@ -596,6 +608,137 @@ export default function App() {
     }, 0);
   }
 
+  function startQueueTaskComposition() {
+    if (queueTaskCompositionEndTimerRef.current !== null) {
+      window.clearTimeout(queueTaskCompositionEndTimerRef.current);
+      queueTaskCompositionEndTimerRef.current = null;
+    }
+    queueTaskComposingRef.current = true;
+  }
+
+  function endQueueTaskComposition() {
+    if (queueTaskCompositionEndTimerRef.current !== null) {
+      window.clearTimeout(queueTaskCompositionEndTimerRef.current);
+    }
+    queueTaskCompositionEndTimerRef.current = window.setTimeout(() => {
+      queueTaskComposingRef.current = false;
+      queueTaskCompositionEndTimerRef.current = null;
+    }, 0);
+  }
+
+  async function refreshRuntimeStatus() {
+    const frame = await sendCommand("get_status", {});
+    if (frame?.type === "core.status") {
+      dispatch(frame);
+    }
+  }
+
+  async function addQueueTask() {
+    const content = queueTaskDraft.trim();
+    if (!content || queueTaskBusy) return;
+    setQueueTaskBusy(true);
+    try {
+      const frame = await sendCommand("queue_task_add", { content });
+      if (!frame) return;
+      setQueueTaskDraft("");
+      await refreshRuntimeStatus();
+    } finally {
+      setQueueTaskBusy(false);
+    }
+  }
+
+  async function updateQueueTask(messageId: string, content: string) {
+    const nextContent = content.trim();
+    if (!messageId || !nextContent || queueTaskBusy) return;
+    setQueueTaskBusy(true);
+    try {
+      const frame = await sendCommand("queue_task_update", { message_id: messageId, content: nextContent });
+      if (!frame) return;
+      setEditingQueueTaskId(null);
+      setQueueTaskEditDraft("");
+      await refreshRuntimeStatus();
+    } finally {
+      setQueueTaskBusy(false);
+    }
+  }
+
+  async function removeQueueTask(messageId: string) {
+    if (!messageId || queueTaskBusy) return;
+    setQueueTaskBusy(true);
+    try {
+      const frame = await sendCommand("queue_task_remove", { message_id: messageId });
+      if (!frame) return;
+      if (editingQueueTaskId === messageId) {
+        setEditingQueueTaskId(null);
+        setQueueTaskEditDraft("");
+      }
+      await refreshRuntimeStatus();
+    } finally {
+      setQueueTaskBusy(false);
+    }
+  }
+
+  async function pullBackQueueTask(message: QueueMessageState) {
+    const content = (message.content ?? message.contentPreview).trim();
+    if (!message.id || !content || queueTaskBusy) return;
+    setQueueTaskBusy(true);
+    try {
+      const frame = await sendCommand("queue_task_remove", { message_id: message.id });
+      if (!frame) return;
+      if (editingQueueTaskId === message.id) {
+        setEditingQueueTaskId(null);
+        setQueueTaskEditDraft("");
+      }
+      setQueueTaskDraft(content);
+      await refreshRuntimeStatus();
+      window.requestAnimationFrame(() => {
+        const draft = queueTaskDraftRef.current;
+        if (!draft) return;
+        draft.focus();
+        draft.setSelectionRange(draft.value.length, draft.value.length);
+      });
+    } finally {
+      setQueueTaskBusy(false);
+    }
+  }
+
+  async function moveQueueTask(messageId: string, direction: -1 | 1) {
+    if (!messageId || queueTaskBusy) return;
+    const ids = state.queueMessages.normal.map((message) => message.id);
+    const index = ids.indexOf(messageId);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return;
+    const nextIds = [...ids];
+    [nextIds[index], nextIds[nextIndex]] = [nextIds[nextIndex], nextIds[index]];
+    setQueueTaskBusy(true);
+    try {
+      const frame = await sendCommand("queue_task_reorder", { message_ids: nextIds });
+      if (!frame) return;
+      await refreshRuntimeStatus();
+    } finally {
+      setQueueTaskBusy(false);
+    }
+  }
+
+  async function clearNormalQueue() {
+    if (queueTaskBusy) return;
+    setQueueTaskBusy(true);
+    try {
+      const frame = await sendCommand("clear_queue", { queue: "normal" });
+      if (!frame) return;
+      setEditingQueueTaskId(null);
+      setQueueTaskEditDraft("");
+      await refreshRuntimeStatus();
+    } finally {
+      setQueueTaskBusy(false);
+    }
+  }
+
+  function startEditingQueueTask(message: QueueMessageState) {
+    setEditingQueueTaskId(message.id);
+    setQueueTaskEditDraft(message.content ?? message.contentPreview);
+  }
+
   async function runSlashCommand(text: string) {
     const command = text.slice(1).toLowerCase();
     if (command === "clear") await clearConversation();
@@ -702,11 +845,35 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="status-strip">
-          <PriorityStatusCell
+          <QueueStatusCell
             queueLengths={state.queueLengths}
             queueMessages={state.queueMessages}
+            control={state.control}
             open={queuePopoverOpen}
             onToggle={() => setQueuePopoverOpen((value) => !value)}
+            taskDraft={queueTaskDraft}
+            taskDraftRef={(element) => {
+              queueTaskDraftRef.current = element;
+            }}
+            taskBusy={queueTaskBusy}
+            editingTaskId={editingQueueTaskId}
+            editDraft={queueTaskEditDraft}
+            onTaskDraftChange={setQueueTaskDraft}
+            onTaskAdd={addQueueTask}
+            onTaskCompositionStart={startQueueTaskComposition}
+            onTaskCompositionEnd={endQueueTaskComposition}
+            isTaskComposing={() => queueTaskComposingRef.current}
+            onEditStart={startEditingQueueTask}
+            onEditCancel={() => {
+              setEditingQueueTaskId(null);
+              setQueueTaskEditDraft("");
+            }}
+            onEditDraftChange={setQueueTaskEditDraft}
+            onTaskUpdate={updateQueueTask}
+            onTaskRemove={removeQueueTask}
+            onTaskPullBack={pullBackQueueTask}
+            onTaskMove={moveQueueTask}
+            onTaskClear={clearNormalQueue}
           />
           <ContextUsageCell usage={state.contextUsage} compression={state.contextCompression} />
           <SessionStatusCell
@@ -877,16 +1044,54 @@ export default function App() {
   );
 }
 
-function PriorityStatusCell({
+function QueueStatusCell({
   queueLengths,
   queueMessages,
+  control,
   open,
-  onToggle
+  onToggle,
+  taskDraft,
+  taskDraftRef,
+  taskBusy,
+  editingTaskId,
+  editDraft,
+  onTaskDraftChange,
+  onTaskAdd,
+  onTaskCompositionStart,
+  onTaskCompositionEnd,
+  isTaskComposing,
+  onEditStart,
+  onEditCancel,
+  onEditDraftChange,
+  onTaskUpdate,
+  onTaskRemove,
+  onTaskPullBack,
+  onTaskMove,
+  onTaskClear
 }: {
   queueLengths: Record<QueueKind, number>;
   queueMessages: Record<QueueKind, QueueMessageState[]>;
+  control: RuntimeControlState;
   open: boolean;
   onToggle: () => void;
+  taskDraft: string;
+  taskDraftRef: (element: HTMLTextAreaElement | null) => void;
+  taskBusy: boolean;
+  editingTaskId: string | null;
+  editDraft: string;
+  onTaskDraftChange: (value: string) => void;
+  onTaskAdd: () => void;
+  onTaskCompositionStart: () => void;
+  onTaskCompositionEnd: () => void;
+  isTaskComposing: () => boolean;
+  onEditStart: (message: QueueMessageState) => void;
+  onEditCancel: () => void;
+  onEditDraftChange: (value: string) => void;
+  onTaskUpdate: (messageId: string, content: string) => void;
+  onTaskRemove: (messageId: string) => void;
+  onTaskPullBack: (message: QueueMessageState) => void;
+  onTaskMove: (messageId: string, direction: -1 | 1) => void;
+  onTaskClear: () => void;
 }) {
   const highPriorityCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
   const normalCount = normalQueueCount(queueLengths, queueMessages);
@@ -896,18 +1101,37 @@ function PriorityStatusCell({
       <button
         type="button"
         className="priority-status-trigger"
-        title="优先消息会作为 steer 处理；普通消息进入队列。"
-        aria-label={renderPriorityStatusText(queueLengths, queueMessages)}
+        title="插话会尽快送达；排队是稍后自动执行的任务。"
+        aria-label={renderQueueStatusText(queueLengths, queueMessages)}
         aria-pressed={open}
         onClick={onToggle}
       >
-        <span>优先 <strong>{highPriorityCount}</strong></span>
-        <span>普通 <strong>{normalCount}</strong></span>
+        <span>插话 <strong>{highPriorityCount}</strong></span>
+        <span>排队 <strong>{normalCount}</strong></span>
       </button>
       {open && (
         <QueuePopover
           queueLengths={queueLengths}
           queueMessages={queueMessages}
+          control={control}
+          taskDraft={taskDraft}
+          taskDraftRef={taskDraftRef}
+          taskBusy={taskBusy}
+          editingTaskId={editingTaskId}
+          editDraft={editDraft}
+          onTaskDraftChange={onTaskDraftChange}
+          onTaskAdd={onTaskAdd}
+          onTaskCompositionStart={onTaskCompositionStart}
+          onTaskCompositionEnd={onTaskCompositionEnd}
+          isTaskComposing={isTaskComposing}
+          onEditStart={onEditStart}
+          onEditCancel={onEditCancel}
+          onEditDraftChange={onEditDraftChange}
+          onTaskUpdate={onTaskUpdate}
+          onTaskRemove={onTaskRemove}
+          onTaskPullBack={onTaskPullBack}
+          onTaskMove={onTaskMove}
+          onTaskClear={onTaskClear}
         />
       )}
     </div>
@@ -1095,28 +1319,90 @@ function SessionLoadIndicator({ state }: { state: SessionLoadState }) {
 
 function QueuePopover({
   queueLengths,
-  queueMessages
+  queueMessages,
+  control,
+  taskDraft,
+  taskDraftRef,
+  taskBusy,
+  editingTaskId,
+  editDraft,
+  onTaskDraftChange,
+  onTaskAdd,
+  onTaskCompositionStart,
+  onTaskCompositionEnd,
+  isTaskComposing,
+  onEditStart,
+  onEditCancel,
+  onEditDraftChange,
+  onTaskUpdate,
+  onTaskRemove,
+  onTaskPullBack,
+  onTaskMove,
+  onTaskClear
 }: {
   queueLengths: Record<QueueKind, number>;
   queueMessages: Record<QueueKind, QueueMessageState[]>;
+  control: RuntimeControlState;
+  taskDraft: string;
+  taskDraftRef: (element: HTMLTextAreaElement | null) => void;
+  taskBusy: boolean;
+  editingTaskId: string | null;
+  editDraft: string;
+  onTaskDraftChange: (value: string) => void;
+  onTaskAdd: () => void;
+  onTaskCompositionStart: () => void;
+  onTaskCompositionEnd: () => void;
+  isTaskComposing: () => boolean;
+  onEditStart: (message: QueueMessageState) => void;
+  onEditCancel: () => void;
+  onEditDraftChange: (value: string) => void;
+  onTaskUpdate: (messageId: string, content: string) => void;
+  onTaskRemove: (messageId: string) => void;
+  onTaskPullBack: (message: QueueMessageState) => void;
+  onTaskMove: (messageId: string, direction: -1 | 1) => void;
+  onTaskClear: () => void;
 }) {
   const normalCount = normalQueueCount(queueLengths, queueMessages);
   const total = (hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0) + normalCount;
   return (
     <div className="queue-popover">
       <header>
-        <span>待处理消息</span>
+        <span>待处理</span>
         <strong>{total}</strong>
       </header>
+      {control.paused && (
+        <div className="queue-pause-note">
+          {control.last_error_message
+            ? `已暂停：${control.last_error_message}`
+            : "已暂停，队列任务不会自动执行。"}
+        </div>
+      )}
       <QueueMessageGroup
         kind="high_prio"
         length={Math.max(queueLengths.high_prio, queueMessages.high_prio.length)}
         messages={queueMessages.high_prio}
       />
-      <QueueMessageGroup
-        kind="normal"
+      <QueueTaskGroup
         length={normalCount}
         messages={queueMessages.normal}
+        draft={taskDraft}
+        draftRef={taskDraftRef}
+        busy={taskBusy}
+        editingTaskId={editingTaskId}
+        editDraft={editDraft}
+        onDraftChange={onTaskDraftChange}
+        onAdd={onTaskAdd}
+        onCompositionStart={onTaskCompositionStart}
+        onCompositionEnd={onTaskCompositionEnd}
+        isComposing={isTaskComposing}
+        onEditStart={onEditStart}
+        onEditCancel={onEditCancel}
+        onEditDraftChange={onEditDraftChange}
+        onUpdate={onTaskUpdate}
+        onRemove={onTaskRemove}
+        onPullBack={onTaskPullBack}
+        onMove={onTaskMove}
+        onClear={onTaskClear}
       />
     </div>
   );
@@ -1155,6 +1441,121 @@ function QueueMessageGroup({
   );
 }
 
+function QueueTaskGroup({
+  length,
+  messages,
+  draft,
+  draftRef,
+  busy,
+  editingTaskId,
+  editDraft,
+  onDraftChange,
+  onAdd,
+  onCompositionStart,
+  onCompositionEnd,
+  isComposing,
+  onEditStart,
+  onEditCancel,
+  onEditDraftChange,
+  onUpdate,
+  onRemove,
+  onPullBack,
+  onMove,
+  onClear
+}: {
+  length: number;
+  messages: QueueMessageState[];
+  draft: string;
+  draftRef: (element: HTMLTextAreaElement | null) => void;
+  busy: boolean;
+  editingTaskId: string | null;
+  editDraft: string;
+  onDraftChange: (value: string) => void;
+  onAdd: () => void;
+  onCompositionStart: () => void;
+  onCompositionEnd: () => void;
+  isComposing: () => boolean;
+  onEditStart: (message: QueueMessageState) => void;
+  onEditCancel: () => void;
+  onEditDraftChange: (value: string) => void;
+  onUpdate: (messageId: string, content: string) => void;
+  onRemove: (messageId: string) => void;
+  onPullBack: (message: QueueMessageState) => void;
+  onMove: (messageId: string, direction: -1 | 1) => void;
+  onClear: () => void;
+}) {
+  return (
+    <section className="queue-group queue-task-group">
+      <header>
+        <span>{queueLabels.normal}</span>
+        <div className="queue-group-actions">
+          <strong>{length}</strong>
+          <button
+            type="button"
+            className="queue-text-action"
+            title="清空稍后任务"
+            disabled={busy || messages.length === 0}
+            onClick={onClear}
+          >
+            清空
+          </button>
+        </div>
+      </header>
+      <form
+        className="queue-add"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onAdd();
+        }}
+      >
+        <textarea
+          ref={draftRef}
+          rows={2}
+          value={draft}
+          placeholder="添加一个稍后任务..."
+          disabled={busy}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
+          onKeyDown={(event) => {
+            if (shouldSubmitInputFromKeyEvent(event, isComposing())) {
+              event.preventDefault();
+              onAdd();
+            }
+          }}
+        />
+        <button type="submit" className="queue-add-button" disabled={busy || !draft.trim()}>
+          <Plus size={14} /> 加入队列
+        </button>
+      </form>
+      {messages.length === 0 ? (
+        <div className="queue-empty">空</div>
+      ) : (
+        <div className="queue-message-list queue-task-list">
+          {messages.map((message, index) => (
+            <QueueTaskItem
+              message={message}
+              key={`normal-${message.id}`}
+              index={index}
+              count={messages.length}
+              busy={busy}
+              editing={editingTaskId === message.id}
+              editDraft={editDraft}
+              onEditStart={onEditStart}
+              onEditCancel={onEditCancel}
+              onEditDraftChange={onEditDraftChange}
+              onUpdate={onUpdate}
+              onRemove={onRemove}
+              onPullBack={onPullBack}
+              onMove={onMove}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function QueueMessageItem({ message }: { message: QueueMessageState }) {
   const timestamp = formatQueueTimestamp(message.createdAt);
   return (
@@ -1164,6 +1565,104 @@ function QueueMessageItem({ message }: { message: QueueMessageState }) {
         {timestamp && <time>{timestamp}</time>}
       </div>
       <p>{message.contentPreview || "空消息"}</p>
+    </article>
+  );
+}
+
+function QueueTaskItem({
+  message,
+  index,
+  count,
+  busy,
+  editing,
+  editDraft,
+  onEditStart,
+  onEditCancel,
+  onEditDraftChange,
+  onUpdate,
+  onRemove,
+  onPullBack,
+  onMove
+}: {
+  message: QueueMessageState;
+  index: number;
+  count: number;
+  busy: boolean;
+  editing: boolean;
+  editDraft: string;
+  onEditStart: (message: QueueMessageState) => void;
+  onEditCancel: () => void;
+  onEditDraftChange: (value: string) => void;
+  onUpdate: (messageId: string, content: string) => void;
+  onRemove: (messageId: string) => void;
+  onPullBack: (message: QueueMessageState) => void;
+  onMove: (messageId: string, direction: -1 | 1) => void;
+}) {
+  const timestamp = formatQueueTimestamp(message.createdAt);
+  if (editing) {
+    return (
+      <article className="queue-message queue-task editing">
+        <div className="queue-message-meta">
+          <span>{message.id}</span>
+          {timestamp && <time>{timestamp}</time>}
+        </div>
+        <textarea
+          rows={3}
+          value={editDraft}
+          disabled={busy}
+          onChange={(event) => onEditDraftChange(event.target.value)}
+        />
+        <div className="queue-task-actions">
+          <button
+            type="button"
+            title="保存"
+            disabled={busy || !editDraft.trim()}
+            onClick={() => onUpdate(message.id, editDraft)}
+          >
+            <Check size={13} />
+          </button>
+          <button type="button" title="取消" disabled={busy} onClick={onEditCancel}>
+            <X size={13} />
+          </button>
+        </div>
+      </article>
+    );
+  }
+
+  return (
+    <article className="queue-message queue-task">
+      <div className="queue-message-meta">
+        <span>{message.id}</span>
+        {timestamp && <time>{timestamp}</time>}
+      </div>
+      <p>{(message.content ?? message.contentPreview) || "空消息"}</p>
+      <div className="queue-task-actions">
+        <button
+          type="button"
+          title="上移"
+          disabled={busy || index === 0}
+          onClick={() => onMove(message.id, -1)}
+        >
+          <ArrowUp size={13} />
+        </button>
+        <button
+          type="button"
+          title="下移"
+          disabled={busy || index >= count - 1}
+          onClick={() => onMove(message.id, 1)}
+        >
+          <ArrowDown size={13} />
+        </button>
+        <button type="button" title="编辑" disabled={busy} onClick={() => onEditStart(message)}>
+          <Pencil size={13} />
+        </button>
+        <button type="button" title="拉回编辑" disabled={busy} onClick={() => onPullBack(message)}>
+          <RotateCcw size={13} />
+        </button>
+        <button type="button" title="删除" disabled={busy} onClick={() => onRemove(message.id)}>
+          <Trash2 size={13} />
+        </button>
+      </div>
     </article>
   );
 }

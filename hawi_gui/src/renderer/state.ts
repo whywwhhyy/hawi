@@ -114,6 +114,7 @@ export interface QueueMessageState {
   id: string;
   queue: QueueKind;
   contentPreview: string;
+  content?: string;
   createdAt?: number;
   metadata?: Record<string, unknown>;
 }
@@ -1678,6 +1679,7 @@ function normalizeQueueMessageList(value: unknown, queue: QueueKind): QueueMessa
         contentPreview: optionalString(item.content_preview)
           ?? optionalString(item.contentPreview)
           ?? "",
+        content: optionalString(item.content),
         createdAt: optionalNumber(item.created_at ?? item.createdAt),
         metadata: isRecord(item.metadata) ? item.metadata : undefined
       };

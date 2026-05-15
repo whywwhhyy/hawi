@@ -548,8 +548,8 @@ button:disabled {
   left: 6px;
   display: flex;
   flex-direction: column;
-  width: 300px;
-  max-height: 380px;
+  width: 360px;
+  max-height: 520px;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--color-border);
@@ -571,6 +571,15 @@ button:disabled {
 
 .queue-popover > header strong {
   color: var(--color-primary);
+}
+
+.queue-pause-note {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: #fff7e8;
+  color: #735724;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .queue-group {
@@ -601,6 +610,76 @@ button:disabled {
   color: var(--color-primary);
 }
 
+.queue-group-actions,
+.queue-task-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.queue-text-action {
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: #536369;
+  font-size: 11px;
+}
+
+.queue-text-action:hover:not(:disabled) {
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+}
+
+.queue-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.queue-add textarea,
+.queue-task textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text-strong);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.queue-add textarea {
+  min-height: 42px;
+  max-height: 120px;
+  padding: 6px 7px;
+}
+
+.queue-task textarea {
+  min-height: 68px;
+  padding: 7px 8px;
+}
+
+.queue-add-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-primary);
+  color: var(--color-surface);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .queue-merge-note,
 .queue-empty {
   color: var(--color-text-subtle);
@@ -620,12 +699,27 @@ button:disabled {
   scrollbar-gutter: stable;
 }
 
+.queue-task-list {
+  max-height: 230px;
+}
+
 .queue-message {
   min-width: 0;
   padding: 7px 8px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius);
   background: var(--color-surface-muted);
+}
+
+.queue-task {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 8px;
+  align-items: start;
+}
+
+.queue-task.editing {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .queue-message-meta {
@@ -652,6 +746,46 @@ button:disabled {
   line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.queue-task p {
+  grid-column: 1;
+  margin-top: 4px;
+}
+
+.queue-task-actions {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  justify-content: flex-end;
+}
+
+.queue-task.editing .queue-task-actions {
+  grid-row: auto;
+  grid-column: auto;
+}
+
+.queue-task-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: #64777a;
+}
+
+.queue-task-actions button:hover:not(:disabled) {
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+}
+
+.queue-task-actions button:disabled,
+.queue-add-button:disabled,
+.queue-text-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .plugin-preview {
