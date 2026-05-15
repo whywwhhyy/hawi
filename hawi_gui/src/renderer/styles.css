@@ -113,11 +113,20 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 38px;
+  padding: 0 10px;
   border-right: 1px solid var(--color-border);
-  gap: 8px;
+  gap: 7px;
   white-space: nowrap;
+}
+
+.status-strip > :first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.status-strip > :last-child {
+  border-right: 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
 }
 
 @keyframes status-spin {
@@ -138,10 +147,10 @@ button:disabled {
 .priority-status-trigger {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 38px;
+  padding: 0 10px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -149,12 +158,40 @@ button:disabled {
   white-space: nowrap;
 }
 
-.priority-status-trigger span {
+.status-cell-label,
+.priority-status-trigger .status-cell-label {
   color: #49575d;
+  font-weight: 600;
 }
 
-.priority-status-trigger strong {
+.message-status-widget {
+  display: grid;
+  gap: 1px;
+  min-width: 52px;
+  color: #69777d;
+  font-size: 10px;
+  line-height: 1.1;
+}
+
+.message-status-widget > span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px;
+  width: 100%;
+}
+
+.message-status-widget > span > span {
+  justify-self: start;
+  text-align: left;
+}
+
+.message-status-widget > span > strong {
+  justify-self: end;
+  min-width: 1.5ch;
   color: var(--color-primary);
+  font-size: 11px;
+  text-align: right;
 }
 
 .priority-status:hover .priority-status-trigger,
@@ -164,9 +201,9 @@ button:disabled {
 
 .context-status {
   position: relative;
-  min-width: 172px;
+  min-width: 174px;
   justify-content: flex-start;
-  gap: 7px;
+  gap: 8px;
   border-right: 1px solid var(--color-border);
   font-size: 12px;
 }
@@ -190,35 +227,46 @@ button.context-status:disabled {
   cursor: default;
 }
 
-.context-status span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #49575d;
-}
-
-.context-status strong {
-  color: var(--color-primary);
-}
-
 .context-status-spinner {
   flex: 0 0 auto;
   color: var(--color-primary);
   animation: status-spin 0.9s linear infinite;
 }
 
+.context-status-percent {
+  color: var(--color-primary);
+}
+
 .inline-spinner {
   animation: status-spin 0.9s linear infinite;
 }
 
-.context-status small {
+.context-status-widget {
+  display: grid;
+  flex: 1 1 84px;
+  min-width: 84px;
+  gap: 3px;
+}
+
+.context-status-widget.compressing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #49575d;
+}
+
+.context-usage-line {
+  display: block;
   color: #69777d;
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1;
+  text-align: right;
 }
 
 .context-meter {
-  flex: 1 1 40px;
-  height: 5px;
+  display: block;
+  width: 100%;
+  height: 4px;
   overflow: hidden;
   border-radius: var(--radius-pill);
   background: #e3e8e9;
@@ -236,8 +284,8 @@ button.context-status:disabled {
   justify-content: flex-start;
   min-width: 0;
   gap: 7px;
-  border-right: 0;
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border-right: 1px solid var(--color-border);
+  border-radius: 0;
   font-size: 12px;
 }
 
@@ -273,6 +321,8 @@ button.context-status:disabled {
   white-space: nowrap;
 }
 
+.session-status:hover,
+.session-status:focus-within,
 .session-status.active {
   background: var(--color-primary-tint);
 }
@@ -305,7 +355,7 @@ button.context-status:disabled {
   position: absolute;
   z-index: var(--layer-popover);
   top: calc(100% + 6px);
-  right: 6px;
+  left: 6px;
   width: min(420px, calc(100vw - 24px));
   max-height: 420px;
   overflow: hidden;

@@ -53,11 +53,11 @@ describe("formatStreamFinishedLabel", () => {
 
 describe("renderPriorityStatusText", () => {
   it("describes high priority as a priority slot and normal as queue length", () => {
-    expect(renderPriorityStatusText({ urgent: 1, high_prio: 3, normal: 4 })).toBe("插话 1 · 排队 4");
+    expect(renderPriorityStatusText({ urgent: 1, high_prio: 3, normal: 4 })).toBe("Message Insert 1 · Queue 4");
   });
 
   it("shows empty priority and queue states", () => {
-    expect(renderPriorityStatusText({ urgent: 0, high_prio: 0, normal: 0 })).toBe("插话 0 · 排队 0");
+    expect(renderPriorityStatusText({ urgent: 0, high_prio: 0, normal: 0 })).toBe("Message Insert 0 · Queue 0");
   });
 
   it("counts pending high priority previews as a priority slot", () => {
@@ -68,7 +68,7 @@ describe("renderPriorityStatusText", () => {
         high_prio: [{ id: "steer-1", queue: "high_prio", contentPreview: "steer" }],
         normal: []
       }
-    )).toBe("插话 1 · 排队 2");
+    )).toBe("Message Insert 1 · Queue 2");
   });
 
   it("counts pending normal previews as ordinary queue work", () => {
@@ -79,7 +79,7 @@ describe("renderPriorityStatusText", () => {
         high_prio: [],
         normal: [{ id: "steer-plain", queue: "normal", contentPreview: "plain" }]
       }
-    )).toBe("插话 0 · 排队 1");
+    )).toBe("Message Insert 0 · Queue 1");
   });
 });
 

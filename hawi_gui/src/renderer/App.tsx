@@ -77,7 +77,7 @@ export function renderQueueStatusText(
   queueMessages?: Record<QueueKind, QueueMessageState[]>
 ): string {
   const highPriorityCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
-  return `插话 ${highPriorityCount} · 排队 ${normalQueueCount(queueLengths, queueMessages)}`;
+  return `Message Insert ${highPriorityCount} · Queue ${normalQueueCount(queueLengths, queueMessages)}`;
 }
 
 export const renderPriorityStatusText = renderQueueStatusText;
@@ -885,6 +885,27 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="status-strip">
+          <SessionStatusCell
+            messageCount={state.sessionMessageCount}
+            runningCount={sessionStats.running}
+            loadedCount={sessionStats.loaded}
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            open={sessionDialogOpen}
+            busy={sessionBusy}
+            onToggle={openSessionDialog}
+            onSelect={loadSession}
+            onDelete={deleteSession}
+            onNew={newSession}
+            onFork={forkSession}
+          />
+          <ContextUsageCell
+            usage={state.contextUsage}
+            compression={state.contextCompression}
+            busy={contextCompactBusy}
+            disabled={!coreRunning || state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING"}
+            onRequestCompact={() => setContextCompactDialogOpen(true)}
+          />
           <QueueStatusCell
             queueLengths={state.queueLengths}
             queueMessages={state.queueMessages}
@@ -914,27 +935,6 @@ export default function App() {
             onTaskPullBack={pullBackQueueTask}
             onTaskMove={moveQueueTask}
             onTaskClear={clearNormalQueue}
-          />
-          <ContextUsageCell
-            usage={state.contextUsage}
-            compression={state.contextCompression}
-            busy={contextCompactBusy}
-            disabled={!coreRunning || state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING"}
-            onRequestCompact={() => setContextCompactDialogOpen(true)}
-          />
-          <SessionStatusCell
-            messageCount={state.sessionMessageCount}
-            runningCount={sessionStats.running}
-            loadedCount={sessionStats.loaded}
-            sessions={sessions}
-            currentSessionId={currentSessionId}
-            open={sessionDialogOpen}
-            busy={sessionBusy}
-            onToggle={openSessionDialog}
-            onSelect={loadSession}
-            onDelete={deleteSession}
-            onNew={newSession}
-            onFork={forkSession}
           />
         </div>
         <button
@@ -1157,13 +1157,16 @@ function QueueStatusCell({
       <button
         type="button"
         className="priority-status-trigger"
-        title="插话会尽快送达；排队是稍后自动执行的任务。"
+        title="Insert messages deliver soon; queued messages run later."
         aria-label={renderQueueStatusText(queueLengths, queueMessages)}
         aria-pressed={open}
         onClick={onToggle}
       >
-        <span>插话 <strong>{highPriorityCount}</strong></span>
-        <span>排队 <strong>{normalCount}</strong></span>
+        <span className="status-cell-label">Message</span>
+        <span className="message-status-widget" aria-hidden="true">
+          <span><span>Insert</span><strong>{highPriorityCount}</strong></span>
+          <span><span>Queue</span><strong>{normalCount}</strong></span>
+        </span>
       </button>
       {open && (
         <QueuePopover
@@ -1227,17 +1230,23 @@ function ContextUsageCell({
       disabled={inactive}
       onClick={onRequestCompact}
     >
-      <span>
-        {compressing && <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />}
-        {compressing ? "Compressing" : "Context"}
+      <span className="status-cell-label">Context</span>
+      {!compressing && <strong className="context-status-percent">{percent}</strong>}
+      <span className={`context-status-widget ${compressing ? "compressing" : ""}`}>
+        {compressing ? (
+          <>
+            <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />
+            <span>Compressing</span>
+          </>
+        ) : (
+          <>
+            <span className="context-usage-line">{usageLabel}</span>
+            <span className="context-meter" aria-hidden="true">
+              <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+            </span>
+          </>
+        )}
       </span>
-      {!compressing && <strong>{percent}</strong>}
-      {!compressing && (
-        <div className="context-meter" aria-hidden="true">
-          <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
-        </div>
-      )}
-      <small>{usageLabel}</small>
     </button>
   );
 }
