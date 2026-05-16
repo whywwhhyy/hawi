@@ -14,7 +14,7 @@ import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRi
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode, type ContextCompressionState, type ContextUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
+import { createInitialState, reduceCoreEvent, type ChatNode, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -1789,6 +1789,9 @@ const ChatBubble = memo(function ChatBubble({
   if (node.kind === "tool" && node.tool) {
     return <ToolBubble node={node} />;
   }
+  if (node.kind === "framework" && node.framework) {
+    return <FrameworkBubble item={node.framework} />;
+  }
   if (node.kind === "thinking") {
     return <ThinkingBubble node={node} />;
   }
@@ -1804,6 +1807,50 @@ function ProcessingLine({ processing }: { processing: ProcessingState }) {
   );
 }
 
+const FrameworkBubble = memo(function FrameworkBubble({
+  item,
+  embedded = false
+}: {
+  item: FrameworkInjectionState;
+  embedded?: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(true);
+  const html = renderMarkdown(item.content);
+  const toggleCollapsed = () => setCollapsed((value) => !value);
+  const source = frameworkInjectionSourceLabel(item);
+
+  return (
+    <article className={`bubble framework ${embedded ? "embedded" : ""} ${collapsed ? "collapsed" : "expanded"}`}>
+      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+        <span className="bubble-title framework-title">
+          <Plug size={15} />
+          <span className="framework-label">{item.label}</span>
+          {source && <span className="framework-source">{source}</span>}
+        </span>
+        <span className="message-actions">
+          <CopyButton text={item.content} title="复制注入内容" />
+          <button
+            className="thinking-toggle framework-toggle"
+            title={collapsed ? "展开注入内容" : "折叠注入内容"}
+            aria-expanded={!collapsed}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCollapsed();
+            }}
+          >
+            {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        </span>
+      </div>
+      <div className={`collapsible-body framework-body ${collapsed ? "is-collapsed" : ""}`} aria-hidden={collapsed}>
+        <div className="collapsible-body-inner">
+          <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+        </div>
+      </div>
+    </article>
+  );
+});
+
 const MessageBubble = memo(function MessageBubble({
   node,
   onForkMessage
@@ -1818,6 +1865,8 @@ const MessageBubble = memo(function MessageBubble({
   const toggleCollapsed = () => setCollapsed((value) => !value);
   const expandCollapsed = () => setCollapsed(false);
   const canFork = node.canFork === true && typeof node.contextMessageIndex === "number";
+  const beforeInjections = (node.injections ?? []).filter((item) => item.mergePosition === "before");
+  const afterInjections = (node.injections ?? []).filter((item) => item.mergePosition !== "before");
 
   return (
     <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""}`}>
@@ -1858,6 +1907,13 @@ const MessageBubble = memo(function MessageBubble({
           </button>
         </span>
       </div>
+      {beforeInjections.length > 0 && (
+        <div className="message-injections before">
+          {beforeInjections.map((item) => (
+            <FrameworkBubble item={item} embedded key={item.id} />
+          ))}
+        </div>
+      )}
       <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
         <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
         {collapsed && (
@@ -1870,6 +1926,13 @@ const MessageBubble = memo(function MessageBubble({
           />
         )}
       </div>
+      {afterInjections.length > 0 && (
+        <div className="message-injections after">
+          {afterInjections.map((item) => (
+            <FrameworkBubble item={item} embedded key={item.id} />
+          ))}
+        </div>
+      )}
     </article>
   );
 });
@@ -1881,6 +1944,35 @@ function labelForUserMessage(node: ChatNode): string {
   if (node.queue === "urgent") return userMessageTypeLabels.urgent;
   if (node.queue === "high_prio") return userMessageTypeLabels.steer;
   return userMessageTypeLabels.normal;
+}
+
+function frameworkInjectionSourceLabel(item: FrameworkInjectionState): string {
+  const source = item.pluginName
+    ?? (item.pluginRole === "framework" ? "Hawi" : item.pluginRole);
+  const injection = item.injectionName && item.injectionName !== source
+    ? item.injectionName
+    : undefined;
+  const target = frameworkInjectionTargetLabel(item);
+  return [source, injection, target].filter(Boolean).join(" · ");
+}
+
+function frameworkInjectionTargetLabel(item: FrameworkInjectionState): string | undefined {
+  if (item.kind === "system_prompt") {
+    return "system prompt";
+  }
+  if (item.kind === "context_injected") {
+    return [item.hookType, item.role].filter(Boolean).join("/");
+  }
+  if (item.kind === "tool_parameter_injected") {
+    return item.toolName ? `${item.toolName} parameters` : "tool parameters";
+  }
+  if (item.kind === "tool_runtime_context_injected") {
+    if (item.toolName && item.parameterName) {
+      return `${item.toolName}.${item.parameterName}`;
+    }
+    return item.toolName ?? item.parameterName ?? "runtime context";
+  }
+  return item.toolCallId ? `tool ${item.toolCallId}` : undefined;
 }
 
 const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }) {

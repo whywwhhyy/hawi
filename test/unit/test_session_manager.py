@@ -23,15 +23,20 @@ from hawi.agent.context import AgentContext
 from hawi.agent.runner.queue import MessageQueueManager
 from hawi.errors import DeniedError, ToolExecutionError
 from hawi.events import (
+    AgentContextInjectedEvent,
     AgentErrorEvent,
     AgentCompactStartEvent,
     AgentCompactStopEvent,
     AgentInterruptEvent,
     AgentMessageAddedEvent,
+    AgentSystemPromptEvent,
+    AgentToolParameterInjectedEvent,
+    AgentToolRuntimeContextInjectedEvent,
     EventBus,
     ModelErrorEvent,
     ModelRetryEvent,
     AgentRunnerInterruptEvent,
+    PluginEvent,
     SessionWriteFailedEvent,
 )
 from hawi.models import Model
@@ -985,6 +990,127 @@ class TestSessionManager:
             assert entries[1]["content"][0]["text"] == "Context compacted"
             assert entries[1]["metadata"]["event_type"] == "agent.compact_stop"
             assert entries[1]["metadata"]["tokens_after"] == 8_000
+
+            manifest = json.loads(
+                layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
+            )
+            assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
+        finally:
+            sm.detach()
+
+    def test_injection_and_plugin_events_append_replayable_history(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        runner = _StubAgentRunner()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            agent.event_bus.publish(
+                AgentSystemPromptEvent.create(
+                    run_id="r1",
+                    content=[{"type": "text", "text": "system material"}],
+                    origin="before_conversation",
+                    plugin_id="research",
+                    plugin_name="ResearchPlugin",
+                    plugin_role="plugin",
+                    injection_name="inject_prompt",
+                    metadata={"content_scope": "injected_segment"},
+                )
+            )
+            agent.event_bus.publish(
+                AgentContextInjectedEvent.create(
+                    run_id="r1",
+                    role="user",
+                    content=[{"type": "text", "text": "context material"}],
+                    hook_type="before_conversation",
+                    plugin_id="research",
+                    plugin_name="ResearchPlugin",
+                    plugin_role="plugin",
+                    injection_name="inject_context",
+                    merge_target="user_message",
+                    merge_position="before",
+                    target_message_id="msg-1",
+                    target_message_index=0,
+                )
+            )
+            agent.event_bus.publish(
+                AgentToolParameterInjectedEvent.create(
+                    run_id="r1",
+                    tool_name="read_file",
+                    tool_call_id="tc-1",
+                    parameters={"tool_call_purpose": "Read notes"},
+                    plugin_role="dynamic_tool",
+                    injection_name="tool_call_purpose",
+                )
+            )
+            agent.event_bus.publish(
+                AgentToolRuntimeContextInjectedEvent.create(
+                    run_id="r1",
+                    tool_name="inspect",
+                    tool_call_id="tc-2",
+                    parameter_name="context",
+                    plugin_id="inspector",
+                    plugin_name="InspectorPlugin",
+                    plugin_role="tool_owner",
+                    injection_name="runtime_context",
+                )
+            )
+            agent.event_bus.publish(
+                PluginEvent.message(
+                    plugin_id="planner",
+                    plugin_name="PlannerPlugin",
+                    title="Plan",
+                    message="Collected notes",
+                    data={"count": 3},
+                    run_id="r1",
+                    message_id="plugin-msg-1",
+                )
+            )
+            agent.event_bus.publish(
+                PluginEvent.create(
+                    "plugin.artifact.upsert",
+                    plugin_id="planner",
+                    plugin_name="PlannerPlugin",
+                    payload={
+                        "artifact": {
+                            "id": "plan",
+                            "type": "plan",
+                            "title": "Plan",
+                            "content": "# Plan\n",
+                            "language": "markdown",
+                        }
+                    },
+                    run_id="r1",
+                )
+            )
+            sm._writer.wait_idle(timeout=2.0)
+
+            entries = sm.read_message_history(sid)
+            assert [entry["role"] for entry in entries] == ["event"] * 6
+            event_types = [entry["metadata"]["event_type"] for entry in entries]
+            assert event_types == [
+                "agent.system_prompt",
+                "agent.context_injected",
+                "agent.tool_parameter_injected",
+                "agent.tool_runtime_context_injected",
+                "plugin.message",
+                "plugin.artifact.upsert",
+            ]
+            context_payload = entries[1]["metadata"]["event_payload"]
+            assert context_payload["plugin_id"] == "research"
+            assert context_payload["merge_target"] == "user_message"
+            assert context_payload["merge_position"] == "before"
+            assert context_payload["target_message_id"] == "msg-1"
+            tool_payload = entries[2]["metadata"]["event_payload"]
+            assert tool_payload["parameters"]["tool_call_purpose"] == "Read notes"
+            plugin_payload = entries[4]["metadata"]["event_payload"]
+            assert plugin_payload["plugin_id"] == "planner"
+            assert plugin_payload["message"] == "Collected notes"
+            artifact_payload = entries[5]["metadata"]["event_payload"]
+            assert artifact_payload["artifact"]["id"] == "plan"
 
             manifest = json.loads(
                 layout.manifest_path(layout.session_dir(session_root, sid)).read_text()

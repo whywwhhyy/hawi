@@ -12,8 +12,9 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from copy import deepcopy
 from dataclasses import replace
-from typing import Any, Optional, Literal, Callable
+from typing import Any, Optional, Literal, Callable, cast
 
 
 from hawi.models import (
@@ -47,10 +48,12 @@ from hawi.events import (
     EventBus,
     EventHandler,
     SyncEventHandler,
+    AgentContextInjectedEvent,
     AgentErrorEvent,
     AgentMessageAddedEvent,
     AgentRunStartEvent,
     AgentRunStopEvent,
+    AgentSystemPromptEvent,
     ModelErrorEvent,
     ModelRetryEvent,
     ModelStreamStartEvent,
@@ -187,6 +190,8 @@ class HawiAgent:
         self._hooks = HookDispatcher(self, self)
         self._suppress_system_prompt_hooks = False
         self._system_prompt_part_variability_rank: dict[int, int] = {}
+        self._last_emitted_system_prompt: list[ContentPart] | None = None
+        self._last_hook_result_injector: dict[str, str | None] | None = None
         self._compactor = AgentCompactor(self)
         self._runtime = AgentRuntime(self)
 
@@ -970,26 +975,336 @@ class HawiAgent:
             self._mark_model_input_started(event.timestamp)
         return await self._events.emit(event, event_bus)
 
+    async def _emit_system_prompt_event_if_changed(
+        self,
+        *,
+        run_id: str,
+        origin: str,
+        event_bus: EventBus | None,
+    ) -> None:
+        content = deepcopy(self._context.get_system_prompt() or [])
+        if not content:
+            self._last_emitted_system_prompt = content
+            return
+        if content == self._last_emitted_system_prompt:
+            return
+        self._last_emitted_system_prompt = deepcopy(content)
+        await self._emit_event(
+            AgentSystemPromptEvent.create(
+                run_id=run_id,
+                content=content,
+                origin=origin,
+                plugin_role="framework",
+                injection_name="system_prompt",
+                metadata={"content_scope": "full_prompt"},
+            ),
+            event_bus,
+        )
+
+    async def _emit_system_prompt_injected_event(
+        self,
+        *,
+        run_id: str,
+        hook_type: str,
+        before_part_ids: set[int],
+        before_content: list[ContentPart],
+        injector: dict[str, str | None],
+        event_bus: EventBus | None,
+    ) -> None:
+        current = list(self._context.get_system_prompt() or [])
+        added = [
+            deepcopy(part)
+            for part in current
+            if id(part) not in before_part_ids
+        ]
+        change_type = "append"
+        if not added and current != before_content:
+            added = deepcopy(current)
+            change_type = "replace"
+        if not added:
+            return
+        await self._emit_event(
+            AgentSystemPromptEvent.create(
+                run_id=run_id,
+                content=added,
+                origin=hook_type,
+                plugin_id=injector.get("plugin_id"),
+                plugin_name=injector.get("plugin_name"),
+                plugin_role=injector.get("plugin_role") or "plugin",
+                injection_name=injector.get("injection_name"),
+                metadata={
+                    "content_scope": "injected_segment",
+                    "change_type": change_type,
+                },
+            ),
+            event_bus,
+        )
+
+    async def _emit_context_injected_events(
+        self,
+        *,
+        run_id: str,
+        hook_type: str,
+        before_messages: list[Message],
+        injector: dict[str, str | None] | None = None,
+        event_bus: EventBus | None,
+    ) -> None:
+        before_ids = {id(message) for message in before_messages}
+        user_target = self._last_user_message_target(before_messages)
+        injector = injector or self._framework_injector("context")
+
+        for position, message in enumerate(self._context.messages):
+            if id(message) in before_ids:
+                continue
+            role = str(message.get("role", ""))
+            if role not in {"user", "assistant", "tool", "system", "error"}:
+                continue
+            content = message.get("content")
+            if not isinstance(content, list) or not content:
+                continue
+            metadata = message.get("metadata")
+            merge_target: Literal["user_message"] | None = None
+            merge_position: Literal["before", "after"] | None = None
+            target_message_id: str | None = None
+            target_message_index: int | None = None
+            if role == "user" and hook_type == "before_conversation":
+                merge_target = "user_message"
+                merge_position = "after"
+                if user_target is not None:
+                    user_target_message_id = user_target.get("message_id")
+                    user_target_message_index = user_target.get("message_index")
+                    target_message_id = (
+                        user_target_message_id
+                        if isinstance(user_target_message_id, str)
+                        else None
+                    )
+                    target_message_index = (
+                        user_target_message_index
+                        if isinstance(user_target_message_index, int)
+                        else None
+                    )
+                    target_object_id = user_target.get("message_object_id")
+                    if isinstance(target_object_id, int):
+                        target_position = self._message_position_by_object_id(
+                            target_object_id
+                        )
+                        if target_position is not None and position < target_position:
+                            merge_position = "before"
+
+            await self._emit_event(
+                AgentContextInjectedEvent.create(
+                    run_id=run_id,
+                    role=cast(
+                        Literal["user", "assistant", "tool", "system", "error"],
+                        role,
+                    ),
+                    content=deepcopy(content),
+                    hook_type=hook_type,
+                    position=position,
+                    plugin_id=injector.get("plugin_id"),
+                    plugin_name=injector.get("plugin_name"),
+                    plugin_role=injector.get("plugin_role") or "framework",
+                    injection_name=injector.get("injection_name"),
+                    metadata=metadata if isinstance(metadata, dict) else None,
+                    merge_target=merge_target,
+                    merge_position=merge_position,
+                    target_message_id=target_message_id,
+                    target_message_index=target_message_index,
+                ),
+                event_bus,
+            )
+
+    async def _add_hook_injected_user_message(
+        self,
+        content: str | list[ContentPart],
+        *,
+        run_id: str,
+        hook_type: str,
+        injector: dict[str, str | None] | None = None,
+        event_bus: EventBus | None,
+    ) -> None:
+        before_messages = list(self._context.messages)
+        self._context.add_user_message(content)
+        await self._emit_context_injected_events(
+            run_id=run_id,
+            hook_type=hook_type,
+            before_messages=before_messages,
+            injector=injector,
+            event_bus=event_bus,
+        )
+
+    def _hook_observers(
+        self,
+        *,
+        run_id: str,
+        event_bus: EventBus | None,
+    ) -> tuple[
+        Callable[[str, Callable[..., Any]], None],
+        Callable[[str, Callable[..., Any], HookResult | None], Any],
+        Callable[[], None],
+    ]:
+        snapshots: dict[int, tuple[list[Message], set[int], list[ContentPart]]] = {}
+        result_injector: dict[str, str | None] | None = None
+
+        def on_hook_start(hook_type: str, hook: Callable[..., Any]) -> None:
+            system_prompt = list(self._context.get_system_prompt() or [])
+            snapshots[id(hook)] = (
+                list(self._context.messages),
+                {id(part) for part in system_prompt},
+                deepcopy(system_prompt),
+            )
+
+        async def on_hook_end(
+            hook_type: str,
+            hook: Callable[..., Any],
+            result: HookResult | None,
+        ) -> None:
+            nonlocal result_injector
+            before_messages, before_part_ids, before_system = snapshots.pop(
+                id(hook),
+                ([], set(), []),
+            )
+            injector = self._hook_injector(hook)
+            await self._emit_context_injected_events(
+                run_id=run_id,
+                hook_type=hook_type,
+                before_messages=before_messages,
+                injector=injector,
+                event_bus=event_bus,
+            )
+            await self._emit_system_prompt_injected_event(
+                run_id=run_id,
+                hook_type=hook_type,
+                before_part_ids=before_part_ids,
+                before_content=before_system,
+                injector=injector,
+                event_bus=event_bus,
+            )
+            if result is not None:
+                result_injector = injector
+
+        def remember_result_injector() -> None:
+            self._last_hook_result_injector = result_injector
+
+        return on_hook_start, on_hook_end, remember_result_injector
+
+    @staticmethod
+    def _framework_injector(injection_name: str) -> dict[str, str | None]:
+        return {
+            "plugin_id": None,
+            "plugin_name": None,
+            "plugin_role": "framework",
+            "injection_name": injection_name,
+        }
+
+    @staticmethod
+    def _hook_injector(hook: Callable[..., Any]) -> dict[str, str | None]:
+        owner = getattr(hook, "__self__", None)
+        if isinstance(owner, HawiPlugin):
+            return {
+                "plugin_id": owner.plugin_id,
+                "plugin_name": owner.plugin_name,
+                "plugin_role": "plugin",
+                "injection_name": getattr(hook, "__name__", owner.__class__.__name__),
+            }
+        return {
+            "plugin_id": None,
+            "plugin_name": None,
+            "plugin_role": "dynamic_hook",
+            "injection_name": getattr(hook, "__name__", type(hook).__name__),
+        }
+
+    def _consume_last_hook_result_injector(
+        self,
+        fallback_name: str,
+    ) -> dict[str, str | None]:
+        injector = self._last_hook_result_injector
+        self._last_hook_result_injector = None
+        return injector or self._framework_injector(fallback_name)
+
+    @staticmethod
+    def _last_user_message_target(
+        messages: list[Message],
+    ) -> dict[str, str | int | None] | None:
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.get("role") != "user":
+                continue
+            metadata = message.get("metadata")
+            message_id = (
+                str(metadata.get("message_id"))
+                if isinstance(metadata, dict) and metadata.get("message_id")
+                else None
+            )
+            return {
+                "message_id": message_id,
+                "message_index": index,
+                "message_object_id": id(message),
+            }
+        return None
+
+    def _message_position_by_object_id(self, message_object_id: int) -> int | None:
+        for index, message in enumerate(self._context.messages):
+            if id(message) == message_object_id:
+                return index
+        return None
+
     async def _invoke_session_hook(
         self,
         hook_type: str,
         ctx: HookContext,
+        event_bus: EventBus | None = None,
     ) -> HookResult | None:
-        return await self._hooks.invoke_session(hook_type, ctx)
+        on_hook_start, on_hook_end, remember_result_injector = self._hook_observers(
+            run_id=ctx.run_id,
+            event_bus=event_bus,
+        )
+        result = await self._hooks.invoke_session(
+            hook_type,
+            ctx,
+            on_hook_start=on_hook_start,
+            on_hook_end=on_hook_end,
+        )
+        remember_result_injector()
+        return result
 
     async def _invoke_before_model_call(
         self,
         model: Model,
         ctx: HookContext,
+        event_bus: EventBus | None = None,
     ) -> HookResult | None:
-        return await self._hooks.invoke_before_model_call(model, ctx)
+        on_hook_start, on_hook_end, remember_result_injector = self._hook_observers(
+            run_id=ctx.run_id,
+            event_bus=event_bus,
+        )
+        result = await self._hooks.invoke_before_model_call(
+            model,
+            ctx,
+            on_hook_start=on_hook_start,
+            on_hook_end=on_hook_end,
+        )
+        remember_result_injector()
+        return result
 
     async def _invoke_after_model_call(
         self,
         response: MessageResponse,
         ctx: HookContext,
+        event_bus: EventBus | None = None,
     ) -> HookResult | None:
-        return await self._hooks.invoke_after_model_call(response, ctx)
+        on_hook_start, on_hook_end, remember_result_injector = self._hook_observers(
+            run_id=ctx.run_id,
+            event_bus=event_bus,
+        )
+        result = await self._hooks.invoke_after_model_call(
+            response,
+            ctx,
+            on_hook_start=on_hook_start,
+            on_hook_end=on_hook_end,
+        )
+        remember_result_injector()
+        return result
 
     async def _invoke_before_tool_calling(
         self,
@@ -1224,7 +1539,11 @@ class HawiAgent:
 
         # before_session hook
         hook_message_count = len(self._context.messages)
-        _hr = await self._invoke_session_hook("before_session", HookContext(run_id=run_id, iteration=0))
+        _hr = await self._invoke_session_hook(
+            "before_session",
+            HookContext(run_id=run_id, iteration=0),
+            event_bus=event_bus,
+        )
         self._mark_context_growth_as_model_input(
             message_count_before=hook_message_count,
             started_at=time.time(),
@@ -1236,7 +1555,11 @@ class HawiAgent:
         # before_conversation hook
         if not state.should_stop:
             hook_message_count = len(self._context.messages)
-            _hr = await self._invoke_session_hook("before_conversation", HookContext(run_id=run_id, iteration=0))
+            _hr = await self._invoke_session_hook(
+                "before_conversation",
+                HookContext(run_id=run_id, iteration=0),
+                event_bus=event_bus,
+            )
             self._mark_context_growth_as_model_input(
                 message_count_before=hook_message_count,
                 started_at=time.time(),
@@ -1269,6 +1592,7 @@ class HawiAgent:
                 _hr = await self._invoke_before_model_call(
                     m,
                     HookContext(run_id=run_id, iteration=state.iteration),
+                    event_bus=event_bus,
                 )
                 self._mark_context_growth_as_model_input(
                     message_count_before=hook_message_count,
@@ -1285,7 +1609,15 @@ class HawiAgent:
                         continue  # skip model call, go to next loop iteration
                     elif _hr.action == "reinvoke" and _hr.message is not None:
                         self._mark_model_input_started()
-                        self._context.add_user_message(_hr.message)
+                        await self._add_hook_injected_user_message(
+                            _hr.message,
+                            run_id=run_id,
+                            hook_type="before_model_call.reinvoke",
+                            injector=self._consume_last_hook_result_injector(
+                                "before_model_call.reinvoke"
+                            ),
+                            event_bus=event_bus,
+                        )
                         await self._emit_event(
                             AgentRunStopEvent.create(
                                 run_id=run_id,
@@ -1309,6 +1641,12 @@ class HawiAgent:
                         initial_message_count,
                         len(self._context.messages),
                     )
+
+                await self._emit_system_prompt_event_if_changed(
+                    run_id=run_id,
+                    origin="model_input",
+                    event_bus=event_bus,
+                )
 
                 # Model stream start
                 request_id = f"{run_id}-{state.iteration}"
@@ -1525,6 +1863,7 @@ class HawiAgent:
                         iteration=state.iteration,
                         duration_ms=(time.time() - model_call_start) * 1000,
                     ),
+                    event_bus=event_bus,
                 )
                 self._mark_context_growth_as_model_input(
                     message_count_before=hook_message_count,
@@ -1536,7 +1875,15 @@ class HawiAgent:
                         state.stop_reason = "hook_abort"
                     elif _hr.action == "reinvoke" and _hr.message is not None:
                         self._mark_model_input_started()
-                        self._context.add_user_message(_hr.message)
+                        await self._add_hook_injected_user_message(
+                            _hr.message,
+                            run_id=run_id,
+                            hook_type="after_model_call.reinvoke",
+                            injector=self._consume_last_hook_result_injector(
+                                "after_model_call.reinvoke"
+                            ),
+                            event_bus=event_bus,
+                        )
                         await self._emit_event(
                             AgentRunStopEvent.create(
                                 run_id=run_id,
@@ -1633,7 +1980,15 @@ class HawiAgent:
                         state.pending_reinvoke_message = tool_batch.control.message
                         state.stop_reason = "hook_reinvoke"
                         self._mark_model_input_started()
-                        self._context.add_user_message(state.pending_reinvoke_message)
+                        await self._add_hook_injected_user_message(
+                            state.pending_reinvoke_message,
+                            run_id=run_id,
+                            hook_type="after_tool_calling.reinvoke",
+                            injector=self._framework_injector(
+                                "after_tool_calling.reinvoke"
+                            ),
+                            event_bus=event_bus,
+                        )
                         await self._emit_event(
                             AgentRunStopEvent.create(
                                 run_id=run_id,
@@ -1739,7 +2094,11 @@ class HawiAgent:
                 error=state.error if isinstance(state.error, Exception) else None,
             )
             # after_conversation hook
-            _hr = await self._invoke_session_hook("after_conversation", _final_ctx)
+            _hr = await self._invoke_session_hook(
+                "after_conversation",
+                _final_ctx,
+                event_bus=event_bus,
+            )
             if (
                 _hr is not None
                 and _hr.action == "reinvoke"
@@ -1749,7 +2108,11 @@ class HawiAgent:
                 post_conversation_reinvoke_message = _hr.message
 
             # after_session hook
-            await self._invoke_session_hook("after_session", _final_ctx)
+            await self._invoke_session_hook(
+                "after_session",
+                _final_ctx,
+                event_bus=event_bus,
+            )
 
             # Clear the live reference so SessionManager.snapshot_runtime()
             # reports an idle agent.
@@ -1757,7 +2120,15 @@ class HawiAgent:
 
         if post_conversation_reinvoke_message is not None:
             self._mark_model_input_started()
-            self._context.add_user_message(post_conversation_reinvoke_message)
+            await self._add_hook_injected_user_message(
+                post_conversation_reinvoke_message,
+                run_id=run_id,
+                hook_type="after_conversation.reinvoke",
+                injector=self._consume_last_hook_result_injector(
+                    "after_conversation.reinvoke"
+                ),
+                event_bus=event_bus,
+            )
             return await self._arun_internal(
                 message=None,
                 model=model,

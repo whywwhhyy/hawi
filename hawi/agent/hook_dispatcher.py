@@ -20,6 +20,10 @@ class HookOwner(Protocol):
     _plugin_manager: PluginManager
 
 
+HookObserver = Callable[[str, Callable[..., Any], HookResult | None], Any]
+HookStartObserver = Callable[[str, Callable[..., Any]], Any]
+
+
 class HookDispatcher:
     """Dispatch plugin hooks while passing the owning agent to hook callables."""
 
@@ -31,11 +35,14 @@ class HookDispatcher:
         self,
         hook_type: str,
         ctx: HookContext,
+        on_hook_start: HookStartObserver | None = None,
+        on_hook_end: HookObserver | None = None,
     ) -> HookResult | None:
         """Invoke before/after_session and before/after_conversation hooks."""
         for hook in self._owner._plugin_manager.get_hooks(hook_type):
             if self._should_skip_system_prompt_hook(hook_type, hook):
                 continue
+            await self._notify_hook_start(on_hook_start, hook_type, hook)
             tracks_system_prompt = is_system_prompt_injection_hook(hook)
             before_part_ids = (
                 self._current_system_prompt_part_ids()
@@ -50,6 +57,7 @@ class HookDispatcher:
                     before_part_ids,
                     system_prompt_variability_rank(hook),
                 )
+            await self._notify_hook_end(on_hook_end, hook_type, hook, result)
             if result is not None:
                 return result
         return None
@@ -128,12 +136,25 @@ class HookDispatcher:
         self,
         model: Model,
         ctx: HookContext,
+        on_hook_start: HookStartObserver | None = None,
+        on_hook_end: HookObserver | None = None,
     ) -> HookResult | None:
         """Invoke before_model_call hook: (agent, model, ctx)."""
         for hook in self._owner._plugin_manager.get_hooks("before_model_call"):
+            await self._notify_hook_start(
+                on_hook_start,
+                "before_model_call",
+                hook,
+            )
             result = hook(self._agent, model, ctx)
             if inspect.isawaitable(result):
                 result = await result
+            await self._notify_hook_end(
+                on_hook_end,
+                "before_model_call",
+                hook,
+                result,
+            )
             if result is not None:
                 return result
         return None
@@ -142,15 +163,53 @@ class HookDispatcher:
         self,
         response: MessageResponse,
         ctx: HookContext,
+        on_hook_start: HookStartObserver | None = None,
+        on_hook_end: HookObserver | None = None,
     ) -> HookResult | None:
         """Invoke after_model_call hook: (agent, response, ctx)."""
         for hook in self._owner._plugin_manager.get_hooks("after_model_call"):
+            await self._notify_hook_start(
+                on_hook_start,
+                "after_model_call",
+                hook,
+            )
             result = hook(self._agent, response, ctx)
             if inspect.isawaitable(result):
                 result = await result
+            await self._notify_hook_end(
+                on_hook_end,
+                "after_model_call",
+                hook,
+                result,
+            )
             if result is not None:
                 return result
         return None
+
+    @staticmethod
+    async def _notify_hook_start(
+        observer: HookStartObserver | None,
+        hook_type: str,
+        hook: Callable[..., Any],
+    ) -> None:
+        if observer is None:
+            return
+        result = observer(hook_type, hook)
+        if inspect.isawaitable(result):
+            await result
+
+    @staticmethod
+    async def _notify_hook_end(
+        observer: HookObserver | None,
+        hook_type: str,
+        hook: Callable[..., Any],
+        result: HookResult | None,
+    ) -> None:
+        if observer is None:
+            return
+        observed = observer(hook_type, hook, result)
+        if inspect.isawaitable(observed):
+            await observed
 
     async def invoke_before_tool_calling(
         self,

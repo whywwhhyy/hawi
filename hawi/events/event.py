@@ -39,6 +39,10 @@ ModelEventType = Literal[
 AgentEventType = Literal[
     "agent.run_start",
     "agent.message_added",
+    "agent.system_prompt",
+    "agent.context_injected",
+    "agent.tool_parameter_injected",
+    "agent.tool_runtime_context_injected",
     "agent.compact_start",
     "agent.compact_stop",
     "agent.tool_call",

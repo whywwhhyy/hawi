@@ -1142,6 +1142,33 @@ button.context-status:disabled {
   border-color: #d9e0e2;
 }
 
+.bubble.framework {
+  margin-right: auto;
+  margin-left: auto;
+  background: #f7f8f8;
+  border-color: #dfe4e5;
+  color: #435057;
+}
+
+.bubble.framework.collapsed {
+  width: min(50%, 430px);
+}
+
+.bubble.framework.expanded {
+  width: min(100%, 860px);
+}
+
+.bubble.framework.embedded {
+  width: auto;
+  max-width: none;
+  margin: 6px 10px 10px;
+  background: #f6f7f7;
+}
+
+.bubble.framework.collapsed .bubble-head {
+  border-bottom-color: transparent;
+}
+
 .processing-line {
   display: inline-flex;
   align-items: center;
@@ -1193,6 +1220,27 @@ button.context-status:disabled {
 .bubble-title {
   min-width: 0;
   flex: 1;
+}
+
+.framework-title {
+  overflow: hidden;
+}
+
+.framework-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bubble-head .framework-source {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  color: #748086;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .block-stream-status {
@@ -1293,6 +1341,12 @@ button.context-status:disabled {
   align-items: center;
   flex-shrink: 0;
   gap: 4px;
+}
+
+.message-injections {
+  display: grid;
+  gap: 0;
+  padding-top: 1px;
 }
 
 .live-spinner {

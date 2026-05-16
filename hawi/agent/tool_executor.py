@@ -19,9 +19,11 @@ from typing import Any, Literal, Protocol, TYPE_CHECKING, cast
 
 from hawi.errors import ToolExecutionError, ToolNotFoundError
 from hawi.events import (
+    AgentToolParameterInjectedEvent,
     AgentToolCallEvent,
     AgentToolResultEvent,
     AgentToolResultPartEvent,
+    AgentToolRuntimeContextInjectedEvent,
     Event,
     EventBus,
 )
@@ -446,6 +448,9 @@ class ToolExecutor:
                 error=f"{err.__class__.__name__}: {err.message}",
             )
         else:
+            tool_owner = self._plugin_manager.get_tool_owner(tool_name)
+            owner_plugin_id = getattr(tool_owner, "plugin_id", None)
+            owner_plugin_name = getattr(tool_owner, "plugin_name", None)
             prepared = await self.prepare_tool_arguments(
                 tool,
                 arguments,
@@ -454,6 +459,20 @@ class ToolExecutor:
                 iteration=iteration,
                 run_injection_handlers=run_injection_handlers,
             )
+            if prepared.injected_arguments:
+                await self._emit_event(
+                    AgentToolParameterInjectedEvent.create(
+                        run_id=run_id,
+                        tool_name=tool_name,
+                        tool_call_id=tool_call_id,
+                        parameters=dict(prepared.injected_arguments),
+                        plugin_id=owner_plugin_id,
+                        plugin_name=owner_plugin_name,
+                        plugin_role="tool_owner" if tool_owner is not None else "dynamic_tool",
+                        injection_name=",".join(sorted(prepared.injected_arguments)),
+                    ),
+                    event_bus,
+                )
             if prepared.short_circuit_result is not None:
                 result = prepared.short_circuit_result
             elif getattr(tool, "audit", False) and audit_action == "queue":
@@ -472,10 +491,28 @@ class ToolExecutor:
                     ),
                 )
             else:
+                context_param = getattr(tool, "context", None)
+                has_runtime_context = bool(
+                    context_param and self._context.tool_call_context
+                )
                 tool_arguments = self.inject_tool_runtime_context(
                     tool,
                     prepared.tool_arguments,
                 )
+                if has_runtime_context:
+                    await self._emit_event(
+                        AgentToolRuntimeContextInjectedEvent.create(
+                            run_id=run_id,
+                            tool_name=tool_name,
+                            tool_call_id=tool_call_id,
+                            parameter_name=str(context_param),
+                            plugin_id=owner_plugin_id,
+                            plugin_name=owner_plugin_name,
+                            plugin_role="tool_owner" if tool_owner is not None else "dynamic_tool",
+                            injection_name=str(context_param),
+                        ),
+                        event_bus,
+                    )
                 result = await self._execute_agent_tool(
                     tool,
                     tool_name,

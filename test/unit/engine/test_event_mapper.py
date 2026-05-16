@@ -5,11 +5,15 @@ from typing import cast
 from hawi.events import (
     AgentCompactStartEvent,
     AgentCompactStopEvent,
+    AgentContextInjectedEvent,
     AgentMessageAddedEvent,
     AgentRunStartEvent,
     AgentRunStopEvent,
+    AgentSystemPromptEvent,
     AgentToolCallEvent,
+    AgentToolParameterInjectedEvent,
     AgentToolResultEvent,
+    AgentToolRuntimeContextInjectedEvent,
     ModelContentBlockDeltaEvent,
     ModelErrorEvent,
     ModelMetadataEvent,
@@ -331,6 +335,85 @@ def test_mapper_emits_tool_events_and_result() -> None:
     assert result[0]["type"] == "tool.result"
     assert result[0]["payload"]["tool_name"] == "calc"
     assert result[0]["payload"]["output"] == {"answer": 4}
+
+
+def test_mapper_forwards_framework_injection_events() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-injected"))
+
+    system_prompt = mapper.map(
+        AgentSystemPromptEvent.create(
+            "run-injected",
+            [{"type": "text", "text": "system guidance"}],
+            origin="model_input",
+            plugin_id="env",
+            plugin_name="Environment",
+            plugin_role="plugin",
+            injection_name="inject_system",
+        )
+    )
+    context = mapper.map(
+        AgentContextInjectedEvent.create(
+            "run-injected",
+            "user",
+            [{"type": "text", "text": "environment block"}],
+            hook_type="before_conversation",
+            position=1,
+            metadata={"source": "test_plugin"},
+            merge_target="user_message",
+            merge_position="after",
+            target_message_id="msg-1",
+            target_message_index=2,
+            plugin_id="env",
+            plugin_name="Environment",
+            plugin_role="plugin",
+            injection_name="inject_user",
+        )
+    )
+    tool_parameter = mapper.map(
+        AgentToolParameterInjectedEvent.create(
+            "run-injected",
+            "read_file",
+            "tc-1",
+            {"tool_call_purpose": "inspect file"},
+            plugin_id="filesystem",
+            plugin_name="Filesystem",
+            injection_name="tool_call_purpose",
+        )
+    )
+    runtime_context = mapper.map(
+        AgentToolRuntimeContextInjectedEvent.create(
+            "run-injected",
+            "stateful_tool",
+            "tc-2",
+            "ctx",
+            plugin_id="stateful",
+            plugin_name="Stateful",
+            injection_name="ctx",
+        )
+    )
+
+    assert system_prompt[0]["type"] == "agent.system_prompt"
+    assert system_prompt[0]["payload"]["text"] == "system guidance"
+    assert system_prompt[0]["payload"]["plugin_id"] == "env"
+    assert system_prompt[0]["payload"]["plugin_role"] == "plugin"
+    assert system_prompt[0]["payload"]["injection_name"] == "inject_system"
+    assert context[0]["type"] == "agent.context_injected"
+    assert context[0]["payload"]["text"] == "environment block"
+    assert context[0]["payload"]["merge_target"] == "user_message"
+    assert context[0]["payload"]["merge_position"] == "after"
+    assert context[0]["payload"]["target_message_id"] == "msg-1"
+    assert context[0]["payload"]["plugin_id"] == "env"
+    assert context[0]["payload"]["injection_name"] == "inject_user"
+    assert tool_parameter[0]["type"] == "agent.tool_parameter_injected"
+    assert tool_parameter[0]["payload"]["parameters"] == {
+        "tool_call_purpose": "inspect file",
+    }
+    assert tool_parameter[0]["payload"]["plugin_id"] == "filesystem"
+    assert tool_parameter[0]["payload"]["plugin_role"] == "tool_owner"
+    assert runtime_context[0]["type"] == "agent.tool_runtime_context_injected"
+    assert runtime_context[0]["payload"]["parameter_name"] == "ctx"
+    assert runtime_context[0]["payload"]["plugin_id"] == "stateful"
 
 
 def test_mapper_extracts_tool_call_purpose_from_arguments() -> None:

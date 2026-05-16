@@ -1,10 +1,40 @@
-import type { CoreFrame, PluginArtifactPayload, QueueKind, RuntimeControlState } from "../shared/protocol";
+import { VERSION, type CoreFrame, type PluginArtifactPayload, type QueueKind, type RuntimeControlState } from "../shared/protocol";
 
 const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 
-export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "compact";
+export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "compact" | "framework";
 export type DisplayMessageType = "normal" | "steer" | "urgent" | "resume";
+export type FrameworkInjectionKind =
+  | "system_prompt"
+  | "context_injected"
+  | "tool_parameter_injected"
+  | "tool_runtime_context_injected"
+  | "plugin_message";
+
+export interface FrameworkInjectionState {
+  id: string;
+  kind: FrameworkInjectionKind;
+  label: string;
+  content: string;
+  pluginId?: string;
+  pluginName?: string;
+  pluginRole?: string;
+  injectionName?: string;
+  eventType?: string;
+  hookType?: string;
+  role?: string;
+  mergeTarget?: string;
+  mergePosition?: "before" | "after";
+  targetMessageId?: string;
+  targetMessageIndex?: number;
+  contextPosition?: number;
+  toolName?: string;
+  toolCallId?: string;
+  parameterName?: string;
+  metadata?: Record<string, unknown>;
+  timestamp: number;
+}
 
 export interface ChatNode {
   id: string;
@@ -19,6 +49,8 @@ export interface ChatNode {
   queue?: QueueKind;
   displayMessageType?: DisplayMessageType;
   tool?: ToolState;
+  framework?: FrameworkInjectionState;
+  injections?: FrameworkInjectionState[];
 }
 
 export interface ToolState {
@@ -212,9 +244,13 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     case "gui.load_session_history": {
       const history = normalizeSessionHistory(payload.message_history);
       const contextUsage = parseStatusContextUsage(payload.context_usage);
+      const replayState = sessionHistoryReplayState(history);
       return {
         ...state,
-        nodes: sessionHistoryNodes(history),
+        nodes: attachHistoryToolProgress(
+          sessionHistoryNodes(history),
+          replayState.toolProgress
+        ),
         runs: {},
         toolNodeByCallId: {},
         activeRunId: undefined,
@@ -223,12 +259,12 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         contextCompression: undefined,
         debugLines: [],
         errors: [],
-        artifacts: {},
-        artifactOrder: [],
-        selectedArtifactId: undefined,
-        pluginMessages: [],
-        pluginStatuses: {},
-        toolProgress: {},
+        artifacts: replayState.artifacts,
+        artifactOrder: replayState.artifactOrder,
+        selectedArtifactId: replayState.selectedArtifactId,
+        pluginMessages: replayState.pluginMessages,
+        pluginStatuses: replayState.pluginStatuses,
+        toolProgress: replayState.toolProgress,
         sessionMessageCount: history.length,
         processing: undefined
       };
@@ -447,6 +483,32 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       return addMeta(nextState, formatModelMetadata(payload));
     }
 
+    case "agent.system_prompt":
+      return appendFrameworkInjection(
+        state,
+        frameworkInjectionFromFrame(frame, payload, "system_prompt")
+      );
+
+    case "agent.context_injected": {
+      const injection = frameworkInjectionFromFrame(frame, payload, "context_injected");
+      if (payload.merge_target === "user_message") {
+        return attachFrameworkInjectionToUserMessage(state, payload, injection);
+      }
+      return appendFrameworkInjection(state, injection);
+    }
+
+    case "agent.tool_parameter_injected":
+      return appendFrameworkInjection(
+        state,
+        frameworkInjectionFromFrame(frame, payload, "tool_parameter_injected")
+      );
+
+    case "agent.tool_runtime_context_injected":
+      return appendFrameworkInjection(
+        state,
+        frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected")
+      );
+
     case "agent.compact_start": {
       const eventAt = frameTime(frame);
       const runId = String(payload.run_id ?? state.activeRunId ?? "manual");
@@ -566,7 +628,12 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         errors: [...state.errors, String(payload.message ?? "Unknown error")]
       };
 
-    case "plugin.message":
+    case "plugin.message": {
+      const nextState = addPluginMessage(state, payload, frame);
+      const injection = pluginMessageFrameworkInjectionFromFrame(frame, payload);
+      return injection ? appendFrameworkInjection(nextState, injection) : nextState;
+    }
+
     case "plugin.event":
       return addPluginMessage(state, payload, frame);
 
@@ -650,6 +717,7 @@ interface SessionHistoryRecord {
   content: unknown[];
   metadata?: Record<string, unknown>;
   contextMessageIndex?: number;
+  timestamp?: number;
 }
 
 function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
@@ -677,7 +745,8 @@ function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
         role,
         content,
         metadata: isRecord(item.metadata) ? item.metadata : undefined,
-        contextMessageIndex: optionalNumber(item.context_message_index ?? item.contextMessageIndex)
+        contextMessageIndex: optionalNumber(item.context_message_index ?? item.contextMessageIndex),
+        timestamp: optionalNumber(item.timestamp)
       };
     })
     .filter((item): item is SessionHistoryRecord => item !== null);
@@ -695,6 +764,13 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
   history.forEach((record, index) => {
     const baseId = `${record.runId}-${index}`;
     if (record.role === "event") {
+      const replayFrame = sessionHistoryEventFrame(record, index);
+      if (replayFrame && applyHistoryChatEvent(nodes, replayFrame)) {
+        return;
+      }
+      if (replayFrame && isSessionHistoryReplayOnlyEvent(replayFrame.type)) {
+        return;
+      }
       const eventType = optionalString(record.metadata?.event_type);
       if (eventType === "agent.compact_start") {
         const node: ChatNode = {
@@ -851,6 +927,111 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
     });
   });
   return nodes;
+}
+
+function sessionHistoryReplayState(history: SessionHistoryRecord[]): AppState {
+  return history.reduce((state, record, index) => {
+    const frame = sessionHistoryEventFrame(record, index);
+    return frame ? reduceCoreEvent(state, frame) : state;
+  }, createInitialState());
+}
+
+function sessionHistoryEventFrame(record: SessionHistoryRecord, index: number): CoreFrame | undefined {
+  if (record.role !== "event") return undefined;
+  const metadata = record.metadata;
+  if (!metadata) return undefined;
+  const eventType = optionalString(metadata.event_type);
+  if (!eventType) return undefined;
+  const payload = isRecord(metadata.event_payload) ? metadata.event_payload : undefined;
+  if (!payload) return undefined;
+  return {
+    version: VERSION,
+    type: eventType,
+    ts: record.timestamp,
+    id: `history-${record.runId}-${index}`,
+    payload
+  };
+}
+
+function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
+  const payload = (frame.payload ?? {}) as Record<string, unknown>;
+  if (frame.type === "agent.system_prompt") {
+    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "system_prompt"), nodes.length));
+    return true;
+  }
+  if (frame.type === "agent.context_injected") {
+    const injection = frameworkInjectionFromFrame(frame, payload, "context_injected");
+    if (payload.merge_target === "user_message") {
+      const targetNodeId = findUserMessageNodeId(
+        {
+          ...createInitialState(),
+          nodes
+        },
+        optionalString(payload.target_message_id),
+        optionalNumber(payload.target_message_index)
+      );
+      if (targetNodeId) {
+        const target = nodes.find((node) => node.id === targetNodeId);
+        if (target) {
+          target.injections = orderFrameworkInjections([...(target.injections ?? []), injection]);
+          return true;
+        }
+      }
+    }
+    nodes.push(historyFrameworkNode(frame, injection, nodes.length));
+    return true;
+  }
+  if (frame.type === "agent.tool_parameter_injected") {
+    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "tool_parameter_injected"), nodes.length));
+    return true;
+  }
+  if (frame.type === "agent.tool_runtime_context_injected") {
+    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected"), nodes.length));
+    return true;
+  }
+  if (frame.type === "plugin.message") {
+    const injection = pluginMessageFrameworkInjectionFromFrame(frame, payload);
+    if (injection) {
+      nodes.push(historyFrameworkNode(frame, injection, nodes.length));
+    }
+    return true;
+  }
+  return false;
+}
+
+function isSessionHistoryReplayOnlyEvent(eventType: string): boolean {
+  return eventType === "plugin.event"
+    || eventType === "plugin.status"
+    || eventType === "plugin.tool_progress"
+    || eventType === "plugin.artifact.upsert"
+    || eventType === "plugin.artifact.delta"
+    || eventType === "plugin.artifact.remove"
+    || eventType === "plugin.artifact.clear";
+}
+
+function historyFrameworkNode(frame: CoreFrame, injection: FrameworkInjectionState, index: number): ChatNode {
+  return {
+    id: nodeId("framework-history", `${frame.id ?? injection.id}-${index}`),
+    kind: "framework",
+    content: "",
+    framework: injection
+  };
+}
+
+function attachHistoryToolProgress(nodes: ChatNode[], progress: Record<string, ToolProgressState>): ChatNode[] {
+  if (Object.keys(progress).length === 0) return nodes;
+  return nodes.map((node) => {
+    if (!node.tool?.toolCallId) return node;
+    const toolProgress = progress[node.tool.toolCallId];
+    if (!toolProgress) return node;
+    return {
+      ...node,
+      tool: {
+        ...node.tool,
+        progress: toolProgress
+      }
+    };
+  });
 }
 
 function normalizeHistoryToolArguments(value: unknown): unknown | undefined {
@@ -1361,6 +1542,223 @@ function addMeta(state: AppState, content: string): AppState {
     }),
     metadataLines: [...state.metadataLines, content]
   };
+}
+
+function appendFrameworkInjection(state: AppState, injection: FrameworkInjectionState): AppState {
+  return appendChatNode(state, {
+    id: nodeId("framework", `${injection.id}-${state.nodes.length}`),
+    kind: "framework",
+    content: "",
+    framework: injection
+  }, { clearProcessing: false });
+}
+
+function attachFrameworkInjectionToUserMessage(
+  state: AppState,
+  payload: Record<string, unknown>,
+  injection: FrameworkInjectionState,
+): AppState {
+  const targetMessageId = optionalString(payload.target_message_id);
+  const targetMessageIndex = optionalNumber(payload.target_message_index);
+  const targetNodeId = findUserMessageNodeId(state, targetMessageId, targetMessageIndex);
+  if (!targetNodeId) {
+    return appendFrameworkInjection(state, injection);
+  }
+  return {
+    ...state,
+    nodes: state.nodes.map((node) => {
+      if (node.id !== targetNodeId) return node;
+      return {
+        ...node,
+        injections: orderFrameworkInjections([...(node.injections ?? []), injection])
+      };
+    })
+  };
+}
+
+function findUserMessageNodeId(
+  state: AppState,
+  targetMessageId?: string,
+  targetMessageIndex?: number,
+): string | undefined {
+  if (targetMessageId) {
+    const id = userMessageNodeId(targetMessageId);
+    if (state.nodes.some((node) => node.id === id && node.kind === "user")) {
+      return id;
+    }
+  }
+  if (targetMessageIndex !== undefined) {
+    const indexed = state.nodes.find((node) => (
+      node.kind === "user" && node.contextMessageIndex === targetMessageIndex
+    ));
+    if (indexed) return indexed.id;
+  }
+  return [...state.nodes].reverse().find((node) => node.kind === "user")?.id;
+}
+
+function frameworkInjectionFromFrame(
+  frame: CoreFrame,
+  payload: Record<string, unknown>,
+  kind: Exclude<FrameworkInjectionKind, "plugin_message">,
+): FrameworkInjectionState {
+  const metadata = isRecord(payload.metadata) ? payload.metadata : undefined;
+  const timestamp = frameTime(frame);
+  const pluginRole = optionalString(payload.plugin_role);
+  const toolName = optionalString(payload.tool_name);
+  const toolCallId = optionalString(payload.tool_call_id);
+  const parameterName = optionalString(payload.parameter_name);
+  return {
+    id: frameworkInjectionId(frame, payload, kind),
+    kind,
+    label: "框架注入消息",
+    content: frameworkInjectionContent(payload, kind),
+    pluginId: optionalString(payload.plugin_id),
+    pluginName: optionalString(payload.plugin_name),
+    pluginRole,
+    injectionName: optionalString(payload.injection_name),
+    eventType: frame.type,
+    hookType: optionalString(payload.hook_type ?? payload.origin),
+    role: optionalString(payload.role),
+    mergeTarget: optionalString(payload.merge_target),
+    mergePosition: normalizeMergePosition(payload.merge_position),
+    targetMessageId: optionalString(payload.target_message_id),
+    targetMessageIndex: optionalNumber(payload.target_message_index),
+    contextPosition: optionalNumber(payload.position),
+    toolName,
+    toolCallId,
+    parameterName,
+    metadata,
+    timestamp
+  };
+}
+
+function pluginMessageFrameworkInjectionFromFrame(
+  frame: CoreFrame,
+  payload: Record<string, unknown>,
+): FrameworkInjectionState | undefined {
+  const plugin = pluginInfo(payload);
+  const content = pluginMessageFrameworkContent(payload);
+  if (!content) return undefined;
+  return {
+    id: frameworkInjectionId(frame, payload, "plugin_message"),
+    kind: "plugin_message",
+    label: "插件消息",
+    content,
+    pluginId: plugin.pluginId,
+    pluginName: plugin.pluginName,
+    pluginRole: "plugin",
+    injectionName: optionalString(payload.title) ?? "plugin.message",
+    eventType: frame.type,
+    toolCallId: optionalString(payload.tool_call_id),
+    metadata: isRecord(payload.metadata) ? payload.metadata : undefined,
+    timestamp: frameTime(frame)
+  };
+}
+
+function frameworkInjectionId(
+  frame: CoreFrame,
+  payload: Record<string, unknown>,
+  kind: FrameworkInjectionKind,
+): string {
+  const explicitId = optionalString(payload.injection_id ?? payload.message_id ?? frame.id);
+  if (explicitId) return explicitId;
+  return [
+    frame.type,
+    kind,
+    optionalString(payload.run_id) ?? "",
+    optionalString(payload.plugin_id) ?? "",
+    optionalString(payload.injection_name) ?? "",
+    optionalString(payload.hook_type ?? payload.origin) ?? "",
+    optionalString(payload.tool_call_id) ?? "",
+    optionalString(payload.parameter_name) ?? "",
+    optionalString(payload.target_message_id) ?? "",
+    optionalString(payload.merge_position) ?? "",
+    String(optionalNumber(payload.target_message_index) ?? ""),
+    String(optionalNumber(payload.position) ?? ""),
+    String(frame.ts ?? ""),
+    simpleHash(formatFrameworkIdentityContent(payload, kind))
+  ].join(":");
+}
+
+function frameworkInjectionContent(
+  payload: Record<string, unknown>,
+  kind: Exclude<FrameworkInjectionKind, "plugin_message">,
+): string {
+  if (kind === "tool_parameter_injected") {
+    const toolName = optionalString(payload.tool_name) ?? "tool";
+    const parameters = payload.parameters;
+    const body = formatToolValue(parameters).trim();
+    return [
+      `Tool \`${toolName}\` received framework-injected parameters.`,
+      body ? markdownJsonBlock(body) : ""
+    ].filter(Boolean).join("\n\n");
+  }
+  if (kind === "tool_runtime_context_injected") {
+    const toolName = optionalString(payload.tool_name) ?? "tool";
+    const parameterName = optionalString(payload.parameter_name) ?? "context";
+    return `Tool \`${toolName}\` received Hawi runtime context as \`${parameterName}\`.`;
+  }
+  const text = optionalString(payload.text);
+  if (text) return text;
+  if (Array.isArray(payload.content)) {
+    const contentText = historyContentText(payload.content);
+    return contentText || formatToolValue(payload.content).trim();
+  }
+  return formatToolValue(payload.content).trim();
+}
+
+function pluginMessageFrameworkContent(payload: Record<string, unknown>): string {
+  const title = optionalString(payload.title);
+  const message = optionalString(payload.message);
+  const data = payload.data;
+  const sections: string[] = [];
+  if (title && title !== message) {
+    sections.push(`**${title}**`);
+  }
+  if (message) {
+    sections.push(message);
+  }
+  const dataText = formatToolValue(data).trim();
+  if (dataText) {
+    sections.push(markdownJsonBlock(dataText));
+  }
+  return sections.join("\n\n");
+}
+
+function formatFrameworkIdentityContent(
+  payload: Record<string, unknown>,
+  kind: FrameworkInjectionKind,
+): string {
+  if (kind === "plugin_message") return pluginMessageFrameworkContent(payload);
+  if (kind === "tool_parameter_injected") return formatToolValue(payload.parameters);
+  if (kind === "tool_runtime_context_injected") return optionalString(payload.parameter_name) ?? "";
+  if (Array.isArray(payload.content)) return historyContentText(payload.content);
+  return optionalString(payload.text) ?? formatToolValue(payload.content);
+}
+
+function markdownJsonBlock(value: string): string {
+  return `\`\`\`json\n${value}\n\`\`\``;
+}
+
+function simpleHash(value: string): string {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function normalizeMergePosition(value: unknown): "before" | "after" | undefined {
+  return value === "before" || value === "after" ? value : undefined;
+}
+
+function orderFrameworkInjections(items: FrameworkInjectionState[]): FrameworkInjectionState[] {
+  return [...items].sort((left, right) => {
+    const leftPosition = left.contextPosition ?? Number.MAX_SAFE_INTEGER;
+    const rightPosition = right.contextPosition ?? Number.MAX_SAFE_INTEGER;
+    if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+    return left.timestamp - right.timestamp;
+  });
 }
 
 function addPluginMessage(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {

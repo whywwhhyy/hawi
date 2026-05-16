@@ -61,6 +61,10 @@ SESSION_ID_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
 # which handles atomic rename + (optionally) fsync.
 EVENT_ROUTING: dict[str, tuple[str, ...]] = {
     "agent.run_start": (layout.COMPONENT_RUNTIME, layout.COMPONENT_QUEUES),
+    "agent.system_prompt": (),
+    "agent.context_injected": (),
+    "agent.tool_parameter_injected": (),
+    "agent.tool_runtime_context_injected": (),
     "agent.tool_call": (layout.COMPONENT_RUNTIME,),
     "agent.tool_result": (
         layout.COMPONENT_CONTEXT,
@@ -82,6 +86,14 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
     "runner.enqueue": (layout.COMPONENT_QUEUES,),
     "runner.dequeue": (layout.COMPONENT_QUEUES,),
     "runner.interrupt": (layout.COMPONENT_RUNTIME,),
+    "plugin.event": (),
+    "plugin.message": (),
+    "plugin.status": (),
+    "plugin.tool_progress": (),
+    "plugin.artifact.upsert": (),
+    "plugin.artifact.delta": (),
+    "plugin.artifact.remove": (),
+    "plugin.artifact.clear": (),
 }
 
 
@@ -676,7 +688,7 @@ class SessionManager:
         if self._session_id is None:
             return
         components = EVENT_ROUTING.get(event.type)
-        if not components:
+        if components is None:
             return
         message_history_entries: list[dict[str, Any]] = []
         entry = message_history_entry_from_event(event)

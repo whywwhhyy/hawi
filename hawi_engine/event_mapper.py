@@ -114,6 +114,84 @@ class SemanticEventMapper:
             self._run_queue[run_id] = self._current_queue_kind
             return []
 
+        if etype == "agent.system_prompt":
+            content = getattr(event, "content", [])
+            return [
+                make_frame(
+                    "agent.system_prompt",
+                    {
+                        "run_id": getattr(event, "run_id", self._active_run_id or ""),
+                        "content": to_json_safe(content),
+                        "text": self._extract_text(content),
+                        "origin": getattr(event, "origin", "model_input"),
+                        "plugin_id": getattr(event, "plugin_id", None),
+                        "plugin_name": getattr(event, "plugin_name", None),
+                        "plugin_role": getattr(event, "plugin_role", "framework"),
+                        "injection_name": getattr(event, "injection_name", None),
+                        "metadata": to_json_safe(getattr(event, "metadata", None)),
+                    },
+                )
+            ]
+
+        if etype == "agent.context_injected":
+            content = getattr(event, "content", [])
+            return [
+                make_frame(
+                    "agent.context_injected",
+                    {
+                        "run_id": getattr(event, "run_id", self._active_run_id or ""),
+                        "role": getattr(event, "role", ""),
+                        "content": to_json_safe(content),
+                        "text": self._extract_text(content),
+                        "hook_type": getattr(event, "hook_type", None),
+                        "position": getattr(event, "position", None),
+                        "plugin_id": getattr(event, "plugin_id", None),
+                        "plugin_name": getattr(event, "plugin_name", None),
+                        "plugin_role": getattr(event, "plugin_role", "framework"),
+                        "injection_name": getattr(event, "injection_name", None),
+                        "metadata": to_json_safe(getattr(event, "metadata", None)),
+                        "merge_target": getattr(event, "merge_target", None),
+                        "merge_position": getattr(event, "merge_position", None),
+                        "target_message_id": getattr(event, "target_message_id", None),
+                        "target_message_index": getattr(event, "target_message_index", None),
+                    },
+                )
+            ]
+
+        if etype == "agent.tool_parameter_injected":
+            return [
+                make_frame(
+                    "agent.tool_parameter_injected",
+                    {
+                        "run_id": getattr(event, "run_id", self._active_run_id or ""),
+                        "tool_name": getattr(event, "tool_name", ""),
+                        "tool_call_id": getattr(event, "tool_call_id", ""),
+                        "parameters": to_json_safe(getattr(event, "parameters", {})),
+                        "plugin_id": getattr(event, "plugin_id", None),
+                        "plugin_name": getattr(event, "plugin_name", None),
+                        "plugin_role": getattr(event, "plugin_role", "tool_owner"),
+                        "injection_name": getattr(event, "injection_name", None),
+                    },
+                )
+            ]
+
+        if etype == "agent.tool_runtime_context_injected":
+            return [
+                make_frame(
+                    "agent.tool_runtime_context_injected",
+                    {
+                        "run_id": getattr(event, "run_id", self._active_run_id or ""),
+                        "tool_name": getattr(event, "tool_name", ""),
+                        "tool_call_id": getattr(event, "tool_call_id", ""),
+                        "parameter_name": getattr(event, "parameter_name", ""),
+                        "plugin_id": getattr(event, "plugin_id", None),
+                        "plugin_name": getattr(event, "plugin_name", None),
+                        "plugin_role": getattr(event, "plugin_role", "tool_owner"),
+                        "injection_name": getattr(event, "injection_name", None),
+                    },
+                )
+            ]
+
         if etype == "agent.compact_start":
             return [
                 make_frame(

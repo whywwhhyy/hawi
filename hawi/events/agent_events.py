@@ -186,6 +186,180 @@ class AgentMessageAddedEvent(Event):
         )
 
 
+class AgentSystemPromptEvent(Event):
+    """System prompt 可见内容被送入模型上下文"""
+
+    run_id: str
+    content: list[ContentPart]
+    origin: str = "model_input"
+    plugin_id: str | None = None
+    plugin_name: str | None = None
+    plugin_role: str = "framework"
+    injection_name: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @classmethod
+    def create(
+        cls,
+        run_id: str,
+        content: list[ContentPart],
+        *,
+        origin: str = "model_input",
+        plugin_id: str | None = None,
+        plugin_name: str | None = None,
+        plugin_role: str = "framework",
+        injection_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> AgentSystemPromptEvent:
+        return cls(
+            type="agent.system_prompt",
+            source="agent",
+            run_id=run_id,
+            content=content,
+            origin=origin,
+            plugin_id=plugin_id,
+            plugin_name=plugin_name,
+            plugin_role=plugin_role,
+            injection_name=injection_name,
+            metadata=metadata,
+        )
+
+
+class AgentContextInjectedEvent(Event):
+    """Hook/plugin 向对话上下文注入了模型可见消息"""
+
+    run_id: str
+    role: Literal["user", "assistant", "tool", "system", "error"]
+    content: list[ContentPart]
+    hook_type: str | None = None
+    position: int | None = None
+    plugin_id: str | None = None
+    plugin_name: str | None = None
+    plugin_role: str = "framework"
+    injection_name: str | None = None
+    metadata: dict[str, Any] | None = None
+    merge_target: Literal["user_message"] | None = None
+    merge_position: Literal["before", "after"] | None = None
+    target_message_id: str | None = None
+    target_message_index: int | None = None
+
+    @classmethod
+    def create(
+        cls,
+        run_id: str,
+        role: Literal["user", "assistant", "tool", "system", "error"],
+        content: list[ContentPart],
+        *,
+        hook_type: str | None = None,
+        position: int | None = None,
+        plugin_id: str | None = None,
+        plugin_name: str | None = None,
+        plugin_role: str = "framework",
+        injection_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        merge_target: Literal["user_message"] | None = None,
+        merge_position: Literal["before", "after"] | None = None,
+        target_message_id: str | None = None,
+        target_message_index: int | None = None,
+    ) -> AgentContextInjectedEvent:
+        return cls(
+            type="agent.context_injected",
+            source="agent",
+            run_id=run_id,
+            role=role,
+            content=content,
+            hook_type=hook_type,
+            position=position,
+            plugin_id=plugin_id,
+            plugin_name=plugin_name,
+            plugin_role=plugin_role,
+            injection_name=injection_name,
+            metadata=metadata,
+            merge_target=merge_target,
+            merge_position=merge_position,
+            target_message_id=target_message_id,
+            target_message_index=target_message_index,
+        )
+
+
+class AgentToolParameterInjectedEvent(Event):
+    """工具 schema 中的框架注入参数被 Hawi 消费并从真实工具参数中剥离"""
+
+    run_id: str
+    tool_name: str
+    tool_call_id: str
+    parameters: dict[str, Any]
+    plugin_id: str | None = None
+    plugin_name: str | None = None
+    plugin_role: str = "tool_owner"
+    injection_name: str | None = None
+
+    @classmethod
+    def create(
+        cls,
+        run_id: str,
+        tool_name: str,
+        tool_call_id: str,
+        parameters: dict[str, Any],
+        *,
+        plugin_id: str | None = None,
+        plugin_name: str | None = None,
+        plugin_role: str = "tool_owner",
+        injection_name: str | None = None,
+    ) -> AgentToolParameterInjectedEvent:
+        return cls(
+            type="agent.tool_parameter_injected",
+            source="agent",
+            run_id=run_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            parameters=parameters,
+            plugin_id=plugin_id,
+            plugin_name=plugin_name,
+            plugin_role=plugin_role,
+            injection_name=injection_name,
+        )
+
+
+class AgentToolRuntimeContextInjectedEvent(Event):
+    """Hawi 运行时上下文被注入到工具实现参数中"""
+
+    run_id: str
+    tool_name: str
+    tool_call_id: str
+    parameter_name: str
+    plugin_id: str | None = None
+    plugin_name: str | None = None
+    plugin_role: str = "tool_owner"
+    injection_name: str | None = None
+
+    @classmethod
+    def create(
+        cls,
+        run_id: str,
+        tool_name: str,
+        tool_call_id: str,
+        parameter_name: str,
+        *,
+        plugin_id: str | None = None,
+        plugin_name: str | None = None,
+        plugin_role: str = "tool_owner",
+        injection_name: str | None = None,
+    ) -> AgentToolRuntimeContextInjectedEvent:
+        return cls(
+            type="agent.tool_runtime_context_injected",
+            source="agent",
+            run_id=run_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            parameter_name=parameter_name,
+            plugin_id=plugin_id,
+            plugin_name=plugin_name,
+            plugin_role=plugin_role,
+            injection_name=injection_name,
+        )
+
+
 class AgentCompactStartEvent(Event):
     """Agent 开始压缩上下文"""
     run_id: str | None = None

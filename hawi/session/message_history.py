@@ -9,9 +9,31 @@ from hawi.events import Event
 
 logger = logging.getLogger(__name__)
 
+REPLAYABLE_AGENT_EVENT_TYPES = {
+    "agent.system_prompt",
+    "agent.context_injected",
+    "agent.tool_parameter_injected",
+    "agent.tool_runtime_context_injected",
+}
+
+REPLAYABLE_PLUGIN_EVENT_TYPES = {
+    "plugin.event",
+    "plugin.message",
+    "plugin.status",
+    "plugin.tool_progress",
+    "plugin.artifact.upsert",
+    "plugin.artifact.delta",
+    "plugin.artifact.remove",
+    "plugin.artifact.clear",
+}
+
 
 def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
     """Build a stable message-history record from a user-visible event."""
+    if event.type in REPLAYABLE_AGENT_EVENT_TYPES:
+        return _replayable_agent_event_entry(event)
+    if event.type in REPLAYABLE_PLUGIN_EVENT_TYPES:
+        return _replayable_plugin_event_entry(event)
     if event.type == "model.retry":
         return _model_retry_entry(event)
     if event.type in {"model.error", "agent.error"}:
@@ -158,6 +180,165 @@ def _context_compaction_entry(event: Event) -> dict[str, Any] | None:
         "content": [{"type": "text", "text": text}],
         "metadata": metadata,
     }
+
+
+def _replayable_agent_event_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize replayable agent history event")
+        return None
+    payload = _agent_event_payload(event.type, data)
+    return _replayable_event_entry(
+        event.type,
+        timestamp=data.get("timestamp"),
+        run_id=data.get("run_id"),
+        content=_event_content(payload),
+        payload=payload,
+    )
+
+
+def _replayable_plugin_event_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize replayable plugin history event")
+        return None
+    payload = _plugin_event_payload(data)
+    return _replayable_event_entry(
+        event.type,
+        timestamp=data.get("timestamp"),
+        run_id=payload.get("run_id"),
+        content=_event_content(payload),
+        payload=payload,
+    )
+
+
+def _replayable_event_entry(
+    event_type: str,
+    *,
+    timestamp: Any,
+    run_id: Any,
+    content: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "timestamp": timestamp,
+        "run_id": run_id,
+        "role": "event",
+        "content": content,
+        "metadata": {
+            "display_message_type": "core_event",
+            "event_type": event_type,
+            "event_payload": payload,
+            "persist_session": True,
+            "replay": True,
+        },
+    }
+
+
+def _agent_event_payload(event_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    if event_type == "agent.system_prompt":
+        return {
+            "run_id": data.get("run_id"),
+            "content": data.get("content"),
+            "text": _content_text(data.get("content")),
+            "origin": data.get("origin"),
+            "plugin_id": data.get("plugin_id"),
+            "plugin_name": data.get("plugin_name"),
+            "plugin_role": data.get("plugin_role"),
+            "injection_name": data.get("injection_name"),
+            "metadata": data.get("metadata"),
+        }
+    if event_type == "agent.context_injected":
+        return {
+            "run_id": data.get("run_id"),
+            "role": data.get("role"),
+            "content": data.get("content"),
+            "text": _content_text(data.get("content")),
+            "hook_type": data.get("hook_type"),
+            "position": data.get("position"),
+            "plugin_id": data.get("plugin_id"),
+            "plugin_name": data.get("plugin_name"),
+            "plugin_role": data.get("plugin_role"),
+            "injection_name": data.get("injection_name"),
+            "metadata": data.get("metadata"),
+            "merge_target": data.get("merge_target"),
+            "merge_position": data.get("merge_position"),
+            "target_message_id": data.get("target_message_id"),
+            "target_message_index": data.get("target_message_index"),
+        }
+    if event_type == "agent.tool_parameter_injected":
+        return {
+            "run_id": data.get("run_id"),
+            "tool_name": data.get("tool_name"),
+            "tool_call_id": data.get("tool_call_id"),
+            "parameters": data.get("parameters") or {},
+            "plugin_id": data.get("plugin_id"),
+            "plugin_name": data.get("plugin_name"),
+            "plugin_role": data.get("plugin_role"),
+            "injection_name": data.get("injection_name"),
+        }
+    return {
+        "run_id": data.get("run_id"),
+        "tool_name": data.get("tool_name"),
+        "tool_call_id": data.get("tool_call_id"),
+        "parameter_name": data.get("parameter_name"),
+        "plugin_id": data.get("plugin_id"),
+        "plugin_name": data.get("plugin_name"),
+        "plugin_role": data.get("plugin_role"),
+        "injection_name": data.get("injection_name"),
+    }
+
+
+def _plugin_event_payload(data: dict[str, Any]) -> dict[str, Any]:
+    raw_payload = data.get("payload")
+    payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+    plugin_name = str(data.get("plugin_name") or "")
+    plugin_id = str(data.get("plugin_id") or plugin_name)
+    payload.update(
+        {
+            "plugin_id": plugin_id,
+            "plugin_name": plugin_name,
+            "run_id": data.get("run_id") or "",
+            "tool_call_id": data.get("tool_call_id") or "",
+        }
+    )
+    message_id = data.get("message_id")
+    if message_id:
+        payload["message_id"] = message_id
+    return payload
+
+
+def _event_content(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    content = payload.get("content")
+    if isinstance(content, list) and content:
+        return content
+    text = (
+        payload.get("text")
+        or payload.get("message")
+        or payload.get("title")
+        or payload.get("event_name")
+        or payload.get("status")
+        or payload.get("tool_name")
+        or "event"
+    )
+    return [{"type": "text", "text": str(text)}]
+
+
+def _content_text(content: Any) -> str:
+    if not isinstance(content, list):
+        return ""
+    chunks: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
+            text = part.get("text")
+            if text:
+                chunks.append(str(text))
+    return "\n\n".join(chunks)
 
 
 def _context_compaction_stop_text(data: dict[str, Any]) -> str:

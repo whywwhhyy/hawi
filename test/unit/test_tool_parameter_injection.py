@@ -64,6 +64,32 @@ class AuditCommandTool(AgentTool):
         return ToolResult(success=True, output=f"ran {command}")
 
 
+class ContextAwareTool(AgentTool):
+    context = "ctx"
+
+    @property
+    def name(self) -> str:
+        return "context_aware"
+
+    @property
+    def description(self) -> str:
+        return "Receives Hawi runtime context"
+
+    @property
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "ctx": {},
+            },
+            "required": ["text", "ctx"],
+        }
+
+    def run(self, text: str, ctx: Any) -> ToolResult:  # type: ignore[override]
+        return ToolResult(success=True, output={"text": text, "has_context": ctx is not None})
+
+
 @pytest.fixture
 def agent() -> HawiAgent:
     return HawiAgent(model=MagicMock())
@@ -98,6 +124,8 @@ def test_tool_definition_schema_is_augmented_without_mutating_tool_schema(agent:
 async def test_injected_parameter_is_stripped_before_tool_execution(agent: HawiAgent):
     tool = StrictEchoTool()
     seen: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
+    events = []
+    agent.subscribe_blocking(events.append, ["agent.tool_parameter_injected"])
 
     def handler(ctx, value):
         seen.append(
@@ -131,6 +159,12 @@ async def test_injected_parameter_is_stripped_before_tool_execution(agent: HawiA
     assert record.result.success is True
     assert record.result.output == "hello"
     assert tool.calls == ["hello"]
+    assert len(events) == 1
+    assert events[0].parameters == {
+        "approval_reason": "Need to show the user the result.",
+    }
+    assert events[0].plugin_role == "dynamic_tool"
+    assert events[0].injection_name == "approval_reason"
     assert seen == [
         (
             "strict_echo",
@@ -142,6 +176,35 @@ async def test_injected_parameter_is_stripped_before_tool_execution(agent: HawiA
             {"approval_reason": "Need to show the user the result."},
         )
     ]
+
+
+async def test_runtime_context_injection_emits_event(agent: HawiAgent):
+    tool = ContextAwareTool()
+    events = []
+    agent.subscribe_blocking(
+        events.append,
+        ["agent.tool_runtime_context_injected"],
+    )
+    agent.plugins.add_tool(tool)
+
+    record = await agent._execute_tool(
+        {
+            "type": "tool_call",
+            "id": "tc-context",
+            "name": "context_aware",
+            "arguments": {"text": "hello"},
+        },
+        _ExecutionState(run_id="run-ctx", iteration=1),
+    )
+
+    assert record.result.success is True
+    assert record.result.output == {"text": "hello", "has_context": True}
+    assert len(events) == 1
+    assert events[0].tool_name == "context_aware"
+    assert events[0].tool_call_id == "tc-context"
+    assert events[0].parameter_name == "ctx"
+    assert events[0].plugin_role == "dynamic_tool"
+    assert events[0].injection_name == "ctx"
 
 
 async def test_missing_required_injected_parameter_fails_before_tool(agent: HawiAgent):

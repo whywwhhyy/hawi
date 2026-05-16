@@ -111,6 +111,139 @@ describe("core event reducer", () => {
     });
   });
 
+  it("replays persisted injection and plugin events from session history", () => {
+    const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
+      message_history: [
+        {
+          run_id: "run-replay",
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          metadata: { message_id: "msg-replay", queue: "normal" },
+          context_message_index: 0
+        },
+        {
+          run_id: "run-replay",
+          role: "event",
+          content: [{ type: "text", text: "Injected context" }],
+          timestamp: 50,
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "agent.context_injected",
+            event_payload: {
+              run_id: "run-replay",
+              role: "user",
+              text: "Injected context",
+              hook_type: "before_conversation",
+              merge_target: "user_message",
+              merge_position: "before",
+              target_message_id: "msg-replay",
+              position: 0,
+              plugin_id: "research",
+              plugin_name: "ResearchPlugin",
+              plugin_role: "plugin",
+              injection_name: "inject_notes"
+            }
+          }
+        },
+        {
+          run_id: "run-replay",
+          role: "event",
+          content: [{ type: "text", text: "system material" }],
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "agent.system_prompt",
+            event_payload: {
+              run_id: "run-replay",
+              text: "system material",
+              origin: "model_input",
+              plugin_role: "framework",
+              injection_name: "system_prompt"
+            }
+          }
+        },
+        {
+          run_id: "run-replay",
+          role: "event",
+          content: [{ type: "text", text: "Collected notes" }],
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "plugin.message",
+            event_payload: {
+              plugin_id: "planner",
+              plugin_name: "PlannerPlugin",
+              title: "Plan",
+              message: "Collected notes",
+              data: { count: 3 }
+            }
+          }
+        },
+        {
+          run_id: "run-replay",
+          role: "event",
+          content: [{ type: "text", text: "artifact" }],
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "plugin.artifact.upsert",
+            event_payload: {
+              plugin_id: "planner",
+              plugin_name: "PlannerPlugin",
+              artifact: {
+                id: "plan",
+                type: "plan",
+                title: "Plan",
+                content: "# Plan\n",
+                language: "markdown"
+              }
+            }
+          }
+        },
+        {
+          run_id: "run-replay",
+          role: "event",
+          content: [{ type: "text", text: "status" }],
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "plugin.status",
+            event_payload: {
+              plugin_id: "planner",
+              plugin_name: "PlannerPlugin",
+              status: "active",
+              message: "Working"
+            }
+          }
+        }
+      ]
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "framework", "framework"]);
+    expect(state.nodes[0].injections?.[0]).toMatchObject({
+      kind: "context_injected",
+      content: "Injected context",
+      pluginName: "ResearchPlugin",
+      targetMessageId: "msg-replay",
+      mergePosition: "before",
+      contextPosition: 0
+    });
+    expect(state.nodes[1].framework).toMatchObject({
+      kind: "system_prompt",
+      content: "system material"
+    });
+    expect(state.nodes[2].framework).toMatchObject({
+      kind: "plugin_message",
+      pluginName: "PlannerPlugin"
+    });
+    expect(state.pluginMessages[0]).toMatchObject({
+      pluginId: "planner",
+      message: "Collected notes"
+    });
+    expect(state.artifactOrder).toEqual(["planner:plan"]);
+    expect(state.artifacts["planner:plan"].content).toBe("# Plan\n");
+    expect(state.pluginStatuses.planner).toMatchObject({
+      status: "active",
+      message: "Working"
+    });
+  });
+
   it("clears stale context usage when loading a session without usage", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("model.metadata", {
@@ -821,6 +954,151 @@ describe("core event reducer", () => {
     expect(state.debugLines).toEqual(["stderr line"]);
     expect(state.nodes.map((node) => node.kind)).toEqual(["debug"]);
     expect(state.nodes[0].content).toBe("stderr line");
+  });
+
+  it("adds system prompt injections as collapsed framework chat nodes", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("agent.system_prompt", {
+      run_id: "run-system",
+      text: "You are Hawi.",
+      origin: "model_input",
+      plugin_role: "framework",
+      injection_name: "system_prompt",
+      metadata: { content_scope: "full_prompt" }
+    }, 30));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["framework"]);
+    expect(state.nodes[0].framework).toMatchObject({
+      kind: "system_prompt",
+      label: "框架注入消息",
+      content: "You are Hawi.",
+      pluginRole: "framework",
+      injectionName: "system_prompt",
+      timestamp: 30000
+    });
+  });
+
+  it("attaches user-targeted context injections to the matching user message", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-context",
+      message_id: "msg-context",
+      user_content: "hello",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("agent.context_injected", {
+      run_id: "run-context",
+      role: "user",
+      text: "Injected after",
+      hook_type: "before_conversation",
+      merge_target: "user_message",
+      merge_position: "after",
+      target_message_id: "msg-context",
+      position: 1,
+      plugin_id: "research",
+      plugin_name: "ResearchPlugin",
+      plugin_role: "plugin",
+      injection_name: "inject_notes"
+    }));
+    state = reduceCoreEvent(state, frame("agent.context_injected", {
+      run_id: "run-context",
+      role: "user",
+      text: "Injected before",
+      hook_type: "before_conversation",
+      merge_target: "user_message",
+      merge_position: "before",
+      target_message_id: "msg-context",
+      position: 0,
+      plugin_id: "research",
+      plugin_name: "ResearchPlugin",
+      plugin_role: "plugin",
+      injection_name: "inject_earlier_notes"
+    }));
+
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0]).toMatchObject({ kind: "user", content: "hello" });
+    expect(state.nodes[0].injections).toHaveLength(2);
+    expect(state.nodes[0].injections?.[0]).toMatchObject({
+      kind: "context_injected",
+      content: "Injected before",
+      pluginId: "research",
+      pluginName: "ResearchPlugin",
+      mergeTarget: "user_message",
+      mergePosition: "before",
+      targetMessageId: "msg-context",
+      contextPosition: 0
+    });
+    expect(state.nodes[0].injections?.[1]).toMatchObject({
+      content: "Injected after",
+      mergePosition: "after",
+      contextPosition: 1
+    });
+    expect(state.processing).toMatchObject({ runId: "run-context" });
+  });
+
+  it("shows tool injection events as framework chat nodes", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("agent.tool_parameter_injected", {
+      run_id: "run-tool",
+      tool_name: "read_file",
+      tool_call_id: "tc-read",
+      parameters: { tool_call_purpose: "Read notes" },
+      plugin_role: "dynamic_tool",
+      injection_name: "tool_call_purpose"
+    }));
+    state = reduceCoreEvent(state, frame("agent.tool_runtime_context_injected", {
+      run_id: "run-tool",
+      tool_name: "inspect",
+      tool_call_id: "tc-inspect",
+      parameter_name: "context",
+      plugin_id: "inspector",
+      plugin_name: "InspectorPlugin",
+      plugin_role: "tool_owner",
+      injection_name: "runtime_context"
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["framework", "framework"]);
+    expect(state.nodes[0].framework).toMatchObject({
+      kind: "tool_parameter_injected",
+      toolName: "read_file",
+      toolCallId: "tc-read",
+      pluginRole: "dynamic_tool"
+    });
+    expect(state.nodes[0].framework?.content).toContain("Read notes");
+    expect(state.nodes[1].framework).toMatchObject({
+      kind: "tool_runtime_context_injected",
+      toolName: "inspect",
+      parameterName: "context",
+      pluginName: "InspectorPlugin"
+    });
+  });
+
+  it("keeps plugin messages in the plugin log and mirrors them as framework bubbles", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("plugin.message", {
+      plugin_id: "planner",
+      plugin_name: "PlannerPlugin",
+      title: "Plan",
+      message: "Collected research notes",
+      data: { count: 3 }
+    }, 40));
+
+    expect(state.pluginMessages).toHaveLength(1);
+    expect(state.pluginMessages[0]).toMatchObject({
+      pluginId: "planner",
+      pluginName: "PlannerPlugin",
+      title: "Plan",
+      message: "Collected research notes"
+    });
+    expect(state.nodes.map((node) => node.kind)).toEqual(["framework"]);
+    expect(state.nodes[0].framework).toMatchObject({
+      kind: "plugin_message",
+      label: "插件消息",
+      pluginId: "planner",
+      pluginName: "PlannerPlugin"
+    });
+    expect(state.nodes[0].framework?.content).toContain("Collected research notes");
+    expect(state.nodes[0].framework?.content).toContain('"count": 3');
   });
 
   it("tracks plugin artifacts and streamed artifact deltas", () => {
