@@ -6,8 +6,9 @@ import {
   SessionEngineManager,
   configFromProfile,
   launchProfileFromUnknown,
-  profileFromConfig
+  profileFromConfig,
 } from "./session-engine-manager";
+import type { EngineLauncher } from "./config";
 
 class FakeCore {
   readonly commands: Array<{ type: CoreCommandType; payload: Record<string, unknown> }> = [];
@@ -60,7 +61,7 @@ const baseConfig: PersistedConfig = {
   systemPrompt: "system",
   selectedPlugins: ["filesystem"],
   pluginConfigs: { filesystem: { root: "." } },
-  showDebug: true
+  showDebug: true,
 };
 
 const inspect: InspectPayload = {
@@ -68,9 +69,9 @@ const inspect: InspectPayload = {
   models: ["deepseek-chat", "kimi"],
   plugin_catalog: [
     { key: "filesystem", label: "Filesystem", schema: {}, defaults: {} },
-    { key: "shell", label: "Shell", schema: {}, defaults: {} }
+    { key: "shell", label: "Shell", schema: {}, defaults: {} },
   ],
-  default_system_prompt: "default"
+  default_system_prompt: "default",
 };
 
 describe("session launch profiles", () => {
@@ -81,26 +82,28 @@ describe("session launch profiles", () => {
       modelName: "deepseek-chat",
       systemPrompt: "system",
       selectedPlugins: ["filesystem"],
-      pluginConfigs: { filesystem: { root: "." } }
+      pluginConfigs: { filesystem: { root: "." } },
     });
     expect(profile).not.toHaveProperty("showDebug");
     expect(configFromProfile(profile, { ...baseConfig, showDebug: false }, inspect).showDebug).toBe(false);
   });
 
   it("normalizes unknown persisted profile data", () => {
-    expect(launchProfileFromUnknown({
-      version: 1,
-      modelName: "kimi",
-      systemPrompt: "saved",
-      selectedPlugins: ["shell", 42],
-      pluginConfigs: { shell: { cwd: "." }, bad: "x" },
-      engineArgs: ["--model", "kimi", 7]
-    })).toMatchObject({
+    expect(
+      launchProfileFromUnknown({
+        version: 1,
+        modelName: "kimi",
+        systemPrompt: "saved",
+        selectedPlugins: ["shell", 42],
+        pluginConfigs: { shell: { cwd: "." }, bad: "x" },
+        engineArgs: ["--model", "kimi", 7],
+      }),
+    ).toMatchObject({
       modelName: "kimi",
       systemPrompt: "saved",
       selectedPlugins: ["shell"],
       pluginConfigs: { shell: { cwd: "." }, bad: {} },
-      engineArgs: ["--model", "kimi"]
+      engineArgs: ["--model", "kimi"],
     });
   });
 });
@@ -116,7 +119,7 @@ describe("SessionEngineManager", () => {
     internals.handleEngineEmit(record, "core:event", {
       version: VERSION,
       type: "debug.info",
-      payload: { message: "hello" }
+      payload: { message: "hello" },
     });
 
     expect(events[0]).toEqual({
@@ -124,8 +127,8 @@ describe("SessionEngineManager", () => {
       payload: {
         version: VERSION,
         type: "debug.info",
-        payload: { message: "hello", session_id: "session-a" }
-      }
+        payload: { message: "hello", session_id: "session-a" },
+      },
     });
   });
 
@@ -155,13 +158,11 @@ describe("SessionEngineManager", () => {
     internals.handleEngineEmit(record, "core:event", {
       version: VERSION,
       type: "run.start",
-      payload: { run_id: "run-1", user_content: "hello", queue: "normal" }
+      payload: { run_id: "run-1", user_content: "hello", queue: "normal" },
     });
 
-    const status = events.find((event) => (
-      event.channel === "core:event"
-      && (event.payload as CoreFrame).type === "gui.session_status"
-    ))?.payload as CoreFrame | undefined;
+    const status = events.find((event) => event.channel === "core:event" && (event.payload as CoreFrame).type === "gui.session_status")
+      ?.payload as CoreFrame | undefined;
     expect(status?.type).toBe("gui.session_status");
     expect((status?.payload as Record<string, unknown> | undefined)?.has_visible_messages).toBe(true);
     expect((status?.payload as Record<string, unknown> | undefined)?.loaded_session_count).toBe(1);
@@ -180,7 +181,7 @@ describe("SessionEngineManager", () => {
     expect(manager.snapshot()).toMatchObject({
       currentSessionId: "session-empty",
       loadedSessionCount: 1,
-      coreRunning: true
+      coreRunning: true,
     });
   });
 
@@ -207,9 +208,7 @@ describe("SessionEngineManager", () => {
 
     await manager.sendCommand("enqueue", { content: "hi", queue: "normal" }, "session-target");
 
-    expect(record.core.commands).toEqual([
-      { type: "enqueue", payload: { content: "hi", queue: "normal" } }
-    ]);
+    expect(record.core.commands).toEqual([{ type: "enqueue", payload: { content: "hi", queue: "normal" } }]);
   });
 
   it("evicts the earliest finished idle non-current session over the loaded limit", async () => {
@@ -276,8 +275,9 @@ describe("SessionEngineManager", () => {
     internals.currentSessionId = running.sessionId;
     internals.loaded.set(running.sessionId, running);
 
-    await expect(manager.sendCommand("session_delete", { session_id: running.sessionId }))
-      .rejects.toThrow("Cannot delete a running session.");
+    await expect(manager.sendCommand("session_delete", { session_id: running.sessionId })).rejects.toThrow(
+      "Cannot delete a running session.",
+    );
   });
 
   it("uses persisted session profiles when listing loaded sessions", async () => {
@@ -292,11 +292,11 @@ describe("SessionEngineManager", () => {
             updated_at: "2025-01-01T00:00:00",
             last_checkpoint_event: "save_now",
             components_present: ["context"],
-            gui_launch_profile: persistedProfile
-          }
+            gui_launch_profile: persistedProfile,
+          },
         ],
-        current_session_id: "session-catalog"
-      })
+        current_session_id: "session-catalog",
+      }),
     });
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;
@@ -341,7 +341,7 @@ describe("SessionEngineManager", () => {
     internals.handleEngineEmit(record, "core:event", {
       version: VERSION,
       type: "run.start",
-      payload: { run_id: "run-1", user_content: "hello", queue: "normal" }
+      payload: { run_id: "run-1", user_content: "hello", queue: "normal" },
     });
 
     const frame = await internals.sessionListFrame();
@@ -353,23 +353,23 @@ describe("SessionEngineManager", () => {
 });
 
 function makeManager(events: Array<{ channel: string; payload: unknown }>): SessionEngineManager {
+  const launcher: EngineLauncher = {
+    command: "uv",
+    argsPrefix: ["run", "--project", "/repo", "python", "-m", "hawi_engine"],
+    source: "uv",
+  };
   const manager = new SessionEngineManager(
     (channel, payload) => events.push({ channel, payload }),
     "/repo",
     "/workspace",
     "/workspace/.hawi/hawi-engine.log",
-    "uv"
+    launcher,
   );
   manager.configure(inspect, baseConfig);
   return manager;
 }
 
-function fakeRecord(
-  sessionId: string,
-  index: number,
-  core = new FakeCore(),
-  launchProfile = profileFromConfig(baseConfig)
-): FakeRecord {
+function fakeRecord(sessionId: string, index: number, core = new FakeCore(), launchProfile = profileFromConfig(baseConfig)): FakeRecord {
   return {
     sessionId,
     core,
@@ -380,7 +380,7 @@ function fakeRecord(
     agentState: "IDLE",
     runnerState: "IDLE",
     suppressEvents: false,
-    stopping: false
+    stopping: false,
   };
 }
 
@@ -388,6 +388,6 @@ function ackFrame(command: string, payload: Record<string, unknown>): CoreFrame 
   return {
     version: VERSION,
     type: "ack",
-    payload: { command, ok: true, ...payload }
+    payload: { command, ok: true, ...payload },
   };
 }

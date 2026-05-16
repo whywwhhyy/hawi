@@ -2,22 +2,29 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CoreCommandType, GuiMetadata, InspectPayload, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult } from "../shared/protocol";
+import type {
+  CoreCommandType,
+  GuiMetadata,
+  InspectPayload,
+  MarkdownExportPayload,
+  PersistedConfig,
+  SaveMarkdownExportResult,
+} from "../shared/protocol";
 import {
   type EnvPaths,
+  ensureEngineWorkspace,
   resolveEnvPaths,
   loadInspectPayload,
   loadConfig,
   saveConfig,
   sanitizeConfig,
-  preserveProviderOrder
+  preserveProviderOrder,
 } from "./config";
 import type { EmitToRenderer } from "./core-process";
 import { SessionEngineManager } from "./session-engine-manager";
 
-const env: EnvPaths = resolveEnvPaths();
-const appIndexUrl = pathToFileURL(path.join(env.guiRoot, "dist", "index.html"));
-
+let env: EnvPaths | null = null;
+let appIndexUrl: URL | null = null;
 let mainWindow: BrowserWindow | null = null;
 let inspectPayload: InspectPayload | null = null;
 let config: PersistedConfig | null = null;
@@ -29,6 +36,7 @@ const MIN_CONTENT_HEIGHT = 660;
 const FILENAME_TIMESTAMP_RE = /\b\d{8}-\d{6}\b/;
 
 function createWindow(): void {
+  const readyEnv = getEnv();
   const window = new BrowserWindow({
     width: 1160,
     height: 780,
@@ -38,10 +46,10 @@ function createWindow(): void {
     title: "Hawi",
     backgroundColor: "#f7f8f8",
     webPreferences: {
-      preload: path.join(env.guiRoot, "dist-electron", "preload", "preload.js"),
+      preload: path.join(readyEnv.guiRoot, "dist-electron", "preload", "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
-    }
+      nodeIntegration: false,
+    },
   });
   mainWindow = window;
 
@@ -51,18 +59,31 @@ function createWindow(): void {
     mainWindow = null;
   });
 
-  window.loadFile(path.join(env.guiRoot, "dist", "index.html"));
+  window.loadFile(path.join(readyEnv.guiRoot, "dist", "index.html"));
 }
 
 app.whenReady().then(async () => {
-  inspectPayload = loadInspectPayload(env.repoRoot, env.workspaceRoot, env.uvCommand);
-  config = loadConfig(env.configPath, inspectPayload);
+  const readyEnv = resolveEnvPaths({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  });
+  env = readyEnv;
+  appIndexUrl = pathToFileURL(path.join(readyEnv.guiRoot, "dist", "index.html"));
+  ensureEngineWorkspace(readyEnv);
+  inspectPayload = loadInspectPayload(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher);
+  config = loadConfig(readyEnv.configPath, inspectPayload);
   const argvModel = parseArgValue("--model");
   if (argvModel && inspectPayload.models.includes(argvModel)) {
     config = { ...config, modelName: argvModel };
-    saveConfig(env.configPath, config);
+    saveConfig(readyEnv.configPath, config);
   }
-  engineManager = new SessionEngineManager(emitToRenderer, env.repoRoot, env.workspaceRoot, env.backendLogPath, env.uvCommand);
+  engineManager = new SessionEngineManager(
+    emitToRenderer,
+    readyEnv.repoRoot,
+    readyEnv.workspaceRoot,
+    readyEnv.backendLogPath,
+    readyEnv.engineLauncher,
+  );
   engineManager.configure(inspectPayload, config, refreshedProviders);
   registerIpc();
   createWindow();
@@ -91,13 +112,13 @@ function registerIpc(): void {
     return {
       inspect: ready.inspect,
       config: ready.config,
-      ...currentManagerSnapshot()
+      ...currentManagerSnapshot(),
     } satisfies GuiMetadata;
   });
 
   ipcMain.handle("gui:save-config", (_event, nextConfig: PersistedConfig) => {
     config = sanitizeConfig(nextConfig, inspectPayload);
-    saveConfig(env.configPath, config);
+    saveConfig(getEnv().configPath, config);
     if (inspectPayload && engineManager) {
       engineManager.configure(inspectPayload, config, refreshedProviders);
     }
@@ -107,7 +128,7 @@ function registerIpc(): void {
   ipcMain.handle("core:restart", async (_event, nextConfig: PersistedConfig) => {
     const ready = getReady();
     config = sanitizeConfig(nextConfig, ready.inspect);
-    saveConfig(env.configPath, config);
+    saveConfig(getEnv().configPath, config);
     engineManager?.configure(ready.inspect, config, refreshedProviders);
     await engineManager?.restartCurrent(config);
     return { ok: true };
@@ -135,6 +156,7 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
     throw new Error("provider is required");
   }
   const ready = getReady();
+  const readyEnv = getEnv();
   let allModels: string[] | null = null;
   let nextInspect = ready.inspect;
 
@@ -146,9 +168,9 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
       allModels = payload.all_models.filter((item): item is string => typeof item === "string");
     }
   } else {
-    const refreshed = loadInspectPayload(env.repoRoot, env.workspaceRoot, env.uvCommand, [
+    const refreshed = loadInspectPayload(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher, [
       "--refresh-provider",
-      providerName
+      providerName,
     ]);
     nextInspect = refreshed;
     allModels = refreshed.models;
@@ -161,15 +183,15 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
   refreshedProviders.add(providerName);
   inspectPayload = {
     ...nextInspect,
-    models: preserveProviderOrder(ready.inspect.models, allModels)
+    models: preserveProviderOrder(ready.inspect.models, allModels),
   };
   config = sanitizeConfig(ready.config, inspectPayload);
-  saveConfig(env.configPath, config);
+  saveConfig(readyEnv.configPath, config);
   engineManager?.configure(inspectPayload, config, refreshedProviders);
   return {
     inspect: inspectPayload,
     config,
-    ...currentManagerSnapshot()
+    ...currentManagerSnapshot(),
   };
 }
 
@@ -181,11 +203,9 @@ async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveM
   const options = {
     title: "导出 Markdown",
     defaultPath: suggested,
-    filters: [{ name: "Markdown", extensions: ["md"] }]
+    filters: [{ name: "Markdown", extensions: ["md"] }],
   };
-  const result = mainWindow
-    ? await dialog.showSaveDialog(mainWindow, options)
-    : await dialog.showSaveDialog(options);
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
   if (result.canceled || !result.filePath) {
     return { canceled: true };
   }
@@ -194,9 +214,10 @@ async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveM
   const parsed = path.parse(markdownPath);
   const referenceDirName = `${parsed.name}-ref`;
   const originalRefDir = payload.reference_dir_name;
-  const markdown = originalRefDir && originalRefDir !== referenceDirName
-    ? payload.markdown.split(originalRefDir).join(referenceDirName)
-    : payload.markdown;
+  const markdown =
+    originalRefDir && originalRefDir !== referenceDirName
+      ? payload.markdown.split(originalRefDir).join(referenceDirName)
+      : payload.markdown;
 
   mkdirSync(parsed.dir, { recursive: true });
   writeFileSync(markdownPath, markdown, "utf8");
@@ -218,7 +239,7 @@ async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveM
   return {
     canceled: false,
     markdownPath,
-    referenceDir
+    referenceDir,
   };
 }
 
@@ -247,11 +268,10 @@ function filenameWithTimestamp(filename: string): string {
 
 function timestampToSeconds(date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, "0");
-  return [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate())
-  ].join("") + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+  return (
+    [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join("") +
+    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  );
 }
 
 function installNavigationGuards(window: BrowserWindow): void {
@@ -285,12 +305,22 @@ function isOpenableExternalUrl(url: string): boolean {
 }
 
 function isAppDocumentUrl(url: string): boolean {
+  if (!appIndexUrl) {
+    return false;
+  }
   try {
     const parsed = new URL(url);
     return parsed.protocol === "file:" && parsed.pathname === appIndexUrl.pathname;
   } catch {
     return false;
   }
+}
+
+function getEnv(): EnvPaths {
+  if (!env) {
+    throw new Error("GUI environment is not ready");
+  }
+  return env;
 }
 
 function getReady(): { inspect: InspectPayload; config: PersistedConfig } {
@@ -301,13 +331,15 @@ function getReady(): { inspect: InspectPayload; config: PersistedConfig } {
 }
 
 function currentManagerSnapshot() {
-  return engineManager?.snapshot() ?? {
-    currentSessionId: null,
-    runningSessionCount: 0,
-    loadedSessionCount: 0,
-    maxLoadedSessions: 5,
-    coreRunning: false
-  };
+  return (
+    engineManager?.snapshot() ?? {
+      currentSessionId: null,
+      runningSessionCount: 0,
+      loadedSessionCount: 0,
+      maxLoadedSessions: 5,
+      coreRunning: false,
+    }
+  );
 }
 
 const emitToRenderer: EmitToRenderer = (channel, payload) => {

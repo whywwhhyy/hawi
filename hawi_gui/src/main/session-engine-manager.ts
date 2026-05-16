@@ -6,10 +6,10 @@ import type {
   PersistedConfig,
   SessionLaunchProfile,
   SessionLoadState,
-  SessionMetaPayload
+  SessionMetaPayload,
 } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import { sanitizeConfig } from "./config";
+import { sanitizeConfig, type EngineLauncher } from "./config";
 import { CoreCommandError, CoreProcess, DEFAULT_COMMAND_TIMEOUT_MS, type EmitToRenderer } from "./core-process";
 
 export const MAX_LOADED_SESSIONS = 5;
@@ -51,7 +51,7 @@ export class SessionEngineManager {
     private readonly repoRoot: string,
     private readonly workspaceRoot: string,
     private readonly backendLogPath: string,
-    private readonly uvCommand: string
+    private readonly engineLauncher: EngineLauncher,
   ) {}
 
   configure(metadata: InspectPayload, config: PersistedConfig, refreshedProviders: Iterable<string> = []): void {
@@ -66,7 +66,7 @@ export class SessionEngineManager {
       runningSessionCount: this.runningSessionCount(),
       loadedSessionCount: this.visibleLoadedSessionCount(),
       maxLoadedSessions: MAX_LOADED_SESSIONS,
-      coreRunning: this.loaded.size > 0
+      coreRunning: this.loaded.size > 0,
     };
   }
 
@@ -80,7 +80,7 @@ export class SessionEngineManager {
     this.currentSessionId = sessionId;
     this.startRecord(sessionId, profile, {
       initialSessionId: sessionId,
-      initialSessionName: sessionId
+      initialSessionName: sessionId,
     });
     this.emitSessionRuntimeStatus(sessionId);
   }
@@ -107,7 +107,7 @@ export class SessionEngineManager {
       if (isMissingSessionError(error)) {
         this.startRecord(sessionId, profile, {
           initialSessionId: sessionId,
-          initialSessionName: sessionId
+          initialSessionName: sessionId,
         });
         this.emitSessionRuntimeStatus(sessionId);
         return;
@@ -119,11 +119,7 @@ export class SessionEngineManager {
     void this.enforceLoadedLimit();
   }
 
-  async sendCommand(
-    type: CoreCommandType,
-    payload: Record<string, unknown>,
-    targetSessionId?: string | null
-  ): Promise<CoreFrame> {
+  async sendCommand(type: CoreCommandType, payload: Record<string, unknown>, targetSessionId?: string | null): Promise<CoreFrame> {
     switch (type) {
       case "session_list":
         return this.sessionListFrame();
@@ -149,11 +145,7 @@ export class SessionEngineManager {
     return record.core.sendCommand("refresh_models", { provider }, 60_000);
   }
 
-  private async routeCommand(
-    type: CoreCommandType,
-    payload: Record<string, unknown>,
-    targetSessionId?: string | null
-  ): Promise<CoreFrame> {
+  private async routeCommand(type: CoreCommandType, payload: Record<string, unknown>, targetSessionId?: string | null): Promise<CoreFrame> {
     const sessionId = targetSessionId || stringOrNull(payload.session_id) || this.currentSessionId;
     if (!sessionId) {
       throw new Error("No active session");
@@ -165,7 +157,7 @@ export class SessionEngineManager {
         return catalog.core.sendCommand(
           type,
           { ...payload, session_id: stringOrNull(payload.session_id) ?? sessionId },
-          commandTimeout(type)
+          commandTimeout(type),
         );
       }
       throw new Error(`Session is not loaded: ${sessionId}`);
@@ -188,7 +180,7 @@ export class SessionEngineManager {
       record.launchProfile = {
         ...record.launchProfile,
         selectedPlugins: stringList(payload.selected_plugins),
-        pluginConfigs: pluginConfigRecord(payload.plugin_configs)
+        pluginConfigs: pluginConfigRecord(payload.plugin_configs),
       };
       await this.saveSessionProfile(record);
     }
@@ -205,7 +197,7 @@ export class SessionEngineManager {
     this.currentSessionId = sessionId;
     this.startRecord(sessionId, profile, {
       initialSessionId: sessionId,
-      initialSessionName: name
+      initialSessionName: name,
     });
     this.emitSessionRuntimeStatus(sessionId);
     void this.enforceLoadedLimit();
@@ -219,9 +211,10 @@ export class SessionEngineManager {
     }
     await this.saveCurrentSession();
     const sourceMeta = await this.findSessionMeta(sourceSessionId);
-    const sourceProfile = launchProfileFromUnknown(sourceMeta?.gui_launch_profile)
-      ?? this.loaded.get(sourceSessionId)?.launchProfile
-      ?? profileFromConfig(this.requireDefaultConfig());
+    const sourceProfile =
+      launchProfileFromUnknown(sourceMeta?.gui_launch_profile) ??
+      this.loaded.get(sourceSessionId)?.launchProfile ??
+      profileFromConfig(this.requireDefaultConfig());
     const provisionalId = `forking-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const record = this.startRecord(provisionalId, sourceProfile, { suppressEvents: true });
     let frame: CoreFrame;
@@ -263,15 +256,14 @@ export class SessionEngineManager {
       void this.enforceLoadedLimit();
       return ackFrame("session_switch", {
         session_id: sessionId,
-        already_loaded: true
+        already_loaded: true,
       });
     }
 
     const meta = await this.findSessionMeta(sessionId);
     await this.saveCurrentSession();
     await this.discardCurrentEmptySession();
-    const profile = launchProfileFromUnknown(meta?.gui_launch_profile)
-      ?? profileFromConfig(this.requireDefaultConfig());
+    const profile = launchProfileFromUnknown(meta?.gui_launch_profile) ?? profileFromConfig(this.requireDefaultConfig());
     const record = this.startRecord(sessionId, profile, {});
     let frame: CoreFrame;
     try {
@@ -289,8 +281,8 @@ export class SessionEngineManager {
       payload: {
         ...framePayload(frame),
         command: "session_switch",
-        session_id: sessionId
-      }
+        session_id: sessionId,
+      },
     };
   }
 
@@ -304,9 +296,7 @@ export class SessionEngineManager {
       throw new Error("Cannot delete a running session.");
     }
     const wasCurrent = sessionId === this.currentSessionId;
-    const nextCurrent = wasCurrent
-      ? this.nextCurrentSessionIdAfterDelete(sessionId)
-      : this.currentSessionId;
+    const nextCurrent = wasCurrent ? this.nextCurrentSessionIdAfterDelete(sessionId) : this.currentSessionId;
     if (loaded) {
       await this.stopRecord(loaded, "delete-session");
     }
@@ -326,8 +316,8 @@ export class SessionEngineManager {
         current_session_id: this.currentSessionId,
         running_session_count: this.runningSessionCount(),
         loaded_session_count: this.visibleLoadedSessionCount(),
-        max_loaded_sessions: MAX_LOADED_SESSIONS
-      }
+        max_loaded_sessions: MAX_LOADED_SESSIONS,
+      },
     };
   }
 
@@ -338,7 +328,7 @@ export class SessionEngineManager {
       initialSessionId?: string;
       initialSessionName?: string;
       suppressEvents?: boolean;
-    }
+    },
   ): EngineRecord {
     const existing = this.loaded.get(sessionId);
     if (existing) {
@@ -352,7 +342,7 @@ export class SessionEngineManager {
       this.repoRoot,
       this.workspaceRoot,
       this.logPathForSession(sessionId),
-      this.uvCommand
+      this.engineLauncher,
     );
     Object.assign(record, {
       sessionId,
@@ -363,13 +353,13 @@ export class SessionEngineManager {
       agentState: "IDLE",
       runnerState: "IDLE",
       suppressEvents: Boolean(options.suppressEvents),
-      stopping: false
+      stopping: false,
     });
     this.loaded.set(sessionId, record);
     record.core.start(config, metadata, this.refreshedProviders, {
       initialSessionId: options.initialSessionId,
       initialSessionName: options.initialSessionName,
-      launchProfile
+      launchProfile,
     });
     return record;
   }
@@ -381,8 +371,7 @@ export class SessionEngineManager {
     record.stopping = true;
     try {
       if (record.core.isRunning()) {
-        await record.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS)
-          .catch(() => undefined);
+        await record.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS).catch(() => undefined);
       }
       await record.core.stop(reason);
     } finally {
@@ -397,8 +386,7 @@ export class SessionEngineManager {
     if (!record.core.isRunning()) {
       return;
     }
-    await record.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS)
-      .catch(() => undefined);
+    await record.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS).catch(() => undefined);
   }
 
   private async saveCurrentSession(): Promise<void> {
@@ -406,8 +394,7 @@ export class SessionEngineManager {
     if (!current?.core.isRunning()) {
       return;
     }
-    await current.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS)
-      .catch(() => undefined);
+    await current.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS).catch(() => undefined);
   }
 
   private async discardCurrentEmptySession(): Promise<void> {
@@ -477,7 +464,7 @@ export class SessionEngineManager {
       byId.set(session.session_id, {
         ...session,
         load_state: "unloaded",
-        gui_launch_profile: launchProfileFromUnknown(session.gui_launch_profile)
+        gui_launch_profile: launchProfileFromUnknown(session.gui_launch_profile),
       });
     }
     for (const record of this.loaded.values()) {
@@ -501,7 +488,7 @@ export class SessionEngineManager {
         load_state: loadStateForRecord(record),
         loaded_at: record.loadedAt,
         last_finished_at: record.lastFinishedAt,
-        gui_launch_profile: record.launchProfile
+        gui_launch_profile: record.launchProfile,
       });
     }
     return ackFrame("session_list", {
@@ -509,7 +496,7 @@ export class SessionEngineManager {
       current_session_id: this.currentSessionId,
       running_session_count: this.runningSessionCount(),
       loaded_session_count: this.visibleLoadedSessionCount(),
-      max_loaded_sessions: MAX_LOADED_SESSIONS
+      max_loaded_sessions: MAX_LOADED_SESSIONS,
     });
   }
 
@@ -545,13 +532,15 @@ export class SessionEngineManager {
   }
 
   private currentRecord(): EngineRecord | null {
-    return this.currentSessionId ? this.loaded.get(this.currentSessionId) ?? null : null;
+    return this.currentSessionId ? (this.loaded.get(this.currentSessionId) ?? null) : null;
   }
 
   private nextCurrentSessionIdAfterDelete(deletedSessionId: string): string | null {
-    return [...this.loaded.values()]
-      .filter((record) => record.sessionId !== deletedSessionId && record.hasVisibleMessages)
-      .sort((a, b) => b.loadedAt - a.loadedAt)[0]?.sessionId ?? null;
+    return (
+      [...this.loaded.values()]
+        .filter((record) => record.sessionId !== deletedSessionId && record.hasVisibleMessages)
+        .sort((a, b) => b.loadedAt - a.loadedAt)[0]?.sessionId ?? null
+    );
   }
 
   private async enforceLoadedLimit(): Promise<void> {
@@ -562,11 +551,9 @@ export class SessionEngineManager {
     try {
       while (this.loaded.size > MAX_LOADED_SESSIONS) {
         const candidate = [...this.loaded.values()]
-          .filter((record) => (
-            record.sessionId !== this.currentSessionId
-            && !isRunningAgentState(record.agentState)
-            && record.core.isRunning()
-          ))
+          .filter(
+            (record) => record.sessionId !== this.currentSessionId && !isRunningAgentState(record.agentState) && record.core.isRunning(),
+          )
           .sort((a, b) => (a.lastFinishedAt ?? a.loadedAt) - (b.lastFinishedAt ?? b.loadedAt))[0];
         if (!candidate) {
           return;
@@ -592,8 +579,8 @@ export class SessionEngineManager {
         current_session_id: this.currentSessionId,
         running_session_count: this.runningSessionCount(),
         loaded_session_count: this.visibleLoadedSessionCount(),
-        max_loaded_sessions: MAX_LOADED_SESSIONS
-      }
+        max_loaded_sessions: MAX_LOADED_SESSIONS,
+      },
     });
   }
 
@@ -632,7 +619,7 @@ export function profileFromConfig(config: PersistedConfig): SessionLaunchProfile
     systemPrompt: config.systemPrompt,
     selectedPlugins: [...config.selectedPlugins],
     pluginConfigs: clonePluginConfigs(config.pluginConfigs),
-    engineArgs: stableEngineArgs(config)
+    engineArgs: stableEngineArgs(config),
   } satisfies SessionLaunchProfile;
   return profile;
 }
@@ -640,16 +627,19 @@ export function profileFromConfig(config: PersistedConfig): SessionLaunchProfile
 export function configFromProfile(
   profile: SessionLaunchProfile,
   defaultConfig: PersistedConfig,
-  metadata: InspectPayload
+  metadata: InspectPayload,
 ): PersistedConfig {
-  return sanitizeConfig({
-    ...defaultConfig,
-    modelName: profile.modelName || defaultConfig.modelName,
-    systemPrompt: profile.systemPrompt || defaultConfig.systemPrompt,
-    selectedPlugins: [...profile.selectedPlugins],
-    pluginConfigs: clonePluginConfigs(profile.pluginConfigs),
-    showDebug: defaultConfig.showDebug
-  }, metadata);
+  return sanitizeConfig(
+    {
+      ...defaultConfig,
+      modelName: profile.modelName || defaultConfig.modelName,
+      systemPrompt: profile.systemPrompt || defaultConfig.systemPrompt,
+      selectedPlugins: [...profile.selectedPlugins],
+      pluginConfigs: clonePluginConfigs(profile.pluginConfigs),
+      showDebug: defaultConfig.showDebug,
+    },
+    metadata,
+  );
 }
 
 export function launchProfileFromUnknown(value: unknown): SessionLaunchProfile | null {
@@ -667,9 +657,7 @@ export function launchProfileFromUnknown(value: unknown): SessionLaunchProfile |
     systemPrompt,
     selectedPlugins: stringList(value.selectedPlugins),
     pluginConfigs: pluginConfigRecord(value.pluginConfigs),
-    engineArgs: Array.isArray(value.engineArgs)
-      ? value.engineArgs.filter((item): item is string => typeof item === "string")
-      : undefined
+    engineArgs: Array.isArray(value.engineArgs) ? value.engineArgs.filter((item): item is string => typeof item === "string") : undefined,
   };
 }
 
@@ -686,7 +674,7 @@ function stableEngineArgs(config: PersistedConfig): string[] {
     "--extra-tool-parameter",
     "tool_call_purpose",
     "str",
-    "用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。"
+    "用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。",
   ];
 }
 
@@ -704,15 +692,13 @@ function normalizeSessionMeta(value: unknown): SessionMetaPayload | null {
     created_at: stringOrNull(value.created_at) ?? "",
     updated_at: stringOrNull(value.updated_at) ?? "",
     last_checkpoint_event: stringOrNull(value.last_checkpoint_event),
-    components_present: Array.isArray(value.components_present)
-      ? value.components_present.map((item) => String(item))
-      : [],
+    components_present: Array.isArray(value.components_present) ? value.components_present.map((item) => String(item)) : [],
     locked: value.locked === true,
     lock_owner: isRecord(value.lock_owner) ? value.lock_owner : null,
     load_state: normalizeLoadState(value.load_state),
     loaded_at: optionalNumber(value.loaded_at),
     last_finished_at: optionalNumber(value.last_finished_at),
-    gui_launch_profile: launchProfileFromUnknown(value.gui_launch_profile)
+    gui_launch_profile: launchProfileFromUnknown(value.gui_launch_profile),
   };
 }
 
@@ -720,7 +706,7 @@ function ackFrame(command: string, payload: Record<string, unknown>): CoreFrame 
   return {
     version: VERSION,
     type: "ack",
-    payload: { command, ok: true, ...payload }
+    payload: { command, ok: true, ...payload },
   };
 }
 
@@ -730,8 +716,8 @@ function injectSessionId(frame: CoreFrame, sessionId: string): CoreFrame {
     ...frame,
     payload: {
       ...payload,
-      session_id: payload.session_id ?? sessionId
-    }
+      session_id: payload.session_id ?? sessionId,
+    },
   };
 }
 
@@ -777,27 +763,18 @@ function compareSessionsByCreatedAt(a: SessionMetaPayload, b: SessionMetaPayload
 }
 
 function clonePluginConfigs(value: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown>> {
-  return Object.fromEntries(
-    Object.entries(value).map(([key, config]) => [key, { ...config }])
-  );
+  return Object.fromEntries(Object.entries(value).map(([key, config]) => [key, { ...config }]));
 }
 
 function pluginConfigRecord(value: unknown): Record<string, Record<string, unknown>> {
   if (!isRecord(value)) {
     return {};
   }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, config]) => [
-      key,
-      isRecord(config) ? { ...config } : {}
-    ])
-  );
+  return Object.fromEntries(Object.entries(value).map(([key, config]) => [key, isRecord(config) ? { ...config } : {}]));
 }
 
 function stringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -818,11 +795,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function generateSessionId(date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, "0");
-  const timestamp = [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate())
-  ].join("") + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+  const timestamp =
+    [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join("") +
+    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
   const suffix = Math.random().toString(16).slice(2, 8).padEnd(6, "0");
   return `session-${timestamp}-${suffix}`;
 }

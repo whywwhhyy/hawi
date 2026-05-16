@@ -6,9 +6,15 @@
   "main": "dist-electron/main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.node.json && vite build",
+    "build:core": "node scripts/build-python-core.mjs",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
     "dev:fast": "tsc -p tsconfig.node.json && vite build && electron .",
+    "package": "npm run build:core && npm run build && electron-builder --dir",
+    "dist": "npm run build:core && npm run build && electron-builder",
+    "dist:mac": "npm run build:core && npm run build && electron-builder --mac",
+    "dist:win": "npm run build:core && npm run build && electron-builder --win",
+    "dist:linux": "npm run build:core && npm run build && electron-builder --linux",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
@@ -32,6 +38,7 @@
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/coverage-v8": "^4.1.5",
     "electron": "^39.2.7",
+    "electron-builder": "^26.8.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^5.2.0",
     "prettier": "^3.8.3",
@@ -39,5 +46,55 @@
     "typescript-eslint": "^8.59.2",
     "vite": "^7.2.7",
     "vitest": "^4.0.15"
+  },
+  "build": {
+    "appId": "com.hawi.gui",
+    "productName": "Hawi",
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/bin",
+        "to": "bin",
+        "filter": [
+          "hawi-engine*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signExts": [
+        "!.exe",
+        "!.dll",
+        "!.node"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
   }
 }

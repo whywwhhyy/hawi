@@ -2,8 +2,10 @@
 node_modules/
 
 # Build output
+build/
 dist/
 dist-electron/
+release/
 
 # Coverage
 coverage/

@@ -1,6 +1,14 @@
+import { homedir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildEngineEnv, buildEngineRunArgs, preserveProviderOrder } from "./config";
+import {
+  buildEngineEnv,
+  buildEngineRunArgs,
+  isUsablePackagedWorkspaceCwd,
+  preserveProviderOrder,
+  resolveWorkspaceRoot,
+  type EngineLauncher,
+} from "./config";
 
 describe("engine launch helpers", () => {
   it("runs the engine module through uv so dependencies can sync", () => {
@@ -11,7 +19,7 @@ describe("engine launch helpers", () => {
       "python",
       "-m",
       "hawi_engine",
-      "--inspect"
+      "--inspect",
     ]);
   });
 
@@ -19,29 +27,90 @@ describe("engine launch helpers", () => {
     expect(buildEngineRunArgs("/repo/hawi", ["--inspect", "--refresh-provider", "openai"])).toContain("--refresh-provider");
   });
 
+  it("runs a bundled engine executable directly", () => {
+    const launcher: EngineLauncher = { command: "/app/resources/bin/hawi-engine", argsPrefix: [], source: "bundled" };
+
+    expect(buildEngineRunArgs("/repo/hawi", ["--inspect"], launcher)).toEqual(["--inspect"]);
+  });
+
   it("adds the repo root to PYTHONPATH", () => {
     const env = buildEngineEnv("C:\\repo\\hawi", {
       PATH: "C:\\tools",
-      PYTHONPATH: "C:\\existing"
+      PYTHONPATH: "C:\\existing",
     });
 
     expect(env.PATH).toBe("C:\\tools");
     expect(env.PYTHONPATH).toBe(`C:\\repo\\hawi${path.delimiter}C:\\existing`);
   });
+
+  it("uses the current directory for packaged command-line launches", () => {
+    const originalArgv = process.argv;
+    const originalCwd = process.env.HAWI_GUI_CWD;
+    const originalInitCwd = process.env.INIT_CWD;
+    const workspace = path.join(homedir(), "hawi-cli-workspace");
+    process.argv = ["electron", "."];
+    delete process.env.HAWI_GUI_CWD;
+    delete process.env.INIT_CWD;
+    try {
+      expect(resolveWorkspaceRoot({ isPackaged: true, cwd: workspace })).toBe(path.resolve(workspace));
+    } finally {
+      process.argv = originalArgv;
+      if (originalCwd === undefined) {
+        delete process.env.HAWI_GUI_CWD;
+      } else {
+        process.env.HAWI_GUI_CWD = originalCwd;
+      }
+      if (originalInitCwd === undefined) {
+        delete process.env.INIT_CWD;
+      } else {
+        process.env.INIT_CWD = originalInitCwd;
+      }
+    }
+  });
+
+  it("falls back to the home directory for packaged launches from unusable system locations", () => {
+    const originalArgv = process.argv;
+    const originalCwd = process.env.HAWI_GUI_CWD;
+    const originalInitCwd = process.env.INIT_CWD;
+    process.argv = ["electron", "."];
+    delete process.env.HAWI_GUI_CWD;
+    delete process.env.INIT_CWD;
+    try {
+      expect(resolveWorkspaceRoot({ isPackaged: true, cwd: path.parse(homedir()).root })).toBe(path.resolve(homedir()));
+    } finally {
+      process.argv = originalArgv;
+      if (originalCwd === undefined) {
+        delete process.env.HAWI_GUI_CWD;
+      } else {
+        process.env.HAWI_GUI_CWD = originalCwd;
+      }
+      if (originalInitCwd === undefined) {
+        delete process.env.INIT_CWD;
+      } else {
+        process.env.INIT_CWD = originalInitCwd;
+      }
+    }
+  });
+
+  it("does not use the packaged app install directory as a workspace", () => {
+    const resourcesPath = path.join(path.sep, "Applications", "Hawi.app", "Contents", "Resources");
+
+    expect(isUsablePackagedWorkspaceCwd(path.join(path.sep, "Applications", "Hawi.app", "Contents", "MacOS"), resourcesPath)).toBe(false);
+    expect(isUsablePackagedWorkspaceCwd(path.join(homedir(), "project"), resourcesPath)).toBe(true);
+  });
 });
 
 describe("provider order", () => {
   it("keeps an existing provider in its original position after refresh", () => {
-    expect(preserveProviderOrder(
-      ["alpha/a1", "target/t1", "omega/o1"],
-      ["target/t1", "target/t2", "alpha/a1", "omega/o1"]
-    )).toEqual(["alpha/a1", "target/t1", "target/t2", "omega/o1"]);
+    expect(preserveProviderOrder(["alpha/a1", "target/t1", "omega/o1"], ["target/t1", "target/t2", "alpha/a1", "omega/o1"])).toEqual([
+      "alpha/a1",
+      "target/t1",
+      "target/t2",
+      "omega/o1",
+    ]);
   });
 
   it("appends newly discovered providers after known providers", () => {
-    expect(preserveProviderOrder(
-      ["alpha/a1", "omega/o1"],
-      ["new/n1", "omega/o1", "alpha/a1"]
-    )).toEqual(["alpha/a1", "omega/o1", "new/n1"]);
+    expect(preserveProviderOrder(["alpha/a1", "omega/o1"], ["new/n1", "omega/o1", "alpha/a1"])).toEqual(["alpha/a1", "omega/o1", "new/n1"]);
   });
 });

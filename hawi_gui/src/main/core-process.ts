@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CoreCommand, CoreCommandType, CoreFrame, InspectPayload, PersistedConfig, SessionLaunchProfile } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import { buildEngineEnv, buildEngineRunArgs } from "./config";
+import { buildEngineEnv, buildEngineRunArgs, type EngineLauncher } from "./config";
 import { TLVDecoder, TYPE_JSON_FRAME, encodeJsonFrame } from "./tlv";
 
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 800;
@@ -49,7 +49,7 @@ export class CoreProcess {
     private readonly repoRoot: string,
     private readonly workspaceRoot: string,
     private readonly backendLogPath: string,
-    private readonly uvCommand: string
+    private readonly engineLauncher: EngineLauncher,
   ) {
     CoreProcess.instanceSequence += 1;
     this.instanceId = CoreProcess.instanceSequence;
@@ -63,7 +63,7 @@ export class CoreProcess {
     nextConfig: PersistedConfig,
     metadata: InspectPayload,
     refreshedProviders: Iterable<string> = [],
-    options: CoreStartOptions = {}
+    options: CoreStartOptions = {},
   ): void {
     if (!nextConfig.modelName) {
       return;
@@ -75,38 +75,40 @@ export class CoreProcess {
     writeFileSync(pluginConfigPath, JSON.stringify(nextConfig.pluginConfigs, null, 2), "utf-8");
 
     const refreshArgs = [...refreshedProviders].flatMap((provider) => ["--refresh-provider", provider]);
-    const launchProfileArgs = options.launchProfile
-      ? ["--gui-launch-profile", JSON.stringify(options.launchProfile)]
-      : [];
+    const launchProfileArgs = options.launchProfile ? ["--gui-launch-profile", JSON.stringify(options.launchProfile)] : [];
     const initialSessionArgs = [
       ...(options.initialSessionId ? ["--initial-session-id", options.initialSessionId] : []),
-      ...(options.initialSessionName ? ["--initial-session-name", options.initialSessionName] : [])
+      ...(options.initialSessionName ? ["--initial-session-name", options.initialSessionName] : []),
     ];
-    const args = buildEngineRunArgs(this.repoRoot, [
-      "--model",
-      nextConfig.modelName,
-      ...refreshArgs,
-      "--transport",
-      "stdio",
-      "--system-prompt",
-      nextConfig.systemPrompt || metadata.default_system_prompt,
-      "--plugins",
-      nextConfig.selectedPlugins.join(","),
-      "--plugin-config",
-      pluginConfigPath,
-      ...launchProfileArgs,
-      ...initialSessionArgs,
-      "--extra-tool-parameter",
-      "tool_call_purpose",
-      "str",
-      "【必填】用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。每次调用工具都必须包含此参数，否则调用会被拒绝。",
-      "--log-file",
-      this.backendLogPath
-    ]);
-    const child = spawn(this.uvCommand, args, {
+    const args = buildEngineRunArgs(
+      this.repoRoot,
+      [
+        "--model",
+        nextConfig.modelName,
+        ...refreshArgs,
+        "--transport",
+        "stdio",
+        "--system-prompt",
+        nextConfig.systemPrompt || metadata.default_system_prompt,
+        "--plugins",
+        nextConfig.selectedPlugins.join(","),
+        "--plugin-config",
+        pluginConfigPath,
+        ...launchProfileArgs,
+        ...initialSessionArgs,
+        "--extra-tool-parameter",
+        "tool_call_purpose",
+        "str",
+        "【必填】用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。每次调用工具都必须包含此参数，否则调用会被拒绝。",
+        "--log-file",
+        this.backendLogPath,
+      ],
+      this.engineLauncher,
+    );
+    const child = spawn(this.engineLauncher.command, args, {
       cwd: this.workspaceRoot,
       stdio: ["pipe", "pipe", "pipe"],
-      env: buildEngineEnv(this.repoRoot)
+      env: buildEngineEnv(this.repoRoot, process.env, this.engineLauncher),
     });
     this.child = child;
     this.decoder = new TLVDecoder();
@@ -128,7 +130,13 @@ export class CoreProcess {
       this.emitToRenderer("core:exit", { code, signal });
       this.resolveStopWaiters();
     });
-    this.emitToRenderer("core:spawn", { args: args.slice(1), cwd: this.workspaceRoot, logFile: this.backendLogPath });
+    this.emitToRenderer("core:spawn", {
+      command: this.engineLauncher.command,
+      args: this.engineLauncher.source === "uv" ? args.slice(1) : args,
+      cwd: this.workspaceRoot,
+      engineSource: this.engineLauncher.source,
+      logFile: this.backendLogPath,
+    });
   }
 
   restart(nextConfig: PersistedConfig, metadata: InspectPayload, refreshedProviders: Iterable<string> = []): void {
@@ -152,7 +160,7 @@ export class CoreProcess {
         version: "hawi.core.v1",
         type: "shutdown",
         id: this.nextId(),
-        payload: { reason }
+        payload: { reason },
       });
     } catch {
       // Process may already be closing.
@@ -177,7 +185,7 @@ export class CoreProcess {
       version: "hawi.core.v1",
       type,
       id,
-      payload
+      payload,
     };
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -212,7 +220,7 @@ export class CoreProcess {
           this.emitToRenderer("core:event", {
             version: VERSION,
             type: "error",
-            payload: { ok: false, code: "bad_frame", message: `Invalid core frame: ${value.toString("utf-8")}` }
+            payload: { ok: false, code: "bad_frame", message: `Invalid core frame: ${value.toString("utf-8")}` },
           });
           continue;
         }
@@ -224,8 +232,8 @@ export class CoreProcess {
           payload: {
             ok: false,
             code: "bad_frame",
-            message: error instanceof Error ? error.message : String(error)
-          }
+            message: error instanceof Error ? error.message : String(error),
+          },
         });
         continue;
       }

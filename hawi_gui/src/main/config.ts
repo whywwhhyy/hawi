@@ -1,7 +1,22 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { InspectPayload, PersistedConfig } from "../shared/protocol";
+
+export type EngineLauncherSource = "bundled" | "uv";
+
+export interface EngineLauncher {
+  command: string;
+  argsPrefix: string[];
+  source: EngineLauncherSource;
+}
+
+export interface ResolveEnvPathsOptions {
+  isPackaged?: boolean;
+  resourcesPath?: string;
+  cwd?: string;
+}
 
 export interface EnvPaths {
   repoRoot: string;
@@ -9,17 +24,23 @@ export interface EnvPaths {
   workspaceRoot: string;
   configPath: string;
   backendLogPath: string;
+  engineLauncher: EngineLauncher;
   uvCommand: string;
 }
 
-export function resolveEnvPaths(): EnvPaths {
-  const repoRoot = path.resolve(__dirname, "..", "..", "..");
-  const guiRoot = path.join(repoRoot, "hawi_gui");
-  const workspaceRoot = resolveWorkspaceRoot();
+export function resolveEnvPaths(options: ResolveEnvPathsOptions = {}): EnvPaths {
+  const guiRoot = resolveGuiRoot();
+  const repoRoot = options.isPackaged ? guiRoot : path.resolve(guiRoot, "..");
+  const workspaceRoot = resolveWorkspaceRoot(options);
   const configPath = path.join(workspaceRoot, ".hawi", "node_gui.json");
   const backendLogPath = path.join(workspaceRoot, ".hawi", "hawi-engine.log");
   const uvCommand = resolveUvCommand();
-  return { repoRoot, guiRoot, workspaceRoot, configPath, backendLogPath, uvCommand };
+  const engineLauncher = resolveEngineLauncher(repoRoot, options, uvCommand);
+  return { repoRoot, guiRoot, workspaceRoot, configPath, backendLogPath, engineLauncher, uvCommand };
+}
+
+export function resolveGuiRoot(): string {
+  return path.resolve(__dirname, "..", "..");
 }
 
 export function resolveUvCommand(): string {
@@ -44,21 +65,146 @@ export function resolveCommandOnPath(command: string, pathValue = process.env.PA
   return null;
 }
 
-export function resolveWorkspaceRoot(): string {
-  const raw = parseArgValue("--cwd") || process.env.HAWI_GUI_CWD || process.env.INIT_CWD || process.cwd();
-  return path.resolve(raw);
+export function resolveWorkspaceRoot(options: ResolveEnvPathsOptions = {}): string {
+  const explicit = parseArgValue("--cwd") || process.env.HAWI_GUI_CWD || process.env.INIT_CWD;
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  if (options.isPackaged) {
+    const cwd = path.resolve(options.cwd ?? process.cwd());
+    return isUsablePackagedWorkspaceCwd(cwd, options.resourcesPath) ? cwd : path.resolve(homedir());
+  }
+  return path.resolve(options.cwd ?? process.cwd());
 }
 
-export function buildEngineRunArgs(repoRoot: string, engineArgs: string[]): string[] {
-  return ["run", "--project", repoRoot, "python", "-m", "hawi_engine", ...engineArgs];
+export function isUsablePackagedWorkspaceCwd(cwd: string, resourcesPath?: string): boolean {
+  const normalizedCwd = path.resolve(cwd);
+  if (normalizedCwd === path.parse(normalizedCwd).root) {
+    return false;
+  }
+  if (!resourcesPath) {
+    return true;
+  }
+
+  const normalizedResources = path.resolve(resourcesPath);
+  if (isSamePathOrChild(normalizedCwd, normalizedResources)) {
+    return false;
+  }
+
+  const appBundleRoot = findAppBundleRoot(normalizedResources);
+  if (appBundleRoot && isSamePathOrChild(normalizedCwd, appBundleRoot)) {
+    return false;
+  }
+
+  const installRoot = path.dirname(normalizedResources);
+  return !isSamePathOrChild(normalizedCwd, installRoot);
 }
 
-export function buildEngineEnv(repoRoot: string, baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function findAppBundleRoot(candidate: string): string | null {
+  let current = path.resolve(candidate);
+  while (true) {
+    if (path.basename(current).toLowerCase().endsWith(".app")) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function isSamePathOrChild(candidate: string, parent: string): boolean {
+  const normalizedCandidate = path.resolve(candidate);
+  const normalizedParent = path.resolve(parent);
+  const relative = path.relative(normalizedParent, normalizedCandidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+export function resolveEngineLauncher(
+  repoRoot: string,
+  options: ResolveEnvPathsOptions = {},
+  uvCommand = resolveUvCommand(),
+): EngineLauncher {
+  const override = process.env.HAWI_GUI_ENGINE_COMMAND?.trim();
+  if (override) {
+    return { command: override, argsPrefix: [], source: "bundled" };
+  }
+
+  const bundledCommand = resolveBundledEngineCommand(options.resourcesPath);
+  if (bundledCommand) {
+    return { command: bundledCommand, argsPrefix: [], source: "bundled" };
+  }
+  if (options.isPackaged) {
+    throw new Error("Bundled hawi-engine executable was not found in the application resources.");
+  }
+
+  return {
+    command: uvCommand,
+    argsPrefix: buildUvEngineArgsPrefix(repoRoot),
+    source: "uv",
+  };
+}
+
+export function resolveBundledEngineCommand(resourcesPath = process.resourcesPath): string | null {
+  if (!resourcesPath) {
+    return null;
+  }
+  const executable = process.platform === "win32" ? "hawi-engine.exe" : "hawi-engine";
+  const candidates = [
+    path.join(resourcesPath, "bin", executable),
+    path.join(resourcesPath, "app.asar.unpacked", "build", "bin", executable),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+export function buildUvEngineArgsPrefix(repoRoot: string): string[] {
+  return ["run", "--project", repoRoot, "python", "-m", "hawi_engine"];
+}
+
+export function buildEngineRunArgs(
+  repoRoot: string,
+  engineArgs: string[],
+  launcher: EngineLauncher = {
+    command: resolveUvCommand(),
+    argsPrefix: buildUvEngineArgsPrefix(repoRoot),
+    source: "uv",
+  },
+): string[] {
+  return [...launcher.argsPrefix, ...engineArgs];
+}
+
+export function buildEngineEnv(repoRoot: string, baseEnv: NodeJS.ProcessEnv = process.env, launcher?: EngineLauncher): NodeJS.ProcessEnv {
+  if (launcher?.source === "bundled") {
+    return {
+      ...baseEnv,
+      HAWI_GUI_ENGINE_SOURCE: "bundled",
+    };
+  }
   const currentPythonPath = baseEnv.PYTHONPATH?.trim();
   return {
     ...baseEnv,
-    PYTHONPATH: currentPythonPath ? `${repoRoot}${path.delimiter}${currentPythonPath}` : repoRoot
+    HAWI_GUI_ENGINE_SOURCE: "uv",
+    PYTHONPATH: currentPythonPath ? `${repoRoot}${path.delimiter}${currentPythonPath}` : repoRoot,
   };
+}
+
+export function ensureEngineWorkspace(env: EnvPaths): void {
+  mkdirSync(env.workspaceRoot, { recursive: true });
+  if (existsSync(path.join(env.workspaceRoot, ".hawi", "models.yaml"))) {
+    return;
+  }
+  const result = spawnSync(env.engineLauncher.command, buildEngineRunArgs(env.repoRoot, ["init"], env.engineLauncher), {
+    cwd: env.workspaceRoot,
+    encoding: "utf-8",
+    env: buildEngineEnv(env.repoRoot, process.env, env.engineLauncher),
+  });
+  if (result.error) {
+    throw new Error(`Failed to initialize Hawi workspace with ${env.engineLauncher.command}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(formatEngineCommandError("Failed to initialize Hawi workspace", result.status, result.stderr, result.stdout));
+  }
 }
 
 export function parseArgValue(name: string): string | null {
@@ -74,23 +220,33 @@ export function parseArgValue(name: string): string | null {
   return null;
 }
 
-export function loadInspectPayload(repoRoot: string, workspaceRoot: string, uvCommand: string, inspectArgs: string[] = []): InspectPayload {
-  const result = spawnSync(uvCommand, buildEngineRunArgs(repoRoot, ["--inspect", ...inspectArgs]), {
+export function loadInspectPayload(
+  repoRoot: string,
+  workspaceRoot: string,
+  engineLauncher: EngineLauncher,
+  inspectArgs: string[] = [],
+): InspectPayload {
+  const result = spawnSync(engineLauncher.command, buildEngineRunArgs(repoRoot, ["--inspect", ...inspectArgs], engineLauncher), {
     cwd: workspaceRoot,
     encoding: "utf-8",
-    env: buildEngineEnv(repoRoot)
+    env: buildEngineEnv(repoRoot, process.env, engineLauncher),
   });
   if (result.error) {
-    throw new Error(`Failed to launch ${uvCommand}: ${result.error.message}`);
+    throw new Error(`Failed to launch ${engineLauncher.command}: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(formatInspectError(result.status, result.stderr, result.stdout));
+    throw new Error(formatEngineCommandError("Failed to inspect hawi-engine metadata", result.status, result.stderr, result.stdout));
   }
   return JSON.parse(result.stdout) as InspectPayload;
 }
 
-function formatInspectError(status: number | null, stderr: string | Buffer | null, stdout: string | Buffer | null): string {
-  const details = [`Failed to inspect hawi-engine metadata (exit ${status ?? "unknown"}).`];
+function formatEngineCommandError(
+  message: string,
+  status: number | null,
+  stderr: string | Buffer | null,
+  stdout: string | Buffer | null,
+): string {
+  const details = [`${message} (exit ${status ?? "unknown"}).`];
   const stderrText = stderr?.toString().trim();
   const stdoutText = stdout?.toString().trim();
   if (stderrText) {
@@ -117,33 +273,30 @@ export function loadConfig(configPath: string, metadata: InspectPayload): Persis
 export function defaultConfig(metadata: InspectPayload): PersistedConfig {
   const pluginCatalog = metadata.plugin_catalog ?? [];
   const environPromptKey = "environ_prompt";
-  const defaultPlugins = pluginCatalog.some((item) => item.key === environPromptKey)
-    ? [environPromptKey]
-    : [];
+  const defaultPlugins = pluginCatalog.some((item) => item.key === environPromptKey) ? [environPromptKey] : [];
   return {
     version: 1,
     modelName: metadata.models[0] ?? "",
     systemPrompt: metadata.default_system_prompt,
     selectedPlugins: defaultPlugins,
     pluginConfigs: {},
-    showDebug: true
+    showDebug: true,
   };
 }
 
 export function sanitizeConfig(raw: PersistedConfig, metadata: InspectPayload | null): PersistedConfig {
-  const modelName = metadata?.models.includes(raw.modelName) ? raw.modelName : metadata?.models[0] ?? "";
+  const modelName = metadata?.models.includes(raw.modelName) ? raw.modelName : (metadata?.models[0] ?? "");
   const pluginKeys = new Set(metadata?.plugin_catalog.map((item) => item.key) ?? []);
-  const selectedPlugins = Array.isArray(raw.selectedPlugins)
-    ? raw.selectedPlugins.filter((key) => pluginKeys.has(key))
-    : [];
+  const selectedPlugins = Array.isArray(raw.selectedPlugins) ? raw.selectedPlugins.filter((key) => pluginKeys.has(key)) : [];
   const pluginConfigs = raw.pluginConfigs && typeof raw.pluginConfigs === "object" ? raw.pluginConfigs : {};
   return {
     version: 1,
     modelName,
-    systemPrompt: typeof raw.systemPrompt === "string" && raw.systemPrompt.trim() ? raw.systemPrompt : metadata?.default_system_prompt ?? "",
+    systemPrompt:
+      typeof raw.systemPrompt === "string" && raw.systemPrompt.trim() ? raw.systemPrompt : (metadata?.default_system_prompt ?? ""),
     selectedPlugins,
     pluginConfigs,
-    showDebug: Boolean(raw.showDebug)
+    showDebug: Boolean(raw.showDebug),
   };
 }
 
