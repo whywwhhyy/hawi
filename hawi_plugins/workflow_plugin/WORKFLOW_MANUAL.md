@@ -38,7 +38,7 @@ nodes:                      # Array of gate definitions
     name: First Gate        # Human-readable gate name
     description: >          # Optional: what this gate does
       Detailed description.
-    prompt: >               # Task instructions injected into agent's system prompt
+    prompt: >               # Task instructions injected before the current user prompt
       You are at the First Gate. Your task is to...
     review_type: logger     # How to review output: logger | sub_agent | human
     sub_agent_prompt: >     # Required if review_type is sub_agent
@@ -121,7 +121,7 @@ Agent writes YAML → load_workflow validates → fix errors → load again → 
 
 ```
 run_workflow("My Workflow", initial_input="Review file X")
-  → Gate prompt injected into system prompt
+  → Gate prompt injected before the current user prompt
   → Agent works on the gate's task
   → If multiple downstream gates are available, agent calls select_next_workflow_node(...)
   → Agent calls complete_workflow_node(output="...")

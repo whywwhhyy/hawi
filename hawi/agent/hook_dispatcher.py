@@ -57,6 +57,9 @@ class HookDispatcher:
                     before_part_ids,
                     system_prompt_variability_rank(hook),
                 )
+                mark_run = getattr(self._agent, "_mark_system_prompt_hook_run", None)
+                if callable(mark_run):
+                    mark_run(hook_type, hook)
             await self._notify_hook_end(on_hook_end, hook_type, hook, result)
             if result is not None:
                 return result
@@ -65,9 +68,12 @@ class HookDispatcher:
     def _should_skip_system_prompt_hook(self, hook_type: str, hook: Callable[..., Any]) -> bool:
         if hook_type not in {"before_session", "before_conversation"}:
             return False
-        if not getattr(self._agent, "_suppress_system_prompt_hooks", False):
+        if not is_system_prompt_injection_hook(hook):
             return False
-        return is_system_prompt_injection_hook(hook)
+        if getattr(self._agent, "_suppress_system_prompt_hooks", False):
+            return True
+        has_run = getattr(self._agent, "_system_prompt_hook_has_run", None)
+        return bool(callable(has_run) and has_run(hook_type, hook))
 
     def _current_system_prompt_part_ids(self) -> set[int]:
         context = getattr(self._agent, "context", None)

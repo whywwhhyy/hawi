@@ -189,6 +189,7 @@ class HawiAgent:
         self._events = AgentEvents(self)
         self._hooks = HookDispatcher(self, self)
         self._suppress_system_prompt_hooks = False
+        self._system_prompt_injection_hook_keys_run: set[tuple[str, str]] = set()
         self._system_prompt_part_variability_rank: dict[int, int] = {}
         self._last_emitted_system_prompt: list[ContentPart] | None = None
         self._last_hook_result_injector: dict[str, str | None] | None = None
@@ -319,6 +320,50 @@ class HawiAgent:
     def suppress_system_prompt_hooks(self, suppress: bool = True) -> None:
         """Control whether declared system-prompt injection hooks are skipped."""
         self._suppress_system_prompt_hooks = suppress
+
+    def reset_system_prompt_injection_hooks(self) -> None:
+        """Allow declared system-prompt injection hooks to run for a new session."""
+        self._system_prompt_injection_hook_keys_run.clear()
+        self._system_prompt_part_variability_rank.clear()
+        self._last_emitted_system_prompt = None
+
+    def _system_prompt_hook_has_run(
+        self,
+        hook_type: str,
+        hook: Callable[..., Any],
+    ) -> bool:
+        return (
+            hook_type,
+            self._system_prompt_hook_key(hook),
+        ) in self._system_prompt_injection_hook_keys_run
+
+    def _mark_system_prompt_hook_run(
+        self,
+        hook_type: str,
+        hook: Callable[..., Any],
+    ) -> None:
+        self._system_prompt_injection_hook_keys_run.add(
+            (hook_type, self._system_prompt_hook_key(hook))
+        )
+
+    @staticmethod
+    def _system_prompt_hook_key(hook: Callable[..., Any]) -> str:
+        owner = getattr(hook, "__self__", None)
+        method_name = getattr(hook, "__name__", None)
+        if isinstance(owner, HawiPlugin):
+            return ":".join(
+                (
+                    "plugin",
+                    str(id(owner)),
+                    owner.plugin_id,
+                    owner.__class__.__module__,
+                    owner.__class__.__qualname__,
+                    method_name or type(hook).__name__,
+                )
+            )
+        module = getattr(hook, "__module__", "")
+        qualname = getattr(hook, "__qualname__", method_name or type(hook).__name__)
+        return f"hook:{module}:{qualname}:{id(hook)}"
 
     def set_model(self, model: Model | str) -> None:
         """Replace the default model for this agent.

@@ -102,7 +102,7 @@ def system_prompt_variability_rank(hook: Callable[..., Any]) -> int:
 
 
 def is_system_prompt_injection_hook(hook: Callable[..., Any]) -> bool:
-    """Whether a hook declares that it mutates or injects system prompt text."""
+    """Whether a hook declares one-time stable system prompt injection."""
     return bool(getattr(hook, "_injects_system_prompt", False))
 
 BeforeSessionMethod:TypeAlias = Callable[[Any, "HawiAgent", HookContext], HookReturnType]

@@ -12,7 +12,7 @@ class SkillsPlugin(HawiPlugin):
     Provides:
     1. Skill discovery: Scans for SKILL.md files in a configured directory
     2. Skill invocation: use_skill tool to load skill instructions
-    3. Context injection: Injects the list of available skills into the system prompt
+    3. Context injection: Injects the list of available skills before each user prompt
     """
 
     def __init__(self, skills_dir: str = "skills"):
@@ -84,9 +84,9 @@ class SkillsPlugin(HawiPlugin):
                 result[key.strip()] = value.strip()
         return result
 
-    @before_conversation(system_prompt_variability="filesystem")
+    @before_conversation
     def inject_skills_context(self, agent: Any, ctx):
-        """Inject the list of available skills into the agent's system prompt."""
+        """Inject the list of available skills before the current user message."""
         # Re-scan to get latest skills
         self._scan_skills()
 
@@ -97,16 +97,27 @@ class SkillsPlugin(HawiPlugin):
         for name, info in self.skills_registry.items():
             skills_list_str += f"- {name}: {info['description']}\n"
 
-        # Inject into system prompt
-        if agent.context.system_prompt is None:
-            agent.context.system_prompt = []
-
-        # Add as a system message or append to existing text
-        # Assuming system_prompt is a list of ContentPart or dicts
-        agent.context.system_prompt.append({
-            "type": "text",
-            "text": f"\n\n{skills_list_str}\n",
-        })
+        agent.context.inject(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "[Framework-injected skill information. "
+                            "This is not user input.]\n\n"
+                            f"{skills_list_str}"
+                        ),
+                    }
+                ],
+                "name": None,
+                "metadata": {
+                    "source": "skills_plugin",
+                    "injection": "available_skills",
+                },
+            },
+            position=_find_last_user_insert_index(agent.context.messages),
+        )
 
     @tool(name="use_skill")
     def use_skill(self, name: str) -> str:
@@ -133,3 +144,10 @@ class SkillsPlugin(HawiPlugin):
             return f"Skill '{name}' loaded.\nLocation: {skill_dir}\n\nInstructions:\n{instructions}"
 
         return f"Skill '{name}' loaded.\nLocation: {skill_dir}\n\n{content}"
+
+
+def _find_last_user_insert_index(messages: list[dict[str, Any]]) -> int:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            return index
+    return len(messages)

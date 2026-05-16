@@ -264,6 +264,7 @@ class SessionManager:
             self._session_name = name or session_id
             self._session_created_at = datetime.now().isoformat()
             self._session_has_visible_messages = False
+            self._reset_agent_system_prompt_injection_hooks()
             self._set_agent_system_prompt_hooks_suppressed(False)
             self._configure_subagent_storage()
         return session_id
@@ -406,8 +407,13 @@ class SessionManager:
                     self._load_plugins(plugins_dir, manifest)
                     loaded.append(layout.COMPONENT_PLUGINS)
 
-                self._set_agent_system_prompt_hooks_suppressed(
+                suppress_system_prompt_hooks = (
                     self._keep_session_system_prompt and loaded_system_prompt
+                )
+                if not suppress_system_prompt_hooks:
+                    self._reset_agent_system_prompt_injection_hooks()
+                self._set_agent_system_prompt_hooks_suppressed(
+                    suppress_system_prompt_hooks
                 )
                 if self._event_bus is not None:
                     self._event_bus.publish(
@@ -1264,6 +1270,13 @@ class SessionManager:
             setter(suppress)
         else:
             setattr(self._agent, "_suppress_system_prompt_hooks", suppress)
+
+    def _reset_agent_system_prompt_injection_hooks(self) -> None:
+        if self._agent is None:
+            return
+        resetter = getattr(self._agent, "reset_system_prompt_injection_hooks", None)
+        if callable(resetter):
+            resetter()
 
     def _configure_subagent_storage(self) -> None:
         subagents = getattr(self._agent, "subagents", None)

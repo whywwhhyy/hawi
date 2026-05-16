@@ -2,8 +2,8 @@ import os
 import shutil
 import tempfile
 import pytest
-from unittest.mock import MagicMock
 from hawi.plugin import HookContext
+from hawi.agent.context import AgentContext
 from hawi_plugins.skills_plugin.plugin import SkillsPlugin
 
 class TestSkillsPlugin:
@@ -67,19 +67,30 @@ Step 1: Do something.
             
         plugin = SkillsPlugin(skills_dir=skills_dir)
         
-        # Mock agent
-        agent = MagicMock()
-        agent.context.system_prompt = []
+        class AgentStub:
+            context = AgentContext()
+
+        agent = AgentStub()
+        agent.context.add_user_message("deploy it")
         
         # Run injection
         ctx = HookContext(run_id="test", iteration=0)
         plugin.inject_skills_context(agent, ctx)  # type: ignore[reportCallIssue]
         
-        # Verify system prompt updated
-        assert len(agent.context.system_prompt) == 1
-        injected_text = agent.context.system_prompt[0]["text"]
+        # Verify dynamic skill info is injected before the user message.
+        assert agent.context.system_prompt is None
+        assert [message["role"] for message in agent.context.messages] == [
+            "user",
+            "user",
+        ]
+        injected_text = agent.context.messages[0]["content"][0]["text"]
         assert "Available Skills" in injected_text
         assert "- deploy: Deploy app." in injected_text
+        assert agent.context.messages[0]["metadata"] == {
+            "source": "skills_plugin",
+            "injection": "available_skills",
+        }
+        assert agent.context.messages[1]["content"][0]["text"] == "deploy it"
 
     def test_use_skill(self, skills_dir):
         """Test loading skill instructions via use_skill tool."""
@@ -189,32 +200,40 @@ These are the instructions.
         assert "bad" not in plugin.skills_registry
 
     def test_inject_skills_context_none_system_prompt(self, skills_dir):
-        """Injection should create system_prompt list if it's None."""
+        """Injection should not mutate system_prompt when it starts as None."""
         skill_path = os.path.join(skills_dir, "s", "SKILL.md")
         os.makedirs(os.path.dirname(skill_path), exist_ok=True)
         with open(skill_path, "w") as f:
             f.write("---\nname: s\ndescription: desc\n---\n")
 
         plugin = SkillsPlugin(skills_dir=skills_dir)
-        agent = MagicMock()
-        agent.context.system_prompt = None
+        class AgentStub:
+            context = AgentContext()
+
+        agent = AgentStub()
+        agent.context.add_user_message("use a skill")
 
         ctx = HookContext(run_id="test", iteration=0)
         plugin.inject_skills_context(agent, ctx)  # type: ignore[reportCallIssue]
 
-        assert agent.context.system_prompt is not None
-        assert "Available Skills" in agent.context.system_prompt[0]["text"]
+        assert agent.context.system_prompt is None
+        assert "Available Skills" in agent.context.messages[0]["content"][0]["text"]
+        assert agent.context.messages[1]["content"][0]["text"] == "use a skill"
 
     def test_inject_skills_context_empty_registry(self, skills_dir):
         """Injection should do nothing when there are no skills."""
         plugin = SkillsPlugin(skills_dir=skills_dir)
-        agent = MagicMock()
-        agent.context.system_prompt = []
+        class AgentStub:
+            context = AgentContext()
+
+        agent = AgentStub()
+        agent.context.add_user_message("hello")
 
         ctx = HookContext(run_id="test", iteration=0)
         plugin.inject_skills_context(agent, ctx)  # type: ignore[reportCallIssue]
 
-        assert agent.context.system_prompt == []
+        assert agent.context.system_prompt is None
+        assert len(agent.context.messages) == 1
 
     def test_use_skill_without_frontmatter(self, skills_dir):
         """use_skill should return raw content if there's no frontmatter to strip."""

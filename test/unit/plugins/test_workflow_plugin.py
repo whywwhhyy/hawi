@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from hawi.agent.context import AgentContext
 from hawi.tool import ToolResult
 
 from hawi_plugins.workflow_plugin.models import (
@@ -341,34 +342,46 @@ class TestHooks:
         ))
         plugin.run_workflow("Hook WF")
         agent = MagicMock()
-        agent.context.system_prompt = [{"type": "text", "text": "original"}]
+        agent.context = AgentContext(
+            system_prompt=[{"type": "text", "text": "original"}]
+        )
+        agent.context.add_user_message("continue workflow")
         return plugin, agent
 
     def test_before_conversation_injects_gate_prompt(self):
         plugin, agent = self._setup()
         plugin.inject_gate_context(agent, MagicMock())
-        last_text = agent.context.system_prompt[-1]["text"]
-        assert GATE_PROMPT_BEGIN in last_text
-        assert "step1" in last_text
-        assert "Do step 1." in last_text
+        injected_text = agent.context.messages[0]["content"][0]["text"]
+        assert agent.context.system_prompt == [{"type": "text", "text": "original"}]
+        assert GATE_PROMPT_BEGIN in injected_text
+        assert "step1" in injected_text
+        assert "Do step 1." in injected_text
+        assert agent.context.messages[1]["content"][0]["text"] == "continue workflow"
 
-    def test_before_conversation_idempotent(self):
+    def test_before_conversation_adds_turn_local_context(self):
         plugin, agent = self._setup()
         plugin.inject_gate_context(agent, MagicMock())
         plugin.inject_gate_context(agent, MagicMock())
-        gate_blocks = [p for p in agent.context.system_prompt
-                       if isinstance(p, dict) and GATE_PROMPT_BEGIN in str(p.get("text", ""))]
-        assert len(gate_blocks) == 1
+        gate_messages = [
+            message for message in agent.context.messages
+            if GATE_PROMPT_BEGIN in str(message["content"][0].get("text", ""))
+        ]
+        assert len(gate_messages) == 2
+        assert agent.context.messages[-1]["content"][0]["text"] == "continue workflow"
 
     def test_before_conversation_no_workflow_shows_guidance(self):
         plugin = WorkflowPlugin()
         agent = MagicMock()
-        agent.context.system_prompt = [{"type": "text", "text": "original"}]
+        agent.context = AgentContext(
+            system_prompt=[{"type": "text", "text": "original"}]
+        )
+        agent.context.add_user_message("start")
         plugin.inject_gate_context(agent, MagicMock())
-        last_text = agent.context.system_prompt[-1]["text"]
-        assert "workflow-plugin" in last_text
-        assert "YAML format" in last_text
-        assert "load_workflow" in last_text
+        injected_text = agent.context.messages[0]["content"][0]["text"]
+        assert agent.context.system_prompt == [{"type": "text", "text": "original"}]
+        assert "workflow-plugin" in injected_text
+        assert "YAML format" in injected_text
+        assert "load_workflow" in injected_text
 
     def test_validate_gate_call_rejects_when_no_run(self):
         plugin = WorkflowPlugin()

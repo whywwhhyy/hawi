@@ -61,7 +61,9 @@ def before_session(
         agent: The HawiAgent instance.
         ctx: HookContext with run_id and iteration=0.
         system_prompt_variability: Optional declaration for hooks that inject
-            system prompt content. Stable hooks run before more variable ones.
+            stable, non-compressible system prompt content. Declared system
+            prompt hooks run once per agent session; put changing context in a
+            user-role message from ``before_conversation`` instead.
 
     Context operations (safe at this point):
         Modifications to ``agent.context`` take effect before the first
@@ -110,8 +112,11 @@ def before_conversation(
     Args:
         agent: The HawiAgent instance.
         ctx: HookContext with run_id and iteration=0.
-        system_prompt_variability: Optional declaration for hooks that inject
-            system prompt content. Stable hooks run before more variable ones.
+        system_prompt_variability: Backward-compatible declaration for hooks
+            that inject stable, non-compressible system prompt content. Declared
+            system prompt hooks run once per agent session; new per-turn or
+            changing context should be injected as a user-role message before
+            the current user prompt.
 
     Context operations (safe at this point):
         Modifications to ``agent.context`` take effect before the first
@@ -250,7 +255,7 @@ def after_tool_calling(func: AfterToolCallMethod) -> AfterToolCallMethod:
 def system_prompt_variability(
     variability: SystemPromptVariabilityInput = "default",
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Mark an already-decorated hook as injecting system prompt content."""
+    """Mark a hook as injecting stable system prompt content once per session."""
     def decorate(func: Callable[P, R]) -> Callable[P, R]:
         setattr(func, "_injects_system_prompt", True)
         setattr(

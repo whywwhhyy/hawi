@@ -7,7 +7,7 @@ from hawi.plugin import (
     HookResult,
     after_conversation,
     after_tool_calling,
-    before_conversation,
+    before_session,
     before_tool_calling,
     tool,
 )
@@ -224,7 +224,7 @@ class PlanPlugin(HawiPlugin):
             "active_completion_tool_call_id"
         )
 
-    @before_conversation(system_prompt_variability="hardcoded")
+    @before_session(system_prompt_variability="hardcoded")
     def inject_plan_instructions(self, agent: Any, ctx: Any) -> None:
         """Inject plan mode guidance into the system prompt."""
         prompt = build_plan_prompt(

@@ -14,7 +14,7 @@ This plugin provides essential skills for the Hawi Agent, implementing the **Cla
   - Parses YAML frontmatter for skill metadata (`name`, `description`).
 
 - **Progressive Disclosure**:
-  - Injects a summary list of available skills into the agent's system prompt.
+  - Injects a summary list of available skills before each user prompt.
   - Provides a `use_skill(name)` tool for the agent to load detailed instructions for a specific skill on-demand.
 
 ## Usage
@@ -60,7 +60,7 @@ To deploy the application:
 ## How It Works
 
 1.  **Discovery**: The plugin scans `skills/**/SKILL.md`.
-2.  **Context Injection**: The agent receives a system prompt listing available skills:
+2.  **Context Injection**: The agent receives a framework-injected user-context message listing available skills:
     > Available Skills:
     > - deploy: Deploy the application to production.
 3.  **Invocation**: When the user asks to "deploy the app", the agent calls `use_skill(name="deploy")`.

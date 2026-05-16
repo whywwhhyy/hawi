@@ -183,7 +183,8 @@ from hawi.plugin.decorators import (
 
 | Hook | 时序说明 |
 |------|---------|
-| `before_session` / `before_conversation` | 修改在整个 run 开始前生效 |
+| `before_session` | 一次性修改 system prompt；只放不变且不能被压缩的内容 |
+| `before_conversation` | 修改在整个 run 开始前生效；变化内容应插到当前 user prompt 前 |
 | `before_model_call` | 修改在本次 model call 中生效 |
 | `after_model_call` | assistant message **尚未**写入 context（hook 返回后才写入） |
 | `before_tool_calling` | 修改在工具执行前生效；`arguments` 可直接修改 |
@@ -264,7 +265,7 @@ class StatsPlugin(HawiPlugin):
             print(f"{name}: avg={avg:.1f}ms, calls={len(durations)}")
 ```
 
-### 动态 System Prompt 注入
+### 动态 User Prompt 前置注入
 
 ```python
 class ContextPlugin(HawiPlugin):
@@ -274,10 +275,18 @@ class ContextPlugin(HawiPlugin):
     @before_conversation
     async def inject(self, agent, ctx: HookContext):
         prefs = await self.load_user_prefs(self.user_id)
-        agent.context.system_prompt.append({
-            "type": "text",
-            "text": f"\n用户偏好: {prefs}"
-        })
+        agent.context.inject(
+            {
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": f"[框架注入信息，不是用户输入]\\n用户偏好: {prefs}",
+                }],
+                "name": None,
+                "metadata": {"source": "context_plugin"},
+            },
+            position=find_last_user_insert_index(agent.context.messages),
+        )
 ```
 
 ### 动态切换备用 Model

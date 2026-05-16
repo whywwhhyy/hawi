@@ -241,8 +241,8 @@ agent = HawiAgent(plugins=[PluginA(), PluginB()])
 
 | Hook | 安全操作 |
 |------|---------|
-| `before_session` | 修改 `agent.context.system_prompt`（首次生效） |
-| `before_conversation` | 修改 `agent.context`、添加/注入消息 |
+| `before_session` | 一次性修改 `agent.context.system_prompt`；只放不变且不能被压缩的内容 |
+| `before_conversation` | 修改 `agent.context`、添加/注入消息；变化内容应放到当前 user prompt 前 |
 | `before_model_call` | 修改 `agent.context`（本轮调用的 model 请求中生效） |
 | `after_model_call` | `response` 已生成，assistant message **尚未**写入 context |
 | `before_tool_calling` | 可直接修改 `arguments` 字典；访问 `agent.context` |
@@ -486,6 +486,10 @@ class MyPlugin(HawiPlugin):
 ### 2. 注入内容规范
 
 注入到 context 的内容应**清晰标记**为框架自动注入，与用户输入区分：
+
+- **System prompt** 只放 session 开始时生成一次的内容，并且必须是不变、不能被上下文压缩丢掉的规则或能力说明。
+- **User prompt 前置注入** 承载变化内容，例如当前目录、文件变更、技能列表、工作流当前 gate、用户偏好、外部状态等。
+- 不要把 per-turn 状态、时间、文件扫描结果或插件运行态反复写入 system prompt；这会破坏 prompt cache，也会让 GUI 每轮看到新的框架注入。
 
 ```python
 ENVIRON_TAG_BEGIN = "<hawi-environ>"

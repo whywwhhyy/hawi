@@ -53,7 +53,7 @@ class WorkflowPlugin(HawiPlugin):
 
     Hooks:
     - ``before_conversation``: injects current gate constraints + construction
-      guidance into the system prompt.
+      guidance before the current user prompt.
     - ``after_tool_calling``: intercepts ``complete_workflow_node``, runs the
       configured reviewer, and either advances or sends feedback.
 
@@ -184,16 +184,11 @@ class WorkflowPlugin(HawiPlugin):
         self._manual_read = bool(data.get("manual_read", False))
     # ═══════════════════════════════════════════════════════════════
 
-    @before_conversation(system_prompt_variability="session_state")
+    @before_conversation
     def inject_gate_context(self, agent: Any, ctx: Any) -> None:
         """Inject current gate constraints + construction guidance."""
-        system_prompt = list(agent.context.system_prompt or [])
-
-        # Always inject construction guidance (if no workflow is loaded)
         if self._workflow is None:
-            system_prompt = self._strip_gate_blocks(system_prompt)
-            system_prompt.append({"type": "text", "text": self._construction_guidance()})
-            agent.context.system_prompt = system_prompt
+            self._inject_user_context(agent, self._construction_guidance())
             return
 
         run = self._active_run
@@ -204,10 +199,7 @@ class WorkflowPlugin(HawiPlugin):
         if node is None:
             return
 
-        prompt = self._build_gate_prompt(node, run)
-        system_prompt = self._strip_gate_blocks(system_prompt)
-        system_prompt.append({"type": "text", "text": prompt})
-        agent.context.system_prompt = system_prompt
+        self._inject_user_context(agent, self._build_gate_prompt(node, run))
 
     # ═══════════════════════════════════════════════════════════════
     # Hook: after_tool_calling — gate guard
@@ -670,6 +662,20 @@ class WorkflowPlugin(HawiPlugin):
             and GATE_PROMPT_BEGIN in str(p.get("text", ""))
         )]
 
+    def _inject_user_context(self, agent: Any, prompt: str) -> None:
+        agent.context.inject(
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+                "name": None,
+                "metadata": {
+                    "source": "workflow_plugin",
+                    "injection": "workflow_gate_context",
+                },
+            },
+            position=_find_last_user_insert_index(agent.context.messages),
+        )
+
     async def _on_approved(self, agent, run, node, execution, decision) -> HookResult | None:
         wf = self._workflow
         debug_assert(wf is not None, "called only from gate_guard after _current_node() check")
@@ -1007,3 +1013,10 @@ class WorkflowPlugin(HawiPlugin):
             mime_type="text/markdown", status="defined",
             metadata={"workflow": wf.to_dict()},
         )
+
+
+def _find_last_user_insert_index(messages: list[dict[str, Any]]) -> int:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            return index
+    return len(messages)

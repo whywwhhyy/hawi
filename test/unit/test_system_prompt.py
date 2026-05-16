@@ -290,6 +290,56 @@ class TestHawiAgentSystemPrompt:
             {"type": "text", "text": "variable"},
         ]
 
+    @pytest.mark.asyncio
+    async def test_declared_system_prompt_hooks_run_once_per_agent_session(self):
+        class StableConversationPlugin(HawiPlugin):
+            def __init__(self):
+                self.calls = 0
+
+            @before_conversation(system_prompt_variability="hardcoded")
+            def inject_stable(self, agent, ctx):
+                self.calls += 1
+                system_prompt = list(agent.context.system_prompt or [])
+                system_prompt.append(
+                    {"type": "text", "text": f"stable {self.calls}"}
+                )
+                agent.context.system_prompt = system_prompt
+
+        plugin = StableConversationPlugin()
+        agent = HawiAgent(
+            model=object(),
+            plugins=[plugin],
+            system_prompt="base",
+        )
+
+        await agent._invoke_session_hook(
+            "before_conversation",
+            HookContext(run_id="r1", iteration=0),
+        )
+        await agent._invoke_session_hook(
+            "before_conversation",
+            HookContext(run_id="r2", iteration=0),
+        )
+
+        assert plugin.calls == 1
+        assert agent.context.system_prompt == [
+            {"type": "text", "text": "base"},
+            {"type": "text", "text": "stable 1"},
+        ]
+
+        agent.reset_system_prompt_injection_hooks()
+        await agent._invoke_session_hook(
+            "before_conversation",
+            HookContext(run_id="r3", iteration=0),
+        )
+
+        assert plugin.calls == 2
+        assert agent.context.system_prompt == [
+            {"type": "text", "text": "base"},
+            {"type": "text", "text": "stable 1"},
+            {"type": "text", "text": "stable 2"},
+        ]
+
 
 class TestOpenAISystemPromptConversion:
     """Test OpenAI converter system_prompt handling."""
