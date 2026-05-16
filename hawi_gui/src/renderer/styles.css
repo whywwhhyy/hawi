@@ -117,6 +117,7 @@ button:disabled {
   padding: 0 10px;
   border-right: 1px solid var(--color-border);
   gap: 7px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -158,10 +159,11 @@ button:disabled {
   white-space: nowrap;
 }
 
-.status-cell-label,
-.priority-status-trigger .status-cell-label {
+.status-cell-label {
   color: #49575d;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1;
 }
 
 .message-status-widget {
@@ -201,7 +203,7 @@ button:disabled {
 
 .context-status {
   position: relative;
-  min-width: 174px;
+  min-width: 148px;
   justify-content: flex-start;
   gap: 8px;
   border-right: 1px solid var(--color-border);
@@ -233,19 +235,15 @@ button.context-status:disabled {
   animation: status-spin 0.9s linear infinite;
 }
 
-.context-status-percent {
-  color: var(--color-primary);
-}
-
 .inline-spinner {
   animation: status-spin 0.9s linear infinite;
 }
 
 .context-status-widget {
   display: grid;
-  flex: 1 1 84px;
-  min-width: 84px;
-  gap: 3px;
+  flex: 0 0 72px;
+  min-width: 72px;
+  gap: 2px;
 }
 
 .context-status-widget.compressing {
@@ -260,22 +258,35 @@ button.context-status:disabled {
   color: #69777d;
   font-size: 10px;
   line-height: 1;
-  text-align: right;
+  text-align: center;
 }
 
 .context-meter {
+  position: relative;
   display: block;
   width: 100%;
-  height: 4px;
+  height: 12px;
   overflow: hidden;
   border-radius: var(--radius-pill);
   background: #e3e8e9;
 }
 
-.context-meter span {
+.context-meter-fill {
   display: block;
   height: 100%;
   background: var(--color-primary-soft);
+}
+
+.context-meter-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary-dark);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .session-status {
@@ -305,18 +316,42 @@ button.context-status:disabled {
   white-space: nowrap;
 }
 
-.session-trigger > span {
-  color: #49575d;
-}
-
-.session-trigger > strong {
-  color: var(--color-primary);
-}
-
-.session-trigger > small {
-  max-width: 64px;
+.session-status-widget {
+  display: grid;
+  gap: 1px;
+  min-width: 118px;
+  max-width: 158px;
   color: #69777d;
+  font-size: 10px;
+  line-height: 1.1;
+}
+
+.session-runtime-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+}
+
+.session-runtime-line strong {
+  color: var(--color-primary);
+  font-size: 11px;
+}
+
+.session-current-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+}
+
+.session-current-line strong {
+  min-width: 0;
   overflow: hidden;
+  color: #69777d;
+  font-size: 10px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2108,6 +2143,10 @@ button.context-status:disabled {
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   box-shadow: 0 18px 60px rgba(18, 31, 38, 0.24);
+}
+
+.modal:focus {
+  outline: none;
 }
 
 .modal.model-modal {

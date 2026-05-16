@@ -92,6 +92,143 @@ interface SessionRuntimeStats {
   maxLoaded: number;
 }
 
+type EscapeDismissTarget =
+  | "contextCompactDialog"
+  | "pluginDialog"
+  | "modelDialog"
+  | "debugMenu"
+  | "queueTaskEdit"
+  | "queuePopover"
+  | "sessionDialog";
+
+interface EscapeDismissState {
+  contextCompactDialogOpen: boolean;
+  contextCompactBusy: boolean;
+  pluginDialogOpen: boolean;
+  modelDialogOpen: boolean;
+  debugMenuOpen: boolean;
+  queuePopoverOpen: boolean;
+  editingQueueTaskId: string | null;
+  sessionDialogOpen: boolean;
+}
+
+export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDismissTarget | null {
+  if (state.contextCompactDialogOpen) {
+    return state.contextCompactBusy ? null : "contextCompactDialog";
+  }
+  if (state.pluginDialogOpen) return "pluginDialog";
+  if (state.modelDialogOpen) return "modelDialog";
+  if (state.debugMenuOpen) return "debugMenu";
+  if (state.queuePopoverOpen) {
+    return state.editingQueueTaskId ? "queueTaskEdit" : "queuePopover";
+  }
+  if (state.sessionDialogOpen) return "sessionDialog";
+  return null;
+}
+
+function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTarget | null {
+  if (state.contextCompactDialogOpen) return "contextCompactDialog";
+  if (state.pluginDialogOpen) return "pluginDialog";
+  if (state.modelDialogOpen) return "modelDialog";
+  if (state.debugMenuOpen) return "debugMenu";
+  if (state.queuePopoverOpen) return "queuePopover";
+  if (state.sessionDialogOpen) return "sessionDialog";
+  return null;
+}
+
+function dialogScopeSelector(target: EscapeDismissTarget): string | null {
+  switch (target) {
+    case "contextCompactDialog":
+      return ".context-compact-modal";
+    case "pluginDialog":
+      return ".plugin-modal";
+    case "modelDialog":
+      return ".model-modal";
+    case "debugMenu":
+      return ".menu-popover";
+    case "queueTaskEdit":
+    case "queuePopover":
+      return ".queue-popover";
+    case "sessionDialog":
+      return ".session-popover";
+  }
+}
+
+function dialogFocusableElements(scope: HTMLElement): HTMLElement[] {
+  const elements = Array.from(scope.querySelectorAll<HTMLElement>(
+    [
+      "button:not(:disabled)",
+      "input:not(:disabled)",
+      "select:not(:disabled)",
+      "textarea:not(:disabled)",
+      "a[href]",
+      "[tabindex]:not([tabindex='-1'])"
+    ].join(",")
+  )).filter((element) => element.getClientRects().length > 0 || element.dataset.dialogClose === "true");
+  const closeButtons = elements.filter((element) => element.dataset.dialogClose === "true");
+  return elements.filter((element) => element.dataset.dialogClose !== "true").concat(closeButtons);
+}
+
+function moveDialogFocus(scope: HTMLElement, direction: 1 | -1): boolean {
+  const elements = dialogFocusableElements(scope);
+  if (elements.length === 0) return false;
+  const active = document.activeElement;
+  const currentIndex = active instanceof HTMLElement ? elements.indexOf(active) : -1;
+  const nextIndex = currentIndex === -1
+    ? direction > 0 ? 0 : elements.length - 1
+    : (currentIndex + direction + elements.length) % elements.length;
+  elements[nextIndex].focus();
+  return true;
+}
+
+function shouldPreserveArrowKey(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLInputElement) {
+    return !["button", "checkbox", "radio", "submit", "reset"].includes(target.type);
+  }
+  return target instanceof HTMLSelectElement;
+}
+
+function shouldPreserveEnterKey(event: KeyboardEvent): boolean {
+  const target = event.target;
+  return target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
+}
+
+function clickActiveButton(scope: HTMLElement): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !scope.contains(active)) return false;
+  if (!active.matches("button:not(:disabled), [role='button']:not([aria-disabled='true'])")) return false;
+  active.click();
+  return true;
+}
+
+function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement): boolean {
+  if (clickActiveButton(scope)) return true;
+  const confirm = (() => {
+    switch (target) {
+      case "contextCompactDialog":
+      case "pluginDialog":
+        return scope.querySelector<HTMLElement>(".modal-actions .primary-button:not(:disabled)");
+      case "modelDialog":
+        return scope.querySelector<HTMLElement>(".model.active:not(:disabled)")
+          ?? scope.querySelector<HTMLElement>(".model:not(:disabled)");
+      case "sessionDialog":
+        return scope.querySelector<HTMLElement>(".session-option.current .session-select:not(:disabled)")
+          ?? scope.querySelector<HTMLElement>(".session-select:not(:disabled)");
+      case "debugMenu":
+      case "queueTaskEdit":
+      case "queuePopover":
+        return null;
+    }
+  })();
+  if (!confirm) return false;
+  confirm.click();
+  return true;
+}
+
 type SessionStates = Record<string, AppState>;
 
 interface SessionStateAction {
@@ -227,6 +364,89 @@ export default function App() {
   useEffect(() => {
     configRef.current = config;
   }, [config]);
+
+  useEffect(() => {
+    function handleDialogKeyboard(event: KeyboardEvent) {
+      if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+      const keyboardState = {
+        contextCompactDialogOpen,
+        contextCompactBusy,
+        pluginDialogOpen,
+        modelDialogOpen,
+        debugMenuOpen,
+        queuePopoverOpen,
+        editingQueueTaskId,
+        sessionDialogOpen
+      };
+
+      if (event.key === "Escape") {
+        const target = resolveEscapeDismissTarget(keyboardState);
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        switch (target) {
+          case "contextCompactDialog":
+            setContextCompactDialogOpen(false);
+            break;
+          case "pluginDialog":
+            setPluginDialogOpen(false);
+            break;
+          case "modelDialog":
+            setModelDialogOpen(false);
+            break;
+          case "debugMenu":
+            setDebugMenuOpen(false);
+            break;
+          case "queueTaskEdit":
+            setEditingQueueTaskId(null);
+            setQueueTaskEditDraft("");
+            break;
+          case "queuePopover":
+            setQueuePopoverOpen(false);
+            break;
+          case "sessionDialog":
+            setSessionDialogOpen(false);
+            break;
+        }
+        return;
+      }
+
+      if (event.key !== "Enter" && event.key !== "ArrowDown" && event.key !== "ArrowRight" && event.key !== "ArrowUp" && event.key !== "ArrowLeft") return;
+      const target = resolveKeyboardScopeTarget(keyboardState);
+      if (!target) return;
+      const selector = dialogScopeSelector(target);
+      const scope = selector ? document.querySelector<HTMLElement>(selector) : null;
+      if (!scope) return;
+
+      if (event.key === "Enter") {
+        if (shouldPreserveEnterKey(event)) return;
+        if (!clickDialogConfirmation(target, scope)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      if (shouldPreserveArrowKey(event)) return;
+      const direction = event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1;
+      if (!moveDialogFocus(scope, direction)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    document.addEventListener("keydown", handleDialogKeyboard);
+    return () => {
+      document.removeEventListener("keydown", handleDialogKeyboard);
+    };
+  }, [
+    contextCompactDialogOpen,
+    contextCompactBusy,
+    pluginDialogOpen,
+    modelDialogOpen,
+    debugMenuOpen,
+    queuePopoverOpen,
+    editingQueueTaskId,
+    sessionDialogOpen
+  ]);
 
   useBrowserLayoutEffect(() => {
     keepChatTailVisible();
@@ -1229,9 +1449,9 @@ function ContextUsageCell({
       title={title}
       disabled={inactive}
       onClick={onRequestCompact}
+      aria-label={`Context ${percent} ${usageLabel}`}
     >
       <span className="status-cell-label">Context</span>
-      {!compressing && <strong className="context-status-percent">{percent}</strong>}
       <span className={`context-status-widget ${compressing ? "compressing" : ""}`}>
         {compressing ? (
           <>
@@ -1242,7 +1462,8 @@ function ContextUsageCell({
           <>
             <span className="context-usage-line">{usageLabel}</span>
             <span className="context-meter" aria-hidden="true">
-              <span style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+              <span className="context-meter-fill" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+              <strong className="context-meter-label">{percent}</strong>
             </span>
           </>
         )}
@@ -1280,20 +1501,40 @@ function SessionStatusCell({
 }) {
   const sortedSessions = sortSessionsByCreatedAt(sessions);
   const canForkCurrent = Boolean(currentSessionId) && messageCount > 0;
+  const currentSession = currentSessionId
+    ? sessions.find((session) => session.session_id === currentSessionId)
+    : undefined;
+  const currentSessionName = currentSession
+    ? sessionDisplayName(currentSession)
+    : currentSessionId
+      ? shortSessionId(currentSessionId)
+      : "-";
+  const sessionRuntimeLabel = `${runningCount} Running / ${loadedCount} Active`;
+  const currentSessionLabel = `Current: ${currentSessionName}`;
 
   return (
     <div className={`session-status ${open ? "active" : ""}`}>
       <button
         type="button"
         className="session-trigger"
-        title="切换 Session"
+        title={`切换 Session\n${sessionRuntimeLabel}\n${currentSessionLabel}`}
         disabled={busy}
         onClick={onToggle}
-        aria-label={`Session ${renderSessionCounterText(runningCount, loadedCount)}`}
+        aria-label={`Session ${sessionRuntimeLabel}. ${currentSessionLabel}`}
       >
-        <span>Session</span>
-        <strong>{renderSessionCounterText(runningCount, loadedCount)}</strong>
-        <small>{currentSessionId ? shortSessionId(currentSessionId) : "-"}</small>
+        <span className="status-cell-label">Session</span>
+        <span className="session-status-widget" aria-hidden="true">
+          <span className="session-runtime-line">
+            <strong>{runningCount}</strong>
+            <span>Running /</span>
+            <strong>{loadedCount}</strong>
+            <span>Active</span>
+          </span>
+          <span className="session-current-line">
+            <span>Current:</span>
+            <strong>{currentSessionName}</strong>
+          </span>
+        </span>
       </button>
       <button
         type="button"
@@ -2929,12 +3170,25 @@ function SchemaField({ field, schema, disabled, value, error, onChange }: { fiel
 }
 
 function Modal({ title, children, className = "", footer, onClose }: { title: string; children: ReactNode; className?: string; footer?: ReactNode; onClose: () => void }) {
+  const modalRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    modalRef.current?.focus({ preventScroll: true });
+  }, []);
+
   return (
     <div className="modal-backdrop">
-      <section className={`modal ${className}`.trim()}>
+      <section
+        ref={modalRef}
+        className={`modal ${className}`.trim()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+      >
         <header>
           <h2>{title}</h2>
-          <button className="icon-button" onClick={onClose} title="关闭"><X size={18} /></button>
+          <button className="icon-button" data-dialog-close="true" onClick={onClose} title="关闭"><X size={18} /></button>
         </header>
         <div className="modal-body">{children}</div>
         {footer && <footer className="modal-actions">{footer}</footer>}

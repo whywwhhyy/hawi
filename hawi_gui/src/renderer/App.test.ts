@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -134,6 +134,49 @@ describe("session runtime display helpers", () => {
     }, { createIfMissing: true });
 
     expect(sessions.map((session) => session.session_id)).toEqual(["session-active"]);
+  });
+});
+
+describe("resolveEscapeDismissTarget", () => {
+  const closed = {
+    contextCompactDialogOpen: false,
+    contextCompactBusy: false,
+    pluginDialogOpen: false,
+    modelDialogOpen: false,
+    debugMenuOpen: false,
+    queuePopoverOpen: false,
+    editingQueueTaskId: null,
+    sessionDialogOpen: false
+  };
+
+  it("dismisses modal dialogs before popovers", () => {
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      modelDialogOpen: true,
+      queuePopoverOpen: true
+    })).toBe("modelDialog");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      pluginDialogOpen: true,
+      modelDialogOpen: true
+    })).toBe("pluginDialog");
+  });
+
+  it("does not close the context compact dialog while it is busy", () => {
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      contextCompactDialogOpen: true,
+      contextCompactBusy: true,
+      pluginDialogOpen: true
+    })).toBeNull();
+  });
+
+  it("cancels queue item editing before closing the queue popover", () => {
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      queuePopoverOpen: true,
+      editingQueueTaskId: "task-1"
+    })).toBe("queueTaskEdit");
   });
 });
 
