@@ -2031,7 +2031,7 @@ const ChatBubble = memo(function ChatBubble({
     return <ToolBubble node={node} />;
   }
   if (node.kind === "framework" && node.framework) {
-    return <FrameworkBubble item={node.framework} />;
+    return <FrameworkNodeBubble node={node} />;
   }
   if (node.kind === "thinking") {
     return <ThinkingBubble node={node} />;
@@ -2047,6 +2047,24 @@ function ProcessingLine({ processing }: { processing: ProcessingState }) {
     </div>
   );
 }
+
+const FrameworkNodeBubble = memo(function FrameworkNodeBubble({ node }: { node: ChatNode }) {
+  if (!node.framework) return null;
+  const childInjections = node.injections ?? [];
+  if (childInjections.length === 0) {
+    return <FrameworkBubble item={node.framework} />;
+  }
+  return (
+    <div className="framework-stack">
+      <FrameworkBubble item={node.framework} />
+      <div className="message-injections framework-child-injections">
+        {childInjections.map((item) => (
+          <FrameworkBubble item={item} embedded key={item.id} />
+        ))}
+      </div>
+    </div>
+  );
+});
 
 const FrameworkBubble = memo(function FrameworkBubble({
   item,

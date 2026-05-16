@@ -828,9 +828,10 @@ async def _invoke_user_message_hook(
 1. **`arun(message=None)` 不触发 hook**：当用户调 `arun()` 不带 message
    （比如恢复运行、runner 驱动），`message is None` 分支跳过 hook。
    插件需要拦截这种入口请用 `before_session`。
-2. **`before_session` 与本 hook 时序**：当前 `before_session` 在 add_user_message
-   之后。本 phase 不动 `before_session` 时序。新顺序：
-   `arun → before_user_message → add_user_message → emit event → before_session → ...`
+2. **`before_session` 与本 hook 时序**：`before_session` 先于本轮
+   `add_user_message`，用于一次性生成 session 级 system prompt。若引入
+   `before_user_message`，顺序应为：
+   `arun → before_session → before_user_message → add_user_message → emit event → before_conversation → ...`
 3. **draft 可被多 hook 串行修改**：每个插件看到的 draft 是上一个插件改完的状态。
    first non-None HookResult 终止链路（与现有约定一致）。
 4. **`draft.content = []`**：表示 "drop message"，run 继续按 message=None 走。

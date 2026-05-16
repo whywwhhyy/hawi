@@ -17,6 +17,7 @@ export interface FrameworkInjectionState {
   kind: FrameworkInjectionKind;
   label: string;
   content: string;
+  runId?: string;
   pluginId?: string;
   pluginName?: string;
   pluginRole?: string;
@@ -484,7 +485,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     }
 
     case "agent.system_prompt":
-      return appendFrameworkInjection(
+      return mergeSystemPromptInjection(
         state,
         frameworkInjectionFromFrame(frame, payload, "system_prompt")
       );
@@ -956,7 +957,7 @@ function sessionHistoryEventFrame(record: SessionHistoryRecord, index: number): 
 function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
   const payload = (frame.payload ?? {}) as Record<string, unknown>;
   if (frame.type === "agent.system_prompt") {
-    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "system_prompt"), nodes.length));
+    mergeHistorySystemPromptInjection(nodes, frame, frameworkInjectionFromFrame(frame, payload, "system_prompt"));
     return true;
   }
   if (frame.type === "agent.context_injected") {
@@ -1013,7 +1014,7 @@ function historyFrameworkNode(frame: CoreFrame, injection: FrameworkInjectionSta
   return {
     id: nodeId("framework-history", `${frame.id ?? injection.id}-${index}`),
     kind: "framework",
-    content: "",
+    content: injection.content,
     framework: injection
   };
 }
@@ -1548,9 +1549,137 @@ function appendFrameworkInjection(state: AppState, injection: FrameworkInjection
   return appendChatNode(state, {
     id: nodeId("framework", `${injection.id}-${state.nodes.length}`),
     kind: "framework",
-    content: "",
+    content: injection.content,
     framework: injection
   }, { clearProcessing: false });
+}
+
+function mergeSystemPromptInjection(
+  state: AppState,
+  injection: FrameworkInjectionState,
+): AppState {
+  if (isSystemPromptInjectedSegment(injection)) {
+    return attachSystemPromptChildInjection(state, injection);
+  }
+  const targetNodeId = findSystemPromptNodeId(state.nodes, injection.runId);
+  if (!targetNodeId) {
+    return appendChatNode(state, systemPromptChatNode(injection, state.nodes.length), { clearProcessing: false });
+  }
+  return {
+    ...state,
+    nodes: state.nodes.map((node) => (
+      node.id === targetNodeId
+        ? { ...node, content: injection.content, framework: injection }
+        : node
+    ))
+  };
+}
+
+function attachSystemPromptChildInjection(
+  state: AppState,
+  injection: FrameworkInjectionState,
+): AppState {
+  const targetNodeId = findSystemPromptNodeId(state.nodes, injection.runId);
+  if (!targetNodeId) {
+    return appendChatNode(
+      state,
+      {
+        ...systemPromptChatNode(systemPromptParentFromChild(injection), state.nodes.length),
+        injections: [injection]
+      },
+      { clearProcessing: false }
+    );
+  }
+  return {
+    ...state,
+    nodes: state.nodes.map((node) => {
+      if (node.id !== targetNodeId) return node;
+      return {
+        ...node,
+        injections: orderFrameworkInjections([...(node.injections ?? []), injection])
+      };
+    })
+  };
+}
+
+function mergeHistorySystemPromptInjection(
+  nodes: ChatNode[],
+  frame: CoreFrame,
+  injection: FrameworkInjectionState,
+): void {
+  const targetIndex = findSystemPromptNodeIndex(nodes, injection.runId);
+  if (isSystemPromptInjectedSegment(injection)) {
+    if (targetIndex < 0) {
+      nodes.push({
+        ...historyFrameworkNode(frame, systemPromptParentFromChild(injection), nodes.length),
+        injections: [injection]
+      });
+      return;
+    }
+    const target = nodes[targetIndex];
+    nodes[targetIndex] = {
+      ...target,
+      injections: orderFrameworkInjections([...(target.injections ?? []), injection])
+    };
+    return;
+  }
+  if (targetIndex < 0) {
+    nodes.push(historyFrameworkNode(frame, injection, nodes.length));
+    return;
+  }
+  const target = nodes[targetIndex];
+  nodes[targetIndex] = {
+    ...target,
+    content: injection.content,
+    framework: injection
+  };
+}
+
+function systemPromptChatNode(injection: FrameworkInjectionState, index: number): ChatNode {
+  return {
+    id: nodeId("system-prompt", `${injection.runId ?? injection.id}-${index}`),
+    kind: "framework",
+    content: injection.content,
+    framework: injection
+  };
+}
+
+function systemPromptParentFromChild(child: FrameworkInjectionState): FrameworkInjectionState {
+  return {
+    ...child,
+    id: `${child.id}:parent`,
+    label: "System prompt",
+    content: "",
+    pluginId: undefined,
+    pluginName: undefined,
+    pluginRole: "framework",
+    injectionName: "system_prompt",
+    hookType: undefined,
+    metadata: { content_scope: "pending_full_prompt" }
+  };
+}
+
+function findSystemPromptNodeId(nodes: ChatNode[], runId?: string): string | undefined {
+  const index = findSystemPromptNodeIndex(nodes, runId);
+  return index < 0 ? undefined : nodes[index].id;
+}
+
+function findSystemPromptNodeIndex(nodes: ChatNode[], runId?: string): number {
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index];
+    if (node.kind !== "framework" || node.framework?.kind !== "system_prompt") {
+      continue;
+    }
+    if (!runId || node.framework.runId === runId || node.injections?.some((item) => item.runId === runId)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isSystemPromptInjectedSegment(injection: FrameworkInjectionState): boolean {
+  return injection.kind === "system_prompt"
+    && optionalString(injection.metadata?.content_scope) === "injected_segment";
 }
 
 function attachFrameworkInjectionToUserMessage(
@@ -1610,8 +1739,9 @@ function frameworkInjectionFromFrame(
   return {
     id: frameworkInjectionId(frame, payload, kind),
     kind,
-    label: "框架注入消息",
+    label: frameworkInjectionLabel(kind, metadata),
     content: frameworkInjectionContent(payload, kind),
+    runId: optionalString(payload.run_id),
     pluginId: optionalString(payload.plugin_id),
     pluginName: optionalString(payload.plugin_name),
     pluginRole,
@@ -1630,6 +1760,18 @@ function frameworkInjectionFromFrame(
     metadata,
     timestamp
   };
+}
+
+function frameworkInjectionLabel(
+  kind: Exclude<FrameworkInjectionKind, "plugin_message">,
+  metadata?: Record<string, unknown>,
+): string {
+  if (kind === "system_prompt") {
+    return optionalString(metadata?.content_scope) === "injected_segment"
+      ? "System prompt 注入信息"
+      : "System prompt";
+  }
+  return "框架注入消息";
 }
 
 function pluginMessageFrameworkInjectionFromFrame(

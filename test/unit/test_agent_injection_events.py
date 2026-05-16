@@ -7,7 +7,13 @@ import pytest
 from hawi.agent import HawiAgent
 from hawi.models.model import Model
 from hawi.models.message import MessageRequest, MessageResponse
-from hawi.plugin import HawiPlugin, HookResult, before_conversation, before_model_call
+from hawi.plugin import (
+    HawiPlugin,
+    HookResult,
+    before_conversation,
+    before_model_call,
+    before_session,
+)
 
 
 class OneShotModel(Model):
@@ -51,12 +57,14 @@ class OneShotModel(Model):
 
 
 class PromptInjectionPlugin(HawiPlugin):
-    @before_conversation(system_prompt_variability="hardcoded")
+    @before_session(system_prompt_variability="hardcoded")
     def inject_prompt_material(self, agent: HawiAgent, ctx: Any) -> None:
         system_prompt = list(agent.context.system_prompt or [])
         system_prompt.append({"type": "text", "text": "plugin system"})
         agent.context.system_prompt = system_prompt
 
+    @before_conversation
+    def inject_user_material(self, agent: HawiAgent, ctx: Any) -> None:
         insert_at = max(0, len(agent.context.messages) - 1)
         agent.context.inject(
             {
@@ -81,6 +89,24 @@ class ReinvokePlugin(HawiPlugin):
         return HookResult.reinvoke("hook supplied follow-up")
 
 
+class SessionOrderPlugin(HawiPlugin):
+    def __init__(self) -> None:
+        self.before_session_roles: list[str] = []
+        self.before_conversation_roles: list[str] = []
+
+    @before_session
+    def observe_before_session(self, agent: HawiAgent, ctx: Any) -> None:
+        self.before_session_roles = [
+            str(message.get("role")) for message in agent.context.messages
+        ]
+
+    @before_conversation
+    def observe_before_conversation(self, agent: HawiAgent, ctx: Any) -> None:
+        self.before_conversation_roles = [
+            str(message.get("role")) for message in agent.context.messages
+        ]
+
+
 @pytest.mark.asyncio
 async def test_agent_emits_system_prompt_and_context_injected_events() -> None:
     model = OneShotModel()
@@ -92,15 +118,23 @@ async def test_agent_emits_system_prompt_and_context_injected_events() -> None:
     events = []
     agent.subscribe_blocking(
         events.append,
-        ["agent.system_prompt", "agent.context_injected"],
+        ["agent.system_prompt", "agent.context_injected", "agent.message_added"],
     )
 
     await agent.arun("hello")
 
     system_events = [event for event in events if event.type == "agent.system_prompt"]
     context_events = [event for event in events if event.type == "agent.context_injected"]
+    user_events = [
+        event for event in events
+        if event.type == "agent.message_added" and event.role == "user"
+    ]
 
     assert len(system_events) == 2
+    assert len(user_events) == 1
+    first_user_event_index = events.index(user_events[0])
+    assert all(events.index(event) < first_user_event_index for event in system_events)
+
     segment_event = next(
         event for event in system_events
         if event.metadata == {
@@ -121,7 +155,7 @@ async def test_agent_emits_system_prompt_and_context_injected_events() -> None:
         "base system",
         "plugin system",
     ]
-    assert snapshot_event.origin == "model_input"
+    assert snapshot_event.origin == "session_start"
 
     assert len(context_events) == 1
     injected = context_events[0]
@@ -132,7 +166,7 @@ async def test_agent_emits_system_prompt_and_context_injected_events() -> None:
     assert injected.plugin_id == "PromptInjectionPlugin"
     assert injected.plugin_name == "PromptInjectionPlugin"
     assert injected.plugin_role == "plugin"
-    assert injected.injection_name == "inject_prompt_material"
+    assert injected.injection_name == "inject_user_material"
     assert injected.merge_target == "user_message"
     assert injected.merge_position == "before"
     assert injected.position == 0
@@ -143,6 +177,17 @@ async def test_agent_emits_system_prompt_and_context_injected_events() -> None:
         {"type": "text", "text": "hello"}
     ]
     assert injected.target_message_index == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_runs_session_hooks_before_user_message_processing() -> None:
+    plugin = SessionOrderPlugin()
+    agent = HawiAgent(model=OneShotModel(), plugins=[plugin])
+
+    await agent.arun("hello")
+
+    assert plugin.before_session_roles == []
+    assert plugin.before_conversation_roles == ["user"]
 
 
 @pytest.mark.asyncio

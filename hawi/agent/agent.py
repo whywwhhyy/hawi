@@ -1554,27 +1554,14 @@ class HawiAgent:
         inflight_thinking_handler: StreamBlockAccumulator | None = None
         inflight_assistant_message_added = False
 
-        # Add user message if provided
+        user_content: list[ContentPart] | None = None
+        message_metadata = dict(message_metadata) if message_metadata else None
         if message is not None:
             self._last_unsent_tool_results = []
-            # Normalize message to list[ContentPart]
             if isinstance(message, str):
-                user_content: list[ContentPart] = [{"type": "text", "text": message}]
+                user_content = [{"type": "text", "text": message}]
             else:
                 user_content = message
-            
-            message_metadata = dict(message_metadata) if message_metadata else None
-            self._context.add_user_message(message, metadata=message_metadata)
-            self._refresh_context_usage_snapshot(model)
-            await self._emit_event(
-                AgentMessageAddedEvent.create(
-                    run_id=run_id,
-                    role="user",
-                    content=user_content,
-                    metadata=message_metadata,
-                ),
-                event_bus,
-            )
 
         # Agent run start
         await self._emit_event(
@@ -1596,6 +1583,26 @@ class HawiAgent:
         if _hr and _hr.action == "abort":
             state.should_stop = True
             state.stop_reason = "hook_abort"
+
+        await self._emit_system_prompt_event_if_changed(
+            run_id=run_id,
+            origin="session_start",
+            event_bus=event_bus,
+        )
+
+        # Add user message only after session-level system prompt material exists.
+        if not state.should_stop and message is not None and user_content is not None:
+            self._context.add_user_message(message, metadata=message_metadata)
+            self._refresh_context_usage_snapshot(model)
+            await self._emit_event(
+                AgentMessageAddedEvent.create(
+                    run_id=run_id,
+                    role="user",
+                    content=user_content,
+                    metadata=message_metadata,
+                ),
+                event_bus,
+            )
 
         # before_conversation hook
         if not state.should_stop:

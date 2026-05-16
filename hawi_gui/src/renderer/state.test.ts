@@ -970,11 +970,51 @@ describe("core event reducer", () => {
     expect(state.nodes.map((node) => node.kind)).toEqual(["framework"]);
     expect(state.nodes[0].framework).toMatchObject({
       kind: "system_prompt",
-      label: "框架注入消息",
+      label: "System prompt",
       content: "You are Hawi.",
+      runId: "run-system",
       pluginRole: "framework",
       injectionName: "system_prompt",
       timestamp: 30000
+    });
+  });
+
+  it("groups system prompt injected segments as child framework bubbles", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("agent.system_prompt", {
+      run_id: "run-system",
+      text: "Plugin system material",
+      origin: "before_session",
+      plugin_id: "research",
+      plugin_name: "ResearchPlugin",
+      plugin_role: "plugin",
+      injection_name: "inject_prompt",
+      metadata: { content_scope: "injected_segment", change_type: "append" }
+    }, 20));
+    state = reduceCoreEvent(state, frame("agent.system_prompt", {
+      run_id: "run-system",
+      text: "Base system\n\nPlugin system material",
+      origin: "session_start",
+      plugin_role: "framework",
+      injection_name: "system_prompt",
+      metadata: { content_scope: "full_prompt" }
+    }, 30));
+
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0].framework).toMatchObject({
+      kind: "system_prompt",
+      label: "System prompt",
+      content: "Base system\n\nPlugin system material",
+      runId: "run-system"
+    });
+    expect(state.nodes[0].injections).toHaveLength(1);
+    expect(state.nodes[0].injections?.[0]).toMatchObject({
+      kind: "system_prompt",
+      label: "System prompt 注入信息",
+      content: "Plugin system material",
+      pluginId: "research",
+      pluginName: "ResearchPlugin",
+      injectionName: "inject_prompt"
     });
   });
 

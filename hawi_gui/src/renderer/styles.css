@@ -1193,6 +1193,16 @@ button.context-status:disabled {
   width: min(100%, 860px);
 }
 
+.framework-stack {
+  display: grid;
+  gap: 0;
+}
+
+.framework-child-injections {
+  width: min(100%, 860px);
+  margin: 0 auto;
+}
+
 .bubble.framework.embedded {
   width: auto;
   max-width: none;
