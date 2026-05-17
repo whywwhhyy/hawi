@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import type { PluginArtifactState } from "./state";
 
 describe("App", () => {
@@ -393,5 +393,69 @@ describe("shouldSubmitInputFromKeyEvent", () => {
       shiftKey: false,
       nativeEvent: { keyCode: 229 }
     }, false)).toBe(false);
+  });
+});
+
+describe("input history navigation", () => {
+  it("collects user chat nodes as editable input history", () => {
+    expect(inputHistoryFromChatNodes([
+      { id: "u1", kind: "user", content: " first " },
+      { id: "a1", kind: "agent", content: "answer" },
+      { id: "u2", kind: "user", content: "" },
+      { id: "u3", kind: "user", content: "second" }
+    ])).toEqual(["first", "second"]);
+  });
+
+  it("merges local and replayed input history without duplicate entries", () => {
+    expect(mergeInputHistory(["first", "second"], ["second", "third"])).toEqual([
+      "first",
+      "second",
+      "third"
+    ]);
+  });
+
+  it("uses ArrowUp at the start of the input to select older messages", () => {
+    expect(shouldNavigateInputHistoryFromKeyEvent({
+      key: "ArrowUp",
+      shiftKey: false,
+      nativeEvent: {}
+    }, "draft", 0, 0, false, false)).toBe("previous");
+  });
+
+  it("uses ArrowUp from a single-line draft to start browsing history", () => {
+    expect(shouldNavigateInputHistoryFromKeyEvent({
+      key: "ArrowUp",
+      shiftKey: false,
+      nativeEvent: {}
+    }, "draft", 3, 3, false, false)).toBe("previous");
+  });
+
+  it("keeps ArrowUp as cursor movement below the first line of multi-line text", () => {
+    expect(shouldNavigateInputHistoryFromKeyEvent({
+      key: "ArrowUp",
+      shiftKey: false,
+      nativeEvent: {}
+    }, "line one\nline two", 10, 10, false, false)).toBeNull();
+  });
+
+  it("uses ArrowDown to move forward only while browsing history", () => {
+    expect(shouldNavigateInputHistoryFromKeyEvent({
+      key: "ArrowDown",
+      shiftKey: false,
+      nativeEvent: {}
+    }, "history item", 12, 12, false, true)).toBe("next");
+    expect(shouldNavigateInputHistoryFromKeyEvent({
+      key: "ArrowDown",
+      shiftKey: false,
+      nativeEvent: {}
+    }, "history item", 12, 12, false, false)).toBeNull();
+  });
+
+  it("does not navigate history while composing with an IME", () => {
+    expect(shouldNavigateInputHistoryFromKeyEvent({
+      key: "ArrowUp",
+      shiftKey: false,
+      nativeEvent: { isComposing: true }
+    }, "", 0, 0, false, false)).toBeNull();
   });
 });

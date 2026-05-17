@@ -1,4 +1,4 @@
-import { forwardRef, memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { forwardRef, memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -58,6 +58,8 @@ const AUTO_SCROLL_SETTLE_FRAMES = 2;
 const COPY_FEEDBACK_MS = 1200;
 const SYSTEM_PROMPT_MAX_ROWS = 3;
 const MESSAGE_INPUT_MAX_ROWS = 5;
+const MAX_INPUT_HISTORY = 100;
+const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const queueLabels: Record<QueueKind, string> = {
@@ -347,6 +349,12 @@ export default function App() {
   const autoScrollFrameRef = useRef<number | null>(null);
   const inputComposingRef = useRef(false);
   const inputCompositionEndTimerRef = useRef<number | null>(null);
+  const inputHistoryBySessionRef = useRef<Record<string, string[]>>({});
+  const inputHistoryNavigationRef = useRef<{
+    sessionKey: string;
+    index: number | null;
+    draft: string;
+  }>({ sessionKey: UNLOADED_INPUT_HISTORY_KEY, index: null, draft: "" });
   const queueTaskComposingRef = useRef(false);
   const queueTaskCompositionEndTimerRef = useRef<number | null>(null);
   const artifactPanelSessionRef = useRef<string | null>(null);
@@ -390,6 +398,7 @@ export default function App() {
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
+    resetInputHistoryNavigation();
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -875,16 +884,107 @@ export default function App() {
     }
   }
 
+  function inputHistorySessionKey(sessionId = currentSessionIdRef.current) {
+    return sessionId ?? UNLOADED_INPUT_HISTORY_KEY;
+  }
+
+  function resetInputHistoryNavigation(draft = "") {
+    inputHistoryNavigationRef.current = {
+      sessionKey: inputHistorySessionKey(),
+      index: null,
+      draft
+    };
+  }
+
+  function rememberInputHistory(text: string) {
+    const entry = text.trim();
+    if (!entry) return;
+    const key = inputHistorySessionKey();
+    const existing = inputHistoryBySessionRef.current[key] ?? [];
+    inputHistoryBySessionRef.current[key] = mergeInputHistory(existing, [entry]);
+  }
+
+  function currentInputHistory() {
+    const key = inputHistorySessionKey();
+    return mergeInputHistory(
+      inputHistoryFromChatNodes(state.nodes),
+      inputHistoryBySessionRef.current[key] ?? []
+    );
+  }
+
+  function focusInputAtEnd() {
+    window.requestAnimationFrame(() => {
+      const inputElement = inputRef.current;
+      if (!inputElement) return;
+      inputElement.focus();
+      inputElement.setSelectionRange(inputElement.value.length, inputElement.value.length);
+    });
+  }
+
+  function browseInputHistory(direction: "previous" | "next") {
+    const history = currentInputHistory();
+    if (history.length === 0) return false;
+    const sessionKey = inputHistorySessionKey();
+    const navigation = inputHistoryNavigationRef.current;
+    const active = navigation.sessionKey === sessionKey && navigation.index !== null;
+    const draft = active ? navigation.draft : input;
+    const currentIndex = active
+      ? Math.min(Math.max(navigation.index ?? history.length - 1, 0), history.length - 1)
+      : null;
+    const nextIndex = direction === "previous"
+      ? (currentIndex === null ? history.length - 1 : Math.max(currentIndex - 1, 0))
+      : (currentIndex === null ? null : currentIndex + 1);
+
+    if (nextIndex === null) {
+      return false;
+    }
+    if (nextIndex >= history.length) {
+      inputHistoryNavigationRef.current = { sessionKey, index: null, draft: "" };
+      setInput(draft);
+      focusInputAtEnd();
+      return true;
+    }
+
+    inputHistoryNavigationRef.current = { sessionKey, index: nextIndex, draft };
+    setInput(history[nextIndex]);
+    focusInputAtEnd();
+    return true;
+  }
+
+  function handleMainInputKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (shouldSubmitInputFromKeyEvent(event, inputComposingRef.current)) {
+      event.preventDefault();
+      void submitInput();
+      return;
+    }
+    const historyDirection = shouldNavigateInputHistoryFromKeyEvent(
+      event,
+      event.currentTarget.value,
+      event.currentTarget.selectionStart,
+      event.currentTarget.selectionEnd,
+      inputComposingRef.current,
+      inputHistoryNavigationRef.current.index !== null
+    );
+    if (historyDirection && browseInputHistory(historyDirection)) {
+      event.preventDefault();
+    }
+  }
+
   async function submitInput() {
     const text = input.trim();
     if (!text) return;
     if (text.startsWith("/")) {
       await runSlashCommand(text);
       setInput("");
+      resetInputHistoryNavigation();
       return;
     }
     setInput("");
-    await sendCommand("enqueue", { content: text, queue: "high_prio", metadata: { intent: "user_send", source: "gui_main_input" } });
+    resetInputHistoryNavigation();
+    const frame = await sendCommand("enqueue", { content: text, queue: "high_prio", metadata: { intent: "user_send", source: "gui_main_input" } });
+    if (frame) {
+      rememberInputHistory(text);
+    }
   }
 
   function startInputComposition() {
@@ -1326,16 +1426,11 @@ export default function App() {
           onChange={(event) => {
             resizeTextareaToRows(event.currentTarget, MESSAGE_INPUT_MAX_ROWS);
             setInput(event.target.value);
+            resetInputHistoryNavigation(event.target.value);
           }}
           onCompositionStart={startInputComposition}
           onCompositionEnd={endInputComposition}
-          onKeyDown={(event) => {
-            if (shouldSubmitInputFromKeyEvent(event, inputComposingRef.current)) {
-              event.preventDefault();
-              void submitInput();
-              return;
-            }
-          }}
+          onKeyDown={handleMainInputKeyDown}
         />
         <button className="primary-button" disabled={!input.trim()} onClick={submitInput}>
           <Send size={18} /> 发送
@@ -3757,6 +3852,9 @@ function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: num
 type InputKeyEvent = {
   key: string;
   shiftKey: boolean;
+  altKey?: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
   nativeEvent: {
     isComposing?: boolean;
     keyCode?: number;
@@ -3767,6 +3865,50 @@ type InputKeyEvent = {
 export function shouldSubmitInputFromKeyEvent(event: InputKeyEvent, inputComposing: boolean): boolean {
   if (event.key !== "Enter" || event.shiftKey) return false;
   return !isInputComposing(event, inputComposing);
+}
+
+export function shouldNavigateInputHistoryFromKeyEvent(
+  event: InputKeyEvent,
+  value: string,
+  selectionStart: number | null,
+  selectionEnd: number | null,
+  inputComposing: boolean,
+  historyActive: boolean
+): "previous" | "next" | null {
+  if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return null;
+  if (isInputComposing(event, inputComposing)) return null;
+  if (selectionStart === null || selectionEnd === null || selectionStart !== selectionEnd) {
+    return null;
+  }
+  const caretOnFirstLine = value.slice(0, selectionStart).indexOf("\n") === -1;
+  const caretOnLastLine = value.slice(selectionEnd).indexOf("\n") === -1;
+  if (event.key === "ArrowUp" && caretOnFirstLine) {
+    return "previous";
+  }
+  if (event.key === "ArrowDown" && historyActive && caretOnLastLine) {
+    return "next";
+  }
+  return null;
+}
+
+export function inputHistoryFromChatNodes(nodes: ChatNode[]): string[] {
+  return nodes
+    .filter((node) => node.kind === "user")
+    .map((node) => node.content.trim())
+    .filter((content) => content.length > 0);
+}
+
+export function mergeInputHistory(...histories: string[][]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  histories.flat().forEach((entry) => {
+    const text = entry.trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    merged.push(text);
+  });
+  return merged.slice(-MAX_INPUT_HISTORY);
 }
 
 function isInputComposing(event: InputKeyEvent, inputComposing: boolean): boolean {
