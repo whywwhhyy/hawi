@@ -51,6 +51,10 @@ class ShellPlugin(HawiPlugin):
     Shell 操作插件，提供运行 shell 命令的能力。
     """
 
+    name = "hawi/shell"
+    display_name = "Shell"
+    dependencies = ()
+
     def __init__(self) -> None:
         self._commands: dict[str, ShellCommand] = {}
         self._commands_lock = threading.Lock()

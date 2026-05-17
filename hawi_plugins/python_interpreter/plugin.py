@@ -21,6 +21,10 @@ class PythonInterpreterPlugin(HawiPlugin):
     脚本管理功能集中在此类中，不依赖于特定解释器实例，而是使用统一的工作目录。
     """
 
+    name = "hawi/python-interpreter"
+    display_name = "Python Interpreter"
+    dependencies = ()
+
     DEFAULT_INSTANCE_NAME = "__default__"
 
     class Instance:

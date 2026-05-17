@@ -25,18 +25,9 @@ from .blob.commands import dispatch_blob_command
 from .event_mapper import SemanticEventMapper
 from .plugin_registry import (
     KNOWN_PLUGINS,
-    PLUGIN_LABELS,
-    PLUGIN_ENVIRON_PROMPT,
-    PLUGIN_FILESYSTEM,
-    PLUGIN_MCP,
-    PLUGIN_PLAN,
-    PLUGIN_PYTHON_INTERPRETER,
-    PLUGIN_SHELL,
-    PLUGIN_SKILLS,
-    PLUGIN_SUBAGENT,
-    PLUGIN_WEB,
-    PLUGIN_WORKFLOW,
     create_plugin,
+    expand_plugin_dependencies,
+    get_plugin_descriptor,
 )
 from .protocol import (
     CoreCommand,
@@ -180,9 +171,10 @@ class CoreRuntime:
     ) -> None:
         self.model_name = model_name
         self.system_prompt = system_prompt
-        self._selected_plugins = list(selected_plugins or [])
+        self._selected_plugins = expand_plugin_dependencies(selected_plugins or [])
         self._plugin_configs = {
             name: dict(cfg) for name, cfg in (plugin_configs or {}).items()
+            if name in KNOWN_PLUGINS
         }
         self._extra_tool_parameters = list(extra_tool_parameters or [])
         self._max_context_tokens = max_context_tokens
@@ -864,9 +856,7 @@ class CoreRuntime:
             isinstance(name, str) for name in selected_plugins
         ):
             raise ValueError("'apply_plugins.payload.selected_plugins' must be a string list")
-        unknown = sorted(set(selected_plugins) - KNOWN_PLUGINS)
-        if unknown:
-            raise ValueError(f"Unknown plugin key(s): {', '.join(unknown)}")
+        selected_plugins = expand_plugin_dependencies(selected_plugins)
 
         plugin_configs = command.payload.get("plugin_configs", {})
         if plugin_configs is None:
@@ -875,13 +865,15 @@ class CoreRuntime:
             raise ValueError("'apply_plugins.payload.plugin_configs' must be an object")
 
         context_copy = runner.agent.context.copy()
+        normalized_plugin_configs = {
+            str(name): dict(cfg) if isinstance(cfg, dict) else {}
+            for name, cfg in plugin_configs.items()
+            if str(name) in KNOWN_PLUGINS
+        }
         await self._replace_runner(
             model_name=self.model_name,
             selected_plugins=list(selected_plugins),
-            plugin_configs={
-                str(name): dict(cfg) if isinstance(cfg, dict) else {}
-                for name, cfg in plugin_configs.items()
-            },
+            plugin_configs=normalized_plugin_configs,
             preserve_context=context_copy,
         )
         await client.send(
@@ -1305,6 +1297,7 @@ class CoreRuntime:
         plugin_configs: dict[str, dict[str, Any]],
         preserve_context: AgentContext | None,
     ) -> None:
+        selected_plugins = expand_plugin_dependencies(selected_plugins)
         new_runner, new_task, new_plugins = await self._build_runner(
             model_name=model_name,
             selected_plugins=selected_plugins,
@@ -1436,10 +1429,11 @@ class CoreRuntime:
         for plugin_key in selected_plugins:
             cfg = dict(plugin_configs.get(plugin_key, {}))
             plugin = await create_plugin(plugin_key, cfg)
+            descriptor = get_plugin_descriptor(plugin_key)
             if hasattr(plugin, "bind_plugin_identity"):
                 plugin.bind_plugin_identity(
                     plugin_id=plugin_key,
-                    plugin_name=PLUGIN_LABELS.get(plugin_key, plugin_key),
+                    plugin_name=descriptor.display_name,
                 )
             plugins.append(plugin)
         return plugins

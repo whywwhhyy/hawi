@@ -429,8 +429,8 @@ class TestSessionManager:
             "version": 1,
             "modelName": "deepseek-chat",
             "systemPrompt": "profile prompt",
-            "selectedPlugins": ["filesystem"],
-            "pluginConfigs": {"filesystem": {"root": "."}},
+            "selectedPlugins": ["hawi/filesystem"],
+            "pluginConfigs": {"hawi/filesystem": {"root": "."}},
         }
         agent = _StubAgent()
         runner = _StubAgentRunner()

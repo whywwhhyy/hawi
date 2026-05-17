@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--plugins",
         default="",
-        help="Comma-separated plugin keys to enable at startup",
+        help="Comma-separated plugin names to enable at startup, e.g. hawi/filesystem,hawi/shell",
     )
     parser.add_argument(
         "--extra-tool-parameter",

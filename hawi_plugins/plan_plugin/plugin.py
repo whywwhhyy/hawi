@@ -69,6 +69,10 @@ class PlanPlugin(HawiPlugin):
     that nudges the agent to continue while open plan items remain.
     """
 
+    name = "hawi/plan"
+    display_name = "Plan"
+    dependencies = ()
+
     def __init__(self, fold_completed_tasks: bool = False) -> None:
         self._engine = PlanEngine(fold_completed_tasks=fold_completed_tasks)
 

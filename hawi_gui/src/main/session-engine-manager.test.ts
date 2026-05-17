@@ -65,8 +65,8 @@ const baseConfig: PersistedConfig = {
   version: 1,
   modelName: "deepseek-chat",
   systemPrompt: "system",
-  selectedPlugins: ["filesystem"],
-  pluginConfigs: { filesystem: { root: "." } },
+  selectedPlugins: ["hawi/filesystem"],
+  pluginConfigs: { "hawi/filesystem": { root: "." } },
   showDebug: true,
 };
 
@@ -74,8 +74,8 @@ const inspect: InspectPayload = {
   version: VERSION,
   models: ["deepseek-chat", "kimi"],
   plugin_catalog: [
-    { key: "filesystem", label: "Filesystem", schema: {}, defaults: {} },
-    { key: "shell", label: "Shell", schema: {}, defaults: {} },
+    { key: "hawi/filesystem", name: "hawi/filesystem", display_name: "Filesystem", dependencies: [], schema: {}, defaults: {} },
+    { key: "hawi/shell", name: "hawi/shell", display_name: "Shell", dependencies: [], schema: {}, defaults: {} },
   ],
   default_system_prompt: "default",
 };
@@ -87,8 +87,8 @@ describe("session launch profiles", () => {
     expect(profile).toMatchObject({
       modelName: "deepseek-chat",
       systemPrompt: "system",
-      selectedPlugins: ["filesystem"],
-      pluginConfigs: { filesystem: { root: "." } },
+      selectedPlugins: ["hawi/filesystem"],
+      pluginConfigs: { "hawi/filesystem": { root: "." } },
     });
     expect(profile).not.toHaveProperty("showDebug");
     expect(configFromProfile(profile, { ...baseConfig, showDebug: false }, inspect).showDebug).toBe(false);
@@ -100,15 +100,15 @@ describe("session launch profiles", () => {
         version: 1,
         modelName: "kimi",
         systemPrompt: "saved",
-        selectedPlugins: ["shell", 42],
-        pluginConfigs: { shell: { cwd: "." }, bad: "x" },
+        selectedPlugins: ["hawi/shell", 42],
+        pluginConfigs: { "hawi/shell": { cwd: "." }, bad: "x" },
         engineArgs: ["--model", "kimi", 7],
       }),
     ).toMatchObject({
       modelName: "kimi",
       systemPrompt: "saved",
-      selectedPlugins: ["shell"],
-      pluginConfigs: { shell: { cwd: "." }, bad: {} },
+      selectedPlugins: ["hawi/shell"],
+      pluginConfigs: { "hawi/shell": { cwd: "." }, bad: {} },
       engineArgs: ["--model", "kimi"],
     });
   });
@@ -324,8 +324,8 @@ describe("SessionEngineManager", () => {
     const internals = manager as unknown as ManagerInternals;
     const requestedProfile = profileFromConfig({
       ...baseConfig,
-      selectedPlugins: ["shell"],
-      pluginConfigs: { shell: { cwd: "/tmp" } },
+      selectedPlugins: ["hawi/shell"],
+      pluginConfigs: { "hawi/shell": { cwd: "/tmp" } },
     });
     let launchedProfile: SessionLaunchProfile | null = null;
     internals.startRecord = (sessionId, launchProfile) => {
@@ -338,8 +338,8 @@ describe("SessionEngineManager", () => {
     await manager.sendCommand("session_new", { gui_launch_profile: requestedProfile });
 
     expect(launchedProfile).toMatchObject({
-      selectedPlugins: ["shell"],
-      pluginConfigs: { shell: { cwd: "/tmp" } },
+      selectedPlugins: ["hawi/shell"],
+      pluginConfigs: { "hawi/shell": { cwd: "/tmp" } },
     });
   });
 
@@ -352,13 +352,13 @@ describe("SessionEngineManager", () => {
 
     await manager.sendCommand(
       "apply_plugins",
-      { selected_plugins: ["shell"], plugin_configs: { shell: { cwd: "/workspace" } } },
+      { selected_plugins: ["hawi/shell"], plugin_configs: { "hawi/shell": { cwd: "/workspace" } } },
       current.sessionId,
     );
 
     expect(internals.defaultConfig).toMatchObject({
-      selectedPlugins: ["shell"],
-      pluginConfigs: { shell: { cwd: "/workspace" } },
+      selectedPlugins: ["hawi/shell"],
+      pluginConfigs: { "hawi/shell": { cwd: "/workspace" } },
     });
 
     let launchedProfile: SessionLaunchProfile | null = null;
@@ -372,8 +372,8 @@ describe("SessionEngineManager", () => {
     await manager.sendCommand("session_new", {});
 
     expect(launchedProfile).toMatchObject({
-      selectedPlugins: ["shell"],
-      pluginConfigs: { shell: { cwd: "/workspace" } },
+      selectedPlugins: ["hawi/shell"],
+      pluginConfigs: { "hawi/shell": { cwd: "/workspace" } },
     });
   });
 

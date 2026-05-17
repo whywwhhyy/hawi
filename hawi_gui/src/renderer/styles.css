@@ -2524,6 +2524,18 @@ button.context-status:disabled {
   margin-bottom: 8px;
 }
 
+.plugin-identity,
+.plugin-dependencies {
+  margin: -3px 0 8px 26px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.plugin-dependencies {
+  margin-top: -4px;
+}
+
 .schema-field {
   display: grid;
   grid-template-columns: 170px 1fr;

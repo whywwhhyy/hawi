@@ -116,7 +116,9 @@ export interface CoreCommand<TPayload = Record<string, unknown>> {
 
 export interface PluginCatalogItem {
   key: string;
-  label: string;
+  name: string;
+  display_name: string;
+  dependencies: string[];
   schema: JsonSchemaObject;
   defaults: Record<string, unknown>;
 }

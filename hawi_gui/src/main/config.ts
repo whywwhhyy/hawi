@@ -272,7 +272,7 @@ export function loadConfig(configPath: string, metadata: InspectPayload): Persis
 
 export function defaultConfig(metadata: InspectPayload): PersistedConfig {
   const pluginCatalog = metadata.plugin_catalog ?? [];
-  const environPromptKey = "environ_prompt";
+  const environPromptKey = "hawi/environ-prompt";
   const defaultPlugins = pluginCatalog.some((item) => item.key === environPromptKey) ? [environPromptKey] : [];
   return {
     version: 1,
@@ -288,7 +288,15 @@ export function sanitizeConfig(raw: PersistedConfig, metadata: InspectPayload | 
   const modelName = metadata?.models.includes(raw.modelName) ? raw.modelName : (metadata?.models[0] ?? "");
   const pluginKeys = new Set(metadata?.plugin_catalog.map((item) => item.key) ?? []);
   const selectedPlugins = Array.isArray(raw.selectedPlugins) ? raw.selectedPlugins.filter((key) => pluginKeys.has(key)) : [];
-  const pluginConfigs = raw.pluginConfigs && typeof raw.pluginConfigs === "object" ? raw.pluginConfigs : {};
+  const rawPluginConfigs = raw.pluginConfigs && typeof raw.pluginConfigs === "object" ? raw.pluginConfigs : {};
+  const pluginConfigs = Object.fromEntries(
+    Object.entries(rawPluginConfigs).filter(([key, value]) => (
+      pluginKeys.has(key)
+      && value != null
+      && typeof value === "object"
+      && !Array.isArray(value)
+    ))
+  ) as Record<string, Record<string, unknown>>;
   return {
     version: 1,
     modelName,

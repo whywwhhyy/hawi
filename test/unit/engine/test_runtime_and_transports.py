@@ -954,11 +954,21 @@ def test_load_model_configs_chains_workspace_then_user_config(tmp_path, monkeypa
 async def test_runtime_can_create_plan_plugin() -> None:
     runtime = CoreRuntime(model_name="test-model")
 
-    plugins = await runtime._create_plugins(["plan"], {})
+    plugins = await runtime._create_plugins(["hawi/plan"], {})
 
     assert len(plugins) == 1
-    assert plugins[0].plugin_id == "plan"
-    assert plugins[0].plugin_name == "PlanPlugin"
+    assert plugins[0].plugin_id == "hawi/plan"
+    assert plugins[0].plugin_name == "Plan"
+
+
+def test_runtime_expands_selected_plugin_dependencies() -> None:
+    runtime = CoreRuntime(model_name="test-model", selected_plugins=["hawi/skills"])
+
+    assert runtime._selected_plugins == [
+        "hawi/filesystem",
+        "hawi/shell",
+        "hawi/skills",
+    ]
 
 
 @pytest.mark.asyncio
@@ -966,8 +976,8 @@ async def test_runtime_passes_plan_folding_config() -> None:
     runtime = CoreRuntime(model_name="test-model")
 
     plugins = await runtime._create_plugins(
-        ["plan"],
-        {"plan": {"fold_completed_tasks": True}},
+        ["hawi/plan"],
+        {"hawi/plan": {"fold_completed_tasks": True}},
     )
 
     assert len(plugins) == 1
@@ -980,22 +990,22 @@ async def test_runtime_passes_plan_folding_config() -> None:
 async def test_runtime_can_create_workflow_plugin() -> None:
     runtime = CoreRuntime(model_name="test-model")
 
-    plugins = await runtime._create_plugins(["workflow"], {})
+    plugins = await runtime._create_plugins(["hawi/workflow"], {})
 
     assert len(plugins) == 1
-    assert plugins[0].plugin_id == "workflow"
-    assert plugins[0].plugin_name == "WorkflowPlugin"
+    assert plugins[0].plugin_id == "hawi/workflow"
+    assert plugins[0].plugin_name == "Workflow"
 
 
 @pytest.mark.asyncio
 async def test_runtime_can_create_subagent_plugin() -> None:
     runtime = CoreRuntime(model_name="test-model")
 
-    plugins = await runtime._create_plugins(["subagent"], {})
+    plugins = await runtime._create_plugins(["hawi/subagent"], {})
 
     assert len(plugins) == 1
-    assert plugins[0].plugin_id == "subagent"
-    assert plugins[0].plugin_name == "SubAgentPlugin"
+    assert plugins[0].plugin_id == "hawi/subagent"
+    assert plugins[0].plugin_name == "Subagent"
 
 
 class CapturingQueuedClient(QueuedJsonClient):

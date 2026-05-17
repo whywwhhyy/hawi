@@ -15,6 +15,10 @@ class SkillsPlugin(HawiPlugin):
     3. Context injection: Injects the list of available skills before each user prompt
     """
 
+    name = "hawi/skills"
+    display_name = "Skills"
+    dependencies = ("hawi/filesystem", "hawi/shell")
+
     def __init__(self, skills_dir: str = "skills"):
         self.skills_dir = os.path.abspath(skills_dir)
         self.skills_registry: Dict[str, Dict[str, str]] = {}

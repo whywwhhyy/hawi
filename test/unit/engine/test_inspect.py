@@ -18,6 +18,9 @@ def test_inspect_payload_contains_models_and_plugin_catalog() -> None:
     assert payload["default_system_prompt"]
     catalog = payload["plugin_catalog"]
     assert {item["key"] for item in catalog} == set(KNOWN_PLUGINS)
+    assert {item["name"] for item in catalog} == set(KNOWN_PLUGINS)
+    assert all("display_name" in item for item in catalog)
+    assert all("dependencies" in item for item in catalog)
     assert all("schema" in item and "defaults" in item for item in catalog)
 
 

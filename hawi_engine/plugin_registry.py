@@ -8,16 +8,16 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
 
-PLUGIN_FILESYSTEM = "filesystem"
-PLUGIN_SHELL = "shell"
-PLUGIN_WEB = "web"
-PLUGIN_SKILLS = "skills"
-PLUGIN_PYTHON_INTERPRETER = "python_interpreter"
-PLUGIN_MCP = "mcp"
-PLUGIN_PLAN = "plan"
-PLUGIN_WORKFLOW = "workflow"
-PLUGIN_ENVIRON_PROMPT = "environ_prompt"
-PLUGIN_SUBAGENT = "subagent"
+PLUGIN_FILESYSTEM = "hawi/filesystem"
+PLUGIN_SHELL = "hawi/shell"
+PLUGIN_WEB = "hawi/web"
+PLUGIN_SKILLS = "hawi/skills"
+PLUGIN_PYTHON_INTERPRETER = "hawi/python-interpreter"
+PLUGIN_MCP = "hawi/mcp"
+PLUGIN_PLAN = "hawi/plan"
+PLUGIN_WORKFLOW = "hawi/workflow"
+PLUGIN_ENVIRON_PROMPT = "hawi/environ-prompt"
+PLUGIN_SUBAGENT = "hawi/subagent"
 
 PluginFactory = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 
@@ -27,7 +27,6 @@ class PluginDescriptor:
     """Descriptor for a plugin the engine can advertise and instantiate."""
 
     key: str
-    label: str
     import_path: str
     factory: PluginFactory | None = None
 
@@ -41,6 +40,23 @@ class PluginDescriptor:
         if not isinstance(plugin_cls, type):
             raise TypeError(f"Plugin import path is not a class: {self.import_path}")
         return plugin_cls
+
+    @property
+    def name(self) -> str:
+        """Canonical plugin name advertised to the GUI and persisted config."""
+        return str(getattr(self.load_class(), "name", None) or self.key)
+
+    @property
+    def dependencies(self) -> tuple[str, ...]:
+        """Canonical plugin names this plugin depends on."""
+        dependencies = getattr(self.load_class(), "dependencies", ()) or ()
+        return tuple(str(dependency) for dependency in dependencies)
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable plugin name for GUI labels and plugin events."""
+        plugin_cls = self.load_class()
+        return str(getattr(plugin_cls, "display_name", None) or plugin_cls.__name__)
 
     async def create(self, config: dict[str, Any] | None = None) -> Any:
         """Instantiate this plugin using its descriptor-owned factory."""
@@ -111,64 +127,57 @@ PLUGIN_REGISTRY: dict[str, PluginDescriptor] = {
     # the prompt before normal tool plugins run.
     PLUGIN_ENVIRON_PROMPT: PluginDescriptor(
         key=PLUGIN_ENVIRON_PROMPT,
-        label="EnvironPromptPlugin",
         import_path="hawi_plugins.environ_prompt_plugin:EnvironPromptPlugin",
         factory=_create_environ_prompt_plugin,
     ),
     PLUGIN_FILESYSTEM: PluginDescriptor(
         key=PLUGIN_FILESYSTEM,
-        label="FileSystemPlugin",
         import_path="hawi_plugins.filesystem_plugin:FileSystemPlugin",
     ),
     PLUGIN_SHELL: PluginDescriptor(
         key=PLUGIN_SHELL,
-        label="ShellPlugin",
         import_path="hawi_plugins.shell_plugin:ShellPlugin",
     ),
     PLUGIN_WEB: PluginDescriptor(
         key=PLUGIN_WEB,
-        label="WebPlugin",
         import_path="hawi_plugins.web:WebPlugin",
     ),
     PLUGIN_SKILLS: PluginDescriptor(
         key=PLUGIN_SKILLS,
-        label="SkillsPlugin",
         import_path="hawi_plugins.skills_plugin:SkillsPlugin",
         factory=_create_skills_plugin,
     ),
     PLUGIN_PYTHON_INTERPRETER: PluginDescriptor(
         key=PLUGIN_PYTHON_INTERPRETER,
-        label="PythonInterpreterPlugin",
         import_path="hawi_plugins.python_interpreter:PythonInterpreterPlugin",
         factory=_create_python_interpreter_plugin,
     ),
     PLUGIN_MCP: PluginDescriptor(
         key=PLUGIN_MCP,
-        label="MCPPlugin",
         import_path="hawi_plugins.mcp_plugin:MCPPlugin",
         factory=_create_mcp_plugin,
     ),
     PLUGIN_PLAN: PluginDescriptor(
         key=PLUGIN_PLAN,
-        label="PlanPlugin",
         import_path="hawi_plugins.plan_plugin:PlanPlugin",
         factory=_create_plan_plugin,
     ),
     PLUGIN_WORKFLOW: PluginDescriptor(
         key=PLUGIN_WORKFLOW,
-        label="WorkflowPlugin",
         import_path="hawi_plugins.workflow_plugin:WorkflowPlugin",
     ),
     PLUGIN_SUBAGENT: PluginDescriptor(
         key=PLUGIN_SUBAGENT,
-        label="SubAgentPlugin",
         import_path="hawi_plugins.subagent_plugin:SubAgentPlugin",
     ),
 }
 
 KNOWN_PLUGINS: frozenset[str] = frozenset(PLUGIN_REGISTRY)
-PLUGIN_LABELS: dict[str, str] = {
-    key: descriptor.label for key, descriptor in PLUGIN_REGISTRY.items()
+PLUGIN_DISPLAY_NAMES: dict[str, str] = {
+    key: descriptor.display_name for key, descriptor in PLUGIN_REGISTRY.items()
+}
+PLUGIN_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    key: descriptor.dependencies for key, descriptor in PLUGIN_REGISTRY.items()
 }
 
 
@@ -185,6 +194,32 @@ def get_plugin_descriptor(key: str) -> PluginDescriptor:
         raise ValueError(f"Unknown plugin key: {key}") from exc
 
 
+def expand_plugin_dependencies(selected_plugins: Iterable[str]) -> list[str]:
+    """Normalize plugin references and include transitive dependencies first."""
+    result: list[str] = []
+    seen: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(key: str) -> None:
+        if key not in PLUGIN_REGISTRY:
+            raise ValueError(f"Unknown plugin key: {key}")
+        if key in seen:
+            return
+        if key in visiting:
+            raise ValueError(f"Plugin dependency cycle detected at: {key}")
+        visiting.add(key)
+        descriptor = PLUGIN_REGISTRY[key]
+        for dependency in descriptor.dependencies:
+            visit(dependency)
+        visiting.remove(key)
+        seen.add(key)
+        result.append(key)
+
+    for plugin in selected_plugins:
+        visit(plugin)
+    return result
+
+
 async def create_plugin(
     key: str,
     config: dict[str, Any] | None = None,
@@ -198,7 +233,9 @@ def plugin_catalog() -> list[dict[str, Any]]:
     return [
         {
             "key": descriptor.key,
-            "label": descriptor.label,
+            "name": descriptor.name,
+            "display_name": descriptor.display_name,
+            "dependencies": list(descriptor.dependencies),
             "schema": descriptor.gui_config_schema(),
             "defaults": descriptor.gui_default_config(),
         }

@@ -68,6 +68,10 @@ class MCPPlugin(HawiPlugin):
         # 现在 agent 可以使用 MCP 工具和资源了
     """
 
+    name = "hawi/mcp"
+    display_name = "MCP"
+    dependencies = ()
+
     def __init__(self, config_path: str | None = None):
         super().__init__()
         self._config_path = config_path

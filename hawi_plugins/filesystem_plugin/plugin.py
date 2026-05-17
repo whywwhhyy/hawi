@@ -37,6 +37,10 @@ class FileSystemPlugin(HawiPlugin):
     - grep: 基于正则搜索文件内容
     """
 
+    name = "hawi/filesystem"
+    display_name = "Filesystem"
+    dependencies = ()
+
     # 常见二进制文件扩展名，grep 时跳过
     _BINARY_EXTENSIONS = {
         ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",

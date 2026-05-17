@@ -13,7 +13,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
+import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type ChatNode, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
@@ -3330,7 +3330,7 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
   }
 
   function updateSelection(next: Set<string>) {
-    setSelected(next);
+    setSelected(new Set(resolvePluginSelectionChange(catalog, selected, next)));
     if (Object.keys(fieldErrors).length > 0) setFieldErrors({});
   }
 
@@ -3356,9 +3356,9 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
               <button
                 className="tool-button"
                 disabled={catalog.length === 0}
-                onClick={() => updateSelection(new Set(invertPluginSelection(catalog, selected)))}
+                onClick={() => updateSelection(new Set())}
               >
-                <RotateCcw size={15} /> 反选
+                <Trash2 size={15} /> 清空
               </button>
               <span className="plugin-selection-count">{selectedCount} / {catalog.length} 已选</span>
             </div>
@@ -3384,8 +3384,14 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
                   updateSelection(next);
                 }}
               />
-              <strong>{item.label}</strong>
+              <strong>{item.display_name}</strong>
             </label>
+            <div className="plugin-identity">{item.name}</div>
+            {item.dependencies.length > 0 && (
+              <div className="plugin-dependencies">
+                依赖: {item.dependencies.join(", ")}
+              </div>
+            )}
             {Object.entries(item.schema.properties ?? {}).map(([field, schema]) => (
               <SchemaField
                 key={field}

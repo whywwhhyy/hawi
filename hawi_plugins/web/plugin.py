@@ -20,6 +20,10 @@ class WebPlugin(HawiPlugin):
         # Agent 可以调用 fetch 工具抓取网页
     """
 
+    name = "hawi/web"
+    display_name = "Web"
+    dependencies = ()
+
     def __init__(self):
         super().__init__()
         self._fetcher = Fetcher()

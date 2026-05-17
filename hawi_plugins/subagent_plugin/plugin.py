@@ -16,6 +16,10 @@ from hawi.plugin import HawiPlugin, tool
 class SubAgentPlugin(HawiPlugin):
     """Expose a small lifecycle tool set for managed sub-agents."""
 
+    name = "hawi/subagent"
+    display_name = "Subagent"
+    dependencies = ()
+
     @classmethod
     def gui_config_schema(cls) -> dict:
         return {"type": "object", "properties": {}, "additionalProperties": False}

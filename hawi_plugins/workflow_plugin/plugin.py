@@ -74,6 +74,10 @@ class WorkflowPlugin(HawiPlugin):
     ``load_workflow`` to validate.  Humans can edit the YAML directly.
     """
 
+    name = "hawi/workflow"
+    display_name = "Workflow"
+    dependencies = ()
+
     def __init__(self) -> None:
         self._workflow: Workflow | None = None
         self._active_run: WorkflowRun | None = None

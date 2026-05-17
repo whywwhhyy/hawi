@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { coerceSchemaValue, invertPluginSelection, mergePluginDefaults, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
+import { coerceSchemaValue, expandPluginSelection, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import type { PluginCatalogItem } from "../shared/protocol";
 
 const item: PluginCatalogItem = {
-  key: "mcp",
-  label: "MCPPlugin",
+  key: "hawi/mcp",
+  name: "hawi/mcp",
+  display_name: "MCP",
+  dependencies: [],
   defaults: { config_path: ".hawi/mcp/config.json" },
   schema: {
     type: "object",
@@ -21,8 +23,10 @@ const item: PluginCatalogItem = {
 const catalog: PluginCatalogItem[] = [
   item,
   {
-    key: "plan",
-    label: "PlanPlugin",
+    key: "hawi/plan",
+    name: "hawi/plan",
+    display_name: "Plan",
+    dependencies: [],
     defaults: {},
     schema: {
       type: "object",
@@ -30,8 +34,10 @@ const catalog: PluginCatalogItem[] = [
     }
   },
   {
-    key: "workflow",
-    label: "WorkflowPlugin",
+    key: "hawi/workflow",
+    name: "hawi/workflow",
+    display_name: "Workflow",
+    dependencies: ["hawi/plan"],
     defaults: {},
     schema: {
       type: "object",
@@ -42,20 +48,36 @@ const catalog: PluginCatalogItem[] = [
 
 describe("plugin config helpers", () => {
   it("merges defaults for selected plugins", () => {
-    const result = mergePluginDefaults([item], ["mcp"], { mcp: { config_path: "custom.json" } });
-    expect(result.pluginConfigs.mcp.config_path).toBe("custom.json");
+    const result = mergePluginDefaults([item], ["hawi/mcp"], { "hawi/mcp": { config_path: "custom.json" } });
+    expect(result.pluginConfigs["hawi/mcp"].config_path).toBe("custom.json");
   });
 
   it("returns catalog keys for select all in display order", () => {
-    expect(selectAllPluginKeys(catalog)).toEqual(["mcp", "plan", "workflow"]);
+    expect(selectAllPluginKeys(catalog)).toEqual(["hawi/mcp", "hawi/plan", "hawi/workflow"]);
   });
 
-  it("inverts selection while ignoring unknown selected keys", () => {
-    expect(invertPluginSelection(catalog, new Set(["mcp", "missing"]))).toEqual(["plan", "workflow"]);
+  it("expands dependencies when selecting a plugin", () => {
+    expect(resolvePluginSelectionChange(catalog, ["hawi/mcp"], ["hawi/mcp", "hawi/workflow"])).toEqual([
+      "hawi/mcp",
+      "hawi/plan",
+      "hawi/workflow"
+    ]);
+  });
+
+  it("removes unsupported plugins when a dependency is deselected", () => {
+    expect(resolvePluginSelectionChange(
+      catalog,
+      ["hawi/mcp", "hawi/plan", "hawi/workflow"],
+      ["hawi/mcp", "hawi/workflow"]
+    )).toEqual(["hawi/mcp"]);
+  });
+
+  it("expands plugin dependencies", () => {
+    expect(expandPluginSelection(catalog, ["hawi/workflow"])).toEqual(["hawi/plan", "hawi/workflow"]);
   });
 
   it("validates required fields", () => {
-    expect(validatePluginConfig(item, { config_path: "" })).toEqual(["MCPPlugin: config_path is required"]);
+    expect(validatePluginConfig(item, { config_path: "" })).toEqual(["MCP: config_path is required"]);
     expect(validatePluginConfig(item, { config_path: "x.json" })).toEqual([]);
   });
 

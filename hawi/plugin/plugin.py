@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence
 
 from hawi.events import EventBus, PluginEvent, PluginEventType
 
@@ -37,6 +37,9 @@ class HawiPlugin:
     2. **Factory mode**: Pass `plugin_factories` to HawiAgent instead of `plugins`.
        Factories are called during init and clone to create fresh instances.
     """
+    name: ClassVar[str | None] = None
+    display_name: ClassVar[str | None] = None
+    dependencies: ClassVar[Sequence[str]] = ()
     _cached_hooks:PluginHooks
     _cached_tools:Sequence[AgentTool]
     _event_bus: EventBus | None = None
@@ -127,12 +130,12 @@ class HawiPlugin:
     @property
     def plugin_id(self) -> str:
         """Stable plugin identifier used in plugin.* events."""
-        return self._plugin_id or self.__class__.__name__
+        return self._plugin_id or self.name or self.__class__.__name__
 
     @property
     def plugin_name(self) -> str:
         """Human-readable plugin name used in plugin.* events."""
-        return self._plugin_name or self.__class__.__name__
+        return self._plugin_name or self.display_name or self.__class__.__name__
 
     def bind_event_bus(self, event_bus: EventBus | None) -> None:
         """Bind the event bus used by ``emit_*`` helper methods."""
@@ -147,7 +150,7 @@ class HawiPlugin:
         """Bind GUI-facing plugin identity.
 
         Core integrations can use this to expose a stable key such as
-        ``filesystem`` while keeping the class name as the display label.
+        ``hawi/filesystem`` while keeping the class name as the display label.
         """
         self._plugin_id = plugin_id or self._plugin_id
         self._plugin_name = plugin_name or self._plugin_name

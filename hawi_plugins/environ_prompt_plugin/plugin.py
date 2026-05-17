@@ -126,6 +126,10 @@ class EnvironPromptPlugin(HawiPlugin):
     markers and prefixed with a note declaring them as framework-injected.
     """
 
+    name = "hawi/environ-prompt"
+    display_name = "Environment Prompt"
+    dependencies = ()
+
     def __init__(self, config_path: str | None = None) -> None:
         self._config = self._load_config(config_path=config_path)
         self._last_prompt_ts: float = 0.0
