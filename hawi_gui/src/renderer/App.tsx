@@ -61,6 +61,7 @@ const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
 const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+const markdownCodeCopyTimers = new WeakMap<HTMLButtonElement, number>();
 
 const queueLabels: Record<QueueKind, string> = {
   normal: "稍后任务",
@@ -2261,7 +2262,7 @@ const SystemPromptBubble = memo(function SystemPromptBubble({ node }: { node: Ch
         </span>
       </div>
       <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
-        <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+        <MarkdownView html={html} />
         {collapsed && (
           <button
             type="button"
@@ -2322,7 +2323,7 @@ const FrameworkBubble = memo(function FrameworkBubble({
       </div>
       <div className={`collapsible-body framework-body ${collapsed ? "is-collapsed" : ""}`} aria-hidden={collapsed}>
         <div className="collapsible-body-inner">
-          <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+          <MarkdownView html={html} />
         </div>
       </div>
     </article>
@@ -2395,7 +2396,7 @@ const MessageBubble = memo(function MessageBubble({
         </div>
       )}
       <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
-        <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+        <MarkdownView html={html} />
         {collapsed && (
           <button
             type="button"
@@ -2497,7 +2498,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
       </div>
       <div className={`collapsible-body thinking-body ${collapsed ? "is-collapsed" : ""}`} aria-hidden={collapsed}>
         <div className="collapsible-body-inner">
-          <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+          <MarkdownView html={html} />
         </div>
       </div>
       <div
@@ -2683,7 +2684,7 @@ function renderToolResult(tool: ToolState): ReactNode {
   // run_shell: 终端风格
   if (toolKind === "run_shell" && preview) {
     return (
-      <pre className="tool-result-block terminal nowrap" onWheel={handleNestedVerticalScroll}>{preview}</pre>
+      <CopyablePreBlock className="tool-result-block terminal nowrap" value={preview} />
     );
   }
 
@@ -2700,7 +2701,7 @@ function renderToolResult(tool: ToolState): ReactNode {
     return (
       <div className="tool-result-view">
         <ToolResultMeta items={meta} />
-        <pre className="tool-result-block terminal nowrap" onWheel={handleNestedVerticalScroll}>{lsText}</pre>
+        <CopyablePreBlock className="tool-result-block terminal nowrap" value={lsText} />
       </div>
     );
   }
@@ -2713,9 +2714,10 @@ function renderToolResult(tool: ToolState): ReactNode {
     return (
       <div className="tool-result-view">
         <ToolResultMeta items={[formatCount(matches.length, "match", "matches")]} />
-        <pre className="tool-result-block nowrap" onWheel={handleNestedVerticalScroll}>
-          {matches.length > 0 ? matches.join("\n") : "No matches."}
-        </pre>
+        <CopyablePreBlock
+          className="tool-result-block nowrap"
+          value={matches.length > 0 ? matches.join("\n") : "No matches."}
+        />
       </div>
     );
   }
@@ -2734,16 +2736,17 @@ function renderToolResult(tool: ToolState): ReactNode {
     return (
       <div className="tool-result-view">
         <ToolResultMeta items={meta} />
-        <pre className="tool-result-block search nowrap" onWheel={handleNestedVerticalScroll}>{content || "No matches."}</pre>
+        <CopyablePreBlock className="tool-result-block search nowrap" value={content || "No matches."} />
       </div>
     );
   }
 
   // 其他工具: 纯文本结果（已在 formatToolResultText 中渲染为文本）
   return (
-    <pre className="tool-result-block" onWheel={handleNestedVerticalScroll}>
-      {preview || "Tool failed without an error message."}
-    </pre>
+    <CopyablePreBlock
+      className="tool-result-block"
+      value={preview || "Tool failed without an error message."}
+    />
   );
 }
 
@@ -2841,17 +2844,19 @@ const CodeScrollBlock = memo(forwardRef<HTMLPreElement, CodeScrollBlockProps>(fu
     ? `hljs language-${highlighted.language}`
     : "hljs";
   return (
-    <pre
-      ref={ref}
-      className={className}
-      onScroll={onScroll}
-      onWheel={handleNestedVerticalScroll}
-    >
-      <code
-        className={codeClass}
-        dangerouslySetInnerHTML={{ __html: highlighted.html }}
-      />
-    </pre>
+    <CopyableCodeShell text={value}>
+      <pre
+        ref={ref}
+        className={className}
+        onScroll={onScroll}
+        onWheel={handleNestedVerticalScroll}
+      >
+        <code
+          className={codeClass}
+          dangerouslySetInnerHTML={{ __html: highlighted.html }}
+        />
+      </pre>
+    </CopyableCodeShell>
   );
 }));
 
@@ -2886,7 +2891,75 @@ function LiveSpinner({ title }: { title: string }) {
   );
 }
 
-function CopyButton({ text, title }: { text: string; title: string }) {
+function MarkdownView({ html, className = "" }: { html: string; className?: string }) {
+  async function handleClick(event: ReactMouseEvent<HTMLDivElement>) {
+    const target = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>(".code-copy-button")
+      : null;
+    if (!target || !event.currentTarget.contains(target)) return;
+
+    event.stopPropagation();
+    const block = target.closest(".code-block-shell");
+    const code = block?.querySelector("pre code")?.textContent ?? "";
+    await copyMarkdownCodeBlock(target, code);
+  }
+
+  return (
+    <div
+      className={`markdown ${className}`.trim()}
+      onClick={handleClick}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+async function copyMarkdownCodeBlock(button: HTMLButtonElement, text: string): Promise<void> {
+  let state: "copied" | "failed" = "copied";
+  try {
+    await copyTextToClipboard(text);
+  } catch {
+    state = "failed";
+  }
+
+  const existingTimer = markdownCodeCopyTimers.get(button);
+  if (existingTimer !== undefined) {
+    window.clearTimeout(existingTimer);
+  }
+
+  const label = state === "copied" ? "已复制" : "复制失败";
+  button.dataset.copyState = state;
+  button.textContent = label;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+
+  const timer = window.setTimeout(() => {
+    button.dataset.copyState = "idle";
+    button.textContent = "复制";
+    button.title = "复制代码";
+    button.setAttribute("aria-label", "复制代码");
+    markdownCodeCopyTimers.delete(button);
+  }, COPY_FEEDBACK_MS);
+  markdownCodeCopyTimers.set(button, timer);
+}
+
+function CopyableCodeShell({ text, children }: { text: string; children: ReactNode }) {
+  return (
+    <div className="copyable-code-shell">
+      <CopyButton text={text} title="复制代码" className="code-copy-overlay" />
+      {children}
+    </div>
+  );
+}
+
+function CopyablePreBlock({ className, value }: { className: string; value: string }) {
+  return (
+    <CopyableCodeShell text={value}>
+      <pre className={className} onWheel={handleNestedVerticalScroll}>{value}</pre>
+    </CopyableCodeShell>
+  );
+}
+
+function CopyButton({ text, title, className = "" }: { text: string; title: string; className?: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timerRef = useRef<number | null>(null);
 
@@ -2920,7 +2993,7 @@ function CopyButton({ text, title }: { text: string; title: string }) {
   return (
     <button
       type="button"
-      className={`copy-button ${copied ? "copied" : ""} ${failed ? "failed" : ""}`.trim()}
+      className={`copy-button ${className} ${copied ? "copied" : ""} ${failed ? "failed" : ""}`.trim()}
       title={label}
       aria-label={label}
       onClick={handleCopy}
@@ -2996,7 +3069,7 @@ function renderArgumentValue(value: unknown): ReactNode {
     return <span className="argument-primitive boolean">{String(value)}</span>;
   }
   if (Array.isArray(value) || isRecord(value)) {
-    return <pre className="argument-code">{JSON.stringify(value, null, 2)}</pre>;
+    return <CopyablePreBlock className="argument-code" value={JSON.stringify(value, null, 2)} />;
   }
   return <span className="argument-primitive unknown">{String(value)}</span>;
 }
@@ -3162,8 +3235,8 @@ function ArtifactPreview({ artifact }: { artifact: PluginArtifactState }) {
       {artifact.uri && <div className="artifact-ref">{artifact.uri}</div>}
       {content ? (
         isMarkdown
-          ? <div className="markdown artifact-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
-          : <pre className="artifact-code">{content}</pre>
+          ? <MarkdownView html={renderMarkdown(content)} className="artifact-content" />
+          : <CopyablePreBlock className="artifact-code" value={content} />
       ) : (
         <div className="preview-empty">Waiting for content.</div>
       )}
@@ -4079,7 +4152,12 @@ function normalizeHighlightLanguage(language: string): string | null {
 
 function codeBlock(value: string, language?: string): string {
   const languageClass = language ? ` language-${escapeHtmlAttribute(language)}` : "";
-  return `<pre class="code-block"><code class="hljs${languageClass}">${value}</code></pre>`;
+  return [
+    "<div class=\"code-block-shell\">",
+    "<button type=\"button\" class=\"code-copy-button\" title=\"复制代码\" aria-label=\"复制代码\">复制</button>",
+    `<pre class="code-block"><code class="hljs${languageClass}">${value}</code></pre>`,
+    "</div>"
+  ].join("");
 }
 
 function escapeHtmlAttribute(value: string): string {

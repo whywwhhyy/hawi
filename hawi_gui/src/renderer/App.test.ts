@@ -321,6 +321,7 @@ describe("renderMarkdown", () => {
   it("renders fenced code blocks with syntax highlighting classes", () => {
     const html = renderMarkdown("```ts\nconst answer = 42;\n```");
 
+    expect(html).toContain("class=\"code-copy-button\"");
     expect(html).toContain("class=\"code-block\"");
     expect(html).toContain("class=\"hljs language-typescript\"");
     expect(html).toContain("hljs-keyword");

@@ -1588,6 +1588,67 @@ button.context-status:disabled {
   color: #9d3028;
 }
 
+.copyable-code-shell,
+.code-block-shell {
+  display: flow-root;
+  position: relative;
+  min-width: 0;
+}
+
+.copyable-code-shell > pre,
+.code-block-shell > pre {
+  padding-right: 44px;
+}
+
+.copy-button.code-copy-overlay,
+.code-copy-button {
+  position: absolute;
+  top: 14px;
+  right: 8px;
+  z-index: 3;
+  background: rgba(255, 255, 255, 0.84);
+  border-color: #d4dadd;
+  box-shadow: 0 1px 3px rgba(23, 36, 42, 0.08);
+}
+
+.copy-button.code-copy-overlay:hover,
+.code-copy-button:hover {
+  background: #ffffff;
+}
+
+.code-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid #d4dadd;
+  border-radius: 5px;
+  color: #59666c;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.code-copy-button[data-copy-state="copied"] {
+  color: #176b5d;
+}
+
+.code-copy-button[data-copy-state="failed"] {
+  color: #9d3028;
+}
+
+.tool-diff-pane > .copyable-code-shell {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+
+.tool-diff-pane > .copyable-code-shell > .tool-diff-block {
+  flex: 1 1 auto;
+}
+
 .collapsible-body {
   display: grid;
   grid-template-rows: 1fr;
@@ -1762,6 +1823,10 @@ button.context-status:disabled {
   font-size: 12px;
   line-height: 1.5;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.markdown .code-block-shell > pre {
+  padding-right: 58px;
 }
 
 .markdown pre code,
