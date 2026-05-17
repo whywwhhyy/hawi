@@ -1230,6 +1230,10 @@ button.context-status:disabled {
   background: #ffffff;
 }
 
+.bubble.system-prompt {
+  background: #ffffff;
+}
+
 .bubble.message::after {
   content: "";
   position: absolute;
@@ -2239,6 +2243,11 @@ button.context-status:disabled {
   overflow-y: hidden;
 }
 
+.prompt-row textarea:focus,
+.prompt-row textarea:focus-visible {
+  outline: none;
+}
+
 .prompt-row.locked {
   color: #7a858a;
 }
@@ -2256,6 +2265,11 @@ button.context-status:disabled {
   line-height: 1.4;
   resize: none;
   overflow-y: hidden;
+}
+
+.input-row textarea:focus,
+.input-row textarea:focus-visible {
+  outline: none;
 }
 
 .debug-toggle {

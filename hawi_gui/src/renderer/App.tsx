@@ -2212,6 +2212,9 @@ function ProcessingLine({ processing }: { processing: ProcessingState }) {
 
 const FrameworkNodeBubble = memo(function FrameworkNodeBubble({ node }: { node: ChatNode }) {
   if (!node.framework) return null;
+  if (node.framework.kind === "system_prompt") {
+    return <SystemPromptBubble node={node} />;
+  }
   const childInjections = node.injections ?? [];
   if (childInjections.length === 0) {
     return <FrameworkBubble item={node.framework} />;
@@ -2225,6 +2228,60 @@ const FrameworkNodeBubble = memo(function FrameworkNodeBubble({ node }: { node: 
         ))}
       </div>
     </div>
+  );
+});
+
+const SystemPromptBubble = memo(function SystemPromptBubble({ node }: { node: ChatNode }) {
+  if (!node.framework) return null;
+  const [collapsed, setCollapsed] = useState(false);
+  const childInjections = node.injections ?? [];
+  const html = renderMarkdown(node.content);
+  const toggleCollapsed = () => setCollapsed((value) => !value);
+  const expandCollapsed = () => setCollapsed(false);
+
+  return (
+    <article className={`bubble system-prompt message ${collapsed ? "message-collapsed" : ""}`}>
+      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+        <span className="bubble-title">
+          {node.framework.label}
+        </span>
+        <span className="message-actions">
+          <CopyButton text={node.content} title="复制 System prompt" />
+          <button
+            className="thinking-toggle message-toggle"
+            title={collapsed ? "展开 System prompt" : "折叠 System prompt"}
+            aria-expanded={!collapsed}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCollapsed();
+            }}
+          >
+            {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        </span>
+      </div>
+      <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
+        <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />
+        {collapsed && (
+          <button
+            type="button"
+            className="message-collapse-mask"
+            title="点击展开 System prompt"
+            aria-label="展开 System prompt"
+            onClick={expandCollapsed}
+          />
+        )}
+      </div>
+      {childInjections.length > 0 && (
+        <div className="message-injections after">
+          <div className="message-injections-inner">
+            {childInjections.map((item) => (
+              <FrameworkBubble item={item} embedded key={item.id} />
+            ))}
+          </div>
+        </div>
+      )}
+    </article>
   );
 });
 
