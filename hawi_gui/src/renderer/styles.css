@@ -1231,6 +1231,8 @@ button.context-status:disabled {
 }
 
 .bubble.system-prompt {
+  width: 100%;
+  max-width: none;
   background: #ffffff;
 }
 

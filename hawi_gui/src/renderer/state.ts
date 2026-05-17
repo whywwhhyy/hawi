@@ -1825,8 +1825,10 @@ function frameworkInjectionContent(
   if (text) return text;
   if (Array.isArray(payload.content)) {
     const contentText = historyContentText(payload.content);
+    if (kind === "system_prompt") return contentText;
     return contentText || formatToolValue(payload.content).trim();
   }
+  if (kind === "system_prompt") return "";
   return formatToolValue(payload.content).trim();
 }
 
@@ -1854,8 +1856,11 @@ function formatFrameworkIdentityContent(
 ): string {
   if (kind === "plugin_message") return pluginMessageFrameworkContent(payload);
   if (kind === "tool_runtime_context_injected") return optionalString(payload.parameter_name) ?? "";
-  if (Array.isArray(payload.content)) return historyContentText(payload.content);
-  return optionalString(payload.text) ?? formatToolValue(payload.content);
+  if (Array.isArray(payload.content)) {
+    const contentText = historyContentText(payload.content);
+    return kind === "system_prompt" ? contentText : contentText || formatToolValue(payload.content);
+  }
+  return optionalString(payload.text) ?? (kind === "system_prompt" ? "" : formatToolValue(payload.content));
 }
 
 function markdownJsonBlock(value: string): string {

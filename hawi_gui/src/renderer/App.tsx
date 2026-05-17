@@ -2233,7 +2233,7 @@ const FrameworkNodeBubble = memo(function FrameworkNodeBubble({ node }: { node: 
 
 const SystemPromptBubble = memo(function SystemPromptBubble({ node }: { node: ChatNode }) {
   if (!node.framework) return null;
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const childInjections = node.injections ?? [];
   const html = renderMarkdown(node.content);
   const toggleCollapsed = () => setCollapsed((value) => !value);

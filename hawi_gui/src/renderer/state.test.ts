@@ -994,6 +994,28 @@ describe("core event reducer", () => {
     });
   });
 
+  it("renders empty system prompts as blank content instead of JSON", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("agent.system_prompt", {
+      run_id: "run-empty-system",
+      content: [
+        { type: "text", text: "" },
+        { type: "cache_point", cache_point: { type: "ephemeral" } }
+      ],
+      text: "",
+      origin: "model_input",
+      plugin_role: "framework",
+      injection_name: "system_prompt",
+      metadata: { content_scope: "full_prompt" }
+    }, 30));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["framework"]);
+    expect(state.nodes[0].framework).toMatchObject({
+      kind: "system_prompt",
+      content: ""
+    });
+  });
+
   it("groups system prompt injected segments as child framework bubbles", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("agent.system_prompt", {
