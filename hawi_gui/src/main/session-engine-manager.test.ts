@@ -48,11 +48,17 @@ interface FakeRecord {
 interface ManagerInternals {
   loaded: Map<string, FakeRecord>;
   currentSessionId: string | null;
+  defaultConfig: PersistedConfig | null;
   handleEngineEmit(record: FakeRecord, channel: string, payload: unknown): void;
   emitSessionRuntimeStatus(sessionId: string): void;
   discardCurrentEmptySession(): Promise<void>;
   enforceLoadedLimit(): Promise<void>;
   sessionListFrame(): Promise<CoreFrame>;
+  startRecord(
+    sessionId: string,
+    launchProfile: SessionLaunchProfile,
+    options: Record<string, unknown>,
+  ): FakeRecord;
 }
 
 const baseConfig: PersistedConfig = {
@@ -311,6 +317,64 @@ describe("SessionEngineManager", () => {
     expect(saved?.load_state).toBe("loaded");
     expect(saved?.gui_launch_profile).toMatchObject({ modelName: "kimi" });
     expect((frame.payload as Record<string, unknown>).loaded_session_count).toBe(1);
+  });
+
+  it("uses the provided launch profile when creating a new session", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const requestedProfile = profileFromConfig({
+      ...baseConfig,
+      selectedPlugins: ["shell"],
+      pluginConfigs: { shell: { cwd: "/tmp" } },
+    });
+    let launchedProfile: SessionLaunchProfile | null = null;
+    internals.startRecord = (sessionId, launchProfile) => {
+      launchedProfile = launchProfile;
+      const record = fakeRecord(sessionId, 1, new FakeCore(), launchProfile);
+      internals.loaded.set(sessionId, record);
+      return record;
+    };
+
+    await manager.sendCommand("session_new", { gui_launch_profile: requestedProfile });
+
+    expect(launchedProfile).toMatchObject({
+      selectedPlugins: ["shell"],
+      pluginConfigs: { shell: { cwd: "/tmp" } },
+    });
+  });
+
+  it("uses recently applied plugins as the fallback profile for new sessions", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const current = fakeRecord("session-current", 1);
+    internals.currentSessionId = current.sessionId;
+    internals.loaded.set(current.sessionId, current);
+
+    await manager.sendCommand(
+      "apply_plugins",
+      { selected_plugins: ["shell"], plugin_configs: { shell: { cwd: "/workspace" } } },
+      current.sessionId,
+    );
+
+    expect(internals.defaultConfig).toMatchObject({
+      selectedPlugins: ["shell"],
+      pluginConfigs: { shell: { cwd: "/workspace" } },
+    });
+
+    let launchedProfile: SessionLaunchProfile | null = null;
+    internals.startRecord = (sessionId, launchProfile) => {
+      launchedProfile = launchProfile;
+      const record = fakeRecord(sessionId, 2, new FakeCore(), launchProfile);
+      internals.loaded.set(sessionId, record);
+      return record;
+    };
+
+    await manager.sendCommand("session_new", {});
+
+    expect(launchedProfile).toMatchObject({
+      selectedPlugins: ["shell"],
+      pluginConfigs: { shell: { cwd: "/workspace" } },
+    });
   });
 
   it("omits loaded sessions that have not started a conversation", async () => {

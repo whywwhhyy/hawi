@@ -3,7 +3,8 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, isNearChatBottom, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import type { PluginArtifactState } from "./state";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -177,6 +178,38 @@ describe("resolveEscapeDismissTarget", () => {
       queuePopoverOpen: true,
       editingQueueTaskId: "task-1"
     })).toBe("queueTaskEdit");
+  });
+});
+
+describe("artifact sidebar helpers", () => {
+  function artifact(key: string, artifactType: string): PluginArtifactState {
+    return {
+      key,
+      id: key,
+      pluginId: "plugin",
+      pluginName: "Plugin",
+      artifactType,
+      title: key,
+      updatedAt: 1
+    };
+  }
+
+  it("groups artifacts by type in first-seen order", () => {
+    const groups = groupArtifactsByType([
+      artifact("a", "plan"),
+      artifact("b", "file"),
+      artifact("c", "plan")
+    ]);
+
+    expect(groups.map((group) => [group.type, group.artifacts.map((item) => item.key)])).toEqual([
+      ["plan", ["a", "c"]],
+      ["file", ["b"]]
+    ]);
+  });
+
+  it("formats artifact type labels for sidebar tabs", () => {
+    expect(artifactTypeLabel("tool_result")).toBe("Tool Result");
+    expect(artifactTypeLabel("")).toBe("Artifact");
   });
 });
 

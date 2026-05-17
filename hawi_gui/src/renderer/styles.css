@@ -580,6 +580,16 @@ button.context-status:disabled {
   position: relative;
 }
 
+.topbar > .tool-button:hover:not(:disabled),
+.topbar > .tool-button:focus-visible,
+.toolbar-menu > .tool-button:hover:not(:disabled),
+.toolbar-menu > .tool-button:focus-visible,
+.toolbar-menu > .tool-button.active {
+  background: var(--color-primary-tint);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-strong);
+}
+
 .menu-popover {
   position: absolute;
   z-index: var(--layer-popover);
@@ -646,9 +656,13 @@ button.context-status:disabled {
 
 .workspace-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
   gap: 6px;
+}
+
+.workspace-row.has-artifacts {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .chat-panel {
@@ -909,10 +923,32 @@ button.context-status:disabled {
   cursor: not-allowed;
 }
 
+.plugin-preview-shell {
+  display: grid;
+  grid-template-columns: 44px;
+  min-width: 0;
+  min-height: 0;
+  gap: 6px;
+}
+
+.plugin-preview-shell.open {
+  grid-template-columns: minmax(300px, 360px) 44px;
+}
+
 .plugin-preview {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
   display: flex;
   flex-direction: column;
-  min-width: 0;
+}
+
+.artifact-type-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--color-border);
@@ -934,51 +970,106 @@ button.context-status:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
-.preview-head strong {
-  color: var(--color-primary);
-}
-
-.artifact-tabs {
-  display: flex;
+.preview-head .icon-button {
   flex: 0 0 auto;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 8px;
+  width: 28px;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+}
+
+.artifact-type-tab {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  justify-items: center;
+  gap: 5px;
+  min-height: 84px;
+  padding: 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
+  color: #4a575d;
+}
+
+.artifact-type-tab:hover,
+.artifact-type-tab.active {
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+}
+
+.artifact-type-tab span {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  max-height: 128px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-type-tab strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: #edf0f1;
+  color: var(--color-primary);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.artifact-type-tab.active strong {
+  background: var(--color-primary);
+  color: var(--color-surface);
+}
+
+.artifact-list {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 4px;
+  max-height: 132px;
+  overflow: auto;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
-.artifact-tab {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  min-width: 118px;
-  max-width: 176px;
-  min-height: 44px;
-  padding: 6px 8px;
-  border: 1px solid #d7dedf;
-  border-radius: 6px;
-  background: #f8faf9;
+.artifact-item {
+  display: grid;
+  justify-items: start;
+  min-width: 0;
+  gap: 2px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
   color: #253139;
+  text-align: left;
 }
 
-.artifact-tab.active {
+.artifact-item:hover,
+.artifact-item.active {
   border-color: #176b5d;
   background: #edf7f3;
 }
 
-.artifact-tab span,
-.artifact-tab small {
+.artifact-item span,
+.artifact-item small {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.artifact-tab small {
+.artifact-item small {
   color: #7d898e;
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .artifact-preview {
@@ -1179,35 +1270,42 @@ button.context-status:disabled {
 
 .bubble.framework {
   margin-right: auto;
-  margin-left: auto;
+  margin-left: 10px;
   background: #f7f8f8;
   border-color: #dfe4e5;
   color: #435057;
 }
 
 .bubble.framework.collapsed {
-  width: min(50%, 430px);
+  width: min(calc(100% - 10px), 430px);
 }
 
 .bubble.framework.expanded {
-  width: min(100%, 860px);
+  width: min(calc(100% - 10px), 860px);
 }
 
 .framework-stack {
   display: grid;
-  gap: 0;
+  gap: 5px;
 }
 
 .framework-child-injections {
   width: min(100%, 860px);
-  margin: 0 auto;
+  margin: 0;
 }
 
 .bubble.framework.embedded {
-  width: auto;
   max-width: none;
-  margin: 6px 10px 10px;
+  margin: 0 10px 4px;
   background: #f6f7f7;
+}
+
+.bubble.framework.embedded.collapsed {
+  width: min(calc(100% - 20px), 430px);
+}
+
+.bubble.framework.embedded.expanded {
+  width: min(calc(100% - 20px), 860px);
 }
 
 .bubble.framework.collapsed .bubble-head {
@@ -1390,8 +1488,39 @@ button.context-status:disabled {
 
 .message-injections {
   display: grid;
-  gap: 0;
-  padding-top: 1px;
+  grid-template-rows: 1fr;
+  padding-top: 5px;
+  opacity: 1;
+  transform: translateY(0);
+  overflow: hidden;
+  transition:
+    grid-template-rows 190ms ease,
+    padding-top 190ms ease,
+    opacity 140ms ease,
+    transform 190ms ease,
+    visibility 0s linear 0s;
+}
+
+.message-injections-inner {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bubble.message-collapsed .message-injections {
+  grid-template-rows: 0fr;
+  padding-top: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  visibility: hidden;
+  transition:
+    grid-template-rows 190ms ease,
+    padding-top 190ms ease,
+    opacity 120ms ease,
+    transform 190ms ease,
+    visibility 0s linear 190ms;
 }
 
 .live-spinner {
@@ -1561,6 +1690,8 @@ button.context-status:disabled {
   .collapsible-body,
   .collapsible-body.is-collapsed,
   .message-body,
+  .message-injections,
+  .bubble.message-collapsed .message-injections,
   .thinking-summary,
   .thinking-summary.is-visible {
     transition: none;

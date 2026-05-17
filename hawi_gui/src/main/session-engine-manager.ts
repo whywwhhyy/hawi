@@ -168,12 +168,14 @@ export class SessionEngineManager {
       const systemPrompt = stringOrNull(payload.system_prompt);
       if (systemPrompt !== null) {
         record.launchProfile = { ...record.launchProfile, systemPrompt };
+        this.syncDefaultConfigFromProfile(record.launchProfile);
         await this.saveSessionProfile(record);
       }
     } else if (type === "switch_model") {
       const modelName = stringOrNull(payload.model_name);
       if (modelName !== null) {
         record.launchProfile = { ...record.launchProfile, modelName };
+        this.syncDefaultConfigFromProfile(record.launchProfile);
         await this.saveSessionProfile(record);
       }
     } else if (type === "apply_plugins") {
@@ -182,6 +184,7 @@ export class SessionEngineManager {
         selectedPlugins: stringList(payload.selected_plugins),
         pluginConfigs: pluginConfigRecord(payload.plugin_configs),
       };
+      this.syncDefaultConfigFromProfile(record.launchProfile);
       await this.saveSessionProfile(record);
     }
     this.emitSessionRuntimeStatus(sessionId);
@@ -193,7 +196,10 @@ export class SessionEngineManager {
     await this.discardCurrentEmptySession();
     const sessionId = generateSessionId();
     const name = stringOrNull(payload.name) ?? sessionId;
-    const profile = profileFromConfig(this.requireDefaultConfig());
+    const profile = launchProfileFromUnknown(payload.gui_launch_profile) ??
+      launchProfileFromUnknown(payload.launch_profile) ??
+      profileFromConfig(this.requireDefaultConfig());
+    this.syncDefaultConfigFromProfile(profile);
     this.currentSessionId = sessionId;
     this.startRecord(sessionId, profile, {
       initialSessionId: sessionId,
@@ -609,6 +615,10 @@ export class SessionEngineManager {
       throw new Error("GUI config is not ready");
     }
     return this.defaultConfig;
+  }
+
+  private syncDefaultConfigFromProfile(profile: SessionLaunchProfile): void {
+    this.defaultConfig = configFromProfile(profile, this.requireDefaultConfig(), this.requireMetadata());
   }
 }
 

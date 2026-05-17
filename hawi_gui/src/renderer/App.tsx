@@ -253,6 +253,38 @@ export function renderSessionCounterText(runningCount: number, loadedCount: numb
   return `${runningCount}/${loadedCount}`;
 }
 
+interface ArtifactTypeGroup {
+  type: string;
+  label: string;
+  artifacts: PluginArtifactState[];
+}
+
+export function artifactTypeLabel(type: string): string {
+  const normalized = type.trim();
+  if (!normalized) return "Artifact";
+  return normalized
+    .replace(/[-_]+/g, " ")
+    .replace(/\w\S*/g, (part) => part.charAt(0).toUpperCase() + part.slice(1));
+}
+
+export function groupArtifactsByType(artifacts: PluginArtifactState[]): ArtifactTypeGroup[] {
+  const groups = new Map<string, ArtifactTypeGroup>();
+  for (const artifact of artifacts) {
+    const type = artifact.artifactType || "artifact";
+    const existing = groups.get(type);
+    if (existing) {
+      existing.artifacts.push(artifact);
+      continue;
+    }
+    groups.set(type, {
+      type,
+      label: artifactTypeLabel(type),
+      artifacts: [artifact]
+    });
+  }
+  return [...groups.values()];
+}
+
 export function sessionLoadStateLabel(state: SessionLoadState): string {
   if (state === "running") return "运行中";
   if (state === "loaded") return "已加载待命";
@@ -283,6 +315,7 @@ export default function App() {
   const [contextCompactDialogOpen, setContextCompactDialogOpen] = useState(false);
   const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
+  const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [queueTaskDraft, setQueueTaskDraft] = useState("");
@@ -316,9 +349,12 @@ export default function App() {
   const inputCompositionEndTimerRef = useRef<number | null>(null);
   const queueTaskComposingRef = useRef(false);
   const queueTaskCompositionEndTimerRef = useRef<number | null>(null);
+  const artifactPanelSessionRef = useRef<string | null>(null);
+  const previousArtifactCountRef = useRef(0);
   const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0;
   const fallbackState = useMemo(createInitialState, []);
   const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
+  const hasArtifacts = state.artifactOrder.some((key) => Boolean(state.artifacts[key]));
 
   useEffect(() => {
     window.hawi.getMetadata().then((meta) => {
@@ -451,6 +487,23 @@ export default function App() {
   useBrowserLayoutEffect(() => {
     keepChatTailVisible();
   }, [state.nodes, state.processing?.id]);
+
+  useEffect(() => {
+    if (artifactPanelSessionRef.current !== currentSessionId) {
+      artifactPanelSessionRef.current = currentSessionId;
+      previousArtifactCountRef.current = 0;
+    }
+    const artifactCount = state.artifactOrder.filter((key) => Boolean(state.artifacts[key])).length;
+    if (artifactCount === 0) {
+      previousArtifactCountRef.current = 0;
+      setArtifactPanelOpen(false);
+      return;
+    }
+    if (previousArtifactCountRef.current === 0) {
+      setArtifactPanelOpen(true);
+    }
+    previousArtifactCountRef.current = artifactCount;
+  }, [currentSessionId, state.artifactOrder, state.artifacts]);
 
   useEffect(() => {
     function syncSelection() {
@@ -676,6 +729,7 @@ export default function App() {
       return;
     }
     const nextConfig = configFromLaunchProfile(profile, configRef.current);
+    configRef.current = nextConfig;
     setConfig(nextConfig);
     setMetadata((current) => current ? { ...current, config: nextConfig } : current);
   }
@@ -742,7 +796,8 @@ export default function App() {
       if (state.sessionMessageCount > 0) {
         await sendCommand("session_save_now", {});
       }
-      const frame = await sendCommand("session_new", {});
+      const profile = configRef.current ? launchProfileFromConfig(configRef.current) : undefined;
+      const frame = await sendCommand("session_new", profile ? { gui_launch_profile: profile } : {});
       const payload = framePayload(frame);
       const sessionId = optionalPayloadString(payload?.session_id);
       if (sessionId) {
@@ -1071,10 +1126,18 @@ export default function App() {
 
   async function applyPlugins(selectedPlugins: string[], pluginConfigs: Record<string, Record<string, unknown>>) {
     if (!config) return;
-    const nextConfig = { ...config, selectedPlugins, pluginConfigs };
+    const frame = await sendCommand("apply_plugins", { selected_plugins: selectedPlugins, plugin_configs: pluginConfigs });
+    if (!frame) return;
+    const payload = framePayload(frame);
+    const appliedPlugins = Array.isArray(payload.selected_plugins)
+      ? payload.selected_plugins.filter((item): item is string => typeof item === "string")
+      : selectedPlugins;
+    const appliedConfigs = normalizePluginConfigs(payload.plugin_configs ?? pluginConfigs);
+    const nextConfig = { ...(configRef.current ?? config), selectedPlugins: appliedPlugins, pluginConfigs: appliedConfigs };
+    configRef.current = nextConfig;
     setConfig(nextConfig);
+    setMetadata((current) => current ? { ...current, config: nextConfig } : current);
     setPluginDialogOpen(false);
-    await sendCommand("apply_plugins", { selected_plugins: selectedPlugins, plugin_configs: pluginConfigs });
   }
 
   async function exportCurrentSession() {
@@ -1218,7 +1281,7 @@ export default function App() {
         />
       </section>
 
-      <section className="workspace-row">
+      <section className={`workspace-row ${hasArtifacts ? "has-artifacts" : ""}`}>
         <main
           className="chat-panel"
           ref={chatRef}
@@ -1237,17 +1300,21 @@ export default function App() {
             ))}
           {state.processing && <ProcessingLine processing={state.processing} />}
         </main>
-        <PluginPreviewPanel
-          artifacts={state.artifacts}
-          artifactOrder={state.artifactOrder}
-          selectedArtifactId={state.selectedArtifactId}
-          messages={state.pluginMessages}
-          statuses={state.pluginStatuses}
-          toolProgress={state.toolProgress}
-          onSelectArtifact={(artifactKey) => {
-            dispatch({ version: VERSION, type: "gui.select_artifact", payload: { artifact_key: artifactKey } });
-          }}
-        />
+        {hasArtifacts && (
+          <PluginPreviewPanel
+            artifacts={state.artifacts}
+            artifactOrder={state.artifactOrder}
+            selectedArtifactId={state.selectedArtifactId}
+            open={artifactPanelOpen}
+            messages={state.pluginMessages}
+            statuses={state.pluginStatuses}
+            toolProgress={state.toolProgress}
+            onOpenChange={setArtifactPanelOpen}
+            onSelectArtifact={(artifactKey) => {
+              dispatch({ version: VERSION, type: "gui.select_artifact", payload: { artifact_key: artifactKey } });
+            }}
+          />
+        )}
       </section>
 
       <footer className="input-row">
@@ -2168,9 +2235,11 @@ const MessageBubble = memo(function MessageBubble({
       </div>
       {beforeInjections.length > 0 && (
         <div className="message-injections before">
-          {beforeInjections.map((item) => (
-            <FrameworkBubble item={item} embedded key={item.id} />
-          ))}
+          <div className="message-injections-inner">
+            {beforeInjections.map((item) => (
+              <FrameworkBubble item={item} embedded key={item.id} />
+            ))}
+          </div>
         </div>
       )}
       <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
@@ -2187,9 +2256,11 @@ const MessageBubble = memo(function MessageBubble({
       </div>
       {afterInjections.length > 0 && (
         <div className="message-injections after">
-          {afterInjections.map((item) => (
-            <FrameworkBubble item={item} embedded key={item.id} />
-          ))}
+          <div className="message-injections-inner">
+            {afterInjections.map((item) => (
+              <FrameworkBubble item={item} embedded key={item.id} />
+            ))}
+          </div>
         </div>
       )}
     </article>
@@ -2796,83 +2867,132 @@ function PluginPreviewPanel({
   artifacts,
   artifactOrder,
   selectedArtifactId,
+  open,
   messages,
   statuses,
   toolProgress,
+  onOpenChange,
   onSelectArtifact
 }: {
   artifacts: Record<string, PluginArtifactState>;
   artifactOrder: string[];
   selectedArtifactId?: string;
+  open: boolean;
   messages: PluginMessageState[];
   statuses: Record<string, PluginStatusState>;
   toolProgress: Record<string, ToolProgressState>;
+  onOpenChange: (open: boolean) => void;
   onSelectArtifact: (artifactKey: string) => void;
 }) {
   const artifactList = artifactOrder.map((key) => artifacts[key]).filter(Boolean);
-  const selected = selectedArtifactId && artifacts[selectedArtifactId]
+  const groups = groupArtifactsByType(artifactList);
+  const selectedCandidate = selectedArtifactId && artifacts[selectedArtifactId]
     ? artifacts[selectedArtifactId]
     : artifactList[0];
+  const selectedGroup = groups.find((group) => group.type === selectedCandidate?.artifactType) ?? groups[0];
+  const selected = selectedCandidate && selectedCandidate.artifactType === selectedGroup?.type
+    ? selectedCandidate
+    : selectedGroup?.artifacts[0];
   const statusList = Object.values(statuses).sort((a, b) => b.updatedAt - a.updatedAt);
   const progressList = Object.values(toolProgress).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4);
   const messageList = messages.slice(-5).reverse();
 
+  function selectType(group: ArtifactTypeGroup) {
+    if (open && group.type === selectedGroup?.type) {
+      onOpenChange(false);
+      return;
+    }
+    onSelectArtifact(group.artifacts[0].key);
+    onOpenChange(true);
+  }
+
+  function selectArtifact(artifactKey: string) {
+    onSelectArtifact(artifactKey);
+    onOpenChange(true);
+  }
+
   return (
-    <aside className="plugin-preview">
-      <header className="preview-head">
-        <span><FileText size={15} /> Artifacts</span>
-        <strong>{artifactList.length}</strong>
-      </header>
-      {artifactList.length > 0 ? (
-        <>
-          <div className="artifact-tabs">
-            {artifactList.map((artifact) => (
-              <button
-                key={artifact.key}
-                className={artifact.key === selected?.key ? "artifact-tab active" : "artifact-tab"}
-                title={artifact.title}
-                onClick={() => onSelectArtifact(artifact.key)}
-              >
-                <span>{artifact.title}</span>
-                <small>{artifact.artifactType}</small>
-              </button>
-            ))}
-          </div>
-          {selected && <ArtifactPreview artifact={selected} />}
-        </>
-      ) : (
-        <div className="preview-empty">No artifacts yet.</div>
-      )}
-
-      {(statusList.length > 0 || progressList.length > 0) && (
-        <section className="plugin-side-section">
-          <h3><Activity size={14} /> Progress</h3>
-          {progressList.map((item, index) => (
-            <ToolProgress progress={item} compact key={`${item.pluginId}-${item.updatedAt}-${index}`} />
-          ))}
-          {statusList.slice(0, 4).map((item) => (
-            <div className="plugin-status" key={item.pluginId}>
-              <div>
-                <strong>{item.label ?? item.pluginName}</strong>
-                <span>{item.message ?? item.status}</span>
-              </div>
-              {item.progress != null && <em>{Math.round(item.progress * 100)}%</em>}
+    <aside className={`plugin-preview-shell ${open ? "open" : "closed"}`} aria-label="Artifact sidebar">
+      {open && selectedGroup && selected && (
+        <section className="plugin-preview">
+          <header className="preview-head">
+            <span><FileText size={15} /> {selectedGroup.label}</span>
+            <button
+              type="button"
+              className="icon-button"
+              title="隐藏 Artifacts"
+              aria-label="隐藏 Artifacts"
+              onClick={() => onOpenChange(false)}
+            >
+              <ChevronRight size={17} />
+            </button>
+          </header>
+          {selectedGroup.artifacts.length > 1 && (
+            <div className="artifact-list">
+              {selectedGroup.artifacts.map((artifact) => (
+                <button
+                  key={artifact.key}
+                  className={artifact.key === selected.key ? "artifact-item active" : "artifact-item"}
+                  title={artifact.title}
+                  onClick={() => selectArtifact(artifact.key)}
+                >
+                  <span>{artifact.title}</span>
+                  <small>{artifact.pluginName}</small>
+                </button>
+              ))}
             </div>
-          ))}
+          )}
+          <ArtifactPreview artifact={selected} />
+
+          {(statusList.length > 0 || progressList.length > 0) && (
+            <section className="plugin-side-section">
+              <h3><Activity size={14} /> Progress</h3>
+              {progressList.map((item, index) => (
+                <ToolProgress progress={item} compact key={`${item.pluginId}-${item.updatedAt}-${index}`} />
+              ))}
+              {statusList.slice(0, 4).map((item) => (
+                <div className="plugin-status" key={item.pluginId}>
+                  <div>
+                    <strong>{item.label ?? item.pluginName}</strong>
+                    <span>{item.message ?? item.status}</span>
+                  </div>
+                  {item.progress != null && <em>{Math.round(item.progress * 100)}%</em>}
+                </div>
+              ))}
+            </section>
+          )}
+
+          {messageList.length > 0 && (
+            <section className="plugin-side-section">
+              <h3>Messages</h3>
+              {messageList.map((item) => (
+                <div className={`plugin-message ${item.level}`} key={item.id}>
+                  <strong>{item.title ?? item.pluginName}</strong>
+                  <span>{item.message}</span>
+                </div>
+              ))}
+            </section>
+          )}
         </section>
       )}
-
-      {messageList.length > 0 && (
-        <section className="plugin-side-section">
-          <h3>Messages</h3>
-          {messageList.map((item) => (
-            <div className={`plugin-message ${item.level}`} key={item.id}>
-              <strong>{item.title ?? item.pluginName}</strong>
-              <span>{item.message}</span>
-            </div>
-          ))}
-        </section>
-      )}
+      <nav className="artifact-type-rail" aria-label="Artifact types">
+        {groups.map((group) => {
+          const active = group.type === selectedGroup?.type;
+          return (
+            <button
+              key={group.type}
+              type="button"
+              className={active && open ? "artifact-type-tab active" : "artifact-type-tab"}
+              title={`${group.label} (${group.artifacts.length})`}
+              aria-pressed={active && open}
+              onClick={() => selectType(group)}
+            >
+              <span>{group.label}</span>
+              <strong>{group.artifacts.length}</strong>
+            </button>
+          );
+        })}
+      </nav>
     </aside>
   );
 }
@@ -3371,6 +3491,16 @@ function configFromLaunchProfile(
     systemPrompt: profile.systemPrompt,
     selectedPlugins: [...profile.selectedPlugins],
     pluginConfigs: normalizePluginConfigs(profile.pluginConfigs)
+  };
+}
+
+function launchProfileFromConfig(config: PersistedConfig): SessionLaunchProfile {
+  return {
+    version: 1,
+    modelName: config.modelName,
+    systemPrompt: config.systemPrompt,
+    selectedPlugins: [...config.selectedPlugins],
+    pluginConfigs: normalizePluginConfigs(config.pluginConfigs)
   };
 }
 
