@@ -46,6 +46,7 @@ COMMAND_TYPES = {
     "switch_model",
     "refresh_models",
     "apply_plugins",
+    "plugin_action",
     "get_status",
     "shutdown",
     "ping",

@@ -17,7 +17,7 @@ from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.events import Event
 from hawi.models import model_registry
 from hawi.session import SessionLockedError, SessionManager
-from hawi.tool import ToolParameterInjection
+from hawi.tool import ToolParameterInjection, ToolResult
 from hawi.utils.debug import debug_assert
 
 from .blob import BlobStore
@@ -56,8 +56,16 @@ SERVER_CAPS: frozenset[str] = frozenset({
     "message_intent_v1",
     "context_branch_v1",
     "manual_context_compact_v1",
+    "plugin_action_v1",
 })
 """Capabilities the server advertises during hello negotiation. Plans 3-5 grow this set."""
+
+PLUGIN_ACTION_METHODS: frozenset[str] = frozenset({
+    "approve_taskflow_review",
+    "reject_taskflow_review",
+    "approve_workflow_node",
+    "reject_workflow_node",
+})
 
 
 @dataclass(frozen=True)
@@ -371,6 +379,8 @@ class CoreRuntime:
                 await self._handle_refresh_models(client, command)
             elif command.type == "apply_plugins":
                 await self._handle_apply_plugins(client, command)
+            elif command.type == "plugin_action":
+                await self._handle_plugin_action(client, command)
             elif command.type == "get_status":
                 await client.send(
                     make_frame(
@@ -885,6 +895,130 @@ class CoreRuntime:
                     "plugin_configs": to_json_safe(self._plugin_configs),
                 },
             )
+        )
+
+    async def _handle_plugin_action(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        plugin_id = command.payload.get("plugin_id")
+        action = command.payload.get("action")
+        arguments = command.payload.get("arguments", {})
+        if not isinstance(plugin_id, str) or not plugin_id.strip():
+            raise ValueError("'plugin_action.payload.plugin_id' must be a non-empty string")
+        if not isinstance(action, str) or action not in PLUGIN_ACTION_METHODS:
+            raise ValueError("'plugin_action.payload.action' is not allowed")
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            raise ValueError("'plugin_action.payload.arguments' must be an object")
+
+        plugin = self._find_plugin(plugin_id.strip())
+        if plugin is None:
+            await client.send(
+                make_error(
+                    f"Plugin is not active: {plugin_id}",
+                    request_id=command.id,
+                    code="plugin_not_active",
+                )
+            )
+            return
+
+        method = getattr(plugin, action, None)
+        if not callable(method):
+            await client.send(
+                make_error(
+                    f"Plugin action is not available: {action}",
+                    request_id=command.id,
+                    code="plugin_action_unavailable",
+                )
+            )
+            return
+
+        result = method(**arguments)
+        if inspect.isawaitable(result):
+            result = await result
+        result_payload = self._plugin_action_result_payload(result)
+        if result_payload.get("success") is False:
+            await client.send(
+                make_error(
+                    str(result_payload.get("error") or "Plugin action failed."),
+                    request_id=command.id,
+                    code="plugin_action_failed",
+                    details=result_payload,
+                )
+            )
+            return
+
+        resume_message_id = self._enqueue_plugin_action_next_message(
+            action,
+            result_payload,
+            command.payload,
+        )
+        await client.send(
+            make_ack(
+                "plugin_action",
+                request_id=command.id,
+                payload={
+                    "plugin_id": plugin_id,
+                    "action": action,
+                    "result": result_payload,
+                    "resume_message_id": resume_message_id,
+                },
+            )
+        )
+
+    def _find_plugin(self, plugin_id: str) -> Any | None:
+        for plugin in self._plugins:
+            candidates = {
+                str(getattr(plugin, "plugin_id", "") or ""),
+                str(getattr(plugin, "name", "") or ""),
+                str(getattr(plugin, "plugin_name", "") or ""),
+                plugin.__class__.__name__,
+            }
+            if plugin_id in candidates:
+                return plugin
+        return None
+
+    @staticmethod
+    def _plugin_action_result_payload(result: Any) -> dict[str, Any]:
+        if isinstance(result, ToolResult):
+            return {
+                "success": result.success,
+                "output": to_json_safe(result.output),
+                "error": result.error,
+            }
+        if isinstance(result, dict):
+            return {"success": True, "output": to_json_safe(result), "error": ""}
+        return {"success": True, "output": to_json_safe(result), "error": ""}
+
+    def _enqueue_plugin_action_next_message(
+        self,
+        action: str,
+        result_payload: dict[str, Any],
+        command_payload: dict[str, Any],
+    ) -> str | None:
+        if command_payload.get("enqueue_next_message", True) is False:
+            return None
+        output = result_payload.get("output")
+        if not isinstance(output, dict):
+            return None
+        next_message = output.get("next_message")
+        if not isinstance(next_message, (str, list)) or not next_message:
+            return None
+        runner = self._runner
+        if runner is None:
+            return None
+        return runner.submit_immediate_message(
+            next_message,
+            intent="plugin_action",
+            metadata={
+                "intent": "plugin_action",
+                "display_message_type": "resume",
+                "plugin_action": action,
+                "auto_generated": True,
+            },
         )
 
     def _require_session_manager(self) -> SessionManager:

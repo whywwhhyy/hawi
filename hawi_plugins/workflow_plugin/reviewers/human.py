@@ -50,6 +50,25 @@ class HumanReviewer(Reviewer):
         agent: "HawiAgent",
     ) -> ReviewDecision:
         review_id = str(uuid.uuid4())[:8]
+        workflow = getattr(self._plugin, "_workflow", None)
+        review_data = {
+            "kind": "human_review_request",
+            "review_id": review_id,
+            "plugin_id": self._plugin.plugin_id,
+            "approve_action": "approve_workflow_node",
+            "reject_action": "reject_workflow_node",
+            "workflow_id": run.workflow_id,
+            "workflow_name": getattr(workflow, "name", ""),
+            "node_id": node.id,
+            "node_name": node.name,
+            "instructions": node.prompt,
+            "output": execution.output,
+            "output_preview": (execution.output or "")[:500],
+            "selected_next_node_id": execution.selected_next_node_id,
+            "routing_reason": execution.routing_reason,
+            "attempt": execution.attempt_count,
+            "max_retries": node.max_retries,
+        }
 
         # Emit event so GUI can show a review dialog
         self._plugin.emit_plugin_event(
@@ -57,9 +76,9 @@ class HumanReviewer(Reviewer):
             {
                 "event_name": "workflow.review.requested",
                 "review_id": review_id,
-                "workflow_name": getattr(
-                    getattr(self._plugin, "_workflow", None), "name", ""
-                ),
+                "message_id": f"workflow-review-{review_id}",
+                "level": "warning",
+                "workflow_name": getattr(workflow, "name", ""),
                 "workflow_id": run.workflow_id,
                 "node_id": node.id,
                 "node_name": node.name,
@@ -75,6 +94,7 @@ class HumanReviewer(Reviewer):
                     f"Node '{node.name}' (attempt {execution.attempt_count}/"
                     f"{node.max_retries}) is awaiting human review."
                 ),
+                "data": review_data,
             },
         )
 

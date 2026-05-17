@@ -14,6 +14,7 @@ PLUGIN_WEB = "hawi/web"
 PLUGIN_SKILLS = "hawi/skills"
 PLUGIN_PYTHON_INTERPRETER = "hawi/python-interpreter"
 PLUGIN_MCP = "hawi/mcp"
+PLUGIN_TASKFLOW = "hawi/taskflow"
 PLUGIN_PLAN = "hawi/plan"
 PLUGIN_WORKFLOW = "hawi/workflow"
 PLUGIN_ENVIRON_PROMPT = "hawi/environ-prompt"
@@ -161,6 +162,10 @@ PLUGIN_REGISTRY: dict[str, PluginDescriptor] = {
         key=PLUGIN_MCP,
         import_path="hawi_plugins.mcp_plugin:MCPPlugin",
         factory=_create_mcp_plugin,
+    ),
+    PLUGIN_TASKFLOW: PluginDescriptor(
+        key=PLUGIN_TASKFLOW,
+        import_path="hawi_plugins.taskflow_plugin:TaskflowPlugin",
     ),
     PLUGIN_PLAN: PluginDescriptor(
         key=PLUGIN_PLAN,

@@ -1174,6 +1174,10 @@ button.context-status:disabled {
   justify-content: space-between;
 }
 
+.plugin-message {
+  flex-direction: column;
+}
+
 .plugin-status div,
 .plugin-message {
   min-width: 0;
@@ -1206,6 +1210,22 @@ button.context-status:disabled {
 
 .plugin-message.error strong {
   color: #9d3028;
+}
+
+.plugin-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.plugin-message-actions .mini-button.danger {
+  border-color: #e4bbb5;
+  color: #9d3028;
+}
+
+.plugin-message-actions .mini-button.danger:hover {
+  background: #fff0ee;
 }
 
 .bubble {

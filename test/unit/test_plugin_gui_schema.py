@@ -6,6 +6,7 @@ from hawi_plugins.plan_plugin import PlanPlugin
 from hawi_plugins.python_interpreter import PythonInterpreterPlugin
 from hawi_plugins.shell_plugin import ShellPlugin
 from hawi_plugins.skills_plugin import SkillsPlugin
+from hawi_plugins.taskflow_plugin import TaskflowPlugin
 from hawi_plugins.web import WebPlugin
 
 
@@ -17,6 +18,7 @@ def test_plugins_expose_gui_schema_and_defaults():
         SkillsPlugin,
         PythonInterpreterPlugin,
         MCPPlugin,
+        TaskflowPlugin,
         PlanPlugin,
     ]
     for plugin_cls in plugin_classes:
@@ -46,3 +48,10 @@ def test_plan_schema_has_context_folding_toggle():
     defaults = PlanPlugin.gui_default_config()
     assert schema["properties"]["fold_completed_tasks"]["type"] == "boolean"
     assert defaults["fold_completed_tasks"] is False
+
+
+def test_taskflow_schema_has_context_folding_toggle():
+    schema = TaskflowPlugin.gui_config_schema()
+    defaults = TaskflowPlugin.gui_default_config()
+    assert schema["properties"]["fold_completed_steps"]["type"] == "boolean"
+    assert defaults["fold_completed_steps"] is False

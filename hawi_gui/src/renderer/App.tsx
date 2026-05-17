@@ -1414,6 +1414,7 @@ export default function App() {
             onSelectArtifact={(artifactKey) => {
               dispatch({ version: VERSION, type: "gui.select_artifact", payload: { artifact_key: artifactKey } });
             }}
+            onPluginAction={(payload) => sendCommand("plugin_action", payload)}
           />
         )}
       </section>
@@ -3085,6 +3086,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+interface PluginActionPayload extends Record<string, unknown> {
+  plugin_id: string;
+  action: string;
+  arguments: Record<string, unknown>;
+}
+
 function PluginPreviewPanel({
   artifacts,
   artifactOrder,
@@ -3094,7 +3101,8 @@ function PluginPreviewPanel({
   statuses,
   toolProgress,
   onOpenChange,
-  onSelectArtifact
+  onSelectArtifact,
+  onPluginAction
 }: {
   artifacts: Record<string, PluginArtifactState>;
   artifactOrder: string[];
@@ -3105,6 +3113,7 @@ function PluginPreviewPanel({
   toolProgress: Record<string, ToolProgressState>;
   onOpenChange: (open: boolean) => void;
   onSelectArtifact: (artifactKey: string) => void;
+  onPluginAction: (payload: PluginActionPayload) => Promise<CoreFrame | null>;
 }) {
   const artifactList = artifactOrder.map((key) => artifacts[key]).filter(Boolean);
   const groups = groupArtifactsByType(artifactList);
@@ -3191,6 +3200,7 @@ function PluginPreviewPanel({
                 <div className={`plugin-message ${item.level}`} key={item.id}>
                   <strong>{item.title ?? item.pluginName}</strong>
                   <span>{item.message}</span>
+                  <PluginMessageActions item={item} onPluginAction={onPluginAction} />
                 </div>
               ))}
             </section>
@@ -3217,6 +3227,70 @@ function PluginPreviewPanel({
       </nav>
     </aside>
   );
+}
+
+function PluginMessageActions({
+  item,
+  onPluginAction
+}: {
+  item: PluginMessageState;
+  onPluginAction: (payload: PluginActionPayload) => Promise<CoreFrame | null>;
+}) {
+  const review = humanReviewActionFromMessage(item);
+  if (!review) return null;
+
+  async function approve() {
+    await onPluginAction({
+      plugin_id: review.pluginId,
+      action: review.approveAction,
+      arguments: {
+        review_id: review.reviewId,
+        feedback: "Approved in GUI."
+      }
+    });
+  }
+
+  async function reject() {
+    const feedback = window.prompt("拒绝原因");
+    if (feedback === null) return;
+    const trimmed = feedback.trim();
+    if (!trimmed) return;
+    await onPluginAction({
+      plugin_id: review.pluginId,
+      action: review.rejectAction,
+      arguments: {
+        review_id: review.reviewId,
+        feedback: trimmed
+      }
+    });
+  }
+
+  return (
+    <div className="plugin-message-actions">
+      <button type="button" className="mini-button" onClick={approve}>
+        <Check size={13} /> 批准
+      </button>
+      <button type="button" className="mini-button danger" onClick={reject}>
+        <X size={13} /> 拒绝
+      </button>
+    </div>
+  );
+}
+
+function humanReviewActionFromMessage(item: PluginMessageState): {
+  pluginId: string;
+  reviewId: string;
+  approveAction: string;
+  rejectAction: string;
+} | null {
+  const data = isRecord(item.data) ? item.data : null;
+  if (!data || data.kind !== "human_review_request") return null;
+  const reviewId = optionalPayloadString(data.review_id);
+  const approveAction = optionalPayloadString(data.approve_action);
+  const rejectAction = optionalPayloadString(data.reject_action);
+  const pluginId = optionalPayloadString(data.plugin_id) ?? item.pluginId;
+  if (!reviewId || !approveAction || !rejectAction || !pluginId) return null;
+  return { pluginId, reviewId, approveAction, rejectAction };
 }
 
 function ArtifactPreview({ artifact }: { artifact: PluginArtifactState }) {

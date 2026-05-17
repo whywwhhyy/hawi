@@ -143,6 +143,16 @@ class DummyAgentRunner:
         self.enqueued.append((content, queue, metadata))
         return "msg-123"
 
+    def submit_immediate_message(
+        self,
+        content: Any,
+        *,
+        intent: str,
+        metadata: dict[str, Any],
+    ) -> str:
+        self.enqueued.append((content, "high_prio", {"intent": intent, **metadata}))
+        return "msg-immediate"
+
     async def interrupt(self, reason: str) -> list[str]:
         self.interrupt_reason = reason
         return ["tc-1"]
@@ -959,6 +969,68 @@ async def test_runtime_can_create_plan_plugin() -> None:
     assert len(plugins) == 1
     assert plugins[0].plugin_id == "hawi/plan"
     assert plugins[0].plugin_name == "Plan"
+
+
+@pytest.mark.asyncio
+async def test_runtime_can_create_taskflow_plugin() -> None:
+    runtime = CoreRuntime(model_name="test-model")
+
+    plugins = await runtime._create_plugins(["hawi/taskflow"], {})
+
+    assert len(plugins) == 1
+    assert plugins[0].plugin_id == "hawi/taskflow"
+    assert plugins[0].plugin_name == "Taskflow"
+
+
+@pytest.mark.asyncio
+async def test_runtime_plugin_action_approves_taskflow_review_and_resumes() -> None:
+    from hawi_plugins.taskflow_plugin import TaskflowPlugin
+
+    runtime = CoreRuntime(model_name="test-model")
+    runner = DummyAgentRunner()
+    runtime._runner = runner  # type: ignore[assignment]
+    plugin = TaskflowPlugin()
+    plugin.bind_plugin_identity(plugin_id="hawi/taskflow", plugin_name="Taskflow")
+    runtime._plugins = [plugin]
+    client = FakeClient(authenticated=True)
+
+    created = plugin.create_taskflow(
+        title="Human Flow",
+        mode="workflow",
+        execution_policy="gated_graph",
+        mutable=False,
+        start_step_id="review",
+        steps=[
+            {"id": "review", "title": "Review", "review": {"type": "human"}},
+            {"id": "next", "title": "Next"},
+        ],
+        edges=[{"from": "review", "to": "next", "type": "transitions"}],
+    )
+    assert created.success is True
+    assert plugin.start_taskflow().success is True
+    submitted = plugin.submit_taskflow_step(output="ready")
+    assert submitted.success is True
+    review_id = next(iter(plugin._pending_human_reviews))
+
+    await runtime.handle_command(
+        client,
+        argparse.Namespace(
+            type="plugin_action",
+            id="cmd-approve",
+            payload={
+                "plugin_id": "hawi/taskflow",
+                "action": "approve_taskflow_review",
+                "arguments": {"review_id": review_id, "feedback": "Approved"},
+            },
+        ),
+    )
+
+    assert client.sent[-1]["type"] == "ack"
+    assert client.sent[-1]["payload"]["command"] == "plugin_action"
+    assert client.sent[-1]["payload"]["resume_message_id"] == "msg-immediate"
+    assert runner.enqueued
+    assert runner.enqueued[-1][1] == "high_prio"
+    assert "Entering next step" in runner.enqueued[-1][0]
 
 
 def test_runtime_expands_selected_plugin_dependencies() -> None:
