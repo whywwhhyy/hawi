@@ -23,6 +23,7 @@ class PythonInterpreterPlugin(HawiPlugin):
 
     name = "hawi/python-interpreter"
     display_name = "Python Interpreter"
+    description = "提供持久 Python 解释器，用于执行脚本并保留运行状态。"
     dependencies = ()
 
     DEFAULT_INSTANCE_NAME = "__default__"

@@ -70,6 +70,7 @@ class MCPPlugin(HawiPlugin):
 
     name = "hawi/mcp"
     display_name = "MCP"
+    description = "连接 MCP 服务器，将远程工具和资源暴露给 agent。"
     dependencies = ()
 
     def __init__(self, config_path: str | None = None):

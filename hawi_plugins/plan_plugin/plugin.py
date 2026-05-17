@@ -71,6 +71,7 @@ class PlanPlugin(HawiPlugin):
 
     name = "hawi/plan"
     display_name = "Plan"
+    description = "维护可更新的任务计划，并在对话中提醒未完成事项。"
     dependencies = ()
 
     def __init__(self, fold_completed_tasks: bool = False) -> None:

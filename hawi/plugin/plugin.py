@@ -39,6 +39,7 @@ class HawiPlugin:
     """
     name: ClassVar[str | None] = None
     display_name: ClassVar[str | None] = None
+    description: ClassVar[str | None] = None
     dependencies: ClassVar[Sequence[str]] = ()
     _cached_hooks:PluginHooks
     _cached_tools:Sequence[AgentTool]

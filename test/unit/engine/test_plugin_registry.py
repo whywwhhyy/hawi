@@ -23,6 +23,9 @@ def test_registry_catalog_matches_known_plugins() -> None:
     assert [item["display_name"] for item in catalog] == [
         d.display_name for d in descriptors
     ]
+    assert [item["description"] for item in catalog] == [
+        d.description for d in descriptors
+    ]
     assert PLUGIN_DISPLAY_NAMES == {d.key: d.display_name for d in descriptors}
     assert all("dependencies" in item for item in catalog)
     assert all("schema" in item and "defaults" in item for item in catalog)
@@ -33,6 +36,7 @@ def test_descriptor_metadata_comes_from_plugin_classes() -> None:
         plugin_cls = descriptor.load_class()
         assert descriptor.name == plugin_cls.name
         assert descriptor.display_name == plugin_cls.display_name
+        assert descriptor.description == plugin_cls.description
         assert descriptor.dependencies == tuple(plugin_cls.dependencies)
 
 

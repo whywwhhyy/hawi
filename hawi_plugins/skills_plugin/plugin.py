@@ -17,6 +17,7 @@ class SkillsPlugin(HawiPlugin):
 
     name = "hawi/skills"
     display_name = "Skills"
+    description = "发现并加载本地 SKILL.md，让 agent 按需使用技能说明。"
     dependencies = ("hawi/filesystem", "hawi/shell")
 
     def __init__(self, skills_dir: str = "skills"):

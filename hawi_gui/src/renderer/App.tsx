@@ -3387,6 +3387,9 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
               <strong>{item.display_name}</strong>
             </label>
             <div className="plugin-identity">{item.name}</div>
+            {item.description && (
+              <div className="plugin-description">{item.description}</div>
+            )}
             {item.dependencies.length > 0 && (
               <div className="plugin-dependencies">
                 依赖: {item.dependencies.join(", ")}

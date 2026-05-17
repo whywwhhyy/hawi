@@ -128,6 +128,7 @@ class EnvironPromptPlugin(HawiPlugin):
 
     name = "hawi/environ-prompt"
     display_name = "Environment Prompt"
+    description = "向系统和用户提示词注入会话、项目和环境上下文。"
     dependencies = ()
 
     def __init__(self, config_path: str | None = None) -> None:

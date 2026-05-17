@@ -76,6 +76,7 @@ class WorkflowPlugin(HawiPlugin):
 
     name = "hawi/workflow"
     display_name = "Workflow"
+    description = "运行带人工或子 agent 审核 gate 的 YAML 工作流。"
     dependencies = ()
 
     def __init__(self) -> None:

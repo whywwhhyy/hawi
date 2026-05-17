@@ -39,6 +39,7 @@ class FileSystemPlugin(HawiPlugin):
 
     name = "hawi/filesystem"
     display_name = "Filesystem"
+    description = "提供文件读取、写入、编辑、目录列表、glob 和 grep 搜索工具。"
     dependencies = ()
 
     # 常见二进制文件扩展名，grep 时跳过

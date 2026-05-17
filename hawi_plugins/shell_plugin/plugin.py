@@ -53,6 +53,7 @@ class ShellPlugin(HawiPlugin):
 
     name = "hawi/shell"
     display_name = "Shell"
+    description = "运行和管理后台 shell 命令，支持查看输出、状态和中断。"
     dependencies = ()
 
     def __init__(self) -> None:

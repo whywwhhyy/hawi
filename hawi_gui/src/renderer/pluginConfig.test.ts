@@ -6,6 +6,7 @@ const item: PluginCatalogItem = {
   key: "hawi/mcp",
   name: "hawi/mcp",
   display_name: "MCP",
+  description: "Connect MCP servers.",
   dependencies: [],
   defaults: { config_path: ".hawi/mcp/config.json" },
   schema: {
@@ -26,6 +27,7 @@ const catalog: PluginCatalogItem[] = [
     key: "hawi/plan",
     name: "hawi/plan",
     display_name: "Plan",
+    description: "Maintain a task plan.",
     dependencies: [],
     defaults: {},
     schema: {
@@ -37,6 +39,7 @@ const catalog: PluginCatalogItem[] = [
     key: "hawi/workflow",
     name: "hawi/workflow",
     display_name: "Workflow",
+    description: "Run gated workflows.",
     dependencies: ["hawi/plan"],
     defaults: {},
     schema: {

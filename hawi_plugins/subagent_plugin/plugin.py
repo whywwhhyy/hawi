@@ -18,6 +18,7 @@ class SubAgentPlugin(HawiPlugin):
 
     name = "hawi/subagent"
     display_name = "Subagent"
+    description = "创建和管理后台子 agent，支持分工、等待和状态查询。"
     dependencies = ()
 
     @classmethod

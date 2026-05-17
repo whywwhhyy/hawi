@@ -22,6 +22,7 @@ class WebPlugin(HawiPlugin):
 
     name = "hawi/web"
     display_name = "Web"
+    description = "抓取网页内容并转换为 Markdown，带有本地降级策略。"
     dependencies = ()
 
     def __init__(self):

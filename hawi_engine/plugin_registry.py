@@ -58,6 +58,11 @@ class PluginDescriptor:
         plugin_cls = self.load_class()
         return str(getattr(plugin_cls, "display_name", None) or plugin_cls.__name__)
 
+    @property
+    def description(self) -> str:
+        """User-facing plugin description for GUI help text."""
+        return str(getattr(self.load_class(), "description", None) or "")
+
     async def create(self, config: dict[str, Any] | None = None) -> Any:
         """Instantiate this plugin using its descriptor-owned factory."""
         cfg = dict(config or {})
@@ -235,6 +240,7 @@ def plugin_catalog() -> list[dict[str, Any]]:
             "key": descriptor.key,
             "name": descriptor.name,
             "display_name": descriptor.display_name,
+            "description": descriptor.description,
             "dependencies": list(descriptor.dependencies),
             "schema": descriptor.gui_config_schema(),
             "defaults": descriptor.gui_default_config(),

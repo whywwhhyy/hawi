@@ -118,6 +118,7 @@ export interface PluginCatalogItem {
   key: string;
   name: string;
   display_name: string;
+  description: string;
   dependencies: string[];
   schema: JsonSchemaObject;
   defaults: Record<string, unknown>;

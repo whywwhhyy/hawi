@@ -2525,11 +2525,16 @@ button.context-status:disabled {
 }
 
 .plugin-identity,
+.plugin-description,
 .plugin-dependencies {
   margin: -3px 0 8px 26px;
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.plugin-description {
+  margin-top: -4px;
 }
 
 .plugin-dependencies {

@@ -74,8 +74,8 @@ const inspect: InspectPayload = {
   version: VERSION,
   models: ["deepseek-chat", "kimi"],
   plugin_catalog: [
-    { key: "hawi/filesystem", name: "hawi/filesystem", display_name: "Filesystem", dependencies: [], schema: {}, defaults: {} },
-    { key: "hawi/shell", name: "hawi/shell", display_name: "Shell", dependencies: [], schema: {}, defaults: {} },
+    { key: "hawi/filesystem", name: "hawi/filesystem", display_name: "Filesystem", description: "File operations.", dependencies: [], schema: {}, defaults: {} },
+    { key: "hawi/shell", name: "hawi/shell", display_name: "Shell", description: "Shell commands.", dependencies: [], schema: {}, defaults: {} },
   ],
   default_system_prompt: "default",
 };
