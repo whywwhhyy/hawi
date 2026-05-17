@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 REPLAYABLE_AGENT_EVENT_TYPES = {
     "agent.system_prompt",
     "agent.context_injected",
-    "agent.tool_parameter_injected",
     "agent.tool_runtime_context_injected",
 }
 
@@ -268,17 +267,6 @@ def _agent_event_payload(event_type: str, data: dict[str, Any]) -> dict[str, Any
             "merge_position": data.get("merge_position"),
             "target_message_id": data.get("target_message_id"),
             "target_message_index": data.get("target_message_index"),
-        }
-    if event_type == "agent.tool_parameter_injected":
-        return {
-            "run_id": data.get("run_id"),
-            "tool_name": data.get("tool_name"),
-            "tool_call_id": data.get("tool_call_id"),
-            "parameters": data.get("parameters") or {},
-            "plugin_id": data.get("plugin_id"),
-            "plugin_name": data.get("plugin_name"),
-            "plugin_role": data.get("plugin_role"),
-            "injection_name": data.get("injection_name"),
         }
     return {
         "run_id": data.get("run_id"),

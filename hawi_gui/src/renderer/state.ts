@@ -8,7 +8,6 @@ export type DisplayMessageType = "normal" | "steer" | "urgent" | "resume";
 export type FrameworkInjectionKind =
   | "system_prompt"
   | "context_injected"
-  | "tool_parameter_injected"
   | "tool_runtime_context_injected"
   | "plugin_message";
 
@@ -498,12 +497,6 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       return appendFrameworkInjection(state, injection);
     }
 
-    case "agent.tool_parameter_injected":
-      return appendFrameworkInjection(
-        state,
-        frameworkInjectionFromFrame(frame, payload, "tool_parameter_injected")
-      );
-
     case "agent.tool_runtime_context_injected":
       return appendFrameworkInjection(
         state,
@@ -982,10 +975,6 @@ function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
     nodes.push(historyFrameworkNode(frame, injection, nodes.length));
     return true;
   }
-  if (frame.type === "agent.tool_parameter_injected") {
-    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "tool_parameter_injected"), nodes.length));
-    return true;
-  }
   if (frame.type === "agent.tool_runtime_context_injected") {
     nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected"), nodes.length));
     return true;
@@ -1002,6 +991,7 @@ function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
 
 function isSessionHistoryReplayOnlyEvent(eventType: string): boolean {
   return eventType === "plugin.event"
+    || eventType === "agent.tool_parameter_injected"
     || eventType === "plugin.status"
     || eventType === "plugin.tool_progress"
     || eventType === "plugin.artifact.upsert"
@@ -1826,15 +1816,6 @@ function frameworkInjectionContent(
   payload: Record<string, unknown>,
   kind: Exclude<FrameworkInjectionKind, "plugin_message">,
 ): string {
-  if (kind === "tool_parameter_injected") {
-    const toolName = optionalString(payload.tool_name) ?? "tool";
-    const parameters = payload.parameters;
-    const body = formatToolValue(parameters).trim();
-    return [
-      `Tool \`${toolName}\` received framework-injected parameters.`,
-      body ? markdownJsonBlock(body) : ""
-    ].filter(Boolean).join("\n\n");
-  }
   if (kind === "tool_runtime_context_injected") {
     const toolName = optionalString(payload.tool_name) ?? "tool";
     const parameterName = optionalString(payload.parameter_name) ?? "context";
@@ -1872,7 +1853,6 @@ function formatFrameworkIdentityContent(
   kind: FrameworkInjectionKind,
 ): string {
   if (kind === "plugin_message") return pluginMessageFrameworkContent(payload);
-  if (kind === "tool_parameter_injected") return formatToolValue(payload.parameters);
   if (kind === "tool_runtime_context_injected") return optionalString(payload.parameter_name) ?? "";
   if (Array.isArray(payload.content)) return historyContentText(payload.content);
   return optionalString(payload.text) ?? formatToolValue(payload.content);

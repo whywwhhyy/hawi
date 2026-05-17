@@ -11,7 +11,6 @@ from hawi.events import (
     AgentRunStopEvent,
     AgentSystemPromptEvent,
     AgentToolCallEvent,
-    AgentToolParameterInjectedEvent,
     AgentToolResultEvent,
     AgentToolRuntimeContextInjectedEvent,
     ModelContentBlockDeltaEvent,
@@ -370,17 +369,6 @@ def test_mapper_forwards_framework_injection_events() -> None:
             injection_name="inject_user",
         )
     )
-    tool_parameter = mapper.map(
-        AgentToolParameterInjectedEvent.create(
-            "run-injected",
-            "read_file",
-            "tc-1",
-            {"tool_call_purpose": "inspect file"},
-            plugin_id="filesystem",
-            plugin_name="Filesystem",
-            injection_name="tool_call_purpose",
-        )
-    )
     runtime_context = mapper.map(
         AgentToolRuntimeContextInjectedEvent.create(
             "run-injected",
@@ -405,12 +393,6 @@ def test_mapper_forwards_framework_injection_events() -> None:
     assert context[0]["payload"]["target_message_id"] == "msg-1"
     assert context[0]["payload"]["plugin_id"] == "env"
     assert context[0]["payload"]["injection_name"] == "inject_user"
-    assert tool_parameter[0]["type"] == "agent.tool_parameter_injected"
-    assert tool_parameter[0]["payload"]["parameters"] == {
-        "tool_call_purpose": "inspect file",
-    }
-    assert tool_parameter[0]["payload"]["plugin_id"] == "filesystem"
-    assert tool_parameter[0]["payload"]["plugin_role"] == "tool_owner"
     assert runtime_context[0]["type"] == "agent.tool_runtime_context_injected"
     assert runtime_context[0]["payload"]["parameter_name"] == "ctx"
     assert runtime_context[0]["payload"]["plugin_id"] == "stateful"

@@ -158,23 +158,6 @@ class SemanticEventMapper:
                 )
             ]
 
-        if etype == "agent.tool_parameter_injected":
-            return [
-                make_frame(
-                    "agent.tool_parameter_injected",
-                    {
-                        "run_id": getattr(event, "run_id", self._active_run_id or ""),
-                        "tool_name": getattr(event, "tool_name", ""),
-                        "tool_call_id": getattr(event, "tool_call_id", ""),
-                        "parameters": to_json_safe(getattr(event, "parameters", {})),
-                        "plugin_id": getattr(event, "plugin_id", None),
-                        "plugin_name": getattr(event, "plugin_name", None),
-                        "plugin_role": getattr(event, "plugin_role", "tool_owner"),
-                        "injection_name": getattr(event, "injection_name", None),
-                    },
-                )
-            ]
-
         if etype == "agent.tool_runtime_context_injected":
             return [
                 make_frame(

@@ -164,6 +164,21 @@ describe("core event reducer", () => {
         {
           run_id: "run-replay",
           role: "event",
+          content: [{ type: "text", text: "legacy injected parameters" }],
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "agent.tool_parameter_injected",
+            event_payload: {
+              run_id: "run-replay",
+              tool_name: "read_file",
+              tool_call_id: "tc-read",
+              parameters: { tool_call_purpose: "Read notes" }
+            }
+          }
+        },
+        {
+          run_id: "run-replay",
+          role: "event",
           content: [{ type: "text", text: "Collected notes" }],
           metadata: {
             display_message_type: "core_event",
@@ -1076,16 +1091,8 @@ describe("core event reducer", () => {
     expect(state.processing).toMatchObject({ runId: "run-context" });
   });
 
-  it("shows tool injection events as framework chat nodes", () => {
+  it("shows runtime context injections as framework bubbles", () => {
     let state = createInitialState();
-    state = reduceCoreEvent(state, frame("agent.tool_parameter_injected", {
-      run_id: "run-tool",
-      tool_name: "read_file",
-      tool_call_id: "tc-read",
-      parameters: { tool_call_purpose: "Read notes" },
-      plugin_role: "dynamic_tool",
-      injection_name: "tool_call_purpose"
-    }));
     state = reduceCoreEvent(state, frame("agent.tool_runtime_context_injected", {
       run_id: "run-tool",
       tool_name: "inspect",
@@ -1097,15 +1104,8 @@ describe("core event reducer", () => {
       injection_name: "runtime_context"
     }));
 
-    expect(state.nodes.map((node) => node.kind)).toEqual(["framework", "framework"]);
+    expect(state.nodes.map((node) => node.kind)).toEqual(["framework"]);
     expect(state.nodes[0].framework).toMatchObject({
-      kind: "tool_parameter_injected",
-      toolName: "read_file",
-      toolCallId: "tc-read",
-      pluginRole: "dynamic_tool"
-    });
-    expect(state.nodes[0].framework?.content).toContain("Read notes");
-    expect(state.nodes[1].framework).toMatchObject({
       kind: "tool_runtime_context_injected",
       toolName: "inspect",
       parameterName: "context",

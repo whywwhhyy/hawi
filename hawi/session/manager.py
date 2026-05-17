@@ -63,7 +63,6 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
     "agent.run_start": (layout.COMPONENT_RUNTIME, layout.COMPONENT_QUEUES),
     "agent.system_prompt": (),
     "agent.context_injected": (),
-    "agent.tool_parameter_injected": (),
     "agent.tool_runtime_context_injected": (),
     "agent.tool_call": (layout.COMPONENT_RUNTIME,),
     "agent.tool_result": (

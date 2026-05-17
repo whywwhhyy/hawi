@@ -19,7 +19,6 @@ from typing import Any, Literal, Protocol, TYPE_CHECKING, cast
 
 from hawi.errors import ToolExecutionError, ToolNotFoundError
 from hawi.events import (
-    AgentToolParameterInjectedEvent,
     AgentToolCallEvent,
     AgentToolResultEvent,
     AgentToolResultPartEvent,
@@ -459,20 +458,6 @@ class ToolExecutor:
                 iteration=iteration,
                 run_injection_handlers=run_injection_handlers,
             )
-            if prepared.injected_arguments:
-                await self._emit_event(
-                    AgentToolParameterInjectedEvent.create(
-                        run_id=run_id,
-                        tool_name=tool_name,
-                        tool_call_id=tool_call_id,
-                        parameters=dict(prepared.injected_arguments),
-                        plugin_id=owner_plugin_id,
-                        plugin_name=owner_plugin_name,
-                        plugin_role="tool_owner" if tool_owner is not None else "dynamic_tool",
-                        injection_name=",".join(sorted(prepared.injected_arguments)),
-                    ),
-                    event_bus,
-                )
             if prepared.short_circuit_result is not None:
                 result = prepared.short_circuit_result
             elif getattr(tool, "audit", False) and audit_action == "queue":

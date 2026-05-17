@@ -41,7 +41,6 @@ AgentEventType = Literal[
     "agent.message_added",
     "agent.system_prompt",
     "agent.context_injected",
-    "agent.tool_parameter_injected",
     "agent.tool_runtime_context_injected",
     "agent.compact_start",
     "agent.compact_stop",

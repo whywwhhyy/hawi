@@ -282,45 +282,6 @@ class AgentContextInjectedEvent(Event):
         )
 
 
-class AgentToolParameterInjectedEvent(Event):
-    """工具 schema 中的框架注入参数被 Hawi 消费并从真实工具参数中剥离"""
-
-    run_id: str
-    tool_name: str
-    tool_call_id: str
-    parameters: dict[str, Any]
-    plugin_id: str | None = None
-    plugin_name: str | None = None
-    plugin_role: str = "tool_owner"
-    injection_name: str | None = None
-
-    @classmethod
-    def create(
-        cls,
-        run_id: str,
-        tool_name: str,
-        tool_call_id: str,
-        parameters: dict[str, Any],
-        *,
-        plugin_id: str | None = None,
-        plugin_name: str | None = None,
-        plugin_role: str = "tool_owner",
-        injection_name: str | None = None,
-    ) -> AgentToolParameterInjectedEvent:
-        return cls(
-            type="agent.tool_parameter_injected",
-            source="agent",
-            run_id=run_id,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            parameters=parameters,
-            plugin_id=plugin_id,
-            plugin_name=plugin_name,
-            plugin_role=plugin_role,
-            injection_name=injection_name,
-        )
-
-
 class AgentToolRuntimeContextInjectedEvent(Event):
     """Hawi 运行时上下文被注入到工具实现参数中"""
 

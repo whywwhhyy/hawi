@@ -30,7 +30,6 @@ from hawi.events import (
     AgentInterruptEvent,
     AgentMessageAddedEvent,
     AgentSystemPromptEvent,
-    AgentToolParameterInjectedEvent,
     AgentToolRuntimeContextInjectedEvent,
     EventBus,
     ModelErrorEvent,
@@ -1037,16 +1036,6 @@ class TestSessionManager:
                 )
             )
             agent.event_bus.publish(
-                AgentToolParameterInjectedEvent.create(
-                    run_id="r1",
-                    tool_name="read_file",
-                    tool_call_id="tc-1",
-                    parameters={"tool_call_purpose": "Read notes"},
-                    plugin_role="dynamic_tool",
-                    injection_name="tool_call_purpose",
-                )
-            )
-            agent.event_bus.publish(
                 AgentToolRuntimeContextInjectedEvent.create(
                     run_id="r1",
                     tool_name="inspect",
@@ -1089,12 +1078,11 @@ class TestSessionManager:
             sm._writer.wait_idle(timeout=2.0)
 
             entries = sm.read_message_history(sid)
-            assert [entry["role"] for entry in entries] == ["event"] * 6
+            assert [entry["role"] for entry in entries] == ["event"] * 5
             event_types = [entry["metadata"]["event_type"] for entry in entries]
             assert event_types == [
                 "agent.system_prompt",
                 "agent.context_injected",
-                "agent.tool_parameter_injected",
                 "agent.tool_runtime_context_injected",
                 "plugin.message",
                 "plugin.artifact.upsert",
@@ -1104,12 +1092,10 @@ class TestSessionManager:
             assert context_payload["merge_target"] == "user_message"
             assert context_payload["merge_position"] == "before"
             assert context_payload["target_message_id"] == "msg-1"
-            tool_payload = entries[2]["metadata"]["event_payload"]
-            assert tool_payload["parameters"]["tool_call_purpose"] == "Read notes"
-            plugin_payload = entries[4]["metadata"]["event_payload"]
+            plugin_payload = entries[3]["metadata"]["event_payload"]
             assert plugin_payload["plugin_id"] == "planner"
             assert plugin_payload["message"] == "Collected notes"
-            artifact_payload = entries[5]["metadata"]["event_payload"]
+            artifact_payload = entries[4]["metadata"]["event_payload"]
             assert artifact_payload["artifact"]["id"] == "plan"
 
             manifest = json.loads(

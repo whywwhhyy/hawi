@@ -2293,9 +2293,6 @@ function frameworkInjectionTargetLabel(item: FrameworkInjectionState): string | 
   if (item.kind === "context_injected") {
     return [item.hookType, item.role].filter(Boolean).join("/");
   }
-  if (item.kind === "tool_parameter_injected") {
-    return item.toolName ? `${item.toolName} parameters` : "tool parameters";
-  }
   if (item.kind === "tool_runtime_context_injected") {
     if (item.toolName && item.parameterName) {
       return `${item.toolName}.${item.parameterName}`;

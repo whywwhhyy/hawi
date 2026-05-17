@@ -124,8 +124,6 @@ def test_tool_definition_schema_is_augmented_without_mutating_tool_schema(agent:
 async def test_injected_parameter_is_stripped_before_tool_execution(agent: HawiAgent):
     tool = StrictEchoTool()
     seen: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
-    events = []
-    agent.subscribe_blocking(events.append, ["agent.tool_parameter_injected"])
 
     def handler(ctx, value):
         seen.append(
@@ -159,12 +157,6 @@ async def test_injected_parameter_is_stripped_before_tool_execution(agent: HawiA
     assert record.result.success is True
     assert record.result.output == "hello"
     assert tool.calls == ["hello"]
-    assert len(events) == 1
-    assert events[0].parameters == {
-        "approval_reason": "Need to show the user the result.",
-    }
-    assert events[0].plugin_role == "dynamic_tool"
-    assert events[0].injection_name == "approval_reason"
     assert seen == [
         (
             "strict_echo",
