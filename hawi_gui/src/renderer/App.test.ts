@@ -315,6 +315,10 @@ describe("resolveFollowTailOnScroll", () => {
   it("resumes following when the chat is back near the bottom", () => {
     expect(resolveFollowTailOnScroll(false, true, true, false, false)).toBe(true);
   });
+
+  it("does not resume following while text selection is active", () => {
+    expect(resolveFollowTailOnScroll(true, true, false, true, false)).toBe(false);
+  });
 });
 
 describe("renderMarkdown", () => {

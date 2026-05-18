@@ -10,6 +10,7 @@ import type {
   PersistedConfig,
   SaveMarkdownExportResult,
 } from "../shared/protocol";
+import { MIN_CONTENT_SIZE, minimumWindowSizeForContent, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import {
   type EnvPaths,
   ensureEngineWorkspace,
@@ -31,8 +32,6 @@ let config: PersistedConfig | null = null;
 let engineManager: SessionEngineManager | null = null;
 const refreshedProviders = new Set<string>();
 
-const MIN_CONTENT_WIDTH = 1080;
-const MIN_CONTENT_HEIGHT = 660;
 const FILENAME_TIMESTAMP_RE = /\b\d{8}-\d{6}\b/;
 
 function createWindow(): void {
@@ -40,8 +39,8 @@ function createWindow(): void {
   const window = new BrowserWindow({
     width: 1160,
     height: 780,
-    minWidth: MIN_CONTENT_WIDTH,
-    minHeight: MIN_CONTENT_HEIGHT,
+    minWidth: MIN_CONTENT_SIZE.width,
+    minHeight: MIN_CONTENT_SIZE.height,
     useContentSize: true,
     title: "Hawi",
     backgroundColor: "#f7f8f8",
@@ -54,6 +53,8 @@ function createWindow(): void {
   mainWindow = window;
 
   installNavigationGuards(window);
+  applyMinimumContentSize(window);
+  window.webContents.on("did-finish-load", () => applyMinimumContentSize(window));
 
   window.on("closed", () => {
     mainWindow = null;
@@ -148,6 +149,17 @@ function registerIpc(): void {
   ipcMain.handle("gui:refresh-provider-models", async (_event, provider: string): Promise<GuiMetadata> => {
     return refreshProviderModels(provider);
   });
+}
+
+function applyMinimumContentSize(window: BrowserWindow, contentSize?: Partial<LayoutSize> | null): void {
+  const minContentSize = normalizeMinimumContentSize(contentSize);
+  const bounds = window.getBounds();
+  const contentBounds = window.getContentBounds();
+  const minWindowSize = minimumWindowSizeForContent(minContentSize, {
+    width: bounds.width - contentBounds.width,
+    height: bounds.height - contentBounds.height,
+  });
+  window.setMinimumSize(minWindowSize.width, minWindowSize.height);
 }
 
 async function refreshProviderModels(provider: string): Promise<GuiMetadata> {

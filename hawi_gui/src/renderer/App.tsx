@@ -1,4 +1,4 @@
-import { forwardRef, memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -343,8 +343,10 @@ export default function App() {
   const pendingSystemPromptConfigRef = useRef<PersistedConfig | null>(null);
   const initializeSessionStateRef = useRef<() => Promise<void>>(async () => undefined);
   const applyingSystemPromptRef = useRef(false);
+  const sessionBusyRef = useRef(false);
   const followTailRef = useRef(true);
   const selectingChatRef = useRef(false);
+  const forkSessionRef = useRef<(sessionId?: string, messageIndex?: number) => Promise<void>>(async () => undefined);
   const userScrollIntentRef = useRef(false);
   const isAutoScrollingRef = useRef(false);
   const autoScrollFrameRef = useRef<number | null>(null);
@@ -364,6 +366,15 @@ export default function App() {
   const fallbackState = useMemo(createInitialState, []);
   const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
   const hasArtifacts = state.artifactOrder.some((key) => Boolean(state.artifacts[key]));
+  const showDebug = config?.showDebug ?? true;
+  const visibleChatNodes = useMemo(
+    () => state.nodes.filter((node) => showDebug || node.kind !== "debug"),
+    [showDebug, state.nodes]
+  );
+  const chatTailKey = useMemo(
+    () => transcriptTailKey(visibleChatNodes, state.processing),
+    [state.processing, visibleChatNodes]
+  );
 
   useEffect(() => {
     window.hawi.getMetadata().then((meta) => {
@@ -400,7 +411,13 @@ export default function App() {
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
     resetInputHistoryNavigation();
+    // Input-history navigation is reset only when the active session changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionId]);
+
+  useEffect(() => {
+    sessionBusyRef.current = sessionBusy;
+  }, [sessionBusy]);
 
   useEffect(() => {
     if (!coreRunning) return;
@@ -496,7 +513,7 @@ export default function App() {
 
   useBrowserLayoutEffect(() => {
     keepChatTailVisible();
-  }, [state.nodes, state.processing?.id]);
+  }, [chatTailKey]);
 
   useEffect(() => {
     if (artifactPanelSessionRef.current !== currentSessionId) {
@@ -518,7 +535,10 @@ export default function App() {
   useEffect(() => {
     function syncSelection() {
       selectingChatRef.current = hasChatSelection();
-      updateFollowTail();
+      if (selectingChatRef.current) {
+        followTailRef.current = false;
+        cancelPendingAutoScroll();
+      }
     }
     window.addEventListener("mouseup", syncSelection);
     document.addEventListener("selectionchange", syncSelection);
@@ -538,7 +558,6 @@ export default function App() {
     }
   }, []);
 
-  const showDebug = config?.showDebug ?? true;
   const selectedModel = config?.modelName || "-";
   const systemPromptLocked = state.nodes.some(isConversationNode);
 
@@ -604,6 +623,13 @@ export default function App() {
     userScrollIntentRef.current = true;
     isAutoScrollingRef.current = false;
     cancelPendingAutoScroll();
+  }
+
+  function pauseChatFollowForSelection(event: ReactMouseEvent<HTMLElement>) {
+    if (event.button !== 0 || isInteractiveTranscriptTarget(event.target)) return;
+    selectingChatRef.current = true;
+    followTailRef.current = false;
+    markChatUserScrollIntent();
   }
 
   function handleChatWheel(event: WheelEvent<HTMLElement>) {
@@ -861,12 +887,14 @@ export default function App() {
       setSessionBusy(false);
     }
   }
+  forkSessionRef.current = forkSession;
 
-  function forkMessage(node: ChatNode) {
-    if (sessionBusy || !currentSessionId) return;
+  const forkMessage = useCallback((node: ChatNode) => {
+    const sessionId = currentSessionIdRef.current;
+    if (sessionBusyRef.current || !sessionId) return;
     if (typeof node.contextMessageIndex !== "number") return;
-    void forkSession(currentSessionId, node.contextMessageIndex);
-  }
+    void forkSessionRef.current(sessionId, node.contextMessageIndex);
+  }, []);
 
   async function saveGlobalAndSet(nextConfig: PersistedConfig) {
     const saved = await window.hawi.saveConfig(nextConfig);
@@ -1383,24 +1411,16 @@ export default function App() {
       </section>
 
       <section className={`workspace-row ${hasArtifacts ? "has-artifacts" : ""}`}>
-        <main
-          className="chat-panel"
+        <ChatTranscript
           ref={chatRef}
+          nodes={visibleChatNodes}
+          processing={state.processing}
+          onForkMessage={forkMessage}
           onScroll={updateFollowTail}
           onWheel={handleChatWheel}
           onTouchStart={markChatUserScrollIntent}
-          onMouseDown={() => {
-            selectingChatRef.current = true;
-            markChatUserScrollIntent();
-          }}
-        >
-          {state.nodes
-            .filter((node) => showDebug || node.kind !== "debug")
-            .map((node) => (
-              <ChatBubble node={node} key={node.id} onForkMessage={forkMessage} />
-            ))}
-          {state.processing && <ProcessingLine processing={state.processing} />}
-        </main>
+          onMouseDown={pauseChatFollowForSelection}
+        />
         {hasArtifacts && (
           <PluginPreviewPanel
             artifacts={state.artifacts}
@@ -2162,6 +2182,53 @@ function QueueTaskItem({
   );
 }
 
+interface ChatTranscriptProps {
+  nodes: ChatNode[];
+  processing?: ProcessingState;
+  onForkMessage: (node: ChatNode) => void;
+  onScroll: () => void;
+  onWheel: (event: WheelEvent<HTMLElement>) => void;
+  onTouchStart: () => void;
+  onMouseDown: (event: ReactMouseEvent<HTMLElement>) => void;
+}
+
+const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(function ChatTranscript({
+  nodes,
+  processing,
+  onForkMessage,
+  onScroll,
+  onWheel,
+  onTouchStart,
+  onMouseDown,
+}, ref) {
+  return (
+    <main
+      className="chat-panel"
+      ref={ref}
+      onScroll={onScroll}
+      onWheel={onWheel}
+      onTouchStart={onTouchStart}
+      onMouseDown={onMouseDown}
+    >
+      {nodes.map((node) => (
+        <ChatBubble node={node} key={node.id} onForkMessage={onForkMessage} />
+      ))}
+      {processing && <ProcessingLine processing={processing} />}
+    </main>
+  );
+}));
+
+function guardedToggle(toggle: () => void) {
+  if (hasActiveTextSelection()) return;
+  toggle();
+}
+
+function guardNativeToggleDuringSelection(event: ReactMouseEvent<HTMLElement>) {
+  if (!hasActiveTextSelection()) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 const ChatBubble = memo(function ChatBubble({
   node,
   onForkMessage
@@ -2234,18 +2301,18 @@ const FrameworkNodeBubble = memo(function FrameworkNodeBubble({ node }: { node: 
 });
 
 const SystemPromptBubble = memo(function SystemPromptBubble({ node }: { node: ChatNode }) {
-  if (!node.framework) return null;
   const [collapsed, setCollapsed] = useState(true);
+  const framework = node.framework;
   const childInjections = node.injections ?? [];
   const html = renderMarkdown(node.content);
   const toggleCollapsed = () => setCollapsed((value) => !value);
-  const expandCollapsed = () => setCollapsed(false);
+  if (!framework) return null;
 
   return (
     <article className={`bubble system-prompt message ${collapsed ? "message-collapsed" : ""}`}>
-      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+      <div className="bubble-head collapsible-head" onClick={() => guardedToggle(toggleCollapsed)}>
         <span className="bubble-title">
-          {node.framework.label}
+          {framework.label}
         </span>
         <span className="message-actions">
           <CopyButton text={node.content} title="复制 System prompt" />
@@ -2264,15 +2331,7 @@ const SystemPromptBubble = memo(function SystemPromptBubble({ node }: { node: Ch
       </div>
       <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
         <MarkdownView html={html} />
-        {collapsed && (
-          <button
-            type="button"
-            className="message-collapse-mask"
-            title="点击展开 System prompt"
-            aria-label="展开 System prompt"
-            onClick={expandCollapsed}
-          />
-        )}
+        {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
       </div>
       {childInjections.length > 0 && (
         <div className="message-injections after">
@@ -2301,7 +2360,7 @@ const FrameworkBubble = memo(function FrameworkBubble({
 
   return (
     <article className={`bubble framework ${embedded ? "embedded" : ""} ${collapsed ? "collapsed" : "expanded"}`}>
-      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+      <div className="bubble-head collapsible-head" onClick={() => guardedToggle(toggleCollapsed)}>
         <span className="bubble-title framework-title">
           <Plug size={15} />
           <span className="framework-label">{item.label}</span>
@@ -2343,14 +2402,13 @@ const MessageBubble = memo(function MessageBubble({
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
-  const expandCollapsed = () => setCollapsed(false);
   const canFork = node.canFork === true && typeof node.contextMessageIndex === "number";
   const beforeInjections = (node.injections ?? []).filter((item) => item.mergePosition === "before");
   const afterInjections = (node.injections ?? []).filter((item) => item.mergePosition !== "before");
 
   return (
     <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""}`}>
-      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+      <div className="bubble-head collapsible-head" onClick={() => guardedToggle(toggleCollapsed)}>
         <span className="bubble-title">
           {label}
           <BlockStreamStatus
@@ -2398,15 +2456,7 @@ const MessageBubble = memo(function MessageBubble({
       )}
       <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
         <MarkdownView html={html} />
-        {collapsed && (
-          <button
-            type="button"
-            className="message-collapse-mask"
-            title="点击展开消息"
-            aria-label={`展开${label}`}
-            onClick={expandCollapsed}
-          />
-        )}
+        {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
       </div>
       {afterInjections.length > 0 && (
         <div className="message-injections after">
@@ -2462,7 +2512,6 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
   const html = renderMarkdown(node.content);
   const receiving = node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
-  const expandCollapsed = () => setCollapsed(false);
 
   useEffect(() => {
     if (node.complete === true && !autoCollapsedRef.current) {
@@ -2473,7 +2522,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
 
   return (
     <article className={`bubble thinking ${collapsed ? "collapsed" : ""}`}>
-      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+      <div className="bubble-head collapsible-head" onClick={() => guardedToggle(toggleCollapsed)}>
         <span className="bubble-title">
           <Brain size={15} /> Thinking
           <BlockStreamStatus
@@ -2505,17 +2554,6 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
       <div
         className={`thinking-summary ${collapsed ? "is-visible" : ""}`}
         aria-hidden={!collapsed}
-        role={collapsed ? "button" : undefined}
-        tabIndex={collapsed ? 0 : undefined}
-        title={collapsed ? "点击展开思考内容" : undefined}
-        onClick={() => {
-          if (collapsed) expandCollapsed();
-        }}
-        onKeyDown={(event) => {
-          if (!collapsed || (event.key !== "Enter" && event.key !== " ")) return;
-          event.preventDefault();
-          expandCollapsed();
-        }}
       >
         {thinkingExcerpt(node.content)}
       </div>
@@ -2533,7 +2571,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
 
   return (
     <article className={`bubble tool ${tool.status} ${collapsed ? "collapsed" : ""}`}>
-      <div className="bubble-head collapsible-head" onClick={toggleCollapsed}>
+      <div className="bubble-head collapsible-head" onClick={() => guardedToggle(toggleCollapsed)}>
         <span className="tool-title">
           <span className="tool-name">
             <Wrench size={15} /> {presentation.label}
@@ -2569,7 +2607,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
         <div className="collapsible-body-inner">
           {tool.progress && <ToolProgress progress={tool.progress} compact={false} />}
           <details open>
-            <summary>
+            <summary onClick={guardNativeToggleDuringSelection}>
               Arguments
               {tool.argsState !== "complete" && <span className="detail-state">receiving</span>}
             </summary>
@@ -2577,7 +2615,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           </details>
           {(tool.resultPreview || tool.resultData !== undefined || tool.status === "fail") && (
             <details open>
-              <summary>Result {tool.durationMs ? `· ${tool.durationMs.toFixed(0)}ms` : ""}</summary>
+              <summary onClick={guardNativeToggleDuringSelection}>Result {tool.durationMs ? `· ${tool.durationMs.toFixed(0)}ms` : ""}</summary>
               {renderToolResult(tool)}
             </details>
           )}
@@ -2894,6 +2932,7 @@ function LiveSpinner({ title }: { title: string }) {
 
 function MarkdownView({ html, className = "" }: { html: string; className?: string }) {
   async function handleClick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (hasActiveTextSelection()) return;
     const target = event.target instanceof Element
       ? event.target.closest<HTMLButtonElement>(".code-copy-button")
       : null;
@@ -2972,6 +3011,7 @@ function CopyButton({ text, title, className = "" }: { text: string; title: stri
 
   async function handleCopy(event: ReactMouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
+    if (hasActiveTextSelection()) return;
     try {
       await copyTextToClipboard(text);
       setState("copied");
@@ -4019,6 +4059,38 @@ function formatQueueTimestamp(value?: number): string | null {
   });
 }
 
+function transcriptTailKey(nodes: ChatNode[], processing?: ProcessingState): string {
+  const last = nodes[nodes.length - 1];
+  return [
+    last?.id ?? "empty",
+    last?.content.length ?? 0,
+    last?.complete === false ? "open" : "done",
+    last?.tool?.argsRaw.length ?? 0,
+    last?.tool?.resultPreview.length ?? 0,
+    processing?.id ?? "idle",
+    processing?.content.length ?? 0,
+  ].join(":");
+}
+
+function hasActiveTextSelection(): boolean {
+  if (typeof window === "undefined") return false;
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+}
+
+function isInteractiveTranscriptTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest([
+    "button",
+    "input",
+    "textarea",
+    "select",
+    "a",
+    "summary",
+    ".bubble-head",
+    "[role='button']",
+  ].join(",")));
+}
+
 export function isNearChatBottom(element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight < AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
@@ -4040,8 +4112,10 @@ export function resolveFollowTailOnScroll(
   selectingChat: boolean,
   isAutoScrolling: boolean,
 ): boolean {
-  if (isAutoScrolling || nearBottom) return true;
-  if (userScrollIntent || selectingChat) return false;
+  if (isAutoScrolling) return true;
+  if (selectingChat) return false;
+  if (nearBottom) return true;
+  if (userScrollIntent) return false;
   return currentFollowTail;
 }
 
@@ -4174,6 +4248,11 @@ export async function copyTextToClipboard(value: string): Promise<void> {
     throw new Error("Clipboard is unavailable");
   }
 
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const selection = typeof window === "undefined" ? null : window.getSelection();
+  const ranges = selection
+    ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange())
+    : [];
   const textarea = document.createElement("textarea");
   textarea.value = value;
   textarea.setAttribute("readonly", "");
@@ -4185,6 +4264,13 @@ export async function copyTextToClipboard(value: string): Promise<void> {
   textarea.select();
   const copied = document.execCommand("copy");
   textarea.remove();
+  if (selection && ranges.length > 0) {
+    selection.removeAllRanges();
+    for (const range of ranges) {
+      selection.addRange(range);
+    }
+  }
+  activeElement?.focus({ preventScroll: true });
   if (!copied) {
     throw new Error("Clipboard copy failed");
   }

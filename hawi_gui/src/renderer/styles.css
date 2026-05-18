@@ -1575,6 +1575,7 @@ button.context-status:disabled {
   border-radius: 5px;
   background: transparent;
   color: #59666c;
+  user-select: none;
 }
 
 .thinking-toggle:hover {
@@ -1649,6 +1650,7 @@ button.context-status:disabled {
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
+  user-select: none;
 }
 
 .code-copy-button[data-copy-state="copied"] {
@@ -1721,7 +1723,7 @@ button.context-status:disabled {
   background:
     linear-gradient(to bottom, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.44)),
     linear-gradient(to bottom, rgba(255, 255, 255, 0), #ffffff 88%);
-  cursor: pointer;
+  pointer-events: none;
 }
 
 .bubble.user .message-collapse-mask {
@@ -1756,7 +1758,6 @@ button.context-status:disabled {
   visibility: visible;
   opacity: 1;
   transform: translateY(0);
-  cursor: pointer;
   transition:
     max-height 190ms ease,
     padding 190ms ease,
