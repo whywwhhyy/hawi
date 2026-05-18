@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from hawi.tool.types import ToolResult
 
@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     from hawi.tool.types import AgentTool
     from hawi.models.model import Model
     from hawi.models.message import ContentPart
+    from hawi.agent.context import AgentContext
+    from hawi.review import RuntimeReviewBroker
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,15 @@ class HookContext:
 
     tool: AgentTool | None = None
     """Tool object (tool hooks only). Carries metadata beyond just the name."""
+
+    context: AgentContext | None = None
+    """Agent conversation context available to runtime hooks."""
+
+    review: RuntimeReviewBroker | None = None
+    """Runtime review broker for blocking human-in-the-loop decisions."""
+
+    metadata: dict[str, Any] | None = None
+    """Optional framework metadata for hook implementations."""
 
     duration_ms: float | None = None
     """Execution duration in milliseconds (after-* hooks only)."""

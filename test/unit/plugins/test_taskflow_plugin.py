@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
+from hawi.agent.context import AgentContext
 from hawi.tool import ToolResult
 from hawi_plugins.taskflow_plugin import TaskflowPlugin
+from hawi_plugins.taskflow_plugin.plugin import TASKFLOW_SUBMIT_CACHE_POINT_SOURCE
 
 
 def _create_two_step_workflow(plugin: TaskflowPlugin) -> ToolResult:
@@ -199,6 +202,229 @@ def test_taskflow_rejects_mutation_of_immutable_workflow() -> None:
 
     assert added.success is False
     assert "not mutable" in added.error
+
+
+def test_taskflow_submit_creates_single_cache_point_marker() -> None:
+    plugin = TaskflowPlugin(fold_completed_steps=True)
+    created = plugin.create_taskflow(
+        title="Fold Flow",
+        mode="plan",
+        steps=[{"id": "a", "title": "A"}, {"id": "b", "title": "B"}],
+    )
+    assert created.success is True
+    context = AgentContext(
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-first",
+                        "name": "submit_taskflow_step",
+                        "arguments": {"step_id": "a"},
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "tool",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-first",
+                        "content": [{"type": "text", "text": "A completed."}],
+                        "is_error": False,
+                    },
+                    {
+                        "type": "cache_point",
+                        "cache_point": {"type": "ephemeral"},
+                        "metadata": {"source": TASKFLOW_SUBMIT_CACHE_POINT_SOURCE},
+                    },
+                    {
+                        "type": "cache_point",
+                        "cache_point": {"type": "ephemeral"},
+                        "metadata": {"source": "other"},
+                    },
+                ],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Details for B."}],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-second",
+                        "name": "submit_taskflow_step",
+                        "arguments": {"step_id": "b"},
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+        ]
+    )
+    plugin._active_submit_tool_call_id = "call-second"
+
+    result = plugin.submit_taskflow_step(
+        step_id="b",
+        output="B done",
+        context_policy="fold",
+        summary="B complete.",
+        handoff_notes="Remember B details.",
+        ctx=SimpleNamespace(context=context),
+    )
+
+    assert result.success is True
+    assert result.cache_point is True
+    assert result.cache_point_source == TASKFLOW_SUBMIT_CACHE_POINT_SOURCE
+    assert [
+        part.get("metadata", {}).get("source")
+        for part in context.messages[1]["content"]
+        if isinstance(part, dict) and part.get("type") == "cache_point"
+    ] == ["other"]
+
+    context.add_tool_result(
+        "call-second",
+        str(result.output),
+        cache_point=result.cache_point,
+        cache_point_source=result.cache_point_source,
+    )
+    marker = context.messages[-1]["content"][-1]
+    assert marker["type"] == "cache_point"
+    assert marker["metadata"]["source"] == TASKFLOW_SUBMIT_CACHE_POINT_SOURCE
+
+
+def test_taskflow_skipped_fold_does_not_create_cache_point() -> None:
+    plugin = TaskflowPlugin(fold_completed_steps=True)
+    created = plugin.create_taskflow(
+        title="Fold Flow",
+        mode="plan",
+        steps=[{"id": "a", "title": "A"}],
+    )
+    assert created.success is True
+    context = AgentContext(
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-a",
+                        "name": "submit_taskflow_step",
+                        "arguments": {"step_id": "a"},
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            }
+        ]
+    )
+    plugin._active_submit_tool_call_id = "call-a"
+
+    result = plugin.submit_taskflow_step(
+        step_id="a",
+        output="A done",
+        context_policy="fold",
+        handoff_notes="Missing summary should skip.",
+        ctx=SimpleNamespace(context=context),
+    )
+
+    assert result.success is True
+    assert result.cache_point is False
+    assert result.output["folded_context"]["skipped"] is True
+    assert plugin._fold_records == []
+
+
+def test_taskflow_consecutive_folded_submissions_reference_previous_fold() -> None:
+    plugin = TaskflowPlugin(fold_completed_steps=True)
+    created = plugin.create_taskflow(
+        title="Fold Flow",
+        mode="plan",
+        steps=[{"id": "a", "title": "A"}, {"id": "b", "title": "B"}],
+    )
+    assert created.success is True
+    context = AgentContext(
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Shared details."}],
+                "name": None,
+                "metadata": None,
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "id": "call-a",
+                        "name": "submit_taskflow_step",
+                        "arguments": {"step_id": "a"},
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            },
+        ]
+    )
+    plugin._active_submit_tool_call_id = "call-a"
+    first = plugin.submit_taskflow_step(
+        step_id="a",
+        output="A done",
+        context_policy="fold",
+        summary="A complete.",
+        handoff_notes="Shared details are in this fold.",
+        ctx=SimpleNamespace(context=context),
+    )
+    assert first.success is True
+    assert len(plugin._fold_records) == 1
+
+    context.add_tool_result(
+        "call-a",
+        str(first.output),
+        cache_point=first.cache_point,
+        cache_point_source=first.cache_point_source,
+    )
+    context.messages.append(
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_call",
+                    "id": "call-b",
+                    "name": "submit_taskflow_step",
+                    "arguments": {"step_id": "b"},
+                }
+            ],
+            "name": None,
+            "metadata": None,
+        }
+    )
+    plugin._active_submit_tool_call_id = "call-b"
+
+    second = plugin.submit_taskflow_step(
+        step_id="b",
+        output="B done",
+        context_policy="fold",
+        summary="B complete.",
+        handoff_notes="Use shared details.",
+        ctx=SimpleNamespace(context=context),
+    )
+
+    assert second.success is True
+    assert second.cache_point is False
+    assert len(plugin._fold_records) == 1
+    assert plugin._fold_records[0].completed_step_ids == ["a", "b"]
+    folded_context = second.output["folded_context"]
+    assert folded_context["skipped"] is True
+    assert folded_context["referenced_fold_id"] == "TF1"
 
 
 @pytest.mark.asyncio

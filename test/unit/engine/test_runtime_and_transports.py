@@ -15,7 +15,9 @@ from hawi_engine.runtime import CoreRuntime, load_model_configs, parse_extra_too
 from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
 from hawi.agent import HawiAgent, AgentRunner
+from hawi.agent.context import AgentContext
 from hawi.models import model_registry
+from hawi.plugin import HookContext
 from hawi.session import SessionContextBranchResult, SessionManager
 from hawi.tool import AgentTool, ToolResult
 
@@ -1031,6 +1033,87 @@ async def test_runtime_plugin_action_approves_taskflow_review_and_resumes() -> N
     assert runner.enqueued
     assert runner.enqueued[-1][1] == "high_prio"
     assert "Entering next step" in runner.enqueued[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_runtime_review_action_resolves_blocking_taskflow_review_without_resume_enqueue() -> None:
+    from hawi_plugins.taskflow_plugin import TaskflowPlugin
+
+    runtime = CoreRuntime(model_name="test-model")
+    runner = DummyAgentRunner()
+    runtime._runner = runner  # type: ignore[assignment]
+    plugin = TaskflowPlugin()
+    plugin.bind_plugin_identity(plugin_id="hawi/taskflow", plugin_name="Taskflow")
+    runtime._plugins = [plugin]
+    client = FakeClient(authenticated=True)
+
+    created = plugin.create_taskflow(
+        title="Blocking Human Flow",
+        mode="workflow",
+        execution_policy="gated_graph",
+        mutable=False,
+        start_step_id="review",
+        steps=[
+            {"id": "review", "title": "Review", "review": {"type": "human"}},
+            {"id": "next", "title": "Next"},
+        ],
+        edges=[{"from": "review", "to": "next", "type": "transitions"}],
+    )
+    assert created.success is True
+    assert plugin.start_taskflow().success is True
+
+    runtime_tool_ctx = argparse.Namespace(
+        context=AgentContext(),
+        review=runtime._review_broker,
+    )
+    submitted = plugin.submit_taskflow_step(output="ready", ctx=runtime_tool_ctx)
+    assert submitted.success is True
+    assert submitted.output["review_pending"] is True
+    assert not plugin._pending_human_reviews
+
+    hook_task = asyncio.create_task(
+        plugin.review_submitted_step(
+            agent=None,
+            tool_name="submit_taskflow_step",
+            arguments={},
+            result=submitted,
+            ctx=HookContext(
+                run_id="run-review",
+                iteration=1,
+                tool_call_id="tc-submit",
+                context=runtime_tool_ctx.context,
+                review=runtime._review_broker,
+            ),
+        )
+    )
+    for _ in range(20):
+        if plugin._pending_human_reviews:
+            break
+        await asyncio.sleep(0.01)
+    assert plugin._pending_human_reviews
+    review_id = next(iter(plugin._pending_human_reviews))
+
+    await runtime.handle_command(
+        client,
+        argparse.Namespace(
+            type="plugin_action",
+            id="cmd-approve",
+            payload={
+                "plugin_id": "hawi/taskflow",
+                "action": "approve_taskflow_review",
+                "arguments": {"review_id": review_id, "feedback": "Approved"},
+            },
+        ),
+    )
+
+    hook_result = await asyncio.wait_for(hook_task, timeout=1)
+    assert hook_result is not None
+    assert "Entering next step" in str(hook_result.message)
+    assert client.sent[-1]["type"] == "ack"
+    assert client.sent[-1]["payload"]["resume_message_id"] is None
+    assert runner.enqueued == []
+    assert submitted.output["approved"] is True
+    assert plugin.get_taskflow_status().output["run"]["current_step_id"] == "next"
 
 
 def test_runtime_expands_selected_plugin_dependencies() -> None:

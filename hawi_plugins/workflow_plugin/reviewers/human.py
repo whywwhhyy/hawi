@@ -6,6 +6,8 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING
 
+from hawi.review import RuntimeReviewDecision
+
 from hawi_plugins.workflow_plugin.models import (
     NodeExecution,
     ReviewDecision,
@@ -98,12 +100,40 @@ class HumanReviewer(Reviewer):
             },
         )
 
-        # Create a future and wait for the human to resolve it
-        future: asyncio.Future[ReviewDecision] = asyncio.get_event_loop().create_future()
+        broker = getattr(agent, "review_broker", None)
+        if broker is not None:
+            future = broker.create(
+                review_id,
+                plugin_id=self._plugin.plugin_id,
+                review_type="human",
+                payload=review_data,
+            ).future
+        else:
+            future = asyncio.get_event_loop().create_future()
         self._plugin._pending_human_reviews[review_id] = future
 
         try:
             decision = await future
-            return decision
+            return self._decision_from_runtime(decision)
         finally:
             self._plugin._pending_human_reviews.pop(review_id, None)
+            if broker is not None:
+                broker.discard(review_id)
+
+    @staticmethod
+    def _decision_from_runtime(raw: object) -> ReviewDecision:
+        if isinstance(raw, ReviewDecision):
+            return raw
+        if isinstance(raw, RuntimeReviewDecision):
+            return ReviewDecision(
+                approved=raw.approved,
+                feedback=raw.feedback,
+                modified_output=raw.modified_output,
+                next_node_id=raw.next_step_id,
+            )
+        return ReviewDecision(
+            approved=bool(getattr(raw, "approved", False)),
+            feedback=str(getattr(raw, "feedback", "") or ""),
+            modified_output=getattr(raw, "modified_output", None),
+            next_node_id=getattr(raw, "next_step_id", None),
+        )

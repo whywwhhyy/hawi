@@ -195,6 +195,7 @@ class HawiAgent:
         self._last_hook_result_injector: dict[str, str | None] | None = None
         self._compactor = AgentCompactor(self)
         self._runtime = AgentRuntime(self)
+        self.review_broker: Any = None
 
         # Convert system_prompt to list[ContentPart] if needed
         system_prompt_parts: list[ContentPart] | None = None
@@ -439,6 +440,7 @@ class HawiAgent:
         )
         new_agent._plugin_manager = self._plugin_manager.clone()
         new_agent._plugin_manager.bind_event_bus(new_agent._event_bus)
+        new_agent.review_broker = self.review_broker
         new_agent.set_context(self._context.copy())
         new_agent.suppress_system_prompt_hooks(self._suppress_system_prompt_hooks)
         return new_agent

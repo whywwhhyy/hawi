@@ -16,6 +16,7 @@ from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.events import Event
 from hawi.models import model_registry
+from hawi.review import RuntimeReviewBroker, RuntimeReviewDecision
 from hawi.session import SessionLockedError, SessionManager
 from hawi.tool import ToolParameterInjection, ToolResult
 from hawi.utils.debug import debug_assert
@@ -57,6 +58,7 @@ SERVER_CAPS: frozenset[str] = frozenset({
     "context_branch_v1",
     "manual_context_compact_v1",
     "plugin_action_v1",
+    "runtime_review_v1",
 })
 """Capabilities the server advertises during hello negotiation. Plans 3-5 grow this set."""
 
@@ -202,6 +204,7 @@ class CoreRuntime:
         self._broadcast_task: asyncio.Task | None = None
         self._plugins: list[Any] = []
         self._session_manager: SessionManager | None = None
+        self._review_broker = RuntimeReviewBroker()
 
         self._clients: set[RuntimeClient] = set()
         self._mapper = SemanticEventMapper()
@@ -914,6 +917,36 @@ class CoreRuntime:
         if not isinstance(arguments, dict):
             raise ValueError("'plugin_action.payload.arguments' must be an object")
 
+        review_result = self._resolve_runtime_review_action(
+            plugin_id=plugin_id.strip(),
+            action=action,
+            arguments=arguments,
+        )
+        if review_result is not None:
+            if review_result.get("success") is False:
+                await client.send(
+                    make_error(
+                        str(review_result.get("error") or "Plugin action failed."),
+                        request_id=command.id,
+                        code="plugin_action_failed",
+                        details=review_result,
+                    )
+                )
+                return
+            await client.send(
+                make_ack(
+                    "plugin_action",
+                    request_id=command.id,
+                    payload={
+                        "plugin_id": plugin_id,
+                        "action": action,
+                        "result": review_result,
+                        "resume_message_id": None,
+                    },
+                )
+            )
+            return
+
         plugin = self._find_plugin(plugin_id.strip())
         if plugin is None:
             await client.send(
@@ -968,6 +1001,71 @@ class CoreRuntime:
                 },
             )
         )
+
+    def _resolve_runtime_review_action(
+        self,
+        *,
+        plugin_id: str,
+        action: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action not in PLUGIN_ACTION_METHODS:
+            return None
+        review_id = arguments.get("review_id")
+        if not isinstance(review_id, str) or not review_id.strip():
+            return None
+        request = self._review_broker.get(review_id.strip())
+        if request is None:
+            return None
+        if request.plugin_id and plugin_id and request.plugin_id != plugin_id:
+            return {
+                "success": False,
+                "output": None,
+                "error": (
+                    f"Review {review_id!r} belongs to plugin "
+                    f"{request.plugin_id!r}, not {plugin_id!r}."
+                ),
+            }
+
+        approved = action.startswith("approve_")
+        feedback = str(arguments.get("feedback") or "")
+        if not approved and not feedback.strip():
+            return {
+                "success": False,
+                "output": None,
+                "error": "feedback is required when rejecting.",
+            }
+        decision = RuntimeReviewDecision(
+            approved=approved,
+            feedback=feedback,
+            modified_output=(
+                str(arguments["modified_output"])
+                if arguments.get("modified_output") is not None
+                else None
+            ),
+            next_step_id=(
+                str(arguments["next_step_id"])
+                if arguments.get("next_step_id") is not None
+                else None
+            ),
+            metadata={
+                key: to_json_safe(value)
+                for key, value in arguments.items()
+                if key
+                not in {"review_id", "feedback", "modified_output", "next_step_id"}
+            },
+        )
+        if not self._review_broker.resolve(review_id.strip(), decision):
+            return None
+        return {
+            "success": True,
+            "output": {
+                "review_id": review_id,
+                "approved": approved,
+                "rejected": not approved,
+            },
+            "error": "",
+        }
 
     def _find_plugin(self, plugin_id: str) -> Any | None:
         for plugin in self._plugins:
@@ -1490,6 +1588,7 @@ class CoreRuntime:
             streaming=True,
             auto_compact=auto_compact,
         )
+        agent.review_broker = self._review_broker
         self._apply_extra_tool_parameters(agent)
         if context_to_restore is not None:
             agent.set_context(context_to_restore.copy())

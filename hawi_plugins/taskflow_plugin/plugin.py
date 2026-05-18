@@ -17,6 +17,7 @@ from hawi.plugin import (
     before_tool_calling,
     tool,
 )
+from hawi.review import RuntimeReviewDecision
 from hawi.tool import ToolResult
 
 from .models import (
@@ -61,7 +62,7 @@ class TaskflowPlugin(HawiPlugin):
         self._fold_records: list[TaskflowFoldRecord] = []
         self._next_fold_number = 1
         self._active_submit_tool_call_id: str | None = None
-        self._pending_human_reviews: dict[str, dict[str, Any]] = {}
+        self._pending_human_reviews: dict[str, Any] = {}
 
     @classmethod
     def gui_config_schema(cls) -> dict[str, Any]:
@@ -206,9 +207,9 @@ class TaskflowPlugin(HawiPlugin):
             step = self._step(step_id)
             if step is None:
                 return None
-            if step.review.type == "human":
+            decision = await self._review_step(agent, step, ctx)
+            if decision is None:
                 return None
-            decision = await self._review_step(agent, step)
             step.review_records.append(
                 TaskflowReviewRecord(
                     step_id=step.id,
@@ -221,8 +222,38 @@ class TaskflowPlugin(HawiPlugin):
             if decision.approved:
                 if decision.modified_output is not None:
                     step.output = decision.modified_output
-                return self._approve_reviewed_step(step, decision, ctx)
-            return self._reject_reviewed_step(step, decision)
+                hook_result, folded_context = self._approve_reviewed_step(
+                    step,
+                    decision,
+                    ctx,
+                )
+                should_cache = self._should_mark_submit_cache_point(folded_context)
+                if should_cache:
+                    self._remove_previous_submit_cache_points(ctx)
+                    result.cache_point = True
+                    result.cache_point_source = TASKFLOW_SUBMIT_CACHE_POINT_SOURCE
+                result.output = {
+                    "review_pending": False,
+                    "approved": True,
+                    "step_id": step.id,
+                    "review_type": step.review.type,
+                    "folded_context": folded_context,
+                    "next_message": hook_result.message if hook_result else None,
+                    "state": self._state_dict(),
+                }
+                return hook_result
+            hook_result = self._reject_reviewed_step(step, decision)
+            result.output = {
+                "review_pending": False,
+                "approved": False,
+                "rejected": True,
+                "step_id": step.id,
+                "review_type": step.review.type,
+                "feedback": decision.feedback,
+                "next_message": hook_result.message,
+                "state": self._state_dict(),
+            }
+            return hook_result
         finally:
             if tool_name == "submit_taskflow_step":
                 self._active_submit_tool_call_id = None
@@ -610,7 +641,7 @@ class TaskflowPlugin(HawiPlugin):
             step.status = "reviewing"
             if self._active_run is not None:
                 self._active_run.status = "paused_awaiting_review"
-            if step.review.type == "human":
+            if step.review.type == "human" and not self._runtime_review_available(ctx):
                 self._request_human_review(step)
             self._sync_artifact()
             return ToolResult(
@@ -638,6 +669,9 @@ class TaskflowPlugin(HawiPlugin):
             summary=summary,
             handoff_notes=handoff_notes,
         )
+        should_cache = self._should_mark_submit_cache_point(folded_context)
+        if should_cache:
+            self._remove_previous_submit_cache_points(ctx)
         next_message = None
         if (
             len(completed) == 1
@@ -654,7 +688,7 @@ class TaskflowPlugin(HawiPlugin):
                 "next_message": next_message,
                 "state": self._state_dict(),
             },
-            cache_point=bool(folded_context and folded_context.get("enabled")),
+            cache_point=should_cache,
             cache_point_source=TASKFLOW_SUBMIT_CACHE_POINT_SOURCE,
         )
 
@@ -854,7 +888,7 @@ class TaskflowPlugin(HawiPlugin):
         feedback: str = "",
         modified_output: str | None = None,
     ) -> ToolResult:
-        review = self._pending_human_reviews.pop(review_id, None)
+        review = self._pending_human_reviews.get(review_id)
         if review is None:
             return ToolResult(
                 success=False,
@@ -863,6 +897,21 @@ class TaskflowPlugin(HawiPlugin):
                     f"Pending: {list(self._pending_human_reviews)}"
                 ),
             )
+        if hasattr(review, "set_result"):
+            if review.done():
+                return ToolResult(success=False, error=f"Review {review_id!r} already resolved.")
+            review.set_result(
+                RuntimeReviewDecision(
+                    approved=True,
+                    feedback=feedback,
+                    modified_output=modified_output,
+                )
+            )
+            return ToolResult(
+                success=True,
+                output={"review_id": review_id, "approved": True},
+            )
+        self._pending_human_reviews.pop(review_id, None)
         step = self._step(str(review.get("step_id") or ""))
         if step is None:
             return ToolResult(success=False, error=f"Review {review_id!r} step is missing.")
@@ -882,12 +931,17 @@ class TaskflowPlugin(HawiPlugin):
         )
         if decision.modified_output is not None:
             step.output = decision.modified_output
-        next_message = self._complete_reviewed_step(step, decision, ctx=None)
+        next_message, folded_context = self._complete_reviewed_step(
+            step,
+            decision,
+            ctx=None,
+        )
         return ToolResult(
             success=True,
             output={
                 "review_id": review_id,
                 "approved": True,
+                "folded_context": folded_context,
                 "next_message": next_message,
                 "state": self._state_dict(),
             },
@@ -896,7 +950,7 @@ class TaskflowPlugin(HawiPlugin):
     def reject_taskflow_review(self, review_id: str, feedback: str) -> ToolResult:
         if not feedback.strip():
             return ToolResult(success=False, error="feedback is required when rejecting.")
-        review = self._pending_human_reviews.pop(review_id, None)
+        review = self._pending_human_reviews.get(review_id)
         if review is None:
             return ToolResult(
                 success=False,
@@ -905,6 +959,15 @@ class TaskflowPlugin(HawiPlugin):
                     f"Pending: {list(self._pending_human_reviews)}"
                 ),
             )
+        if hasattr(review, "set_result"):
+            if review.done():
+                return ToolResult(success=False, error=f"Review {review_id!r} already resolved.")
+            review.set_result(RuntimeReviewDecision(approved=False, feedback=feedback))
+            return ToolResult(
+                success=True,
+                output={"review_id": review_id, "rejected": True},
+            )
+        self._pending_human_reviews.pop(review_id, None)
         step = self._step(str(review.get("step_id") or ""))
         if step is None:
             return ToolResult(success=False, error=f"Review {review_id!r} step is missing.")
@@ -1035,11 +1098,11 @@ class TaskflowPlugin(HawiPlugin):
         step: TaskflowStep,
         decision: TaskflowReviewDecision,
         ctx: Any,
-    ) -> HookResult | None:
-        message = self._complete_reviewed_step(step, decision, ctx=ctx)
+    ) -> tuple[HookResult | None, dict[str, Any] | None]:
+        message, folded_context = self._complete_reviewed_step(step, decision, ctx=ctx)
         if message:
-            return HookResult.reinvoke(message)
-        return None
+            return HookResult.reinvoke(message), folded_context
+        return None, folded_context
 
     def _complete_reviewed_step(
         self,
@@ -1047,13 +1110,13 @@ class TaskflowPlugin(HawiPlugin):
         decision: TaskflowReviewDecision,
         *,
         ctx: Any,
-    ) -> str | None:
+    ) -> tuple[str | None, dict[str, Any] | None]:
         completed = self._complete_steps(
             [step],
             output=step.output,
             reviewer_type=step.review.type,
         )
-        self._maybe_fold_for_submission(
+        folded_context = self._maybe_fold_for_submission(
             ctx,
             completed,
             context_policy=step.context_policy,
@@ -1062,7 +1125,7 @@ class TaskflowPlugin(HawiPlugin):
         )
         message = self._advance_after_step(step, next_step_id=decision.next_step_id)
         self._sync_artifact()
-        return message
+        return message, folded_context
 
     def _reject_reviewed_step(
         self,
@@ -1154,17 +1217,69 @@ class TaskflowPlugin(HawiPlugin):
             f"{next_step.instructions}"
         )
 
-    async def _review_step(self, agent: Any, step: TaskflowStep) -> TaskflowReviewDecision:
+    async def _review_step(
+        self,
+        agent: Any,
+        step: TaskflowStep,
+        ctx: Any,
+    ) -> TaskflowReviewDecision | None:
+        if step.review.type == "human":
+            return await self._human_review(step, ctx)
         if step.review.type == "sub_agent":
             return await self._sub_agent_review(agent, step)
         return TaskflowReviewDecision(approved=True)
 
-    def _request_human_review(self, step: TaskflowStep) -> str:
+    @staticmethod
+    def _runtime_review_available(ctx: Any) -> bool:
+        return getattr(ctx, "review", None) is not None
+
+    async def _human_review(
+        self,
+        step: TaskflowStep,
+        ctx: Any,
+    ) -> TaskflowReviewDecision | None:
+        broker = getattr(ctx, "review", None)
+        if broker is None:
+            return None
+        review_id = self._pending_human_review_id(step) or str(uuid.uuid4())[:8]
+        review_id = self._request_human_review(
+            step,
+            review_id=review_id,
+            broker_future=broker.create(
+                review_id,
+                plugin_id=self.plugin_id,
+                review_type="human",
+                payload={
+                    "step_id": step.id,
+                    "step_title": step.title,
+                    "output": step.output,
+                },
+            ).future,
+        )
+        try:
+            raw_decision = await broker.wait(review_id)
+        finally:
+            broker.discard(review_id)
+            self._pending_human_reviews.pop(review_id, None)
+        return self._taskflow_review_decision_from_runtime(raw_decision)
+
+    def _pending_human_review_id(self, step: TaskflowStep) -> str | None:
         for review_id, review in self._pending_human_reviews.items():
-            if review.get("step_id") == step.id:
+            if isinstance(review, dict) and review.get("step_id") == step.id:
                 return review_id
-        review_id = str(uuid.uuid4())[:8]
-        self._pending_human_reviews[review_id] = {
+        return None
+
+    def _request_human_review(
+        self,
+        step: TaskflowStep,
+        review_id: str | None = None,
+        broker_future: Any = None,
+    ) -> str:
+        existing_review_id = self._pending_human_review_id(step)
+        if existing_review_id is not None:
+            return existing_review_id
+        review_id = review_id or str(uuid.uuid4())[:8]
+        self._pending_human_reviews[review_id] = broker_future or {
             "review_id": review_id,
             "step_id": step.id,
             "created_at": time.time(),
@@ -1203,6 +1318,24 @@ class TaskflowPlugin(HawiPlugin):
             },
         )
         return review_id
+
+    @staticmethod
+    def _taskflow_review_decision_from_runtime(raw: Any) -> TaskflowReviewDecision:
+        if isinstance(raw, TaskflowReviewDecision):
+            return raw
+        if isinstance(raw, RuntimeReviewDecision):
+            return TaskflowReviewDecision(
+                approved=raw.approved,
+                feedback=raw.feedback,
+                modified_output=raw.modified_output,
+                next_step_id=raw.next_step_id,
+            )
+        return TaskflowReviewDecision(
+            approved=bool(getattr(raw, "approved", False)),
+            feedback=str(getattr(raw, "feedback", "") or ""),
+            modified_output=getattr(raw, "modified_output", None),
+            next_step_id=getattr(raw, "next_step_id", None),
+        )
 
     async def _sub_agent_review(self, agent: Any, step: TaskflowStep) -> TaskflowReviewDecision:
         sub = agent.clone()
@@ -1369,6 +1502,34 @@ class TaskflowPlugin(HawiPlugin):
             }
         start_index = self._fold_start_index(messages, current_index)
         folded_messages = deepcopy(messages[start_index:current_index])
+        if not folded_messages:
+            completed_step_ids = [step.id for step in completed]
+            if self._fold_records:
+                previous = self._fold_records[-1]
+                for step_id in completed_step_ids:
+                    if step_id not in previous.completed_step_ids:
+                        previous.completed_step_ids.append(step_id)
+                folded_context = previous.reference_dict()
+                folded_context["enabled"] = True
+                folded_context["skipped"] = True
+                folded_context["referenced_fold_id"] = previous.fold_id
+                folded_context["reason"] = (
+                    "No new messages appeared since the previous "
+                    "submit_taskflow_step fold. Refer to "
+                    f"`{previous.fold_id}` for the shared folded context."
+                )
+                return folded_context
+            return {
+                "enabled": True,
+                "skipped": True,
+                "reason": (
+                    "No messages were available to fold for this "
+                    "submit_taskflow_step call."
+                ),
+                "summary": summary_text,
+                "handoff_notes": handoff_text,
+                "completed_step_ids": completed_step_ids,
+            }
         if start_index < current_index:
             del messages[start_index:current_index]
         record = TaskflowFoldRecord(
@@ -1395,6 +1556,21 @@ class TaskflowPlugin(HawiPlugin):
         folded_context["enabled"] = True
         folded_context["skipped"] = False
         return folded_context
+
+    @staticmethod
+    def _should_mark_submit_cache_point(folded_context: dict[str, Any] | None) -> bool:
+        return bool(
+            folded_context
+            and folded_context.get("enabled")
+            and not folded_context.get("skipped")
+        )
+
+    @staticmethod
+    def _remove_previous_submit_cache_points(ctx: Any) -> None:
+        context = getattr(ctx, "context", None)
+        remover = getattr(context, "remove_cache_points", None)
+        if callable(remover):
+            remover(source=TASKFLOW_SUBMIT_CACHE_POINT_SOURCE)
 
     def _find_current_submit_message_index(self, messages: list[dict[str, Any]]) -> int | None:
         if self._active_submit_tool_call_id:

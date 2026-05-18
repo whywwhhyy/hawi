@@ -412,6 +412,8 @@ class ToolExecutor:
             iteration=iteration,
             tool_call_id=tool_call_id,
             tool=tool,
+            context=self._context,
+            review=getattr(self._agent, "review_broker", None),
         )
         hook_result = await self._invoke_before_tool_calling(
             tool_name,
@@ -518,6 +520,8 @@ class ToolExecutor:
                 iteration=iteration,
                 tool_call_id=tool_call_id,
                 tool=tool,
+                context=self._context,
+                review=getattr(self._agent, "review_broker", None),
                 duration_ms=duration_ms,
             ),
         )

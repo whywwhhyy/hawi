@@ -31,6 +31,7 @@ from hawi.tool.types import PendingToolCall
 
 if TYPE_CHECKING:
     from .agent import HawiAgent
+    from hawi.review import RuntimeReviewBroker
 
 
 CONTEXT_COMPACTION_PROMPT = (
@@ -184,6 +185,11 @@ class ToolCallContext:
     def agent(self) -> HawiAgent:
         """访问完整 agent（sub-agent 编排、动态工具注册等）。"""
         return self._agent
+
+    @property
+    def review(self) -> RuntimeReviewBroker | None:
+        """Runtime review broker, when the hosting engine provides one."""
+        return getattr(self._agent, "review_broker", None)
 
 
 @dataclass
