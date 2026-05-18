@@ -83,6 +83,7 @@ from .hook_dispatcher import HookDispatcher
 from .result import AgentRunResult, ToolCallRecord
 from .runtime import AgentRuntime
 from .state import (
+    AddedToolResultMessages,
     MaterializedSteerMessage,
     PendingInput,
     SteerPartMergeMode,
@@ -832,7 +833,7 @@ class HawiAgent:
         materialize_pending_steer: bool = True,
         cache_point: CachePoint | dict[str, Any] | bool | None = None,
         cache_point_source: str | None = None,
-    ) -> list[MaterializedSteerMessage]:
+    ) -> AddedToolResultMessages:
         return self._runtime.add_tool_result_with_pending_steer(
             tool_call_id,
             content,
@@ -849,6 +850,7 @@ class HawiAgent:
         tool_call_id: str,
         content: str | list[ContentPart],
         is_error: bool,
+        context_message_id: str,
         event_bus: EventBus | None,
     ) -> None:
         await self._runtime.emit_tool_result_message_event(
@@ -856,6 +858,7 @@ class HawiAgent:
             tool_call_id=tool_call_id,
             content=content,
             is_error=is_error,
+            context_message_id=context_message_id,
             event_bus=event_bus,
         )
 
@@ -1114,12 +1117,16 @@ class HawiAgent:
             merge_position: Literal["before", "after"] | None = None
             target_message_id: str | None = None
             target_message_index: int | None = None
+            target_context_message_id: str | None = None
             if role == "user" and hook_type == "before_conversation":
                 merge_target = "user_message"
                 merge_position = "after"
                 if user_target is not None:
                     user_target_message_id = user_target.get("message_id")
                     user_target_message_index = user_target.get("message_index")
+                    user_target_context_message_id = user_target.get(
+                        "context_message_id"
+                    )
                     target_message_id = (
                         user_target_message_id
                         if isinstance(user_target_message_id, str)
@@ -1128,6 +1135,11 @@ class HawiAgent:
                     target_message_index = (
                         user_target_message_index
                         if isinstance(user_target_message_index, int)
+                        else None
+                    )
+                    target_context_message_id = (
+                        user_target_context_message_id
+                        if isinstance(user_target_context_message_id, str)
                         else None
                     )
                     target_object_id = user_target.get("message_object_id")
@@ -1153,10 +1165,12 @@ class HawiAgent:
                     plugin_role=injector.get("plugin_role") or "framework",
                     injection_name=injector.get("injection_name"),
                     metadata=metadata if isinstance(metadata, dict) else None,
+                    context_message_id=message.get("context_message_id"),
                     merge_target=merge_target,
                     merge_position=merge_position,
                     target_message_id=target_message_id,
                     target_message_index=target_message_index,
+                    target_context_message_id=target_context_message_id,
                 ),
                 event_bus,
             )
@@ -1286,6 +1300,7 @@ class HawiAgent:
             return {
                 "message_id": message_id,
                 "message_index": index,
+                "context_message_id": message.get("context_message_id"),
                 "message_object_id": id(message),
             }
         return None
@@ -1479,7 +1494,7 @@ class HawiAgent:
             "interrupted": True,
             "interrupt_reason": reason,
         }
-        self._context.add_assistant_message(
+        context_message_id = self._context.add_assistant_message(
             content=interrupted_content,
             metadata=metadata,
         )
@@ -1489,6 +1504,7 @@ class HawiAgent:
                 role="assistant",
                 content=interrupted_content,
                 metadata=metadata,
+                context_message_id=context_message_id,
             ),
             event_bus,
         )
@@ -1594,7 +1610,10 @@ class HawiAgent:
 
         # Add user message only after session-level system prompt material exists.
         if not state.should_stop and message is not None and user_content is not None:
-            self._context.add_user_message(message, metadata=message_metadata)
+            context_message_id = self._context.add_user_message(
+                message,
+                metadata=message_metadata,
+            )
             self._refresh_context_usage_snapshot(model)
             await self._emit_event(
                 AgentMessageAddedEvent.create(
@@ -1602,6 +1621,7 @@ class HawiAgent:
                     role="user",
                     content=user_content,
                     metadata=message_metadata,
+                    context_message_id=context_message_id,
                 ),
                 event_bus,
             )
@@ -1956,7 +1976,9 @@ class HawiAgent:
 
                 # Add assistant message to context
                 # tool_calls are now included in content as ToolCallPart items
-                self._context.add_assistant_message(content=response_content)
+                context_message_id = self._context.add_assistant_message(
+                    content=response_content
+                )
                 self._refresh_context_usage_snapshot(m)
                 inflight_assistant_message_added = True
 
@@ -1966,6 +1988,7 @@ class HawiAgent:
                         run_id=run_id,
                         role="assistant",
                         content=response_content,
+                        context_message_id=context_message_id,
                     ),
                     event_bus,
                 )
@@ -2269,6 +2292,24 @@ class HawiAgent:
             except ModelError as e:
                 last_error = e
 
+                if (
+                    isinstance(e, ContextLengthError)
+                    and context_retry_attempt < max_context_retries
+                    and await self._truncate_last_unsent_tool_results_for_context_retry(e)
+                ):
+                    context_retry_attempt += 1
+                    if event_bus:
+                        await event_bus.publish_async(
+                            ModelRetryEvent.create(
+                                request_id=request_id,
+                                error_type=e.error_type,
+                                attempt=context_retry_attempt,
+                                max_retries=max_context_retries,
+                                error_message=str(e),
+                            )
+                        )
+                    continue
+
                 if isinstance(e, ContextLengthError) and not context_compact_attempted:
                     context_compact_attempted = True
                     if await self._force_auto_compact_for_context_length_error(
@@ -2288,24 +2329,6 @@ class HawiAgent:
                                 )
                             )
                         continue
-
-                if (
-                    isinstance(e, ContextLengthError)
-                    and context_retry_attempt < max_context_retries
-                    and await self._truncate_last_unsent_tool_results_for_context_retry(e)
-                ):
-                    context_retry_attempt += 1
-                    if event_bus:
-                        await event_bus.publish_async(
-                            ModelRetryEvent.create(
-                                request_id=request_id,
-                                error_type=e.error_type,
-                                attempt=context_retry_attempt,
-                                max_retries=max_context_retries,
-                                error_message=str(e),
-                            )
-                        )
-                    continue
 
                 # 直接使用 ModelError 的 error_type
                 policy_for_error = policy[e.error_type]

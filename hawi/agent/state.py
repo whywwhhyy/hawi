@@ -64,3 +64,21 @@ class MaterializedSteerMessage:
 
     content: list[ContentPart]
     metadata: dict[str, Any]
+    context_message_id: str
+
+
+@dataclass
+class AddedToolResultMessages:
+    """Tool-result context message plus any steer messages materialized after it."""
+
+    context_message_id: str
+    materialized_messages: list[MaterializedSteerMessage] = field(default_factory=list)
+
+    def __iter__(self):
+        return iter(self.materialized_messages)
+
+    def __len__(self) -> int:
+        return len(self.materialized_messages)
+
+    def __bool__(self) -> bool:
+        return bool(self.materialized_messages)

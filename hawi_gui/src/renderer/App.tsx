@@ -346,7 +346,11 @@ export default function App() {
   const sessionBusyRef = useRef(false);
   const followTailRef = useRef(true);
   const selectingChatRef = useRef(false);
-  const forkSessionRef = useRef<(sessionId?: string, messageIndex?: number) => Promise<void>>(async () => undefined);
+  const forkSessionRef = useRef<(
+    sessionId?: string,
+    messageIndex?: number,
+    contextMessageId?: string,
+  ) => Promise<void>>(async () => undefined);
   const userScrollIntentRef = useRef(false);
   const isAutoScrollingRef = useRef(false);
   const autoScrollFrameRef = useRef<number | null>(null);
@@ -855,13 +859,15 @@ export default function App() {
     }
   }
 
-  async function forkSession(sessionId?: string, messageIndex?: number) {
+  async function forkSession(sessionId?: string, messageIndex?: number, contextMessageId?: string) {
     const sourceSessionId = sessionId || currentSessionId;
     if (!sourceSessionId) return;
     setSessionBusy(true);
     try {
       const payload: Record<string, unknown> = { session_id: sourceSessionId };
-      if (typeof messageIndex === "number") {
+      if (contextMessageId) {
+        payload.context_message_id = contextMessageId;
+      } else if (typeof messageIndex === "number") {
         payload.message_index = messageIndex;
       }
       const frame = await sendCommand("session_fork", payload);
@@ -892,8 +898,8 @@ export default function App() {
   const forkMessage = useCallback((node: ChatNode) => {
     const sessionId = currentSessionIdRef.current;
     if (sessionBusyRef.current || !sessionId) return;
-    if (typeof node.contextMessageIndex !== "number") return;
-    void forkSessionRef.current(sessionId, node.contextMessageIndex);
+    if (!node.contextMessageId && typeof node.contextMessageIndex !== "number") return;
+    void forkSessionRef.current(sessionId, node.contextMessageIndex, node.contextMessageId);
   }, []);
 
   async function saveGlobalAndSet(nextConfig: PersistedConfig) {
@@ -2402,7 +2408,8 @@ const MessageBubble = memo(function MessageBubble({
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
-  const canFork = node.canFork === true && typeof node.contextMessageIndex === "number";
+  const canFork = node.canFork === true
+    && (Boolean(node.contextMessageId) || typeof node.contextMessageIndex === "number");
   const beforeInjections = (node.injections ?? []).filter((item) => item.mergePosition === "before");
   const afterInjections = (node.injections ?? []).filter((item) => item.mergePosition !== "before");
 

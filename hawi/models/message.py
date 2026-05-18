@@ -612,6 +612,10 @@ class Message(TypedDict):
     # 元数据（可选，用于上下文管理）
     metadata: MessageMetadata | None
 
+    # Hawi context-local stable message identity. This is intentionally
+    # separate from metadata so user/plugin metadata remains semantic data.
+    context_message_id: NotRequired[str]
+
 
 # =============================================================================
 # 音频处理工具函数
@@ -735,6 +739,8 @@ def downgrade_messages_audio(messages: list[Message]) -> list[Message]:
             "name": msg.get("name"),
             "metadata": msg.get("metadata"),
         }
+        if "context_message_id" in msg:
+            new_msg["context_message_id"] = msg["context_message_id"]
         result.append(new_msg)
 
     return result

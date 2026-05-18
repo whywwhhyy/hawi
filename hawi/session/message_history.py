@@ -66,6 +66,7 @@ def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
         "role": role,
         "content": content,
         "metadata": metadata if isinstance(metadata, dict) else None,
+        "context_message_id": data.get("context_message_id"),
     }
 
 
@@ -263,10 +264,12 @@ def _agent_event_payload(event_type: str, data: dict[str, Any]) -> dict[str, Any
             "plugin_role": data.get("plugin_role"),
             "injection_name": data.get("injection_name"),
             "metadata": data.get("metadata"),
+            "context_message_id": data.get("context_message_id"),
             "merge_target": data.get("merge_target"),
             "merge_position": data.get("merge_position"),
             "target_message_id": data.get("target_message_id"),
             "target_message_index": data.get("target_message_index"),
+            "target_context_message_id": data.get("target_context_message_id"),
         }
     return {
         "run_id": data.get("run_id"),

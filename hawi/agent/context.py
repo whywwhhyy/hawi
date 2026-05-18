@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import time
+import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -53,6 +54,23 @@ CONTEXT_COMPACTION_SUMMARY_PREFIX = (
     "summary of its work. Use this summary to build on the work that has "
     "already been done and avoid duplicating work."
 )
+
+CONTEXT_MESSAGE_ID_PREFIX = "ctxmsg_"
+
+
+def new_context_message_id() -> str:
+    """Return an opaque stable id for one AgentContext message."""
+    return f"{CONTEXT_MESSAGE_ID_PREFIX}{uuid.uuid4().hex[:16]}"
+
+
+def ensure_context_message_id(message: Message) -> str:
+    """Ensure a message has a stable Hawi context identity."""
+    existing = message.get("context_message_id")
+    if isinstance(existing, str) and existing.strip():
+        return existing
+    context_message_id = new_context_message_id()
+    message["context_message_id"] = context_message_id
+    return context_message_id
 
 
 def _safe_json_dumps(value: Any) -> str:
@@ -199,6 +217,7 @@ class RecoveredToolResult:
     tool_call_id: str
     tool_name: str
     content: str
+    context_message_id: str
 
 
 @dataclass
@@ -229,6 +248,7 @@ class ContextMessageBoundaryResult:
     """Result of truncating context at a user/assistant message boundary."""
 
     message_index: int
+    context_message_id: str | None
     target_role: Literal["user", "assistant"]
     boundary_index: int
     popped_user_message: Message | None = None
@@ -236,6 +256,7 @@ class ContextMessageBoundaryResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "message_index": self.message_index,
+            "context_message_id": self.context_message_id,
             "target_role": self.target_role,
             "boundary_index": self.boundary_index,
             "popped_user_message": self.popped_user_message,
@@ -432,12 +453,19 @@ class AgentContext:
         tools = self._tool_definitions_for_request()
         system = self._system_prompt_for_request(tools)
         return MessageRequest(
-            messages=self.messages.copy(),
+            messages=[self._message_for_request(message) for message in self.messages],
             system=system,
             cache_point=deepcopy(self.cache_point),
             cache_tool_definitions=deepcopy(self.cache_tool_definitions),
             tools=tools,
         )
+
+    @staticmethod
+    def _message_for_request(message: Message) -> Message:
+        """Return a model-visible message without context-local identity fields."""
+        request_message = deepcopy(message)
+        request_message.pop("context_message_id", None)
+        return request_message
 
     def _system_prompt_for_request(
         self,
@@ -523,19 +551,21 @@ class AgentContext:
         """Return the last persisted context usage metadata, if any."""
         return self.context_usage
 
-    def add_message(self, message: Message) -> None:
+    def add_message(self, message: Message) -> str:
         """Append a message to the conversation.
 
         Args:
             message: Message to append
         """
+        context_message_id = ensure_context_message_id(message)
         self.messages.append(message)
+        return context_message_id
 
     def add_user_message(
         self,
         content: str | list[ContentPart],
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str:
         """Add a user message.
 
         Args:
@@ -545,18 +575,21 @@ class AgentContext:
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
 
-        self.messages.append({
+        message: Message = {
             "role": "user",
             "content": content,
             "name": None,
             "metadata": cast("MessageMetadata | None", metadata),
-        })
+        }
+        context_message_id = ensure_context_message_id(message)
+        self.messages.append(message)
+        return context_message_id
 
     def add_assistant_message(
         self,
         content: list[ContentPart],
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str:
         """Add an assistant message.
 
         Args:
@@ -564,12 +597,15 @@ class AgentContext:
                   Tool calls should already be included as ToolCallPart items in content.
             metadata: Optional message metadata.
         """
-        self.messages.append({
+        message: Message = {
             "role": "assistant",
             "content": content,
             "name": None,
             "metadata": cast("MessageMetadata | None", metadata),
-        })
+        }
+        context_message_id = ensure_context_message_id(message)
+        self.messages.append(message)
+        return context_message_id
 
     def add_tool_result(
         self,
@@ -578,7 +614,7 @@ class AgentContext:
         is_error: bool = False,
         cache_point: CachePoint | dict[str, Any] | bool | None = None,
         cache_point_source: str | None = None,
-    ) -> None:
+    ) -> str:
         """Add a tool result message.
 
         Args:
@@ -607,12 +643,15 @@ class AgentContext:
                 marker["metadata"] = {"source": cache_point_source}  # type: ignore[typeddict-unknown-key]
             message_content.append(marker)
 
-        self.messages.append({
+        message: Message = {
             "role": "tool",
             "content": message_content,
             "name": None,
             "metadata": None,
-        })
+        }
+        context_message_id = ensure_context_message_id(message)
+        self.messages.append(message)
+        return context_message_id
 
     def remove_cache_points(self, *, source: str) -> int:
         """Remove cache point markers previously tagged with ``source``."""
@@ -711,9 +750,14 @@ class AgentContext:
                 if not tool_call_id or tool_call_id in responded_ids:
                     continue
                 tool_name = tool_call.get("name") or ""
+                tool_result_message = self._make_tool_result_message(
+                    tool_call_id,
+                    content,
+                    is_error=True,
+                )
                 self.messages.insert(
                     insert_at,
-                    self._make_tool_result_message(tool_call_id, content, is_error=True),
+                    tool_result_message,
                 )
                 insert_at += 1
                 responded_ids.add(tool_call_id)
@@ -722,6 +766,7 @@ class AgentContext:
                         tool_call_id=tool_call_id,
                         tool_name=tool_name,
                         content=content,
+                        context_message_id=tool_result_message["context_message_id"],
                     )
                 )
 
@@ -754,6 +799,24 @@ class AgentContext:
         self.clear_pending_tool_calls()
         return result
 
+    def truncate_after_message_id(
+        self,
+        context_message_id: str,
+    ) -> ContextMessageBoundaryResult:
+        """Truncate context at the user/assistant message with this id."""
+        return self.truncate_after_message(
+            self.message_index_for_id(context_message_id)
+        )
+
+    def message_index_for_id(self, context_message_id: str) -> int:
+        """Return the current context index for a stable message id."""
+        if not context_message_id:
+            raise ValueError("context_message_id must be non-empty")
+        for index, message in enumerate(self.messages):
+            if message.get("context_message_id") == context_message_id:
+                return index
+        raise KeyError(f"context_message_id not found: {context_message_id}")
+
     def message_boundary_after(self, message_index: int) -> ContextMessageBoundaryResult:
         """Resolve the safe boundary represented by ``message_index``."""
         if isinstance(message_index, bool) or not isinstance(message_index, int):
@@ -762,6 +825,7 @@ class AgentContext:
             raise IndexError(f"message_index out of range: {message_index}")
 
         message = self.messages[message_index]
+        context_message_id = ensure_context_message_id(message)
         role = message.get("role")
         if role == "tool":
             raise ValueError("tool result messages do not support fork/rewind")
@@ -773,6 +837,7 @@ class AgentContext:
         if role == "user":
             return ContextMessageBoundaryResult(
                 message_index=message_index,
+                context_message_id=context_message_id,
                 target_role="user",
                 boundary_index=message_index,
                 popped_user_message=deepcopy(message),
@@ -781,6 +846,7 @@ class AgentContext:
         boundary_index = self._assistant_boundary_after(message_index)
         return ContextMessageBoundaryResult(
             message_index=message_index,
+            context_message_id=context_message_id,
             target_role="assistant",
             boundary_index=boundary_index,
         )
@@ -877,6 +943,7 @@ class AgentContext:
             summary,
             summary_prefix=summary_prefix,
         )
+        ensure_context_message_id(summary_message)
         self.messages = [summary_message, *kept_tail]
         tokens_after = self.estimate_tokens()
 
@@ -897,6 +964,7 @@ class AgentContext:
             message: Message to insert
             position: Position index (-1 for append)
         """
+        ensure_context_message_id(message)
         if position == -1:
             self.messages.append(message)
         else:
@@ -909,7 +977,7 @@ class AgentContext:
         *,
         is_error: bool,
     ) -> Message:
-        return {
+        message: Message = {
             "role": "tool",
             "content": [
                 {
@@ -922,6 +990,8 @@ class AgentContext:
             "name": None,
             "metadata": None,
         }
+        ensure_context_message_id(message)
+        return message
 
     @staticmethod
     def _tool_call_parts(message: Message) -> list[ToolCallPart]:
@@ -1087,6 +1157,9 @@ class AgentContext:
             raise ValueError(f"Unsupported context snapshot version: {version}")
 
         self.messages = data.get("messages", [])
+        for message in self.messages:
+            if isinstance(message, dict):
+                ensure_context_message_id(cast(Message, message))
         self.system_prompt = data.get("system_prompt")
         self.cache_point = normalize_cache_point(data.get("cache_point"))
         self.cache_tool_definitions = normalize_cache_point(

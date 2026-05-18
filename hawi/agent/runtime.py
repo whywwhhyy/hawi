@@ -25,6 +25,7 @@ from .context_retry import (
 )
 from .result import AgentRunResult, ToolCallRecord
 from .state import (
+    AddedToolResultMessages,
     MaterializedSteerMessage,
     PendingInput,
     SteerPartMergeMode,
@@ -95,6 +96,7 @@ class AgentRuntime:
                     result_preview=content,
                     duration_ms=0.0,
                     result_obj=ToolResult(success=False, error=content),
+                    context_message_id=item.context_message_id,
                 ),
                 event_bus,
             )
@@ -110,6 +112,7 @@ class AgentRuntime:
                             "is_error": True,
                         }
                     ],
+                    context_message_id=item.context_message_id,
                 ),
                 event_bus,
             )
@@ -382,7 +385,10 @@ class AgentRuntime:
                 "source_queue": "high_prio",
                 "materialized_as": "plain_user_message",
             }
-            agent._context.add_user_message(pending.content, metadata=metadata)
+            context_message_id = agent._context.add_user_message(
+                pending.content,
+                metadata=metadata,
+            )
             refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
             if callable(refresher):
                 refresher()
@@ -392,6 +398,7 @@ class AgentRuntime:
                     role="user",
                     content=pending.content,
                     metadata=metadata,
+                    context_message_id=context_message_id,
                 ),
                 event_bus,
             )
@@ -438,11 +445,11 @@ class AgentRuntime:
         materialize_pending_steer: bool = True,
         cache_point: CachePoint | dict[str, Any] | bool | None = None,
         cache_point_source: str | None = None,
-    ) -> list[MaterializedSteerMessage]:
+    ) -> AddedToolResultMessages:
         """Add a tool result and materialize one matching pending input as steer."""
         agent = self._owner
         tool_result_content = self.normalize_content_parts(content)
-        agent._context.add_tool_result(
+        context_message_id = agent._context.add_tool_result(
             tool_call_id=tool_call_id,
             content=tool_result_content,
             is_error=is_error,
@@ -454,8 +461,13 @@ class AgentRuntime:
             refresher()
 
         if materialize_pending_steer:
-            return self.materialize_pending_steer_for_tool_results([tool_call_id])
-        return []
+            return AddedToolResultMessages(
+                context_message_id=context_message_id,
+                materialized_messages=self.materialize_pending_steer_for_tool_results(
+                    [tool_call_id]
+                ),
+            )
+        return AddedToolResultMessages(context_message_id=context_message_id)
 
     async def emit_tool_result_message_event(
         self,
@@ -464,6 +476,7 @@ class AgentRuntime:
         tool_call_id: str,
         content: str | list[ContentPart],
         is_error: bool,
+        context_message_id: str,
         event_bus: EventBus | None,
     ) -> None:
         """Emit AgentMessageAddedEvent for a persisted tool result."""
@@ -481,6 +494,7 @@ class AgentRuntime:
                         "is_error": is_error,
                     }
                 ],
+                context_message_id=context_message_id,
             ),
             event_bus,
         )
@@ -530,9 +544,16 @@ class AgentRuntime:
             }
             content = [steer_part]
             metadata = self.steer_message_metadata(pending_input, matched_tool_call_id)
-            agent._context.add_user_message(content, metadata=metadata)
+            context_message_id = agent._context.add_user_message(
+                content,
+                metadata=metadata,
+            )
             materialized_messages.append(
-                MaterializedSteerMessage(content=cast(list[ContentPart], content), metadata=metadata)
+                MaterializedSteerMessage(
+                    content=cast(list[ContentPart], content),
+                    metadata=metadata,
+                    context_message_id=context_message_id,
+                )
             )
         if materialized_messages:
             refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
@@ -573,6 +594,7 @@ class AgentRuntime:
                     role="user",
                     content=message.content,
                     metadata=message.metadata,
+                    context_message_id=message.context_message_id,
                 ),
                 event_bus,
             )

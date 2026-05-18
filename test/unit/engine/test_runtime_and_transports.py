@@ -266,6 +266,25 @@ class DummySessionManager:
             },
         )
 
+    def fork_session_after_message_id(
+        self,
+        *,
+        session_id: str | None = None,
+        name: str | None = None,
+        context_message_id: str,
+    ) -> SessionContextBranchResult:
+        self.forked_after_context_message_id = context_message_id
+        forked = self.fork_session(session_id=session_id, name=name)
+        self.histories[forked] = self.histories[forked][:1]
+        return SessionContextBranchResult(
+            session_id=forked,
+            source_session_id=self.forked_from,
+            message_index=3,
+            context_message_id=context_message_id,
+            target_role="assistant",
+            boundary_index=4,
+        )
+
     def rewind_session_after_message(
         self,
         *,
@@ -285,6 +304,22 @@ class DummySessionManager:
                 "name": None,
                 "metadata": None,
             },
+        )
+
+    def rewind_session_after_message_id(
+        self,
+        *,
+        context_message_id: str,
+    ) -> SessionContextBranchResult:
+        self.rewound_after_context_message_id = context_message_id
+        self.histories[self.current_session_id] = []
+        return SessionContextBranchResult(
+            session_id=self.current_session_id,
+            source_session_id=self.current_session_id,
+            message_index=2,
+            context_message_id=context_message_id,
+            target_role="assistant",
+            boundary_index=3,
         )
 
     def save_now(self) -> None:
@@ -673,6 +708,35 @@ async def test_session_fork_command_accepts_message_index() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_fork_command_accepts_context_message_id() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    sm = DummySessionManager()
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_fork","id":"fork",'
+            '"payload":{"session_id":"saved-session","context_message_id":"ctxmsg-a"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_fork"
+    assert payload["session_id"] == "forked-session"
+    assert payload["context_message_id"] == "ctxmsg-a"
+    assert payload["message_index"] == 3
+    assert payload["target_role"] == "assistant"
+    assert sm.forked_after_context_message_id == "ctxmsg-a"
+    assert sm.saved_now is True
+
+
+@pytest.mark.asyncio
 async def test_session_rewind_command_returns_popped_user_message() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
     client = FakeClient(authenticated=True)
@@ -698,6 +762,35 @@ async def test_session_rewind_command_returns_popped_user_message() -> None:
     assert payload["popped_user_text"] == "rewound"
     assert payload["message_history"] == []
     assert sm.rewound_after_message_index == 1
+    assert sm.saved_now is True
+
+
+@pytest.mark.asyncio
+async def test_session_rewind_command_accepts_context_message_id() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    sm = DummySessionManager()
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_rewind","id":"rewind",'
+            '"payload":{"context_message_id":"ctxmsg-b"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_rewind"
+    assert payload["session_id"] == "current-session"
+    assert payload["context_message_id"] == "ctxmsg-b"
+    assert payload["message_index"] == 2
+    assert payload["target_role"] == "assistant"
+    assert sm.rewound_after_context_message_id == "ctxmsg-b"
     assert sm.saved_now is True
 
 

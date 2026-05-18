@@ -70,6 +70,7 @@ def test_mapper_emits_run_start_with_queue_kind() -> None:
                 "queue": "urgent",
                 "display_message_type": "urgent",
             },
+            context_message_id="ctxmsg_user_1",
         )
     )
 
@@ -79,6 +80,26 @@ def test_mapper_emits_run_start_with_queue_kind() -> None:
     assert frames[0]["payload"]["queue"] == "urgent"
     assert frames[0]["payload"]["display_message_type"] == "urgent"
     assert frames[0]["payload"]["user_content"] == "hello"
+    assert frames[0]["payload"]["context_message_id"] == "ctxmsg_user_1"
+
+
+def test_mapper_emits_assistant_commit_context_message_id() -> None:
+    mapper = SemanticEventMapper()
+
+    mapper.map(AgentRunStartEvent.create("run-commit"))
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-commit",
+            "assistant",
+            [{"type": "text", "text": "answer"}],
+            context_message_id="ctxmsg_assistant_1",
+        )
+    )
+
+    assert frames[0]["type"] == "run.message_committed"
+    assert frames[0]["payload"]["run_id"] == "run-commit"
+    assert frames[0]["payload"]["role"] == "assistant"
+    assert frames[0]["payload"]["context_message_id"] == "ctxmsg_assistant_1"
 
 
 def test_mapper_emits_ttft_debug_before_first_model_delta() -> None:

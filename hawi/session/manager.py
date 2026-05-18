@@ -118,6 +118,7 @@ class SessionContextBranchResult:
     session_id: str
     source_session_id: str | None = None
     message_index: int | None = None
+    context_message_id: str | None = None
     target_role: str | None = None
     boundary_index: int | None = None
     popped_user_message: dict[str, Any] | None = None
@@ -128,6 +129,8 @@ class SessionContextBranchResult:
             payload["source_session_id"] = self.source_session_id
         if self.message_index is not None:
             payload["message_index"] = self.message_index
+        if self.context_message_id is not None:
+            payload["context_message_id"] = self.context_message_id
         if self.target_role is not None:
             payload["target_role"] = self.target_role
         if self.boundary_index is not None:
@@ -540,12 +543,28 @@ class SessionManager:
             after_message_index=after_message_index,
         )
 
+    def fork_session_after_message_id(
+        self,
+        *,
+        session_id: str | None = None,
+        name: str | None = None,
+        context_message_id: str,
+    ) -> SessionContextBranchResult:
+        """Fork a session and truncate the fork at a stable message id."""
+        return self._fork_session(
+            session_id=session_id,
+            name=name,
+            after_message_index=None,
+            after_context_message_id=context_message_id,
+        )
+
     def _fork_session(
         self,
         *,
         session_id: str | None,
         name: str | None,
         after_message_index: int | None,
+        after_context_message_id: str | None = None,
     ) -> SessionContextBranchResult:
         source_id = session_id or self._session_id
         if source_id is None:
@@ -577,12 +596,13 @@ class SessionManager:
                     "*.tmp",
                 ),
             )
-            if after_message_index is not None:
+            if after_message_index is not None or after_context_message_id is not None:
                 branch_result = self._apply_context_message_boundary(
                     temp_dir,
                     session_id=fork_id,
                     source_session_id=source_id,
                     message_index=after_message_index,
+                    context_message_id=after_context_message_id,
                 )
             self._rewrite_fork_manifest(
                 temp_dir,
@@ -626,6 +646,38 @@ class SessionManager:
             session_id=session_id,
             source_session_id=session_id,
             message_index=after_message_index,
+            manifest_event="session_rewind",
+        )
+        self.load_session(session_id)
+        self._session_has_visible_messages = self._session_dir_has_visible_messages(
+            session_dir
+        )
+        return result
+
+    def rewind_session_after_message_id(
+        self,
+        *,
+        context_message_id: str,
+    ) -> SessionContextBranchResult:
+        """Rewind the current session to a stable message id boundary."""
+        if self._session_id is None:
+            raise RuntimeError("No active session to rewind")
+        if self._agent is None:
+            raise RuntimeError("SessionManager.rewind_session requires attach() first")
+
+        self.save_now()
+        session_id = self._session_id
+        session_dir = layout.session_dir(self._root, session_id)
+        if not layout.manifest_path(session_dir).exists():
+            raise FileNotFoundError(f"session not found: {session_id}")
+
+        self._ensure_current_session_lock()
+        result = self._apply_context_message_boundary(
+            session_dir,
+            session_id=session_id,
+            source_session_id=session_id,
+            message_index=None,
+            context_message_id=context_message_id,
             manifest_event="session_rewind",
         )
         self.load_session(session_id)
@@ -862,7 +914,8 @@ class SessionManager:
         *,
         session_id: str,
         source_session_id: str,
-        message_index: int,
+        message_index: int | None,
+        context_message_id: str | None = None,
         manifest_event: str | None = None,
     ) -> SessionContextBranchResult:
         ctx_path = layout.context_path(session_dir)
@@ -877,7 +930,12 @@ class SessionManager:
         context = AgentContext()
         context.load_snapshot(ctx_data)
         original_messages = deepcopy(context.messages)
-        boundary_result = context.truncate_after_message(message_index)
+        if context_message_id is not None:
+            boundary_result = context.truncate_after_message_id(context_message_id)
+        elif message_index is not None:
+            boundary_result = context.truncate_after_message(message_index)
+        else:
+            raise ValueError("message_index or context_message_id is required")
 
         layout.atomic_write_text(
             ctx_path,
@@ -900,6 +958,9 @@ class SessionManager:
                 {
                     "last_checkpoint_event": manifest_event,
                     "rewound_after_message_index": boundary_result.message_index,
+                    "rewound_after_context_message_id": (
+                        boundary_result.context_message_id
+                    ),
                     "rewind_boundary_index": boundary_result.boundary_index,
                     "rewind_target_role": boundary_result.target_role,
                 },
@@ -913,6 +974,7 @@ class SessionManager:
             session_id=session_id,
             source_session_id=source_session_id,
             message_index=boundary_result.message_index,
+            context_message_id=boundary_result.context_message_id,
             target_role=boundary_result.target_role,
             boundary_index=boundary_result.boundary_index,
             popped_user_message=(
@@ -954,12 +1016,18 @@ class SessionManager:
         for entry in entries:
             record = dict(entry)
             if record.get("role") in {"user", "assistant", "tool"}:
-                match = cls._find_matching_context_message(
+                match = cls._find_matching_context_message_by_id(
                     record,
                     messages,
                     start=cursor,
-                    strict_metadata=True,
                 )
+                if match is None:
+                    match = cls._find_matching_context_message(
+                        record,
+                        messages,
+                        start=cursor,
+                        strict_metadata=True,
+                    )
                 if match is None:
                     match = cls._find_matching_context_message(
                         record,
@@ -969,9 +1037,34 @@ class SessionManager:
                     )
                 if match is not None:
                     record["context_message_index"] = match
+                    message = messages[match]
+                    if isinstance(message, dict):
+                        context_message_id = message.get("context_message_id")
+                        if isinstance(context_message_id, str):
+                            record["context_message_id"] = context_message_id
                     cursor = match + 1
             annotated.append(record)
         return annotated
+
+    @classmethod
+    def _find_matching_context_message_by_id(
+        cls,
+        record: dict[str, Any],
+        messages: list[Any],
+        *,
+        start: int,
+    ) -> int | None:
+        context_message_id = record.get("context_message_id")
+        if not isinstance(context_message_id, str) or not context_message_id:
+            return None
+        for index in range(start, len(messages)):
+            message = messages[index]
+            if (
+                isinstance(message, dict)
+                and message.get("context_message_id") == context_message_id
+            ):
+                return index
+        return None
 
     @classmethod
     def _find_matching_context_message(
@@ -1077,6 +1170,9 @@ class SessionManager:
             manifest.update(
                 {
                     "forked_after_message_index": branch_result.message_index,
+                    "forked_after_context_message_id": (
+                        branch_result.context_message_id
+                    ),
                     "fork_boundary_index": branch_result.boundary_index,
                     "fork_target_role": branch_result.target_role,
                 }

@@ -150,10 +150,16 @@ class SemanticEventMapper:
                         "plugin_role": getattr(event, "plugin_role", "framework"),
                         "injection_name": getattr(event, "injection_name", None),
                         "metadata": to_json_safe(getattr(event, "metadata", None)),
+                        "context_message_id": getattr(event, "context_message_id", None),
                         "merge_target": getattr(event, "merge_target", None),
                         "merge_position": getattr(event, "merge_position", None),
                         "target_message_id": getattr(event, "target_message_id", None),
                         "target_message_index": getattr(event, "target_message_index", None),
+                        "target_context_message_id": getattr(
+                            event,
+                            "target_context_message_id",
+                            None,
+                        ),
                     },
                 )
             ]
@@ -237,6 +243,21 @@ class SemanticEventMapper:
             role = getattr(event, "role", "")
             if role in {"user", "tool"}:
                 self._mark_model_wait_start(getattr(event, "timestamp", None))
+            if role == "assistant":
+                return [
+                    make_frame(
+                        "run.message_committed",
+                        {
+                            "run_id": getattr(event, "run_id", self._active_run_id or ""),
+                            "role": "assistant",
+                            "context_message_id": getattr(
+                                event,
+                                "context_message_id",
+                                None,
+                            ),
+                        },
+                    )
+                ]
             if role != "user":
                 return []
             run_id = str(getattr(event, "run_id", self._active_run_id or ""))
@@ -258,6 +279,11 @@ class SemanticEventMapper:
                         "user_content": text,
                         "queue": queue,
                         "display_message_type": display_message_type,
+                        "context_message_id": getattr(
+                            event,
+                            "context_message_id",
+                            None,
+                        ),
                     },
                 )
             ]
@@ -531,6 +557,11 @@ class SemanticEventMapper:
                         "output": to_json_safe(output),
                         "error": error,
                         "duration_ms": getattr(event, "duration_ms", 0.0),
+                        "context_message_id": getattr(
+                            event,
+                            "context_message_id",
+                            None,
+                        ),
                         "is_part": False,
                     },
                 )

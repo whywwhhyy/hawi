@@ -691,6 +691,48 @@ class TestSessionManager:
         assert [entry["role"] for entry in history] == ["user", "assistant"]
         assert [entry["context_message_index"] for entry in history] == [0, 1]
 
+    def test_fork_session_after_context_message_id(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("first")
+        agent.context.add_assistant_message([{"type": "text", "text": "reply"}])
+        target_id = agent.context.add_user_message("second")
+        agent.context.add_assistant_message([{"type": "text", "text": "later"}])
+        sid = sm.new_session(name="source")
+        sm.save_now()
+        layout.write_jsonl(
+            layout.message_history_path(layout.session_dir(sm._root, sid)),
+            [
+                {
+                    "version": 1,
+                    "run_id": "r1",
+                    "role": message["role"],
+                    "content": message["content"],
+                    "metadata": message.get("metadata"),
+                    "context_message_id": message.get("context_message_id"),
+                }
+                for message in agent.context.messages
+            ],
+            fsync=True,
+        )
+
+        result = sm.fork_session_after_message_id(
+            session_id=sid,
+            context_message_id=target_id,
+        )
+
+        assert result.context_message_id == target_id
+        assert result.message_index == 2
+        assert result.target_role == "user"
+        assert result.popped_user_message is not None
+        assert result.popped_user_message["context_message_id"] == target_id
+        assert [m["role"] for m in agent.context.messages] == ["user", "assistant"]
+        history = sm.read_message_history(result.session_id)
+        assert [entry["role"] for entry in history] == ["user", "assistant"]
+        assert all(entry.get("context_message_id") for entry in history)
+
     def test_rewind_session_after_assistant_keeps_tool_results(
         self,
         stub_setup,

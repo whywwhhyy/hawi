@@ -36,6 +36,50 @@ class TestAgentContextSnapshot:
         assert ctx2.system_prompt == ctx.system_prompt
         assert ctx2.messages == ctx.messages
 
+    def test_messages_get_stable_context_message_ids(self) -> None:
+        ctx = AgentContext()
+        user_id = ctx.add_user_message("hello")
+        assistant_id = ctx.add_assistant_message([{"type": "text", "text": "hi"}])
+
+        assert user_id.startswith("ctxmsg_")
+        assert assistant_id.startswith("ctxmsg_")
+        assert user_id != assistant_id
+        assert ctx.messages[0]["context_message_id"] == user_id
+        assert ctx.messages[1]["context_message_id"] == assistant_id
+
+        restored = AgentContext()
+        restored.load_snapshot(json.loads(json.dumps(ctx.snapshot())))
+
+        assert restored.messages[0]["context_message_id"] == user_id
+        assert restored.messages[1]["context_message_id"] == assistant_id
+
+    def test_prepare_request_strips_context_message_ids(self) -> None:
+        ctx = AgentContext()
+        context_message_id = ctx.add_user_message("hello")
+
+        request = ctx.prepare_request()
+
+        assert ctx.messages[0]["context_message_id"] == context_message_id
+        assert "context_message_id" not in request.messages[0]
+
+    def test_load_snapshot_backfills_context_message_ids(self) -> None:
+        ctx = AgentContext()
+        ctx.load_snapshot(
+            {
+                "version": "1.0",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "legacy"}],
+                        "name": None,
+                        "metadata": None,
+                    }
+                ],
+            }
+        )
+
+        assert ctx.messages[0]["context_message_id"].startswith("ctxmsg_")
+
     def test_pending_tool_calls_persist(self) -> None:
         ctx = AgentContext()
         ctx._add_pending_tool_call("tc-1", "shell", {"cmd": "ls"})

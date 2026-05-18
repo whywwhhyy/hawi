@@ -127,6 +127,7 @@ class AgentToolResultEvent(Event):
     result: "ToolResult | None" = None
     success: bool
     duration_ms: float
+    context_message_id: str | None = None
 
     @classmethod
     def create(
@@ -137,6 +138,7 @@ class AgentToolResultEvent(Event):
         result_preview: str,
         duration_ms: float,
         result_obj: "ToolResult | None" = None,
+        context_message_id: str | None = None,
     ) -> AgentToolResultEvent:
         return cls(
             type="agent.tool_result",
@@ -147,6 +149,7 @@ class AgentToolResultEvent(Event):
             result=result_obj,
             success=success,
             duration_ms=duration_ms,
+            context_message_id=context_message_id,
         )
 
     @field_serializer('result')
@@ -167,6 +170,7 @@ class AgentMessageAddedEvent(Event):
     role: Literal["user", "assistant", "tool"]
     content: list[ContentPart]
     metadata: dict[str, Any] | None = None
+    context_message_id: str | None = None
 
     @classmethod
     def create(
@@ -175,6 +179,7 @@ class AgentMessageAddedEvent(Event):
         role: Literal["user", "assistant", "tool"],
         content: list[ContentPart],
         metadata: dict[str, Any] | None = None,
+        context_message_id: str | None = None,
     ) -> AgentMessageAddedEvent:
         return cls(
             type="agent.message_added",
@@ -183,6 +188,7 @@ class AgentMessageAddedEvent(Event):
             role=role,
             content=content,
             metadata=metadata,
+            context_message_id=context_message_id,
         )
 
 
@@ -238,10 +244,12 @@ class AgentContextInjectedEvent(Event):
     plugin_role: str = "framework"
     injection_name: str | None = None
     metadata: dict[str, Any] | None = None
+    context_message_id: str | None = None
     merge_target: Literal["user_message"] | None = None
     merge_position: Literal["before", "after"] | None = None
     target_message_id: str | None = None
     target_message_index: int | None = None
+    target_context_message_id: str | None = None
 
     @classmethod
     def create(
@@ -257,10 +265,12 @@ class AgentContextInjectedEvent(Event):
         plugin_role: str = "framework",
         injection_name: str | None = None,
         metadata: dict[str, Any] | None = None,
+        context_message_id: str | None = None,
         merge_target: Literal["user_message"] | None = None,
         merge_position: Literal["before", "after"] | None = None,
         target_message_id: str | None = None,
         target_message_index: int | None = None,
+        target_context_message_id: str | None = None,
     ) -> AgentContextInjectedEvent:
         return cls(
             type="agent.context_injected",
@@ -275,10 +285,12 @@ class AgentContextInjectedEvent(Event):
             plugin_role=plugin_role,
             injection_name=injection_name,
             metadata=metadata,
+            context_message_id=context_message_id,
             merge_target=merge_target,
             merge_position=merge_position,
             target_message_id=target_message_id,
             target_message_index=target_message_index,
+            target_context_message_id=target_context_message_id,
         )
 
 

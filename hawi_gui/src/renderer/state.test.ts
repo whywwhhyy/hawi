@@ -36,6 +36,168 @@ describe("core event reducer", () => {
     expect(state.sessionMessageCount).toBe(1);
   });
 
+  it("enables fork controls for live user and assistant messages", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-live",
+      message_id: "msg-live",
+      user_content: "hello",
+      context_message_id: "ctxmsg-user-live",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      run_id: "run-live",
+      delta: "answer"
+    }));
+
+    expect(state.nodes[0]).toMatchObject({
+      kind: "user",
+      canFork: true,
+      contextMessageId: "ctxmsg-user-live",
+      contextMessageIndex: 0
+    });
+    state = reduceCoreEvent(state, frame("run.message_committed", {
+      run_id: "run-live",
+      role: "assistant",
+      context_message_id: "ctxmsg-assistant-live"
+    }));
+
+    expect(state.nodes[1]).toMatchObject({
+      kind: "agent",
+      canFork: true,
+      contextMessageId: "ctxmsg-assistant-live",
+      contextMessageIndex: 1
+    });
+    expect(state.nextContextMessageIndex).toBe(2);
+  });
+
+  it("keeps live fork indices aligned across tool calls", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-tool",
+      user_content: "lookup",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-tool",
+      tool_call_id: "tc-tool",
+      tool_name: "search"
+    }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-tool",
+      tool_call_id: "tc-tool",
+      tool_name: "search",
+      success: true,
+      output: "found"
+    }));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      run_id: "run-tool",
+      delta: "done"
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "tool", "agent"]);
+    expect(state.nodes[0]).toMatchObject({ canFork: true, contextMessageIndex: 0 });
+    expect(state.nodes[1].tool).toMatchObject({ contextMessageIndex: 2 });
+    expect(state.nodes[2]).toMatchObject({ canFork: true, contextMessageIndex: 3 });
+    expect(state.nextContextMessageIndex).toBe(4);
+  });
+
+  it("keeps user fork indices aligned when context is injected before the prompt", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-injected",
+      user_content: "hello",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("agent.context_injected", {
+      run_id: "run-injected",
+      role: "user",
+      text: "Injected before",
+      hook_type: "before_conversation",
+      merge_target: "user_message",
+      merge_position: "before",
+      target_message_index: 0,
+      position: 0
+    }));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      run_id: "run-injected",
+      delta: "answer"
+    }));
+
+    expect(state.nodes[0]).toMatchObject({
+      kind: "user",
+      canFork: true,
+      contextMessageIndex: 1
+    });
+    expect(state.nodes[0].injections?.[0]).toMatchObject({
+      content: "Injected before",
+      contextPosition: 0
+    });
+    expect(state.nodes[1]).toMatchObject({
+      kind: "agent",
+      canFork: true,
+      contextMessageIndex: 2
+    });
+    expect(state.nextContextMessageIndex).toBe(3);
+  });
+
+  it("remaps fork indices after context compaction", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-1",
+      user_content: "first",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      run_id: "run-1",
+      delta: "reply"
+    }));
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-2",
+      user_content: "second",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      run_id: "run-2",
+      delta: "later"
+    }));
+
+    state = reduceCoreEvent(state, frame("agent.compact_stop", {
+      run_id: "manual",
+      status: "success",
+      replaced_message_count: 2,
+      kept_message_count: 2,
+      message_count_before: 4,
+      message_count_after: 3
+    }));
+
+    expect(state.nodes[0]).toMatchObject({
+      kind: "user",
+      canFork: false,
+      contextMessageIndex: undefined
+    });
+    expect(state.nodes[1]).toMatchObject({
+      kind: "agent",
+      canFork: false,
+      contextMessageIndex: undefined
+    });
+    expect(state.nodes[2]).toMatchObject({
+      kind: "user",
+      canFork: true,
+      contextMessageIndex: 1
+    });
+    expect(state.nodes[3]).toMatchObject({
+      kind: "agent",
+      canFork: true,
+      contextMessageIndex: 2
+    });
+    expect(state.nextContextMessageIndex).toBe(3);
+  });
+
   it("loads session message history into chat nodes", () => {
     const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
       message_history: [
@@ -44,6 +206,7 @@ describe("core event reducer", () => {
           role: "user",
           content: [{ type: "text", text: "hello" }],
           metadata: { queue: "normal", display_message_type: "normal" },
+          context_message_id: "ctxmsg-history-user",
           context_message_index: 0
         },
         {
@@ -54,6 +217,7 @@ describe("core event reducer", () => {
             { type: "text", text: "answer" }
           ],
           metadata: null,
+          context_message_id: "ctxmsg-history-assistant",
           context_message_index: 1
         },
         {
@@ -91,12 +255,17 @@ describe("core event reducer", () => {
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "thinking", "agent", "system", "error", "compact"]);
     expect(state.nodes[0].content).toBe("hello");
-    expect(state.nodes[0]).toMatchObject({ canFork: true, contextMessageIndex: 0 });
+    expect(state.nodes[0]).toMatchObject({
+      canFork: true,
+      contextMessageId: "ctxmsg-history-user",
+      contextMessageIndex: 0
+    });
     expect(state.nodes[1]).toMatchObject({ content: "thinking", complete: true });
     expect(state.nodes[2]).toMatchObject({
       content: "answer",
       complete: true,
       canFork: true,
+      contextMessageId: "ctxmsg-history-assistant",
       contextMessageIndex: 1
     });
     expect(state.nodes[3].content).toContain("模型重试 1/10");

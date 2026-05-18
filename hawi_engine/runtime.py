@@ -1148,6 +1148,19 @@ class CoreRuntime:
             )
         return raw
 
+    @staticmethod
+    def _optional_context_message_id(command: CoreCommand) -> str | None:
+        raw = command.payload.get("context_message_id")
+        if raw is None:
+            raw = command.payload.get("after_context_message_id")
+        if raw is None:
+            return None
+        if not isinstance(raw, str) or not raw:
+            raise ValueError(
+                "payload.context_message_id must be a non-empty string when present"
+            )
+        return raw
+
     async def _handle_session_list(
         self,
         client: RuntimeClient,
@@ -1246,10 +1259,22 @@ class CoreRuntime:
         if name is not None and not isinstance(name, str):
             raise ValueError("'session_fork.payload.name' must be a string when present")
         forked_from = source_session_id or sm.current_session_id
-        message_index = self._optional_message_index(command)
+        context_message_id = self._optional_context_message_id(command)
+        message_index = (
+            None if context_message_id is not None else self._optional_message_index(command)
+        )
         branch_result = None
-        if message_index is None:
+        if message_index is None and context_message_id is None:
             session_id = sm.fork_session(session_id=source_session_id, name=name)
+        elif context_message_id is not None:
+            branch_result = sm.fork_session_after_message_id(
+                session_id=source_session_id,
+                name=name,
+                context_message_id=context_message_id,
+            )
+            session_id = branch_result.session_id
+            self._reset_runner_volatile_state()
+            sm.save_now()
         else:
             branch_result = sm.fork_session_after_message(
                 session_id=source_session_id,
@@ -1297,12 +1322,23 @@ class CoreRuntime:
                 )
             )
             return
-        message_index = self._optional_message_index(command)
-        if message_index is None:
-            raise ValueError("'session_rewind.payload.message_index' is required")
-        branch_result = sm.rewind_session_after_message(
-            after_message_index=message_index,
+        context_message_id = self._optional_context_message_id(command)
+        message_index = (
+            None if context_message_id is not None else self._optional_message_index(command)
         )
+        if context_message_id is not None:
+            branch_result = sm.rewind_session_after_message_id(
+                context_message_id=context_message_id,
+            )
+        else:
+            if message_index is None:
+                raise ValueError(
+                    "'session_rewind.payload.context_message_id' or "
+                    "'session_rewind.payload.message_index' is required"
+                )
+            branch_result = sm.rewind_session_after_message(
+                after_message_index=message_index,
+            )
         self._reset_runner_volatile_state()
         sm.save_now()
         message_history = sm.read_message_history(branch_result.session_id)
@@ -1482,6 +1518,11 @@ class CoreRuntime:
         popped_user_message = getattr(branch_result, "popped_user_message", None)
         payload = {
             "message_index": getattr(branch_result, "message_index", None),
+            "context_message_id": getattr(
+                branch_result,
+                "context_message_id",
+                None,
+            ),
             "target_role": getattr(branch_result, "target_role", None),
             "boundary_index": getattr(branch_result, "boundary_index", None),
             "popped_user_message": popped_user_message,

@@ -38,6 +38,7 @@ from hawi.tool.types import (
 
 from .context import AgentContext
 from .result import ToolCallRecord
+from .state import AddedToolResultMessages
 
 if TYPE_CHECKING:
     from .agent import HawiAgent
@@ -62,7 +63,7 @@ class AddToolResultCallback(Protocol):
         materialize_pending_steer: bool = True,
         cache_point: CachePoint | dict[str, Any] | bool | None = None,
         cache_point_source: str | None = None,
-    ) -> list[Any]:
+    ) -> AddedToolResultMessages:
         ...
 
 
@@ -74,6 +75,7 @@ class EmitToolResultMessageCallback(Protocol):
         tool_call_id: str,
         content: str | list[ContentPart],
         is_error: bool,
+        context_message_id: str,
         event_bus: EventBus | None,
     ) -> Awaitable[None]:
         ...
@@ -106,6 +108,7 @@ class ToolExecutionOutcome:
     audit_pending: bool
     result_content: str
     control: HookResult | None = None
+    context_message_id: str | None = None
 
 
 @dataclass
@@ -174,7 +177,12 @@ class ToolExecutor:
                 materialize_pending_steer=materialize_pending_steer,
             )
         if emit_final_event:
-            await self._emit_final_result_event(outcome.record, run_id, event_bus)
+            await self._emit_final_result_event(
+                outcome.record,
+                run_id,
+                event_bus,
+                context_message_id=outcome.context_message_id,
+            )
         return outcome.record
 
     async def execute_batch(
@@ -228,6 +236,7 @@ class ToolExecutor:
                     outcome.record,
                     run_id,
                     event_bus,
+                    context_message_id=outcome.context_message_id,
                 )
                 if outcome.control is not None:
                     control = outcome.control
@@ -251,6 +260,7 @@ class ToolExecutor:
                                 skipped_outcome.record,
                                 run_id,
                                 event_bus,
+                                context_message_id=skipped_outcome.context_message_id,
                             )
                     break
         finally:
@@ -675,7 +685,7 @@ class ToolExecutor:
             if outcome.audit_pending:
                 continue
 
-            materialized_messages = self._add_tool_result(
+            added_messages = self._add_tool_result(
                 tool_call_id=record.tool_call_id,
                 content=outcome.result_content,
                 is_error=not record.result.success,
@@ -683,17 +693,19 @@ class ToolExecutor:
                 cache_point=getattr(record.result, "cache_point", None),
                 cache_point_source=getattr(record.result, "cache_point_source", None),
             )
+            outcome.context_message_id = added_messages.context_message_id
             await self._emit_tool_result_message(
                 run_id=run_id,
                 tool_call_id=record.tool_call_id,
                 content=outcome.result_content,
                 is_error=not record.result.success,
+                context_message_id=added_messages.context_message_id,
                 event_bus=event_bus,
             )
-            if materialized_messages:
+            if added_messages.materialized_messages:
                 await self._emit_materialized_steer_events(
                     run_id,
-                    materialized_messages,
+                    added_messages.materialized_messages,
                     event_bus,
                 )
 
@@ -725,6 +737,7 @@ class ToolExecutor:
         record: ToolCallRecord,
         run_id: str,
         event_bus: EventBus | None,
+        context_message_id: str | None = None,
     ) -> None:
         await self._emit_event(
             AgentToolResultEvent.create(
@@ -734,6 +747,7 @@ class ToolExecutor:
                 result_preview=str(record.result.output),
                 duration_ms=record.duration_ms,
                 result_obj=record.result,
+                context_message_id=context_message_id,
             ),
             event_bus,
         )

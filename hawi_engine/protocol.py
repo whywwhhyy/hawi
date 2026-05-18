@@ -80,6 +80,7 @@ EVENT_TYPES = {
     "error",
     "pong",
     "run.start",
+    "run.message_committed",
     "run.text_delta",
     "run.thinking_delta",
     "run.stop",

@@ -27,6 +27,7 @@ export interface FrameworkInjectionState {
   mergeTarget?: string;
   mergePosition?: "before" | "after";
   targetMessageId?: string;
+  targetContextMessageId?: string;
   targetMessageIndex?: number;
   contextPosition?: number;
   toolName?: string;
@@ -41,6 +42,7 @@ export interface ChatNode {
   kind: ChatKind;
   content: string;
   complete?: boolean;
+  contextMessageId?: string;
   contextMessageIndex?: number;
   canFork?: boolean;
   streamStartedAt?: number;
@@ -65,6 +67,8 @@ export interface ToolState {
   resultPreview: string;
   /** 原始 tool result output 结构化数据（仅保持最近的完整结果） */
   resultData?: unknown;
+  contextMessageId?: string;
+  contextMessageIndex?: number;
   streamStartedAt?: number;
   streamFinishedAt?: number;
   streamDurationMs?: number;
@@ -164,6 +168,8 @@ interface RunState {
   thinkingNodeId?: string;
   processingId?: string;
   assistantMessageCounted?: boolean;
+  assistantContextMessageIndex?: number;
+  toolCallAssistantContextIndexed?: boolean;
 }
 
 export interface AppState {
@@ -188,6 +194,7 @@ export interface AppState {
   pluginStatuses: Record<string, PluginStatusState>;
   toolProgress: Record<string, ToolProgressState>;
   sessionMessageCount: number;
+  nextContextMessageIndex: number;
   processing?: ProcessingState;
 }
 
@@ -212,6 +219,7 @@ export function createInitialState(): AppState {
     pluginStatuses: {},
     toolProgress: {},
     sessionMessageCount: 0,
+    nextContextMessageIndex: 0,
     processing: undefined
   };
 }
@@ -238,6 +246,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         pluginStatuses: {},
         toolProgress: {},
         sessionMessageCount: 0,
+        nextContextMessageIndex: 0,
         processing: undefined
       };
 
@@ -266,6 +275,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         pluginStatuses: replayState.pluginStatuses,
         toolProgress: replayState.toolProgress,
         sessionMessageCount: history.length,
+        nextContextMessageIndex: nextContextMessageIndexFromHistory(history),
         processing: undefined
       };
     }
@@ -292,13 +302,18 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         queue
       );
       const messageId = optionalString(payload.message_id);
+      const contextMessageId = optionalString(payload.context_message_id);
       const userContent = String(payload.user_content ?? "");
       const userNodeId = messageId ? userMessageNodeId(messageId) : nodeId("user", runId);
+      const contextMessageIndex = state.nextContextMessageIndex;
       const withUser = appendChatNode(state, {
         id: userNodeId,
         kind: "user",
         queue,
         displayMessageType,
+        contextMessageId,
+        contextMessageIndex,
+        canFork: true,
         content: userContent
       });
       const processing: ProcessingState = {
@@ -309,10 +324,29 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       return {
         ...withUser,
         sessionMessageCount: state.sessionMessageCount + 1,
+        nextContextMessageIndex: contextMessageIndex + 1,
         processing,
         activeRunId: runId,
         runs: { ...withUser.runs, [runId]: { processingId: processing.id } }
       };
+    }
+
+    case "run.message_committed": {
+      const runId = String(payload.run_id ?? state.activeRunId ?? "");
+      const contextMessageId = optionalString(payload.context_message_id);
+      const role = optionalString(payload.role);
+      if (!runId || !contextMessageId || role !== "assistant") {
+        return state;
+      }
+      const agentNodeId = state.runs[runId]?.agentNodeId;
+      if (!agentNodeId) {
+        return state;
+      }
+      return updateChatNode(state, agentNodeId, (node) => ({
+        ...node,
+        contextMessageId,
+        canFork: true
+      }));
     }
 
     case "run.text_delta": {
@@ -361,13 +395,14 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const runId = String(payload.run_id ?? state.activeRunId ?? "");
       const eventAt = frameTime(frame);
       const completedState = completeOpenRunNodesForRun(state, runId, eventAt);
+      const indexedState = indexToolCallAssistantContext(completedState, runId);
       const toolCallId = String(payload.tool_call_id ?? "");
       const status = normalizeToolStatus(payload.status, "running");
       const hasArguments = Object.prototype.hasOwnProperty.call(payload, "arguments");
       const argumentInfo = hasArguments ? splitToolArguments(payload.arguments) : undefined;
-      const existingNodeId = completedState.toolNodeByCallId[toolCallId];
+      const existingNodeId = indexedState.toolNodeByCallId[toolCallId];
       if (existingNodeId) {
-        return updateChatNode(completedState, existingNodeId, (node) => {
+        return updateChatNode(indexedState, existingNodeId, (node) => {
           if (!node.tool) return node;
           const description = optionalToolPurpose(payload)
             ?? argumentInfo?.description
@@ -408,13 +443,15 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         content: "",
         tool
       };
-      const withTool = appendChatNode(completedState, node);
+      const withTool = appendChatNode(indexedState, node);
       const runs = {
         ...withTool.runs,
         [runId]: {
           ...(withTool.runs[runId] ?? {}),
           agentNodeId: undefined,
-          thinkingNodeId: undefined
+          thinkingNodeId: undefined,
+          assistantContextMessageIndex: undefined,
+          toolCallAssistantContextIndexed: true
         }
       };
       return {
@@ -458,8 +495,12 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         }, eventAt);
       });
 
-    case "tool.result":
-      return updateToolResult(state, String(payload.tool_call_id ?? ""), payload, (tool) => {
+    case "tool.result": {
+      const toolCallId = String(payload.tool_call_id ?? "");
+      const contextMessageIndex = toolResultNeedsContextIndex(state, toolCallId, payload)
+        ? state.nextContextMessageIndex
+        : undefined;
+      const updated = updateToolResult(state, toolCallId, payload, (tool) => {
         const eventAt = frameTime(frame);
         const text = formatToolResultText(payload);
         return completeToolStream({
@@ -471,9 +512,15 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
             ? tool.resultPreview + text
             : text || tool.resultPreview,
           resultData: payload.is_part === true ? tool.resultData : payload.output,
+          contextMessageId: tool.contextMessageId ?? optionalString(payload.context_message_id),
+          contextMessageIndex: tool.contextMessageIndex ?? contextMessageIndex,
           durationMs: Number(payload.duration_ms ?? tool.durationMs ?? 0)
         }, eventAt);
       });
+      return contextMessageIndex === undefined
+        ? updated
+        : { ...updated, nextContextMessageIndex: updated.nextContextMessageIndex + 1 };
+    }
 
     case "model.metadata": {
       const nextState = {
@@ -491,10 +538,10 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "agent.context_injected": {
       const injection = frameworkInjectionFromFrame(frame, payload, "context_injected");
-      if (payload.merge_target === "user_message") {
-        return attachFrameworkInjectionToUserMessage(state, payload, injection);
-      }
-      return appendFrameworkInjection(state, injection);
+      const withInjection = payload.merge_target === "user_message"
+        ? attachFrameworkInjectionToUserMessage(state, payload, injection)
+        : appendFrameworkInjection(state, injection);
+      return noteContextInsertion(withInjection, payload);
     }
 
     case "agent.tool_runtime_context_injected":
@@ -568,7 +615,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
             streamFinishedAt: eventAt,
             streamDurationMs: 0
           });
-      return {
+      const withCompression = {
         ...base,
         sessionMessageCount: base.sessionMessageCount + 1,
         contextCompression: {
@@ -584,6 +631,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           updatedAt: eventAt
         }
       };
+      return reconcileContextIndexesAfterCompaction(withCompression, payload);
     }
 
     case "model.retry":
@@ -713,6 +761,7 @@ interface SessionHistoryRecord {
   role: "user" | "assistant" | "tool" | "system" | "error" | "event";
   content: unknown[];
   metadata?: Record<string, unknown>;
+  contextMessageId?: string;
   contextMessageIndex?: number;
   timestamp?: number;
 }
@@ -742,6 +791,7 @@ function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
         role,
         content,
         metadata: isRecord(item.metadata) ? item.metadata : undefined,
+        contextMessageId: optionalString(item.context_message_id ?? item.contextMessageId),
         contextMessageIndex: optionalNumber(item.context_message_index ?? item.contextMessageIndex),
         timestamp: optionalNumber(item.timestamp)
       };
@@ -824,8 +874,9 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           record.metadata?.display_message_type,
           queue
         ),
+        contextMessageId: record.contextMessageId,
         contextMessageIndex: record.contextMessageIndex,
-        canFork: record.contextMessageIndex !== undefined,
+        canFork: record.contextMessageId !== undefined || record.contextMessageIndex !== undefined,
         content: historyContentText(record.content)
       });
       return;
@@ -838,6 +889,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           id: nodeId("thinking-history", baseId),
           kind: "thinking",
           content: reasoning,
+          contextMessageId: record.contextMessageId,
           contextMessageIndex: record.contextMessageIndex,
           complete: true
         });
@@ -847,8 +899,9 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           id: nodeId("agent-history", baseId),
           kind: "agent",
           content: answer,
+          contextMessageId: record.contextMessageId,
           contextMessageIndex: record.contextMessageIndex,
-          canFork: record.contextMessageIndex !== undefined,
+          canFork: record.contextMessageId !== undefined || record.contextMessageIndex !== undefined,
           complete: true
         });
       }
@@ -900,7 +953,9 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         ...existing.tool,
         status: result.isError ? "fail" : "success",
         resultPreview: result.text,
-        resultData: result.data
+        resultData: result.data,
+        contextMessageId: record.contextMessageId,
+        contextMessageIndex: record.contextMessageIndex
       };
       return;
     }
@@ -919,11 +974,23 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         argsRaw: "",
         argsState: "complete",
         resultPreview: result.text,
-        resultData: result.data
+        resultData: result.data,
+        contextMessageId: record.contextMessageId,
+        contextMessageIndex: record.contextMessageIndex
       }
     });
   });
   return nodes;
+}
+
+function nextContextMessageIndexFromHistory(history: SessionHistoryRecord[]): number {
+  const maxIndex = history.reduce((current, record) => {
+    if (typeof record.contextMessageIndex !== "number") {
+      return current;
+    }
+    return Math.max(current, record.contextMessageIndex);
+  }, -1);
+  return maxIndex + 1;
 }
 
 function sessionHistoryReplayState(history: SessionHistoryRecord[]): AppState {
@@ -965,6 +1032,7 @@ function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
           nodes
         },
         optionalString(payload.target_message_id),
+        optionalString(payload.target_context_message_id),
         optionalNumber(payload.target_message_index)
       );
       if (targetNodeId) {
@@ -1246,6 +1314,11 @@ function appendRunDelta(
   }
   const processingId = run.processingId;
   const shouldCountAssistant = run.assistantMessageCounted !== true;
+  const contextMessageIndex = kind === "agent"
+    ? run.assistantContextMessageIndex ?? state.nextContextMessageIndex
+    : undefined;
+  const shouldIndexAssistant = kind === "agent"
+    && run.assistantContextMessageIndex === undefined;
   if (processingId) {
     const withoutProcessing = clearProcessingForRun(state, runId);
     const id = nodeId(kind, `${runId}-${withoutProcessing.nodes.length}`);
@@ -1253,6 +1326,8 @@ function appendRunDelta(
       id,
       kind,
       content: delta,
+      contextMessageIndex,
+      canFork: contextMessageIndex !== undefined,
       complete: false,
       streamStartedAt: eventAt
     });
@@ -1266,9 +1341,18 @@ function appendRunDelta(
         [runId]: {
           ...(next.runs[runId] ?? {}),
           [key]: id,
-          assistantMessageCounted: true
+          assistantMessageCounted: true,
+          assistantContextMessageIndex: kind === "agent"
+            ? contextMessageIndex
+            : run.assistantContextMessageIndex,
+          toolCallAssistantContextIndexed: kind === "agent"
+            ? false
+            : run.toolCallAssistantContextIndexed,
         }
-      }
+      },
+      nextContextMessageIndex: shouldIndexAssistant
+        ? next.nextContextMessageIndex + 1
+        : next.nextContextMessageIndex
     };
   }
   const id = nodeId(kind, `${runId}-${state.nodes.length}`);
@@ -1276,6 +1360,8 @@ function appendRunDelta(
     id,
     kind,
     content: delta,
+    contextMessageIndex,
+    canFork: contextMessageIndex !== undefined,
     complete: false,
     streamStartedAt: eventAt
   });
@@ -1289,10 +1375,167 @@ function appendRunDelta(
       [runId]: {
         ...(next.runs[runId] ?? {}),
         [key]: id,
-        assistantMessageCounted: true
+        assistantMessageCounted: true,
+        assistantContextMessageIndex: kind === "agent"
+          ? contextMessageIndex
+          : run.assistantContextMessageIndex,
+        toolCallAssistantContextIndexed: kind === "agent"
+          ? false
+          : run.toolCallAssistantContextIndexed,
+      }
+    },
+    nextContextMessageIndex: shouldIndexAssistant
+      ? next.nextContextMessageIndex + 1
+      : next.nextContextMessageIndex
+  };
+}
+
+function indexToolCallAssistantContext(state: AppState, runId: string): AppState {
+  if (!runId) {
+    return state;
+  }
+  const run = state.runs[runId] ?? {};
+  if (
+    run.assistantContextMessageIndex !== undefined
+    || run.toolCallAssistantContextIndexed === true
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    nextContextMessageIndex: state.nextContextMessageIndex + 1,
+    runs: {
+      ...state.runs,
+      [runId]: {
+        ...run,
+        toolCallAssistantContextIndexed: true
       }
     }
   };
+}
+
+function toolResultNeedsContextIndex(
+  state: AppState,
+  toolCallId: string,
+  payload: Record<string, unknown>,
+): boolean {
+  if (!toolCallId || payload.is_part === true) {
+    return false;
+  }
+  const nodeIdForTool = state.toolNodeByCallId[toolCallId];
+  if (!nodeIdForTool) {
+    return true;
+  }
+  const node = state.nodes.find((item) => item.id === nodeIdForTool);
+  return node?.tool?.contextMessageIndex === undefined;
+}
+
+function noteContextInsertion(
+  state: AppState,
+  payload: Record<string, unknown>,
+): AppState {
+  const insertionIndex = optionalNumber(payload.position);
+  const role = optionalString(payload.role);
+  if (
+    insertionIndex === undefined
+    || insertionIndex < 0
+    || !isContextMessageRole(role)
+  ) {
+    return state;
+  }
+  return mapContextIndexes(
+    state,
+    (index) => index >= insertionIndex ? index + 1 : index,
+    Math.max(state.nextContextMessageIndex + 1, insertionIndex + 1),
+  );
+}
+
+function reconcileContextIndexesAfterCompaction(
+  state: AppState,
+  payload: Record<string, unknown>,
+): AppState {
+  if (optionalString(payload.status) !== "success") {
+    return state;
+  }
+  const replacedMessageCount = optionalNumber(payload.replaced_message_count);
+  if (replacedMessageCount === undefined || replacedMessageCount <= 0) {
+    return state;
+  }
+  const messageCountAfter = optionalNumber(payload.message_count_after);
+  return mapContextIndexes(
+    state,
+    (index) => (
+      index < replacedMessageCount
+        ? undefined
+        : index - replacedMessageCount + 1
+    ),
+    messageCountAfter ?? Math.max(1, state.nextContextMessageIndex - replacedMessageCount + 1),
+  );
+}
+
+function mapContextIndexes(
+  state: AppState,
+  mapIndex: (index: number) => number | undefined,
+  nextContextMessageIndex: number,
+): AppState {
+  const nodes = state.nodes.map((node) => {
+    let nextNode = node;
+    if (node.contextMessageIndex !== undefined) {
+      const mapped = mapIndex(node.contextMessageIndex);
+      if (mapped !== node.contextMessageIndex) {
+        nextNode = {
+          ...nextNode,
+          contextMessageIndex: mapped,
+          contextMessageId: mapped === undefined ? undefined : nextNode.contextMessageId,
+          canFork: mapped === undefined ? false : nextNode.canFork,
+        };
+      }
+    }
+    if (nextNode.tool?.contextMessageIndex !== undefined) {
+      const mapped = mapIndex(nextNode.tool.contextMessageIndex);
+      if (mapped !== nextNode.tool.contextMessageIndex) {
+        nextNode = {
+          ...nextNode,
+          tool: {
+            ...nextNode.tool,
+            contextMessageId: mapped === undefined ? undefined : nextNode.tool.contextMessageId,
+            contextMessageIndex: mapped,
+          },
+        };
+      }
+    }
+    return nextNode;
+  });
+
+  const runs = Object.fromEntries(
+    Object.entries(state.runs).map(([runId, run]) => {
+      if (run.assistantContextMessageIndex === undefined) {
+        return [runId, run];
+      }
+      const mapped = mapIndex(run.assistantContextMessageIndex);
+      return [
+        runId,
+        mapped === run.assistantContextMessageIndex
+          ? run
+          : { ...run, assistantContextMessageIndex: mapped },
+      ];
+    })
+  );
+
+  return {
+    ...state,
+    nodes,
+    runs,
+    nextContextMessageIndex,
+  };
+}
+
+function isContextMessageRole(role?: string): boolean {
+  return role === "user"
+    || role === "assistant"
+    || role === "tool"
+    || role === "system"
+    || role === "error";
 }
 
 function completeThinkingForRun(state: AppState, runId: string, finishedAt: number): AppState {
@@ -1681,8 +1924,14 @@ function attachFrameworkInjectionToUserMessage(
   injection: FrameworkInjectionState,
 ): AppState {
   const targetMessageId = optionalString(payload.target_message_id);
+  const targetContextMessageId = optionalString(payload.target_context_message_id);
   const targetMessageIndex = optionalNumber(payload.target_message_index);
-  const targetNodeId = findUserMessageNodeId(state, targetMessageId, targetMessageIndex);
+  const targetNodeId = findUserMessageNodeId(
+    state,
+    targetMessageId,
+    targetContextMessageId,
+    targetMessageIndex
+  );
   if (!targetNodeId) {
     return appendFrameworkInjection(state, injection);
   }
@@ -1701,6 +1950,7 @@ function attachFrameworkInjectionToUserMessage(
 function findUserMessageNodeId(
   state: AppState,
   targetMessageId?: string,
+  targetContextMessageId?: string,
   targetMessageIndex?: number,
 ): string | undefined {
   if (targetMessageId) {
@@ -1708,6 +1958,12 @@ function findUserMessageNodeId(
     if (state.nodes.some((node) => node.id === id && node.kind === "user")) {
       return id;
     }
+  }
+  if (targetContextMessageId) {
+    const indexed = state.nodes.find((node) => (
+      node.kind === "user" && node.contextMessageId === targetContextMessageId
+    ));
+    if (indexed) return indexed.id;
   }
   if (targetMessageIndex !== undefined) {
     const indexed = state.nodes.find((node) => (
@@ -1745,6 +2001,7 @@ function frameworkInjectionFromFrame(
     mergeTarget: optionalString(payload.merge_target),
     mergePosition: normalizeMergePosition(payload.merge_position),
     targetMessageId: optionalString(payload.target_message_id),
+    targetContextMessageId: optionalString(payload.target_context_message_id),
     targetMessageIndex: optionalNumber(payload.target_message_index),
     contextPosition: optionalNumber(payload.position),
     toolName,
@@ -1807,6 +2064,7 @@ function frameworkInjectionId(
     optionalString(payload.tool_call_id) ?? "",
     optionalString(payload.parameter_name) ?? "",
     optionalString(payload.target_message_id) ?? "",
+    optionalString(payload.target_context_message_id) ?? "",
     optionalString(payload.merge_position) ?? "",
     String(optionalNumber(payload.target_message_index) ?? ""),
     String(optionalNumber(payload.position) ?? ""),
