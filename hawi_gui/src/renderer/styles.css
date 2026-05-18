@@ -1725,6 +1725,10 @@ button.context-status:disabled {
   overflow: hidden;
 }
 
+.message-body.is-collapsed.can-expand {
+  cursor: pointer;
+}
+
 .message-collapse-mask {
   position: absolute;
   inset: 0;

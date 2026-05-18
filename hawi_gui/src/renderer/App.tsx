@@ -2229,6 +2229,20 @@ function guardedToggle(toggle: () => void) {
   toggle();
 }
 
+function expandCollapsedBubbleContent(event: ReactMouseEvent<HTMLElement>, expand: () => void) {
+  if (hasActiveTextSelection()) return;
+  if (isInteractiveClickTarget(event.target, event.currentTarget)) return;
+  expand();
+}
+
+function isInteractiveClickTarget(target: EventTarget | null, container: HTMLElement): boolean {
+  if (!(target instanceof Element)) return false;
+  const interactive = target.closest(
+    "a, button, input, textarea, select, summary, details, [role='button'], [contenteditable='true']"
+  );
+  return interactive !== null && container.contains(interactive);
+}
+
 function guardNativeToggleDuringSelection(event: ReactMouseEvent<HTMLElement>) {
   if (!hasActiveTextSelection()) return;
   event.preventDefault();
@@ -2335,7 +2349,15 @@ const SystemPromptBubble = memo(function SystemPromptBubble({ node }: { node: Ch
           </button>
         </span>
       </div>
-      <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
+      <div
+        className={`message-body ${collapsed ? "is-collapsed can-expand" : ""}`}
+        onClick={
+          collapsed
+            ? (event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))
+            : undefined
+        }
+        title={collapsed ? "点击展开 System prompt" : undefined}
+      >
         <MarkdownView html={html} />
         {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
       </div>
@@ -2461,7 +2483,15 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         </div>
       )}
-      <div className={`message-body ${collapsed ? "is-collapsed" : ""}`}>
+      <div
+        className={`message-body ${collapsed ? "is-collapsed can-expand" : ""}`}
+        onClick={
+          collapsed
+            ? (event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))
+            : undefined
+        }
+        title={collapsed ? "点击展开消息" : undefined}
+      >
         <MarkdownView html={html} />
         {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
       </div>
