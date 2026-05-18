@@ -3277,10 +3277,25 @@ function PluginMessageActions({
   onPluginAction: (payload: PluginActionPayload) => Promise<CoreFrame | null>;
 }) {
   const review = humanReviewActionFromMessage(item);
+  const [busy, setBusy] = useState(false);
+  const [handled, setHandled] = useState(false);
   if (!review) return null;
 
+  async function submitReview(payload: PluginActionPayload) {
+    if (busy || handled) return;
+    setBusy(true);
+    try {
+      const frame = await onPluginAction(payload);
+      if (frame?.type === "ack") {
+        setHandled(true);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function approve() {
-    await onPluginAction({
+    await submitReview({
       plugin_id: review.pluginId,
       action: review.approveAction,
       arguments: {
@@ -3291,11 +3306,12 @@ function PluginMessageActions({
   }
 
   async function reject() {
+    if (busy || handled) return;
     const feedback = window.prompt("拒绝原因");
     if (feedback === null) return;
     const trimmed = feedback.trim();
     if (!trimmed) return;
-    await onPluginAction({
+    await submitReview({
       plugin_id: review.pluginId,
       action: review.rejectAction,
       arguments: {
@@ -3305,12 +3321,20 @@ function PluginMessageActions({
     });
   }
 
+  if (handled) {
+    return (
+      <div className="plugin-message-actions">
+        <span className="review-action-state">已提交</span>
+      </div>
+    );
+  }
+
   return (
     <div className="plugin-message-actions">
-      <button type="button" className="mini-button" onClick={approve}>
-        <Check size={13} /> 批准
+      <button type="button" className="mini-button" onClick={approve} disabled={busy}>
+        {busy ? <LoaderCircle size={13} /> : <Check size={13} />} 批准
       </button>
-      <button type="button" className="mini-button danger" onClick={reject}>
+      <button type="button" className="mini-button danger" onClick={reject} disabled={busy}>
         <X size={13} /> 拒绝
       </button>
     </div>

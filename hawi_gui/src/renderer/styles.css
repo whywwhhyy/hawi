@@ -381,6 +381,13 @@ button.context-status:disabled {
   background: var(--color-primary-tint);
 }
 
+.mini-button:disabled,
+.mini-button:disabled:hover {
+  cursor: default;
+  opacity: 0.55;
+  background: var(--color-surface);
+}
+
 .mini-button.icon-only {
   width: 24px;
   padding: 0;
@@ -1226,6 +1233,12 @@ button.context-status:disabled {
 
 .plugin-message-actions .mini-button.danger:hover {
   background: #fff0ee;
+}
+
+.review-action-state {
+  color: #69767b;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .bubble {

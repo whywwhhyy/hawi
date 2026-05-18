@@ -259,6 +259,96 @@ describe("core event reducer", () => {
     });
   });
 
+  it("replaces older taskflow review messages for the same step", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("plugin.event", {
+      plugin_id: "hawi/taskflow",
+      plugin_name: "Taskflow",
+      event_name: "taskflow.review.requested",
+      message_id: "taskflow-review-r1",
+      level: "warning",
+      title: "Review required: Draft",
+      message: "Step Draft is awaiting human review.",
+      data: {
+        kind: "human_review_request",
+        plugin_id: "hawi/taskflow",
+        review_id: "r1",
+        step_id: "draft",
+        approve_action: "approve_taskflow_review",
+        reject_action: "reject_taskflow_review"
+      },
+      state: {
+        steps: [{ id: "draft", status: "reviewing", children: [] }]
+      }
+    }));
+
+    state = reduceCoreEvent(state, frame("plugin.event", {
+      plugin_id: "hawi/taskflow",
+      plugin_name: "Taskflow",
+      event_name: "taskflow.review.requested",
+      message_id: "taskflow-review-r2",
+      level: "warning",
+      title: "Review required: Draft",
+      message: "Step Draft is awaiting human review.",
+      data: {
+        kind: "human_review_request",
+        plugin_id: "hawi/taskflow",
+        review_id: "r2",
+        step_id: "draft",
+        approve_action: "approve_taskflow_review",
+        reject_action: "reject_taskflow_review"
+      },
+      state: {
+        steps: [{ id: "draft", status: "reviewing", children: [] }]
+      }
+    }));
+
+    expect(state.pluginMessages).toHaveLength(1);
+    expect(state.pluginMessages[0].id).toBe("taskflow-review-r2");
+    expect(state.pluginMessages[0].data).toMatchObject({ review_id: "r2" });
+  });
+
+  it("removes taskflow review messages once their step leaves review", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("plugin.event", {
+      plugin_id: "hawi/taskflow",
+      plugin_name: "Taskflow",
+      event_name: "taskflow.review.requested",
+      message_id: "taskflow-review-r1",
+      level: "warning",
+      title: "Review required: Draft",
+      message: "Step Draft is awaiting human review.",
+      data: {
+        kind: "human_review_request",
+        plugin_id: "hawi/taskflow",
+        review_id: "r1",
+        step_id: "draft",
+        approve_action: "approve_taskflow_review",
+        reject_action: "reject_taskflow_review"
+      },
+      state: {
+        steps: [{ id: "draft", status: "reviewing", children: [] }]
+      }
+    }));
+
+    state = reduceCoreEvent(state, frame("plugin.event", {
+      plugin_id: "hawi/taskflow",
+      plugin_name: "Taskflow",
+      event_name: "taskflow.step.updated",
+      action: "completed",
+      message: "completed: draft",
+      state: {
+        steps: [{ id: "draft", status: "completed", children: [] }]
+      }
+    }));
+
+    expect(state.pluginMessages).toHaveLength(1);
+    expect(state.pluginMessages[0].message).toBe("completed: draft");
+    expect(state.pluginMessages[0].data).toBeUndefined();
+  });
+
   it("clears stale context usage when loading a session without usage", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("model.metadata", {

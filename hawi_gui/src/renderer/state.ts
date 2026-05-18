@@ -629,7 +629,10 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     }
 
     case "plugin.event":
-      return addPluginMessage(state, payload, frame);
+      return pruneResolvedHumanReviewMessages(
+        addPluginMessage(state, payload, frame),
+        payload
+      );
 
     case "plugin.status":
       return updatePluginStatus(state, payload, frame);
@@ -1908,9 +1911,99 @@ function addPluginMessage(state: AppState, payload: Record<string, unknown>, fra
     data: payload.data,
     timestamp: frameTime(frame)
   };
+  const baseMessages = removeSupersededPluginMessages(state.pluginMessages, item);
   return {
     ...state,
-    pluginMessages: [...state.pluginMessages.slice(-79), item]
+    pluginMessages: [...baseMessages.slice(-79), item]
+  };
+}
+
+function removeSupersededPluginMessages(
+  messages: PluginMessageState[],
+  item: PluginMessageState,
+): PluginMessageState[] {
+  const review = humanReviewMessageInfo(item);
+  return messages.filter((existing) => {
+    if (existing.id === item.id) {
+      return false;
+    }
+    if (!review) {
+      return true;
+    }
+    const existingReview = humanReviewMessageInfo(existing);
+    if (!existingReview || existingReview.pluginId !== review.pluginId) {
+      return true;
+    }
+    if (existingReview.reviewId === review.reviewId) {
+      return false;
+    }
+    return !review.stepId || existingReview.stepId !== review.stepId;
+  });
+}
+
+function pruneResolvedHumanReviewMessages(
+  state: AppState,
+  payload: Record<string, unknown>,
+): AppState {
+  const reviewingStepIds = reviewingTaskflowStepIds(payload);
+  if (!reviewingStepIds) {
+    return state;
+  }
+  const plugin = pluginInfo(payload);
+  const pluginMessages = state.pluginMessages.filter((message) => {
+    const review = humanReviewMessageInfo(message);
+    if (!review || review.pluginId !== plugin.pluginId || !review.stepId) {
+      return true;
+    }
+    return reviewingStepIds.has(review.stepId);
+  });
+  if (pluginMessages.length === state.pluginMessages.length) {
+    return state;
+  }
+  return { ...state, pluginMessages };
+}
+
+function reviewingTaskflowStepIds(payload: Record<string, unknown>): Set<string> | undefined {
+  const state = isRecord(payload.state) ? payload.state : undefined;
+  const steps = Array.isArray(state?.steps) ? state.steps : undefined;
+  if (!steps) {
+    return undefined;
+  }
+  const ids = new Set<string>();
+  collectReviewingStepIds(steps, ids);
+  return ids;
+}
+
+function collectReviewingStepIds(steps: unknown[], ids: Set<string>): void {
+  steps.forEach((step) => {
+    if (!isRecord(step)) {
+      return;
+    }
+    const id = optionalString(step.id);
+    if (id && optionalString(step.status) === "reviewing") {
+      ids.add(id);
+    }
+    if (Array.isArray(step.children)) {
+      collectReviewingStepIds(step.children, ids);
+    }
+  });
+}
+
+function humanReviewMessageInfo(
+  message: PluginMessageState,
+): { pluginId: string; reviewId: string; stepId?: string } | undefined {
+  const data = isRecord(message.data) ? message.data : undefined;
+  if (!data || data.kind !== "human_review_request") {
+    return undefined;
+  }
+  const reviewId = optionalString(data.review_id);
+  if (!reviewId) {
+    return undefined;
+  }
+  return {
+    pluginId: optionalString(data.plugin_id) ?? message.pluginId,
+    reviewId,
+    stepId: optionalString(data.step_id),
   };
 }
 
