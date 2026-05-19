@@ -151,10 +151,7 @@ async def test_agent_emits_system_prompt_and_context_injected_events() -> None:
     assert segment_event.plugin_name == "PromptInjectionPlugin"
     assert segment_event.plugin_role == "plugin"
     assert segment_event.injection_name == "inject_prompt_material"
-    assert [part["text"] for part in snapshot_event.content] == [
-        "base system",
-        "plugin system",
-    ]
+    assert [part["text"] for part in snapshot_event.content] == ["base system"]
     assert snapshot_event.origin == "session_start"
 
     assert len(context_events) == 1

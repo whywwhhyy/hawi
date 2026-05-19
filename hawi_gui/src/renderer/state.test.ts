@@ -617,6 +617,63 @@ describe("core event reducer", () => {
     expect(state.nodes[2].content).toBe("done");
   });
 
+  it("shows a processing line after the last tool result while waiting for model output", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-wait-tool", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-wait-tool", tool_call_id: "tc-wait", tool_name: "calc" }));
+
+    expect(state.processing).toBeUndefined();
+
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-wait-tool",
+      tool_call_id: "tc-wait",
+      tool_name: "calc",
+      success: true,
+      output: "4"
+    }));
+
+    expect(state.processing).toMatchObject({
+      runId: "run-wait-tool",
+      content: "处理中..."
+    });
+    expect(state.runs["run-wait-tool"].processingId).toBe(state.processing?.id);
+
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-wait-tool", delta: "done" }));
+
+    expect(state.processing).toBeUndefined();
+    expect(state.runs["run-wait-tool"].processingId).toBeUndefined();
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "tool", "agent"]);
+  });
+
+  it("waits for all known tools to finish before showing model processing", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-two-tools", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-two-tools", tool_call_id: "tc-a", tool_name: "a" }));
+    state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-two-tools", tool_call_id: "tc-b", tool_name: "b" }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-two-tools",
+      tool_call_id: "tc-a",
+      tool_name: "a",
+      success: true,
+      output: "a"
+    }));
+
+    expect(state.processing).toBeUndefined();
+
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-two-tools",
+      tool_call_id: "tc-b",
+      tool_name: "b",
+      success: true,
+      output: "b"
+    }));
+
+    expect(state.processing).toMatchObject({
+      runId: "run-two-tools",
+      content: "处理中..."
+    });
+  });
+
   it("splits thinking content around tool calls", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("run.start", { run_id: "run-thinking", user_content: "hi", queue: "normal" }));
@@ -1289,7 +1346,7 @@ describe("core event reducer", () => {
     }, 20));
     state = reduceCoreEvent(state, frame("agent.system_prompt", {
       run_id: "run-system",
-      text: "Base system\n\nPlugin system material",
+      text: "Base system",
       origin: "session_start",
       plugin_role: "framework",
       injection_name: "system_prompt",
@@ -1300,7 +1357,7 @@ describe("core event reducer", () => {
     expect(state.nodes[0].framework).toMatchObject({
       kind: "system_prompt",
       label: "System prompt",
-      content: "Base system\n\nPlugin system material",
+      content: "Base system",
       runId: "run-system"
     });
     expect(state.nodes[0].injections).toHaveLength(1);

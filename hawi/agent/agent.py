@@ -1032,17 +1032,21 @@ class HawiAgent:
         origin: str,
         event_bus: EventBus | None,
     ) -> None:
-        content = deepcopy(self._context.get_system_prompt() or [])
-        if not content:
-            self._last_emitted_system_prompt = content
+        current = list(self._context.get_system_prompt() or [])
+        content_snapshot = deepcopy(current)
+        if not content_snapshot:
+            self._last_emitted_system_prompt = content_snapshot
             return
-        if content == self._last_emitted_system_prompt:
+        if content_snapshot == self._last_emitted_system_prompt:
             return
-        self._last_emitted_system_prompt = deepcopy(content)
+        self._last_emitted_system_prompt = deepcopy(content_snapshot)
+        display_content = self._system_prompt_display_content(current)
+        if not display_content:
+            return
         await self._emit_event(
             AgentSystemPromptEvent.create(
                 run_id=run_id,
-                content=content,
+                content=display_content,
                 origin=origin,
                 plugin_role="framework",
                 injection_name="system_prompt",
@@ -1050,6 +1054,20 @@ class HawiAgent:
             ),
             event_bus,
         )
+
+    def _system_prompt_display_content(
+        self,
+        content: list[ContentPart],
+    ) -> list[ContentPart]:
+        """Return only the base system prompt parts for UI display events."""
+        injected_part_ids = set(self._system_prompt_part_variability_rank)
+        if not injected_part_ids and self._system_prompt is not None:
+            return deepcopy(self._system_prompt)
+        return [
+            deepcopy(part)
+            for part in content
+            if id(part) not in injected_part_ids
+        ]
 
     async def _emit_system_prompt_injected_event(
         self,

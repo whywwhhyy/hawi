@@ -517,9 +517,19 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           durationMs: Number(payload.duration_ms ?? tool.durationMs ?? 0)
         }, eventAt);
       });
-      return contextMessageIndex === undefined
+      const withContextIndex = contextMessageIndex === undefined
         ? updated
         : { ...updated, nextContextMessageIndex: updated.nextContextMessageIndex + 1 };
+      const runId = String(payload.run_id ?? state.activeRunId ?? "");
+      if (
+        payload.is_part !== true
+        && runId
+        && withContextIndex.activeRunId === runId
+        && !hasActiveToolsForRun(withContextIndex, runId)
+      ) {
+        return ensureProcessingForRun(withContextIndex, runId);
+      }
+      return withContextIndex;
     }
 
     case "model.metadata": {
@@ -1659,6 +1669,30 @@ function clearProcessingForRun(state: AppState, runId: string): AppState {
   };
 }
 
+function ensureProcessingForRun(state: AppState, runId: string): AppState {
+  const existingId = state.runs[runId]?.processingId;
+  if (existingId && state.processing?.id === existingId) {
+    return state;
+  }
+  const base = clearProcessing(state);
+  const processing: ProcessingState = {
+    id: nodeId("processing", `${runId}-${base.nodes.length}`),
+    runId,
+    content: "处理中...",
+  };
+  return {
+    ...base,
+    processing,
+    runs: {
+      ...base.runs,
+      [runId]: {
+        ...(base.runs[runId] ?? {}),
+        processingId: processing.id
+      }
+    }
+  };
+}
+
 function clearProcessing(state: AppState): AppState {
   const hasRunProcessing = Object.values(state.runs).some((run) => run.processingId);
   if (!state.processing && !hasRunProcessing) {
@@ -1675,6 +1709,14 @@ function clearProcessing(state: AppState): AppState {
     processing: undefined,
     runs
   };
+}
+
+function hasActiveToolsForRun(state: AppState, runId: string): boolean {
+  return state.nodes.some((node) => {
+    const tool = node.tool;
+    return tool?.runId === runId
+      && (tool.status === "pending" || tool.status === "running");
+  });
 }
 
 function updateTool(state: AppState, toolCallId: string, updater: (tool: ToolState) => ToolState): AppState {
