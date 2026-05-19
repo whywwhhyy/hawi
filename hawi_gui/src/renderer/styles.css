@@ -1750,6 +1750,9 @@ button.context-status:disabled {
 }
 
 .thinking-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   max-height: 0;
   padding: 0 12px;
   color: #7b858a;
@@ -1770,11 +1773,12 @@ button.context-status:disabled {
 }
 
 .thinking-summary.is-visible {
-  max-height: 140px;
+  max-height: calc(4.35em + 19px);
   padding: 9px 12px 10px;
   visibility: visible;
   opacity: 1;
   transform: translateY(0);
+  cursor: pointer;
   transition:
     max-height 190ms ease,
     padding 190ms ease,

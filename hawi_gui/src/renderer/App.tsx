@@ -57,6 +57,7 @@ const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
 const COPY_FEEDBACK_MS = 1200;
 const SYSTEM_PROMPT_MAX_ROWS = 3;
+const THINKING_SUMMARY_MAX_CHARS = 360;
 const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
 const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
@@ -2544,18 +2545,10 @@ function frameworkInjectionTargetLabel(item: FrameworkInjectionState): string | 
 }
 
 const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }) {
-  const [collapsed, setCollapsed] = useState(() => node.complete === true);
-  const autoCollapsedRef = useRef(node.complete === true);
+  const [collapsed, setCollapsed] = useState(true);
   const html = renderMarkdown(node.content);
   const receiving = node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
-
-  useEffect(() => {
-    if (node.complete === true && !autoCollapsedRef.current) {
-      setCollapsed(true);
-      autoCollapsedRef.current = true;
-    }
-  }, [node.complete]);
 
   return (
     <article className={`bubble thinking ${collapsed ? "collapsed" : ""}`}>
@@ -2590,9 +2583,15 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
       </div>
       <div
         className={`thinking-summary ${collapsed ? "is-visible" : ""}`}
+        onClick={
+          collapsed
+            ? (event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))
+            : undefined
+        }
+        title={collapsed ? "点击展开思考内容" : undefined}
         aria-hidden={!collapsed}
       >
-        {thinkingExcerpt(node.content)}
+        {thinkingExcerpt(node.content, THINKING_SUMMARY_MAX_CHARS)}
       </div>
     </article>
   );
