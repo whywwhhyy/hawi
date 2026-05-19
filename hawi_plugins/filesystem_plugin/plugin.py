@@ -52,11 +52,7 @@ class FileSystemPlugin(HawiPlugin):
             ),
             PermissionDeclared(
                 permission=WKP["filesystem:write"],
-                tool_names=["write_file"],
-            ),
-            PermissionDeclared(
-                permission=WKP["filesystem:edit"],
-                tool_names=["edit_file"],
+                tool_names=["write_file", "edit_file"],
             ),
         ]
 

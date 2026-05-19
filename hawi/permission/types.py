@@ -456,14 +456,7 @@ WELL_KNOWN_PERMISSIONS: dict[str, Permission] = {
     ),
     "filesystem:write": Permission(
         id=PermissionId("filesystem:write"),
-        description="Create, modify, or delete files and directories.",
-        risk_level=RiskLevel.high,
-        default_policy=PermissionPolicy.deny,
-        tags=("filesystem", "io", "mutation"),
-    ),
-    "filesystem:edit": Permission(
-        id=PermissionId("filesystem:edit"),
-        description="Edit file contents in-place (edit_file, patch operations).",
+        description="Create, modify, edit, or delete files and directories.",
         risk_level=RiskLevel.high,
         default_policy=PermissionPolicy.deny,
         tags=("filesystem", "io", "mutation"),
