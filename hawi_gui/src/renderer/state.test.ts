@@ -1095,6 +1095,16 @@ describe("core event reducer", () => {
         urgent: [{ id: "u1", queue: "urgent", content_preview: "stop now", created_at: 100 }],
         high_prio: [{ id: "h1", queue: "high_prio", content_preview: "merge this", created_at: 101 }],
         normal: [{ id: "n1", queue: "normal", content_preview: "first", content: "first full task", created_at: 102 }]
+      },
+      auto_compact: {
+        enabled: true,
+        max_context_tokens: 1000,
+        trigger_tokens: 720,
+        trigger_ratio: 0.72,
+        max_trigger_ratio: 0.95,
+        compression_budget: 200,
+        token_limit: 720,
+        token_limit_ratio: 0.72
       }
     }));
     state = reduceCoreEvent(state, frame("model.metadata", {
@@ -1129,6 +1139,16 @@ describe("core event reducer", () => {
     expect(state.metadataLines[0]).toContain("decode≈43 tok/s");
     expect(state.metadataLines[0]).not.toContain("estimated");
     expect(state.contextUsage).toEqual({ usedTokens: 128, maxContextTokens: 1024, ratio: 0.125, source: "provider_usage" });
+    expect(state.contextAutoCompact).toEqual({
+      enabled: true,
+      maxContextTokens: 1000,
+      triggerTokens: 720,
+      triggerRatio: 0.72,
+      maxTriggerRatio: 0.95,
+      compressionBudget: 200,
+      tokenLimit: 720,
+      tokenLimitRatio: 0.72
+    });
     expect(state.nodes.map((node) => node.kind)).toContain("error");
   });
 

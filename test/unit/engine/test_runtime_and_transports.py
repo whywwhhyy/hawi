@@ -14,7 +14,7 @@ from hawi_engine.protocol import VERSION, make_ack, make_frame
 from hawi_engine.runtime import CoreRuntime, load_model_configs, parse_extra_tool_parameter, parse_extra_tool_parameters
 from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi_engine.transports import QueuedJsonClient
-from hawi.agent import HawiAgent, AgentRunner
+from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext
 from hawi.models import model_registry
 from hawi.plugin import HookContext
@@ -80,6 +80,10 @@ class DummyAgent:
     def __init__(self) -> None:
         self.context = self
         self.model_name = ""
+        self._auto_compact = AutoCompactConfig(
+            max_context_tokens=1000,
+            compression_budget=200,
+        )
         self.loaded_steer: list[Any] | None = None
         self.loaded_runtime: dict[str, Any] | None = None
         self.compact_calls: list[dict[str, Any]] = []
@@ -481,6 +485,52 @@ async def test_compact_context_command_rejects_busy_runner() -> None:
     assert client.sent[-1]["type"] == "error"
     assert client.sent[-1]["payload"]["code"] == "busy"
     assert runner.agent.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_set_auto_compact_command_updates_runtime_threshold() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    runtime._runner = runner  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"set_auto_compact","id":"auto",'
+            '"payload":{"trigger_tokens":720,"trigger_ratio":0.72}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "set_auto_compact"
+    assert payload["auto_compact"]["trigger_tokens"] == 720
+    assert payload["auto_compact"]["trigger_ratio"] == 0.72
+    assert payload["auto_compact"]["token_limit"] == 720
+    assert payload["auto_compact"]["token_limit_ratio"] == 0.72
+    assert runner.agent._auto_compact.trigger_tokens == 720
+
+
+@pytest.mark.asyncio
+async def test_set_auto_compact_rejects_threshold_past_context_window() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    runtime._runner = runner  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"set_auto_compact","id":"auto",'
+            '"payload":{"trigger_tokens":1001}}'
+        )
+        % VERSION,
+    )
+
+    assert client.sent[-1]["type"] == "error"
+    assert "max_context_tokens" in client.sent[-1]["payload"]["message"]
 
 
 @pytest.mark.asyncio
@@ -904,6 +954,10 @@ def test_status_payload_includes_queue_messages() -> None:
     assert payload["queue_messages"]["normal"][1]["content_preview"] == "pending plain steer"
     assert payload["queue_messages"]["high_prio"][0]["content_preview"] == "pending steer"
     assert payload["queue_messages"]["urgent"] == []
+    assert payload["auto_compact"]["enabled"] is True
+    assert payload["auto_compact"]["max_context_tokens"] == 1000
+    assert payload["auto_compact"]["token_limit"] == 800
+    assert payload["auto_compact"]["token_limit_ratio"] == 0.8
 
 
 def test_parse_extra_tool_parameter() -> None:

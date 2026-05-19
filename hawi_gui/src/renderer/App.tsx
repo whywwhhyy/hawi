@@ -14,7 +14,7 @@ import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRi
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type ChatNode, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
+import { createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -73,7 +73,8 @@ const queueLabels: Record<QueueKind, string> = {
 const userMessageTypeLabels = {
   normal: "普通消息",
   steer: "Steer",
-  urgent: "紧急消息"
+  urgent: "紧急消息",
+  resume: "Resume"
 } as const;
 
 export function renderQueueStatusText(
@@ -333,6 +334,7 @@ export default function App() {
   });
   const [sessionBusy, setSessionBusy] = useState(false);
   const [contextCompactBusy, setContextCompactBusy] = useState(false);
+  const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -438,7 +440,7 @@ export default function App() {
       if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
       const keyboardState = {
         contextCompactDialogOpen,
-        contextCompactBusy,
+        contextCompactBusy: contextCompactBusy || contextSettingsBusy,
         pluginDialogOpen,
         modelDialogOpen,
         debugMenuOpen,
@@ -508,6 +510,7 @@ export default function App() {
   }, [
     contextCompactDialogOpen,
     contextCompactBusy,
+    contextSettingsBusy,
     pluginDialogOpen,
     modelDialogOpen,
     debugMenuOpen,
@@ -565,6 +568,8 @@ export default function App() {
 
   const selectedModel = config?.modelName || "-";
   const systemPromptLocked = state.nodes.some(isConversationNode);
+  const contextRunnerBusy = state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING";
+  const canCompactContextManually = coreRunning && !contextRunnerBusy && state.contextCompression?.active !== true;
 
   useEffect(() => {
     resizeTextareaToRows(systemPromptRef.current, SYSTEM_PROMPT_MAX_ROWS);
@@ -1191,7 +1196,7 @@ export default function App() {
   }
 
   async function compactContextManually() {
-    if (contextCompactBusy) return;
+    if (contextCompactBusy || !canCompactContextManually) return;
     setContextCompactBusy(true);
     try {
       const frame = await sendCommand("compact_context", {});
@@ -1205,6 +1210,27 @@ export default function App() {
       await refreshRuntimeStatus();
     } finally {
       setContextCompactBusy(false);
+    }
+  }
+
+  async function setAutoCompactThreshold(percent: number) {
+    if (contextSettingsBusy) return;
+    const maxContextTokens = state.contextAutoCompact?.maxContextTokens ?? state.contextUsage?.maxContextTokens;
+    if (!maxContextTokens || maxContextTokens <= 0) {
+      dispatch(errorFrame(new Error("当前模型缺少 context window 信息，无法设置自动压缩阈值")));
+      return;
+    }
+    const ratio = Math.min(1, Math.max(0.01, percent / 100));
+    setContextSettingsBusy(true);
+    try {
+      const frame = await sendCommand("set_auto_compact", {
+        trigger_tokens: Math.max(1, Math.round(maxContextTokens * ratio)),
+        trigger_ratio: ratio
+      });
+      if (!frame) return;
+      await refreshRuntimeStatus();
+    } finally {
+      setContextSettingsBusy(false);
     }
   }
 
@@ -1265,6 +1291,7 @@ export default function App() {
     const frame = await sendCommand("apply_plugins", { selected_plugins: selectedPlugins, plugin_configs: pluginConfigs });
     if (!frame) return;
     const payload = framePayload(frame);
+    if (!payload) return;
     const appliedPlugins = Array.isArray(payload.selected_plugins)
       ? payload.selected_plugins.filter((item): item is string => typeof item === "string")
       : selectedPlugins;
@@ -1322,7 +1349,7 @@ export default function App() {
             usage={state.contextUsage}
             compression={state.contextCompression}
             busy={contextCompactBusy}
-            disabled={!coreRunning || state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING"}
+            disabled={!coreRunning}
             onRequestCompact={() => setContextCompactDialogOpen(true)}
           />
           <QueueStatusCell
@@ -1500,11 +1527,15 @@ export default function App() {
       {contextCompactDialogOpen && (
         <ContextCompactDialog
           usage={state.contextUsage}
+          autoCompact={state.contextAutoCompact}
           busy={contextCompactBusy}
+          settingsBusy={contextSettingsBusy}
+          canManualCompact={canCompactContextManually}
           onClose={() => {
-            if (!contextCompactBusy) setContextCompactDialogOpen(false);
+            if (!contextCompactBusy && !contextSettingsBusy) setContextCompactDialogOpen(false);
           }}
           onConfirm={compactContextManually}
+          onThresholdChange={setAutoCompactThreshold}
         />
       )}
     </div>
@@ -1627,12 +1658,14 @@ function ContextUsageCell({
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
   const usageLabel = `${usage?.source === "estimate" ? "~" : ""}${used}/${max}`;
-  const inactive = disabled || busy || compressing;
+  const inactive = disabled;
   const title = compressing
-    ? `Context compressing ${usageLabel}`
+    ? `Context compressing ${usageLabel} · 点击查看上下文设置`
     : inactive
       ? `Context ${usageLabel}`
-      : `Context ${usageLabel} · 点击手动压缩上下文`;
+      : busy
+        ? `Context ${usageLabel} · 压缩中`
+        : `Context ${usageLabel} · 点击查看上下文设置`;
   return (
     <button
       type="button"
@@ -3316,6 +3349,7 @@ function PluginMessageActions({
   const [busy, setBusy] = useState(false);
   const [handled, setHandled] = useState(false);
   if (!review) return null;
+  const activeReview = review;
 
   async function submitReview(payload: PluginActionPayload) {
     if (busy || handled) return;
@@ -3332,10 +3366,10 @@ function PluginMessageActions({
 
   async function approve() {
     await submitReview({
-      plugin_id: review.pluginId,
-      action: review.approveAction,
+      plugin_id: activeReview.pluginId,
+      action: activeReview.approveAction,
       arguments: {
-        review_id: review.reviewId,
+        review_id: activeReview.reviewId,
         feedback: "Approved in GUI."
       }
     });
@@ -3348,10 +3382,10 @@ function PluginMessageActions({
     const trimmed = feedback.trim();
     if (!trimmed) return;
     await submitReview({
-      plugin_id: review.pluginId,
-      action: review.rejectAction,
+      plugin_id: activeReview.pluginId,
+      action: activeReview.rejectAction,
       arguments: {
-        review_id: review.reviewId,
+        review_id: activeReview.reviewId,
         feedback: trimmed
       }
     });
@@ -3430,29 +3464,57 @@ function formatArtifactData(value: unknown): string {
 
 function ContextCompactDialog({
   usage,
+  autoCompact,
   busy,
+  settingsBusy,
+  canManualCompact,
   onClose,
-  onConfirm
+  onConfirm,
+  onThresholdChange
 }: {
   usage?: ContextUsageState;
+  autoCompact?: ContextAutoCompactState;
   busy: boolean;
+  settingsBusy: boolean;
+  canManualCompact: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  onThresholdChange: (percent: number) => Promise<void>;
 }) {
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(usage.ratio * 100)}%`;
   const estimated = usage?.source === "estimate";
+  const currentThresholdPercent = autoCompactThresholdPercent(autoCompact, usage);
+  const maxThresholdPercent = autoCompactMaxThresholdPercent(autoCompact);
+  const [thresholdDraft, setThresholdDraft] = useState(currentThresholdPercent);
+  const thresholdTokens = autoCompactThresholdTokens(autoCompact, usage, thresholdDraft);
+  const thresholdChanged = thresholdDraft !== currentThresholdPercent;
+  const thresholdDisabled = settingsBusy || !(autoCompact?.maxContextTokens ?? usage?.maxContextTokens);
+
+  useEffect(() => {
+    setThresholdDraft(currentThresholdPercent);
+  }, [currentThresholdPercent]);
+
+  function updateThresholdDraft(value: number) {
+    if (!Number.isFinite(value)) return;
+    setThresholdDraft(Math.min(maxThresholdPercent, Math.max(10, Math.round(value))));
+  }
 
   return (
     <Modal
-      title="手动压缩上下文"
+      title="上下文"
       className="confirm-modal context-compact-modal"
       onClose={onClose}
       footer={
         <div className="modal-action-row">
-          <button className="tool-button" disabled={busy} onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={busy} onClick={onConfirm}>
+          <button className="tool-button" disabled={busy || settingsBusy} onClick={onClose}>取消</button>
+          <button
+            className="primary-button"
+            disabled={busy || !canManualCompact}
+            title={canManualCompact ? "手动压缩上下文" : "Agent idle 后可手动压缩"}
+            onClick={onConfirm}
+          >
             {busy ? (
               <>
                 <LoaderCircle className="inline-spinner" size={15} /> 压缩中
@@ -3467,7 +3529,6 @@ function ContextCompactDialog({
       }
     >
       <div className="confirm-content">
-        <p>是否手动压缩当前上下文？</p>
         <dl className="context-compact-stats">
           <div>
             <dt>Context</dt>
@@ -3478,9 +3539,87 @@ function ContextCompactDialog({
             <dd>{percent}</dd>
           </div>
         </dl>
+        <section className="context-auto-compact">
+          <div className="context-auto-compact-head">
+            <strong>自动压缩</strong>
+            <span>{autoCompact ? (autoCompact.enabled ? "On" : "Off") : "n/a"}</span>
+          </div>
+          <label className="context-threshold-control">
+            <span>触发阈值</span>
+            <input
+              type="range"
+              min={10}
+              max={maxThresholdPercent}
+              step={1}
+              value={thresholdDraft}
+              disabled={thresholdDisabled}
+              onChange={(event) => updateThresholdDraft(Number(event.currentTarget.value))}
+            />
+            <span className="context-threshold-number">
+              <input
+                type="number"
+                min={10}
+                max={maxThresholdPercent}
+                step={1}
+                value={thresholdDraft}
+                disabled={thresholdDisabled}
+                onChange={(event) => updateThresholdDraft(Number(event.currentTarget.value))}
+              />
+              <span>%</span>
+            </span>
+          </label>
+          <div className="context-threshold-actions">
+            <span>
+              {thresholdTokens !== undefined
+                ? `${compactNumber(thresholdTokens)} tokens`
+                : "tokens n/a"}
+            </span>
+            <button
+              className="tool-button"
+              disabled={thresholdDisabled || !thresholdChanged}
+              onClick={() => void onThresholdChange(thresholdDraft)}
+            >
+              {settingsBusy ? (
+                <>
+                  <LoaderCircle className="inline-spinner" size={15} /> 保存中
+                </>
+              ) : "保存阈值"}
+            </button>
+          </div>
+        </section>
       </div>
     </Modal>
   );
+}
+
+function autoCompactThresholdPercent(
+  autoCompact?: ContextAutoCompactState,
+  usage?: ContextUsageState,
+): number {
+  const maxContextTokens = autoCompact?.maxContextTokens ?? usage?.maxContextTokens;
+  const ratio = autoCompact?.tokenLimitRatio
+    ?? (
+      autoCompact?.tokenLimit !== undefined && maxContextTokens
+        ? autoCompact.tokenLimit / maxContextTokens
+        : undefined
+    )
+    ?? autoCompact?.triggerRatio
+    ?? 0.8;
+  return Math.min(autoCompactMaxThresholdPercent(autoCompact), Math.max(10, Math.round(ratio * 100)));
+}
+
+function autoCompactMaxThresholdPercent(autoCompact?: ContextAutoCompactState): number {
+  return Math.min(100, Math.max(10, Math.round((autoCompact?.maxTriggerRatio ?? 0.95) * 100)));
+}
+
+function autoCompactThresholdTokens(
+  autoCompact: ContextAutoCompactState | undefined,
+  usage: ContextUsageState | undefined,
+  percent: number,
+): number | undefined {
+  const maxContextTokens = autoCompact?.maxContextTokens ?? usage?.maxContextTokens;
+  if (!maxContextTokens) return autoCompact?.tokenLimit;
+  return Math.max(1, Math.round(maxContextTokens * (percent / 100)));
 }
 
 function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void; onRefresh: (provider: string) => Promise<void> }) {

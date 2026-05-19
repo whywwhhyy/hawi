@@ -41,6 +41,7 @@ COMMAND_TYPES = {
     "resume",
     "clear_context",
     "compact_context",
+    "set_auto_compact",
     "clear_queue",
     "set_system_prompt",
     "switch_model",

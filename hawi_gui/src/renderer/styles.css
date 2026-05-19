@@ -2494,6 +2494,64 @@ button.context-status:disabled {
   overflow-wrap: anywhere;
 }
 
+.context-auto-compact {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius);
+  background: #fbfcfc;
+}
+
+.context-auto-compact-head,
+.context-threshold-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-auto-compact-head strong {
+  color: #26343a;
+  font-size: 13px;
+}
+
+.context-auto-compact-head span,
+.context-threshold-actions span {
+  color: #637177;
+  font-size: 12px;
+}
+
+.context-threshold-control {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: #3d4b51;
+  font-size: 12px;
+}
+
+.context-threshold-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--color-primary);
+}
+
+.context-threshold-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.context-threshold-number input {
+  width: 58px;
+  padding: 5px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: #243238;
+  font: inherit;
+}
+
 .modal-toolbar {
   flex: 0 0 auto;
   padding: 14px;

@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 import os
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, Sequence, cast
 
@@ -57,6 +58,7 @@ SERVER_CAPS: frozenset[str] = frozenset({
     "message_intent_v1",
     "context_branch_v1",
     "manual_context_compact_v1",
+    "auto_compact_config_v1",
     "plugin_action_v1",
     "runtime_review_v1",
 })
@@ -372,6 +374,8 @@ class CoreRuntime:
                 await self._handle_clear_context(client, command)
             elif command.type == "compact_context":
                 await self._handle_compact_context(client, command)
+            elif command.type == "set_auto_compact":
+                await self._handle_set_auto_compact(client, command)
             elif command.type == "clear_queue":
                 await self._handle_clear_queue(client, command)
             elif command.type == "set_system_prompt":
@@ -763,6 +767,74 @@ class CoreRuntime:
                     "record": record_payload,
                     "message_history": message_history,
                     "context_usage": context_usage,
+                },
+            )
+        )
+
+    async def _handle_set_auto_compact(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        cfg = getattr(runner.agent, "_auto_compact", None)
+        if not isinstance(cfg, AutoCompactConfig):
+            raise ValueError("Current agent does not support auto compact configuration")
+
+        updates: dict[str, Any] = {}
+        if "enabled" in command.payload:
+            enabled = command.payload["enabled"]
+            if not isinstance(enabled, bool):
+                raise ValueError("'set_auto_compact.payload.enabled' must be a boolean")
+            updates["enabled"] = enabled
+
+        if "trigger_tokens" in command.payload:
+            trigger_tokens = command.payload["trigger_tokens"]
+            if trigger_tokens is None:
+                updates["trigger_tokens"] = None
+            else:
+                if isinstance(trigger_tokens, bool) or not isinstance(trigger_tokens, int):
+                    raise ValueError(
+                        "'set_auto_compact.payload.trigger_tokens' must be a positive integer or null"
+                    )
+                if trigger_tokens <= 0:
+                    raise ValueError(
+                        "'set_auto_compact.payload.trigger_tokens' must be positive"
+                    )
+                if cfg.max_context_tokens > 0 and trigger_tokens > cfg.max_context_tokens:
+                    raise ValueError(
+                        "'set_auto_compact.payload.trigger_tokens' must not exceed max_context_tokens"
+                    )
+                updates["trigger_tokens"] = trigger_tokens
+
+        if "trigger_ratio" in command.payload:
+            trigger_ratio = command.payload["trigger_ratio"]
+            if (
+                isinstance(trigger_ratio, bool)
+                or not isinstance(trigger_ratio, (int, float))
+                or not math.isfinite(float(trigger_ratio))
+            ):
+                raise ValueError("'set_auto_compact.payload.trigger_ratio' must be a number")
+            trigger_ratio = float(trigger_ratio)
+            if trigger_ratio <= 0 or trigger_ratio > 1:
+                raise ValueError(
+                    "'set_auto_compact.payload.trigger_ratio' must be greater than 0 and at most 1"
+                )
+            updates["trigger_ratio"] = trigger_ratio
+
+        if not updates:
+            raise ValueError(
+                "'set_auto_compact.payload' must include enabled, trigger_tokens, or trigger_ratio"
+            )
+
+        runner.agent._auto_compact = replace(cfg, **updates)
+        await client.send(
+            make_ack(
+                "set_auto_compact",
+                request_id=command.id,
+                payload={
+                    "auto_compact": self._agent_auto_compact(),
+                    "context_usage": self._agent_context_usage(),
                 },
             )
         )
@@ -1796,6 +1868,9 @@ class CoreRuntime:
         context_usage = self._agent_context_usage()
         if context_usage is not None:
             payload["context_usage"] = context_usage
+        auto_compact = self._agent_auto_compact()
+        if auto_compact is not None:
+            payload["auto_compact"] = auto_compact
         return payload
 
     def _session_manifest_metadata(self) -> dict[str, Any]:
@@ -1855,6 +1930,29 @@ class CoreRuntime:
         if callable(to_dict):
             return to_json_safe(to_dict())
         return None
+
+    def _agent_auto_compact(self) -> dict[str, Any] | None:
+        if self._runner is None:
+            return None
+        cfg = getattr(self._runner.agent, "_auto_compact", None)
+        if not isinstance(cfg, AutoCompactConfig):
+            return None
+        token_limit = cfg.token_limit()
+        token_limit_ratio = (
+            token_limit / cfg.max_context_tokens
+            if cfg.max_context_tokens > 0
+            else None
+        )
+        return to_json_safe({
+            "enabled": cfg.enabled,
+            "max_context_tokens": cfg.max_context_tokens,
+            "trigger_tokens": cfg.trigger_tokens,
+            "trigger_ratio": cfg.trigger_ratio,
+            "max_trigger_ratio": cfg.max_trigger_ratio,
+            "compression_budget": cfg.compression_budget,
+            "token_limit": token_limit,
+            "token_limit_ratio": token_limit_ratio,
+        })
 
 
 def load_model_configs(

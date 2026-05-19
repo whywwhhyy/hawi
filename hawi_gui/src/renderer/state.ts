@@ -148,6 +148,17 @@ export interface ContextCompressionState {
   updatedAt?: number;
 }
 
+export interface ContextAutoCompactState {
+  enabled: boolean;
+  maxContextTokens?: number;
+  triggerTokens?: number;
+  triggerRatio?: number;
+  maxTriggerRatio?: number;
+  compressionBudget?: number;
+  tokenLimit?: number;
+  tokenLimitRatio?: number;
+}
+
 export interface QueueMessageState {
   id: string;
   queue: QueueKind;
@@ -185,6 +196,7 @@ export interface AppState {
   metadataLines: string[];
   contextUsage?: ContextUsageState;
   contextCompression?: ContextCompressionState;
+  contextAutoCompact?: ContextAutoCompactState;
   debugLines: string[];
   errors: string[];
   artifacts: Record<string, PluginArtifactState>;
@@ -211,6 +223,7 @@ export function createInitialState(): AppState {
     metadataLines: [],
     contextUsage: undefined,
     contextCompression: undefined,
+    contextAutoCompact: undefined,
     debugLines: [],
     errors: [],
     artifacts: {},
@@ -237,6 +250,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         metadataLines: [],
         contextUsage: undefined,
         contextCompression: undefined,
+        contextAutoCompact: undefined,
         debugLines: [],
         errors: [],
         artifacts: {},
@@ -266,6 +280,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         metadataLines: [],
         contextUsage,
         contextCompression: undefined,
+        contextAutoCompact: parseStatusAutoCompact(payload.auto_compact),
         debugLines: [],
         errors: [],
         artifacts: replayState.artifacts,
@@ -744,6 +759,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     state.contextUsage,
     parseStatusContextUsage(payload.context_usage)
   );
+  const contextAutoCompact = parseStatusAutoCompact(payload.auto_compact) ?? state.contextAutoCompact;
   const control = normalizeControlState(payload.control);
   if (
     runnerState === state.runnerState
@@ -751,6 +767,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     && sameQueueLengths(queueLengths, state.queueLengths)
     && sameQueueMessages(queueMessages, state.queueMessages)
     && sameContextUsage(contextUsage, state.contextUsage)
+    && sameContextAutoCompact(contextAutoCompact, state.contextAutoCompact)
     && sameControlState(control, state.control)
   ) {
     return state;
@@ -762,6 +779,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
     queueLengths,
     queueMessages,
     contextUsage,
+    contextAutoCompact,
     control
   };
 }
@@ -1200,6 +1218,28 @@ function parseStatusContextUsage(value: unknown): ContextUsageState | undefined 
   };
 }
 
+function parseStatusAutoCompact(value: unknown): ContextAutoCompactState | undefined {
+  if (!isRecord(value)) return undefined;
+  const enabled = value.enabled === true;
+  const maxContextTokens = optionalNumber(value.max_context_tokens);
+  const triggerTokens = optionalNumber(value.trigger_tokens);
+  const triggerRatio = optionalNumber(value.trigger_ratio);
+  const maxTriggerRatio = optionalNumber(value.max_trigger_ratio);
+  const compressionBudget = optionalNumber(value.compression_budget);
+  const tokenLimit = optionalNumber(value.token_limit);
+  const tokenLimitRatio = optionalNumber(value.token_limit_ratio);
+  return {
+    enabled,
+    maxContextTokens,
+    triggerTokens,
+    triggerRatio: triggerRatio === undefined ? undefined : clamp(triggerRatio, 0, 1),
+    maxTriggerRatio: maxTriggerRatio === undefined ? undefined : clamp(maxTriggerRatio, 0, 1),
+    compressionBudget,
+    tokenLimit,
+    tokenLimitRatio: tokenLimitRatio === undefined ? undefined : clamp(tokenLimitRatio, 0, 1),
+  };
+}
+
 function sameContextUsage(a?: ContextUsageState, b?: ContextUsageState): boolean {
   if (!a && !b) return true;
   if (!a || !b) return false;
@@ -1207,6 +1247,19 @@ function sameContextUsage(a?: ContextUsageState, b?: ContextUsageState): boolean
     && a.maxContextTokens === b.maxContextTokens
     && a.ratio === b.ratio
     && a.source === b.source;
+}
+
+function sameContextAutoCompact(a?: ContextAutoCompactState, b?: ContextAutoCompactState): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.enabled === b.enabled
+    && a.maxContextTokens === b.maxContextTokens
+    && a.triggerTokens === b.triggerTokens
+    && a.triggerRatio === b.triggerRatio
+    && a.maxTriggerRatio === b.maxTriggerRatio
+    && a.compressionBudget === b.compressionBudget
+    && a.tokenLimit === b.tokenLimit
+    && a.tokenLimitRatio === b.tokenLimitRatio;
 }
 
 function chooseContextUsage(current: ContextUsageState | undefined, incoming: ContextUsageState | undefined): ContextUsageState | undefined {
