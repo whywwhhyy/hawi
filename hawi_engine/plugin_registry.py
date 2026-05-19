@@ -83,6 +83,33 @@ class PluginDescriptor:
         """Return the plugin GUI default config."""
         return self.load_class().gui_default_config()
 
+    @property
+    def permissions(self) -> list[dict[str, Any]]:
+        """Return the plugin's declared permissions for GUI display."""
+        plugin_cls = self.load_class()
+        perm_prop = getattr(plugin_cls, "permissions", None)
+        if perm_prop is None:
+            return []
+        # Create a temporary instance to read the property
+        try:
+            instance = plugin_cls()
+            perms = instance.permissions
+        except Exception:
+            return []
+        result: list[dict[str, Any]] = []
+        for decl in perms:
+            perm = getattr(decl, "permission", None)
+            if perm is None:
+                continue
+            result.append({
+                "id": str(getattr(perm, "id", "")),
+                "description": str(getattr(perm, "description", "")),
+                "risk_level": str(getattr(perm, "risk_level", "medium")),
+                "default_policy": str(getattr(perm, "default_policy", "deny")),
+                "tool_names": list(getattr(decl, "tool_names", ())),
+            })
+        return result
+
 
 def _create_skills_plugin(config: dict[str, Any]) -> Any:
     from hawi_plugins.skills_plugin import SkillsPlugin
@@ -249,6 +276,7 @@ def plugin_catalog() -> list[dict[str, Any]]:
             "dependencies": list(descriptor.dependencies),
             "schema": descriptor.gui_config_schema(),
             "defaults": descriptor.gui_default_config(),
+            "permissions": descriptor.permissions,
         }
         for descriptor in iter_plugin_descriptors()
     ]

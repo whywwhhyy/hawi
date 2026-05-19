@@ -2706,6 +2706,56 @@ button.context-status:disabled {
   margin-top: -4px;
 }
 
+/* Permission tags in plugin dialog */
+.plugin-permissions {
+  margin: 4px 0 8px 26px;
+}
+
+.plugin-permissions-title {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.permission-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 4px 2px 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+}
+
+.permission-tag .permission-id {
+  font-weight: 600;
+  font-family: monospace;
+  color: var(--color-text);
+}
+
+.permission-tag .permission-policy {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: var(--color-bg);
+}
+
+.permission-tag .permission-tools {
+  color: var(--color-text-muted);
+  font-family: monospace;
+  font-size: 10px;
+}
+
+.permission-risk-low .permission-policy { color: #22c55e; }
+.permission-risk-medium .permission-policy { color: #eab308; }
+.permission-risk-high .permission-policy { color: #f97316; }
+.permission-risk-critical .permission-policy { color: #ef4444; }
+
 .schema-field {
   display: grid;
   grid-template-columns: 170px 1fr;

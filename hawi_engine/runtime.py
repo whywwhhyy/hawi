@@ -69,6 +69,8 @@ PLUGIN_ACTION_METHODS: frozenset[str] = frozenset({
     "reject_taskflow_review",
     "approve_workflow_node",
     "reject_workflow_node",
+    "approve_permission_review",
+    "reject_permission_review",
 })
 
 

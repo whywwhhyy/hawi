@@ -2346,18 +2346,23 @@ function humanReviewMessageInfo(
   message: PluginMessageState,
 ): { pluginId: string; reviewId: string; stepId?: string } | undefined {
   const data = isRecord(message.data) ? message.data : undefined;
-  if (!data || data.kind !== "human_review_request") {
-    return undefined;
+  if (!data) return undefined;
+
+  // Taskflow/Workflow human_review_request
+  if (data.kind === "human_review_request") {
+    const reviewId = optionalString(data.review_id);
+    if (!reviewId) return undefined;
+    return {
+      pluginId: optionalString(data.plugin_id) ?? message.pluginId,
+      reviewId,
+      stepId: optionalString(data.step_id),
+    };
   }
-  const reviewId = optionalString(data.review_id);
-  if (!reviewId) {
-    return undefined;
-  }
-  return {
-    pluginId: optionalString(data.plugin_id) ?? message.pluginId,
-    reviewId,
-    stepId: optionalString(data.step_id),
-  };
+
+  // Permission system review (via plugin.event)
+  // event_name === "permission.review.requested" also carries
+  // kind === "human_review_request" for the GUI protocol.
+  return undefined;
 }
 
 function updatePluginStatus(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {

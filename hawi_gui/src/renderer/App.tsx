@@ -3781,6 +3781,20 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
                 依赖: {item.dependencies.join(", ")}
               </div>
             )}
+            {item.permissions && item.permissions.length > 0 && (
+              <div className="plugin-permissions">
+                <div className="plugin-permissions-title">声明的权限:</div>
+                {item.permissions.map((perm) => (
+                  <div key={perm.id} className={`permission-tag permission-risk-${perm.risk_level}`}>
+                    <span className="permission-id">{perm.id}</span>
+                    <span className="permission-policy">{perm.default_policy}</span>
+                    {perm.tool_names.length > 0 && (
+                      <span className="permission-tools">{perm.tool_names.join(", ")}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
             {Object.entries(item.schema.properties ?? {}).map(([field, schema]) => (
               <SchemaField
                 key={field}

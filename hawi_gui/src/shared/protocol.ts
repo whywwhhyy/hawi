@@ -124,6 +124,15 @@ export interface PluginCatalogItem {
   dependencies: string[];
   schema: JsonSchemaObject;
   defaults: Record<string, unknown>;
+  permissions?: PluginPermissionDeclared[];
+}
+
+export interface PluginPermissionDeclared {
+  id: string;
+  description: string;
+  risk_level: string;
+  default_policy: string;
+  tool_names: string[];
 }
 
 export interface InspectPayload {

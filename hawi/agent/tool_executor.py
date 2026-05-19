@@ -922,20 +922,32 @@ class ToolExecutor:
         )
 
         # Emit review-requested event for GUI observability
+        # The payload matches the human_review_request protocol that the
+        # GUI's PluginMessageActions component already understands.
         from hawi.events import PluginEvent
+        review_payload = {
+            "event_name": "permission.review.requested",
+            "kind": "human_review_request",       # ← GUI key
+            "review_id": review_id,
+            "plugin_id": "hawi/permission",       # ← GUI key
+            "approve_action": "approve_permission_review",  # ← GUI key
+            "reject_action": "reject_permission_review",    # ← GUI key
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "review_type": "human",
+            "output_preview": str(arguments)[:400],
+            "level": "info",
+            "message": (
+                f"Tool '{tool_name}' requires human review. "
+                f"Arguments: {str(arguments)[:200]}"
+            ),
+        }
         await self._emit_event(
             PluginEvent.create(
                 "plugin.event",
                 plugin_name="Permission",
                 plugin_id="hawi/permission",
-                payload={
-                    "event_name": "permission.review.requested",
-                    "review_id": review_id,
-                    "tool_name": tool_name,
-                    "tool_call_id": tool_call_id,
-                    "review_type": "human",
-                    "arguments_preview": str(arguments)[:400],
-                },
+                payload=review_payload,
             ),
             None,
         )
