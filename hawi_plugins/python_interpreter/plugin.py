@@ -26,6 +26,16 @@ class PythonInterpreterPlugin(HawiPlugin):
     description = "提供持久 Python 解释器，用于执行脚本并保留运行状态。"
     dependencies = ()
 
+    @property
+    def permissions(self):
+        from hawi.permission import PermissionDeclared, WELL_KNOWN_PERMISSIONS as WKP
+        return [
+            PermissionDeclared(
+                permission=WKP["python:execute"],
+                tool_names=["execute", "execute_script"],
+            ),
+        ]
+
     DEFAULT_INSTANCE_NAME = "__default__"
 
     class Instance:

@@ -512,6 +512,12 @@ class SubAgentManager:
         self._rebind_agent_event_bus(child, event_bus)
         self._apply_plugin_policy(child, policy)
 
+        # --- Apply permission set ---
+        # If spec explicitly provides a permission_set, use it; otherwise
+        # inherit the parent's permission set (already cloned).
+        if spec.permission_set is not None:
+            child.set_permissions(spec.permission_set)
+
         if spec.model is not None:
             child.set_model(spec.model)
 
@@ -553,11 +559,6 @@ class SubAgentManager:
         child: HawiAgent,
         policy: SubAgentPluginPolicy,
     ) -> None:
-        if policy.allowlist or policy.denylist or policy.tool_allowlist or policy.tool_denylist:
-            raise NotImplementedError(
-                "Sub-agent plugin allow/deny policies are reserved for the next "
-                "tool-permission pass. Use inherit and extra plugins for now."
-            )
         for plugin in policy.extra_plugins:
             child.plugins.add_plugin(plugin)
         for factory in policy.extra_factories:

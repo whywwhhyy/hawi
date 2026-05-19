@@ -25,6 +25,16 @@ class WebPlugin(HawiPlugin):
     description = "抓取网页内容并转换为 Markdown，带有本地降级策略。"
     dependencies = ()
 
+    @property
+    def permissions(self):
+        from hawi.permission import PermissionDeclared, WELL_KNOWN_PERMISSIONS as WKP
+        return [
+            PermissionDeclared(
+                permission=WKP["network:fetch"],
+                tool_names=["fetch"],
+            ),
+        ]
+
     def __init__(self):
         super().__init__()
         self._fetcher = Fetcher()

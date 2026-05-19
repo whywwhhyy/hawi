@@ -21,6 +21,24 @@ class SubAgentPlugin(HawiPlugin):
     description = "创建和管理后台子 agent，支持分工、等待和状态查询。"
     dependencies = ()
 
+    @property
+    def permissions(self):
+        from hawi.permission import PermissionDeclared, WELL_KNOWN_PERMISSIONS as WKP
+        return [
+            PermissionDeclared(
+                permission=WKP["subagent:spawn"],
+                tool_names=["create_subagent"],
+            ),
+            PermissionDeclared(
+                permission=WKP["subagent:send"],
+                tool_names=["send_subagent_message", "wait_subagent", "read_subagent"],
+            ),
+            PermissionDeclared(
+                permission=WKP["subagent:close"],
+                tool_names=["close_subagent"],
+            ),
+        ]
+
     @classmethod
     def gui_config_schema(cls) -> dict:
         return {"type": "object", "properties": {}, "additionalProperties": False}

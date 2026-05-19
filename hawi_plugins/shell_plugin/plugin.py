@@ -56,6 +56,16 @@ class ShellPlugin(HawiPlugin):
     description = "运行和管理后台 shell 命令，支持查看输出、状态和中断。"
     dependencies = ()
 
+    @property
+    def permissions(self):
+        from hawi.permission import PermissionDeclared, WELL_KNOWN_PERMISSIONS as WKP
+        return [
+            PermissionDeclared(
+                permission=WKP["shell:execute"],
+                tool_names=["run_shell", "shell_control"],
+            ),
+        ]
+
     def __init__(self) -> None:
         self._commands: dict[str, ShellCommand] = {}
         self._commands_lock = threading.Lock()

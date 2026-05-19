@@ -42,6 +42,24 @@ class FileSystemPlugin(HawiPlugin):
     description = "提供文件读取、写入、编辑、目录列表、glob 和 grep 搜索工具。"
     dependencies = ()
 
+    @property
+    def permissions(self):
+        from hawi.permission import PermissionDeclared, WELL_KNOWN_PERMISSIONS as WKP
+        return [
+            PermissionDeclared(
+                permission=WKP["filesystem:read"],
+                tool_names=["read_file", "list_dir", "glob", "grep"],
+            ),
+            PermissionDeclared(
+                permission=WKP["filesystem:write"],
+                tool_names=["write_file"],
+            ),
+            PermissionDeclared(
+                permission=WKP["filesystem:edit"],
+                tool_names=["edit_file"],
+            ),
+        ]
+
     # 常见二进制文件扩展名，grep 时跳过
     _BINARY_EXTENSIONS = {
         ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",

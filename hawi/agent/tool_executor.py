@@ -30,6 +30,8 @@ from hawi.models import ContentPart, ToolCallPart
 from hawi.models.message import CachePoint
 from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
+from hawi.permission.types import PermissionPolicy
+from hawi.permission.audit import PermissionAuditSink
 from hawi.tool.types import (
     AgentTool,
     ToolParameterInjectionContext,
@@ -459,66 +461,91 @@ class ToolExecutor:
                 error=f"{err.__class__.__name__}: {err.message}",
             )
         else:
-            tool_owner = self._plugin_manager.get_tool_owner(tool_name)
-            owner_plugin_id = getattr(tool_owner, "plugin_id", None)
-            owner_plugin_name = getattr(tool_owner, "plugin_name", None)
-            prepared = await self.prepare_tool_arguments(
-                tool,
-                arguments,
-                tool_call_id=tool_call_id,
-                run_id=run_id,
-                iteration=iteration,
-                run_injection_handlers=run_injection_handlers,
-            )
-            if prepared.short_circuit_result is not None:
-                result = prepared.short_circuit_result
-            elif getattr(tool, "audit", False) and audit_action == "queue":
-                self._context._add_pending_tool_call(
-                    tool_call_id,
-                    tool_name,
-                    arguments,
-                )
-                audit_pending = True
+            # --- Permission check (secondary gate) ---
+            # Tools might have been hidden from the model via PluginManager
+            # filtering, but a stale assistant turn or dynamic tool could
+            # still request a denied tool.  This secondary check catches
+            # those edge cases and produces an audit record.
+            permission_policy = self._plugin_manager.check_tool_permission(tool_name)
+            if permission_policy != PermissionPolicy.allow:
                 result = ToolResult(
-                    success=True,
-                    output=(
-                        f"[AUDIT PENDING] Tool '{tool_name}' has been submitted "
-                        "for review. Use review_pending_tools() to check status "
-                        "and approve/reject."
+                    success=False,
+                    error=(
+                        f"Permission denied for tool '{tool_name}': "
+                        f"policy is '{permission_policy.value}'"
                     ),
                 )
+                # Emit audit via the agent's permission audit sink, if present
+                self._record_permission_audit(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    run_id=run_id,
+                    policy=permission_policy,
+                    allowed=False,
+                )
+                # Fall through to record / after-hook handling below
             else:
-                context_param = getattr(tool, "context", None)
-                has_runtime_context = bool(
-                    context_param and self._context.tool_call_context
-                )
-                tool_arguments = self.inject_tool_runtime_context(
+                # --- Normal tool execution ---
+                tool_owner = self._plugin_manager.get_tool_owner(tool_name)
+                owner_plugin_id = getattr(tool_owner, "plugin_id", None)
+                owner_plugin_name = getattr(tool_owner, "plugin_name", None)
+                prepared = await self.prepare_tool_arguments(
                     tool,
-                    prepared.tool_arguments,
-                )
-                if has_runtime_context:
-                    await self._emit_event(
-                        AgentToolRuntimeContextInjectedEvent.create(
-                            run_id=run_id,
-                            tool_name=tool_name,
-                            tool_call_id=tool_call_id,
-                            parameter_name=str(context_param),
-                            plugin_id=owner_plugin_id,
-                            plugin_name=owner_plugin_name,
-                            plugin_role="tool_owner" if tool_owner is not None else "dynamic_tool",
-                            injection_name=str(context_param),
-                        ),
-                        event_bus,
-                    )
-                result = await self._execute_agent_tool(
-                    tool,
-                    tool_name,
-                    tool_call_id,
-                    tool_arguments,
+                    arguments,
+                    tool_call_id=tool_call_id,
                     run_id=run_id,
                     iteration=iteration,
-                    event_bus=event_bus,
+                    run_injection_handlers=run_injection_handlers,
                 )
+                if prepared.short_circuit_result is not None:
+                    result = prepared.short_circuit_result
+                elif getattr(tool, "audit", False) and audit_action == "queue":
+                    self._context._add_pending_tool_call(
+                        tool_call_id,
+                        tool_name,
+                        arguments,
+                    )
+                    audit_pending = True
+                    result = ToolResult(
+                        success=True,
+                        output=(
+                            f"[AUDIT PENDING] Tool '{tool_name}' has been submitted "
+                            "for review. Use review_pending_tools() to check status "
+                            "and approve/reject."
+                        ),
+                    )
+                else:
+                    context_param = getattr(tool, "context", None)
+                    has_runtime_context = bool(
+                        context_param and self._context.tool_call_context
+                    )
+                    tool_arguments = self.inject_tool_runtime_context(
+                        tool,
+                        prepared.tool_arguments,
+                    )
+                    if has_runtime_context:
+                        await self._emit_event(
+                            AgentToolRuntimeContextInjectedEvent.create(
+                                run_id=run_id,
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                parameter_name=str(context_param),
+                                plugin_id=owner_plugin_id,
+                                plugin_name=owner_plugin_name,
+                                plugin_role="tool_owner" if tool_owner is not None else "dynamic_tool",
+                                injection_name=str(context_param),
+                            ),
+                            event_bus,
+                        )
+                    result = await self._execute_agent_tool(
+                        tool,
+                        tool_name,
+                        tool_call_id,
+                        tool_arguments,
+                        run_id=run_id,
+                        iteration=iteration,
+                        event_bus=event_bus,
+                    )
 
         duration_ms = (time.time() - start_time) * 1000
         after_hook_result = await self._invoke_after_tool_calling(
@@ -775,6 +802,43 @@ class ToolExecutor:
         for tool_call in active_batch_tool_calls:
             if tool_call in self._current_tool_calls:
                 self._current_tool_calls.remove(tool_call)
+
+    def _record_permission_audit(
+        self,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+        run_id: str,
+        policy: "PermissionPolicy",
+        allowed: bool,
+    ) -> None:
+        """Record a permission decision to the agent's audit sink."""
+        from hawi.permission import PermissionAuditSink
+
+        sink: PermissionAuditSink | None = getattr(
+            self._agent, "_permission_audit_sink", None
+        )
+        if sink is None:
+            return
+
+        from hawi.permission.types import (
+            PermissionAuditRecord,
+            PermissionId,
+            PermissionPolicy,
+        )
+
+        pid = PermissionId(f"tool:{tool_name}")
+        decision = "allowed" if allowed else "denied"
+        sink.record(
+            PermissionAuditRecord(
+                permission_id=pid,
+                tool_name=tool_name,
+                effective_policy=policy,
+                decision=decision,
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+            )
+        )
 
     async def _invoke_before_tool_calling(
         self,

@@ -11,6 +11,7 @@ from .types import PluginHooks
 
 if TYPE_CHECKING:
     from hawi.tool.types import AgentTool
+    from hawi.permission import PermissionDeclared
     from .resource import HawiResource
 
 
@@ -30,6 +31,7 @@ class HawiPlugin:
     - hooks: Lifecycle hooks
     - tools: Custom tools for agents to use
     - resources: Contextual data/resources for agents (MCP-compatible)
+    - permissions: Permission declarations for the permission system
 
     For fork/clone support, plugins can be used in two ways:
     1. **Clone mode**: Implement `clone()` to return a copy of the plugin.
@@ -55,7 +57,7 @@ class HawiPlugin:
         self._cached_tools = []
 
         # Skip these properties to avoid triggering recursion
-        _skip_names = {"hooks", "tools", "resources", "_cached_hooks", "_cached_tools"}
+        _skip_names = {"hooks", "tools", "resources", "permissions", "_cached_hooks", "_cached_tools"}
 
         for name in dir(self):
             if name in _skip_names:
@@ -90,6 +92,38 @@ class HawiPlugin:
 
         Resources provide contextual data to agents, identified by URI.
         They can be text or binary, static or dynamic.
+        """
+        return []
+
+    @property
+    def permissions(self) -> "Sequence[PermissionDeclared]":
+        """Permissions required by this plugin's tools.
+
+        Each :class:`~hawi.permission.PermissionDeclared` links a permission
+        to one or more tool names.  The :class:`~hawi.plugin.PluginManager`
+        collects these during initialization and uses them together with the
+        agent's active :class:`~hawi.permission.PermissionSet` to filter
+        visible tools and gate execution.
+
+        Subclasses should override this property to declare their
+        permissions.  The default implementation returns an empty list
+        (no permission requirements — all tools are implicitly allowed).
+
+        Example::
+
+            @property
+            def permissions(self):
+                from hawi.permission import PermissionDeclared, WELL_KNOWN_PERMISSIONS as WKP
+                return [
+                    PermissionDeclared(
+                        permission=WKP["filesystem:read"],
+                        tool_names=["read_file", "glob", "grep"],
+                    ),
+                    PermissionDeclared(
+                        permission=WKP["filesystem:write"],
+                        tool_names=["write_file", "edit_file"],
+                    ),
+                ]
         """
         return []
 

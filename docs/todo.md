@@ -107,21 +107,21 @@
     - [x] 增加单元测试：fork/fresh 隔离、后台运行、status/read、wait timeout、latest result、partial streaming、tool wrapper schema
     - [ ] 增加 interrupt/close 细粒度单元测试与超时后 interrupt/close action 测试
 
-- [ ] 权限机制：plugin 声明权限，agent 运行时持有权限集，并据此过滤/审查工具
-    - [ ] 设计权限模型：每个权限都有 stable id、scope、description、risk level、默认策略
-    - [ ] 权限策略枚举：`allow` / `deny` / `human_review` / `agent_review`
-    - [ ] `deny` 语义：对应工具或能力直接不出现在 agent tool definitions 中，模型不可见
-    - [ ] `human_review` 语义：暂未实现，第一阶段按 `deny` 处理；预留审批请求、审批记录、恢复执行接口
-    - [ ] `agent_review` 语义：暂未实现，第一阶段按 `allow` 处理；预留 reviewer agent/subagent 审查接口
-    - [ ] 每个 plugin 声明通用权限：例如 filesystem read/write、shell execute、network fetch、subagent spawn、credential access
-    - [ ] 每个 plugin 声明专属权限：plugin 自己的细粒度能力、资源、危险动作、外部系统 scope
-    - [ ] Agent 初始化时接收 runtime permission set，可由配置、GUI、session、subagent spec 合成
-    - [ ] PluginManager 根据 agent 权限集生成可见工具列表和 tool definitions
-    - [ ] 工具执行前二次校验权限，避免动态工具或旧上下文绕过 tool list 过滤
-    - [ ] 权限 metadata 进入审计：agent id/session id、plugin id、tool name、permission id、策略、review 结果
-    - [ ] 与 subagent 集成：`SubAgentPluginPolicy` 改为基于权限集，而不是长期依赖 tool allow/deny 字段
+- [x] 权限机制：plugin 声明权限，agent 运行时持有权限集，并据此过滤/审查工具
+    - [x] 设计权限模型：每个权限都有 stable id、scope、description、risk level、默认策略
+    - [x] 权限策略枚举：`allow` / `deny` / `human_review` / `agent_review`
+    - [x] `deny` 语义：对应工具或能力直接不出现在 agent tool definitions 中，模型不可见
+    - [x] `human_review` 语义：暂未实现，第一阶段按 `deny` 处理；预留审批请求、审批记录、恢复执行接口
+    - [x] `agent_review` 语义：暂未实现，第一阶段按 `allow` 处理；预留 reviewer agent/subagent 审查接口
+    - [x] 每个 plugin 声明通用权限：例如 filesystem read/write、shell execute、network fetch、subagent spawn、credential access
+    - [x] 每个 plugin 声明专属权限：plugin 自己的细粒度能力、资源、危险动作、外部系统 scope
+    - [x] Agent 初始化时接收 runtime permission set，可由配置、GUI、session、subagent spec 合成
+    - [x] PluginManager 根据 agent 权限集生成可见工具列表和 tool definitions
+    - [x] 工具执行前二次校验权限，避免动态工具或旧上下文绕过 tool list 过滤
+    - [x] 权限 metadata 进入审计：agent id/session id、plugin id、tool name、permission id、策略、review 结果
+    - [x] 与 subagent 集成：`SubAgentPluginPolicy` 改为基于权限集，而不是长期依赖 tool allow/deny 字段
     - [ ] 与 GUI 集成：展示 plugin 请求的权限、当前 agent 权限集、被隐藏/待审批能力
-    - [ ] 增加测试：permission 声明收集、deny 隐藏工具、执行前拒绝、human_review 按 deny、agent_review 按 allow
+    - [x] 增加测试：permission 声明收集、deny 隐藏工具、执行前拒绝、human_review 按 deny、agent_review 按 allow
 
 - [ ] multi-agent 支持：保留多种可能性，先把可验证的模式沉淀成受控 workflow / tool
     - [ ] 明确设计原则：主循环仍保持可调试，multi-agent 不是默认执行架构

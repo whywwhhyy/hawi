@@ -133,6 +133,7 @@ class HawiAgent:
         cache_point: CachePoint | dict[str, Any] | bool | None = None,
         cache_tool_definitions: CachePoint | dict[str, Any] | bool | None = None,
         auto_cache_static_prefix: CachePoint | dict[str, Any] | bool | None = True,
+        permission_set: "PermissionSet | FrozenPermissionSet | dict[str, str] | None" = None,
     ):
         """Initialize HawiAgent.
 
@@ -157,6 +158,15 @@ class HawiAgent:
             cache_tool_definitions: Cache the tool-definition prefix when supported.
             auto_cache_static_prefix: Agent-managed cache point for the stable
                 tools/system prefix. Defaults to an ephemeral cache point.
+            permission_set: Runtime permission configuration controlling which
+                plugin tools are visible and executable.  Can be:
+
+                - ``PermissionSet`` / ``FrozenPermissionSet`` instance.
+                - ``dict`` mapping ``"scope:capability"`` ids to ``"allow"`` /
+                  ``"deny"`` / ``"human_review"`` / ``"agent_review"``.
+
+                When ``None`` (default), all tools are visible (backwards
+                compatible).  See :mod:`hawi.permission`.
 
         Note:
             Both `plugins` and `plugin_factories` can be used together.
@@ -187,6 +197,14 @@ class HawiAgent:
             plugin_factories=plugin_factories,
         )
         self._plugin_manager.bind_event_bus(self._event_bus)
+
+        # Initialize permission system
+        from hawi.permission import PermissionSet, FrozenPermissionSet, PermissionAuditSink
+        self._permission_audit_sink = PermissionAuditSink()
+        if permission_set is not None:
+            if isinstance(permission_set, dict):
+                permission_set = PermissionSet.from_dict(permission_set)
+            self._plugin_manager.set_permission_set(permission_set)
         self._events = AgentEvents(self)
         self._hooks = HookDispatcher(self, self)
         self._suppress_system_prompt_hooks = False
@@ -253,6 +271,45 @@ class HawiAgent:
     def plugins(self) -> PluginManager:
         """Get the plugin manager for accessing and modifying plugins/tools/hooks."""
         return self._plugin_manager
+
+    @property
+    def permission_set(self) -> "PermissionSet | FrozenPermissionSet | None":
+        """The active permission set controlling visible and executable tools.
+
+        Returns ``None`` when no permission set is configured (all tools
+        visible — backwards compatible).
+
+        See :mod:`hawi.permission` for the full permission model.
+        """
+        return self._plugin_manager.permission_set
+
+    def set_permissions(
+        self,
+        permissions: "PermissionSet | FrozenPermissionSet | dict[str, str] | None",
+    ) -> None:
+        """Replace the active permission set and refresh tool definitions.
+
+        After setting, the agent's context tool definitions are automatically
+        refreshed to reflect the new visibility.
+
+        Args:
+            permissions: A ``PermissionSet``, ``FrozenPermissionSet``, or a
+                plain ``dict`` mapping ``"scope:capability"`` ids to policy
+                strings.  Pass ``None`` to disable all permission filtering.
+        """
+        from hawi.permission import PermissionSet, FrozenPermissionSet
+
+        if isinstance(permissions, dict):
+            permissions = PermissionSet.from_dict(permissions)
+        self._plugin_manager.set_permission_set(permissions)
+        # Refresh tool definitions in context
+        defs = self._plugin_manager.get_tool_definitions()
+        self._context.tool_definitions = defs if defs else None
+
+    @property
+    def permission_audit_sink(self):
+        """The agent's permission audit sink for observability."""
+        return self._permission_audit_sink
 
     @property
     def subagents(self):

@@ -72,15 +72,17 @@ class SubAgentLimits:
 
 @dataclass
 class SubAgentPluginPolicy:
-    """Plugin inheritance and extension policy for child agents."""
+    """Plugin inheritance and extension policy for child agents.
+
+    .. versionchanged:: next
+       ``allowlist`` / ``denylist`` / ``tool_allowlist`` / ``tool_denylist``
+       are replaced by the first-class :mod:`~hawi.permission` system.
+       Use ``permission_set`` on the :class:`SubAgentSpec` instead.
+    """
 
     inherit: bool = True
     extra_plugins: list[HawiPlugin] = field(default_factory=list)
     extra_factories: list[Callable[[], HawiPlugin]] = field(default_factory=list)
-    allowlist: list[str] | None = None
-    denylist: list[str] | None = None
-    tool_allowlist: list[str] | None = None
-    tool_denylist: list[str] | None = None
 
 
 @dataclass
@@ -101,6 +103,14 @@ class SubAgentSpec:
     ownership: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     description: str | None = None
+    permission_set: "PermissionSet | FrozenPermissionSet | dict[str, str] | None" = None
+    """Permission set for the sub-agent.
+
+    When ``None`` (default), the child inherits the parent's permission
+    set.  Pass a :class:`~hawi.permission.PermissionSet` or a plain
+    ``dict`` to override.  Pass an empty :class:`PermissionSet` to
+    grant all permissions (no filtering).
+    """
 
 
 @dataclass

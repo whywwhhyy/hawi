@@ -14,6 +14,16 @@ from hawi.tool.types import (
 )
 from hawi.plugin.types import HookReturnType, system_prompt_variability_rank
 from hawi.models.message import ToolDefinition
+from hawi.permission import (
+    PermissionChecker,
+    PermissionDeclared,
+    PermissionSet,
+    FrozenPermissionSet,
+    build_tool_permission_map,
+    collect_plugin_permissions,
+    filter_tools,
+)
+from hawi.permission.types import PermissionPolicy
 
 if TYPE_CHECKING:
     from hawi.plugin import HawiPlugin
@@ -96,6 +106,11 @@ class PluginManager:
         self._tool_defs_cache: list[ToolDefinition] | None = None
         self._event_bus: Any | None = None
 
+        # Permission system
+        self._permission_checker = PermissionChecker()
+        self._tool_permissions: dict[str, list[PermissionDeclared]] = {}
+        self._build_permission_map()
+
     def _collect_plugin_hooks(self) -> None:
         """Collect hooks from all plugins, building hook chains."""
         for plugin in self._plugins:
@@ -103,6 +118,73 @@ class PluginManager:
             for hook_type, hook_fn in plugin_hooks.items():
                 if hook_fn:
                     self._hooks.setdefault(hook_type, []).append(cast(Callable[..., HookReturnType], hook_fn))
+
+    # --- Permission System ---
+
+    def _build_permission_map(self) -> None:
+        """Rebuild the tool → permission mapping from all loaded plugins.
+
+        Plugin tools are named like ``PluginClass__method_name`` (derived
+        from ``__qualname__``), but plugins declare permissions with short
+        names.  This method resolves short names to full tool names by
+        consulting each plugin's registered tools.
+        """
+        self._tool_permissions = {}
+        for plugin in self._plugins:
+            # Build short-name → full-name lookup for this plugin
+            short_to_full: dict[str, str] = {}
+            for tool in plugin.tools:
+                if "__" in tool.name:
+                    short_name = tool.name.split("__", 1)[1]
+                else:
+                    short_name = tool.name
+                short_to_full[short_name] = tool.name
+
+            perms = getattr(plugin, "permissions", None)
+            if perms is None:
+                continue
+            if callable(perms):
+                perms = perms()
+            for decl in perms:
+                for tool_name in decl.tool_names:
+                    # Resolve short name to actual tool name registered
+                    # by _collect_items; fall back to the declared name
+                    actual_name = short_to_full.get(tool_name, tool_name)
+                    self._tool_permissions.setdefault(actual_name, []).append(decl)
+
+    def set_permission_set(
+        self,
+        permission_set: PermissionSet | FrozenPermissionSet | None,
+    ) -> None:
+        """Set or clear the active permission set for tool filtering.
+
+        When *permission_set* is ``None``, all tools are visible (backwards
+        compatible).  Setting a non-None set invalidates caches so that the
+        next call to :meth:`get_tools` or :meth:`get_tool_definitions`
+        reflects the new permissions.
+        """
+        self._permission_checker.set_permission_set(permission_set)
+        self._invalidate_cache()
+
+    @property
+    def permission_set(self) -> PermissionSet | FrozenPermissionSet | None:
+        """The active permission set, if any."""
+        return self._permission_checker.permission_set
+
+    def check_tool_permission(self, tool_name: str) -> PermissionPolicy:
+        """Return the effective permission policy for *tool_name*."""
+        return self._permission_checker.check_tool_permission(
+            tool_name,
+            tool_permissions=self._tool_permissions,
+        )
+
+    def get_permission_checker(self) -> PermissionChecker:
+        """Return the internal :class:`PermissionChecker` instance."""
+        return self._permission_checker
+
+    def get_tool_permissions_map(self) -> dict[str, list[PermissionDeclared]]:
+        """Return the ``{tool_name: [PermissionDeclared]}`` mapping."""
+        return dict(self._tool_permissions)
 
     def get_plugins(self) -> list[HawiPlugin]:
         """Return all plugins (as a copy)."""
@@ -117,6 +199,7 @@ class PluginManager:
                 self._hooks.setdefault(hook_type, []).append(
                     cast(Callable[..., HookReturnType], hook_fn)
                 )
+        self._build_permission_map()
         self._invalidate_cache()
 
     def add_plugin_factory(self, factory: Callable[[], HawiPlugin]) -> HawiPlugin:
@@ -131,6 +214,7 @@ class PluginManager:
                 self._hooks.setdefault(hook_type, []).append(
                     cast(Callable[..., HookReturnType], hook_fn)
                 )
+        self._build_permission_map()
         self._invalidate_cache()
         return plugin
 
@@ -180,10 +264,15 @@ class PluginManager:
         return owner_by_name.get(name)
 
     def get_tools(self) -> list[AgentTool]:
-        """Get all unmasked tools (cached)."""
+        """Get all unmasked and permission-allowed tools (cached)."""
         if self._tools_cache is None:
             all_tools = self._collect_all_tools()
-            self._tools_cache = [t for t in all_tools if t.name not in self._masked_names]
+            unmasked = [t for t in all_tools if t.name not in self._masked_names]
+            self._tools_cache = filter_tools(
+                unmasked,
+                self._permission_checker,
+                self._tool_permissions,
+            )
         return self._tools_cache
 
     def get_tool_definitions(self) -> list[ToolDefinition]:
@@ -464,5 +553,15 @@ class PluginManager:
 
         # 6. Copy injected parameter definitions (immutable dataclasses)
         new_manager._parameter_injections = self._parameter_injections.copy()
+
+        # 7. Copy permission state
+        ps = self._permission_checker.permission_set
+        if ps is not None:
+            new_manager._permission_checker.set_permission_set(
+                ps.freeze() if hasattr(ps, "freeze") else ps
+            )
+        new_manager._tool_permissions = {
+            k: list(v) for k, v in self._tool_permissions.items()
+        }
 
         return new_manager
