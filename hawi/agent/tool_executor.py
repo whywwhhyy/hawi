@@ -32,6 +32,7 @@ from hawi.plugin import PluginManager
 from hawi.plugin.hook_context import HookContext, HookResult
 from hawi.permission.types import PermissionPolicy
 from hawi.permission.audit import PermissionAuditSink
+from hawi.review import RuntimeReviewBroker, RuntimeReviewDecision
 from hawi.tool.types import (
     AgentTool,
     ToolParameterInjectionContext,
@@ -467,7 +468,9 @@ class ToolExecutor:
             # still request a denied tool.  This secondary check catches
             # those edge cases and produces an audit record.
             permission_policy = self._plugin_manager.check_tool_permission(tool_name)
-            if permission_policy != PermissionPolicy.allow:
+
+            if permission_policy == PermissionPolicy.deny:
+                # Hard deny — tool is blocked unconditionally.
                 result = ToolResult(
                     success=False,
                     error=(
@@ -475,7 +478,6 @@ class ToolExecutor:
                         f"policy is '{permission_policy.value}'"
                     ),
                 )
-                # Emit audit via the agent's permission audit sink, if present
                 self._record_permission_audit(
                     tool_name=tool_name,
                     tool_call_id=tool_call_id,
@@ -483,8 +485,32 @@ class ToolExecutor:
                     policy=permission_policy,
                     allowed=False,
                 )
-                # Fall through to record / after-hook handling below
-            else:
+
+            elif permission_policy == PermissionPolicy.human_review:
+                # Human-in-the-loop review.
+                # Phase 1 fallback: deny when no broker is available.
+                result = await self._handle_human_review(
+                    tool=tool,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    tool_call_id=tool_call_id,
+                    run_id=run_id,
+                    iteration=iteration,
+                )
+
+            elif permission_policy == PermissionPolicy.agent_review:
+                # Sub-agent review.
+                # Phase 1 fallback: allow when no review mechanism available.
+                result = await self._handle_agent_review(
+                    tool=tool,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    tool_call_id=tool_call_id,
+                    run_id=run_id,
+                    iteration=iteration,
+                )
+
+            else:  # PermissionPolicy.allow
                 # --- Normal tool execution ---
                 tool_owner = self._plugin_manager.get_tool_owner(tool_name)
                 owner_plugin_id = getattr(tool_owner, "plugin_id", None)
@@ -839,6 +865,197 @@ class ToolExecutor:
                 run_id=run_id,
             )
         )
+
+    async def _handle_human_review(
+        self,
+        *,
+        tool: "AgentTool",
+        tool_name: str,
+        arguments: dict[str, Any],
+        tool_call_id: str,
+        run_id: str,
+        iteration: int,
+    ) -> ToolResult:
+        """Handle a ``human_review`` permission policy.
+
+        When a :class:`RuntimeReviewBroker` is available (via the agent's
+        ``review_broker``), this method creates a review request, waits for
+        the human to approve or reject, and then either executes the tool
+        or returns a deny result.
+
+        When no broker is available (standalone / headless usage), falls back
+        to Phase 1 semantics: **deny**.
+        """
+        broker: RuntimeReviewBroker | None = getattr(
+            self._agent, "review_broker", None
+        )
+        if broker is None:
+            # Phase 1 fallback: deny
+            self._record_permission_audit(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+                policy=PermissionPolicy.human_review,
+                allowed=False,
+            )
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Tool '{tool_name}' requires human review, but no "
+                    "review broker is available (headless mode)."
+                ),
+            )
+
+        import uuid
+        review_id = f"perm-{tool_name}-{uuid.uuid4().hex[:8]}"
+        broker.create(
+            review_id,
+            plugin_id="hawi/permission",
+            review_type="human_review",
+            payload={
+                "kind": "permission_review",
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "arguments": arguments,
+                "permission_policy": "human_review",
+            },
+        )
+
+        # Emit review-requested event for GUI observability
+        from hawi.events import PluginEvent
+        await self._emit_event(
+            PluginEvent.create(
+                "plugin.event",
+                plugin_name="Permission",
+                plugin_id="hawi/permission",
+                payload={
+                    "event_name": "permission.review.requested",
+                    "review_id": review_id,
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "review_type": "human",
+                    "arguments_preview": str(arguments)[:400],
+                },
+            ),
+            None,
+        )
+
+        try:
+            raw_decision = await broker.wait(review_id)
+            decision = self._normalize_review_decision(raw_decision)
+        except asyncio.CancelledError:
+            broker.discard(review_id)
+            raise
+        finally:
+            broker.discard(review_id)
+
+        if decision.approved:
+            self._record_permission_audit(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+                policy=PermissionPolicy.human_review,
+                allowed=True,
+            )
+            # Execute the tool normally (approved by human)
+            tool_owner = self._plugin_manager.get_tool_owner(tool_name)
+            owner_plugin_id = getattr(tool_owner, "plugin_id", None)
+            owner_plugin_name = getattr(tool_owner, "plugin_name", None)
+            prepared = await self.prepare_tool_arguments(
+                tool,
+                arguments,
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+                iteration=iteration,
+                run_injection_handlers=True,
+            )
+            if prepared.short_circuit_result is not None:
+                return prepared.short_circuit_result
+            tool_arguments = self.inject_tool_runtime_context(
+                tool, prepared.tool_arguments
+            )
+            return await self._execute_agent_tool(
+                tool,
+                tool_name,
+                tool_call_id,
+                tool_arguments,
+                run_id=run_id,
+                iteration=iteration,
+                event_bus=None,
+            )
+        else:
+            self._record_permission_audit(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+                policy=PermissionPolicy.human_review,
+                allowed=False,
+            )
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Human review rejected tool '{tool_name}'. "
+                    f"Feedback: {decision.feedback or 'no feedback provided'}"
+                ),
+            )
+
+    async def _handle_agent_review(
+        self,
+        *,
+        tool: "AgentTool",
+        tool_name: str,
+        arguments: dict[str, Any],
+        tool_call_id: str,
+        run_id: str,
+        iteration: int,
+    ) -> ToolResult:
+        """Handle an ``agent_review`` permission policy.
+
+        Phase 1 fallback: **allow** (execute the tool unconditionally).
+        Future phases will route through a reviewer sub-agent.
+        """
+        self._record_permission_audit(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+            policy=PermissionPolicy.agent_review,
+            allowed=True,
+        )
+        # Phase 1: allow — execute normally
+        tool_owner = self._plugin_manager.get_tool_owner(tool_name)
+        owner_plugin_id = getattr(tool_owner, "plugin_id", None)
+        owner_plugin_name = getattr(tool_owner, "plugin_name", None)
+        prepared = await self.prepare_tool_arguments(
+            tool,
+            arguments,
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+            iteration=iteration,
+            run_injection_handlers=True,
+        )
+        if prepared.short_circuit_result is not None:
+            return prepared.short_circuit_result
+        tool_arguments = self.inject_tool_runtime_context(
+            tool, prepared.tool_arguments
+        )
+        return await self._execute_agent_tool(
+            tool,
+            tool_name,
+            tool_call_id,
+            tool_arguments,
+            run_id=run_id,
+            iteration=iteration,
+            event_bus=None,
+        )
+
+    @staticmethod
+    def _normalize_review_decision(raw: Any) -> RuntimeReviewDecision:
+        """Normalize a raw review result into a RuntimeReviewDecision."""
+        if isinstance(raw, RuntimeReviewDecision):
+            return raw
+        approved = bool(getattr(raw, "approved", False))
+        feedback = str(getattr(raw, "feedback", ""))
+        return RuntimeReviewDecision(approved=approved, feedback=feedback)
 
     async def _invoke_before_tool_calling(
         self,
