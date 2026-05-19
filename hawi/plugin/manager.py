@@ -172,8 +172,25 @@ class PluginManager:
         return self._permission_checker.permission_set
 
     def check_tool_permission(self, tool_name: str) -> PermissionPolicy:
-        """Return the effective permission policy for *tool_name*."""
+        """Return the effective permission policy for *tool_name*.
+
+        Uses :meth:`PermissionPolicy.effective_phase1` so ``human_review``
+        maps to ``allow`` (for tool visibility).  See
+        :meth:`check_tool_permission_raw` for the unmapped version.
+        """
         return self._permission_checker.check_tool_permission(
+            tool_name,
+            tool_permissions=self._tool_permissions,
+        )
+
+    def check_tool_permission_raw(self, tool_name: str) -> PermissionPolicy:
+        """Return the original (unmapped) permission policy for *tool_name*.
+
+        Unlike :meth:`check_tool_permission`, ``human_review`` is NOT
+        mapped to ``allow`` — the caller can distinguish it for execution
+        gating in :class:`ToolExecutor`.
+        """
+        return self._permission_checker.check_tool_permission_raw(
             tool_name,
             tool_permissions=self._tool_permissions,
         )

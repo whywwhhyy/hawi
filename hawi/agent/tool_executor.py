@@ -467,7 +467,7 @@ class ToolExecutor:
             # filtering, but a stale assistant turn or dynamic tool could
             # still request a denied tool.  This secondary check catches
             # those edge cases and produces an audit record.
-            permission_policy = self._plugin_manager.check_tool_permission(tool_name)
+            permission_policy = self._plugin_manager.check_tool_permission_raw(tool_name)
 
             if permission_policy == PermissionPolicy.deny:
                 # Hard deny — tool is blocked unconditionally.

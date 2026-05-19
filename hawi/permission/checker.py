@@ -102,6 +102,11 @@ class PermissionChecker:
     ) -> PermissionPolicy:
         """Return the *most restrictive* effective policy for *tool_name*.
 
+        Uses :meth:`PermissionPolicy.effective_phase1` so that
+        ``human_review`` / ``agent_review`` are mapped to ``allow``
+        (tool visible to model).  Use :meth:`check_tool_permission_raw`
+        when you need the unmapped original policy for execution gating.
+
         Returns ``allow`` when:
         - No permission set is configured, or
         - The tool has no declared permissions, or
@@ -120,6 +125,41 @@ class PermissionChecker:
             if not self._check_single(declared.permission):
                 return PermissionPolicy.deny
         return PermissionPolicy.allow
+
+    def check_tool_permission_raw(
+        self,
+        tool_name: str,
+        *,
+        tool_permissions: dict[str, Sequence[PermissionDeclared]],
+    ) -> PermissionPolicy:
+        """Return the *original* policy for *tool_name* (no phase1 mapping).
+
+        Unlike :meth:`check_tool_permission`, this returns the unmapped
+        policy so callers (e.g. :class:`ToolExecutor`) can distinguish
+        ``human_review`` from ``allow`` for execution gating.
+        """
+        if self._permission_set is None:
+            return PermissionPolicy.allow
+
+        declared_list = tool_permissions.get(tool_name, [])
+        if not declared_list:
+            return PermissionPolicy.allow
+
+        most_restrictive = PermissionPolicy.allow
+        for declared in declared_list:
+            original = self._permission_set.resolve_raw(
+                str(declared.permission.id), declared=declared.permission
+            )
+            # Keep the original (unmapped) policy — human_review stays human_review
+            # _rank for ordering: deny=3, human_review=2, agent_review=1, allow=0
+            def _rank(p: PermissionPolicy) -> int:
+                if p == PermissionPolicy.deny: return 3
+                if p == PermissionPolicy.human_review: return 2
+                if p == PermissionPolicy.agent_review: return 1
+                return 0
+            if _rank(original) > _rank(most_restrictive):
+                most_restrictive = original
+        return most_restrictive
 
     # --- audit ---
 

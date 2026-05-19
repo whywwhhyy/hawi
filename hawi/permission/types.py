@@ -61,17 +61,23 @@ class PermissionPolicy(str, Enum):
        :header-rows: 1
 
        * - Policy
-         - Phase 1 behaviour
+         - PluginManager (visibility)
+         - ToolExecutor (execution)
        * - ``allow``
-         - Tool appears in definitions and executes normally.
+         - visible
+         - executes normally
        * - ``deny``
-         - Tool is hidden from model and rejected at execution.
+         - hidden
+         - blocked with error
        * - ``human_review``
-         - Treated as ``deny``; audit record is marked for future approval.
+         - visible
+         - blocked until human approves via RuntimeReviewBroker
+           (falls back to deny when no broker is available)
        * - ``agent_review``
-         - Treated as ``allow``; audit record is marked for future review.
+         - visible
+         - executes normally (reserved for future sub-agent review)
 
-    Future phases will implement the full human/agent review flows.
+    Future phases will implement the full sub-agent review flow.
     """
 
     allow = "allow"
@@ -80,15 +86,21 @@ class PermissionPolicy(str, Enum):
     agent_review = "agent_review"
 
     def effective_phase1(self) -> "PermissionPolicy":
-        """Return the effective policy under first-phase semantics."""
+        """Return the effective policy under first-phase semantics.
+
+        At the PluginManager level (tool visibility), ``human_review``
+        and ``agent_review`` both behave like ``allow`` so the tool
+        appears in model definitions.  The actual gating happens in
+        :class:`~hawi.agent.tool_executor.ToolExecutor`.
+        """
         if self is PermissionPolicy.allow:
             return PermissionPolicy.allow
         if self is PermissionPolicy.deny:
             return PermissionPolicy.deny
         if self is PermissionPolicy.human_review:
-            return PermissionPolicy.deny  # first phase: deny
+            return PermissionPolicy.allow  # visible to model, gated at execution
         if self is PermissionPolicy.agent_review:
-            return PermissionPolicy.allow  # first phase: allow
+            return PermissionPolicy.allow  # visible to model, gated at execution
         return self
 
 
@@ -258,12 +270,34 @@ class PermissionSet:
 
         If the id is explicitly configured, its policy is used.  Otherwise
         falls back to *declared.default_policy*, and finally to ``deny``.
+
+        Uses :meth:`PermissionPolicy.effective_phase1` so ``human_review``
+        and ``agent_review`` map to ``allow``.  Use :meth:`resolve_raw`
+        when you need the original unmapped value.
         """
         pid = PermissionId(permission_id)
         if pid in self._policies:
             return self._policies[pid].effective_phase1()
         if declared is not None:
             return declared.default_policy.effective_phase1()
+        return PermissionPolicy.deny
+
+    def resolve_raw(
+        self,
+        permission_id: str,
+        declared: Permission | None = None,
+    ) -> PermissionPolicy:
+        """Return the *original* policy for *permission_id* (no phase1 mapping).
+
+        Unlike :meth:`resolve`, ``human_review`` stays ``human_review``
+        so callers (e.g. :class:`~hawi.agent.tool_executor.ToolExecutor`)
+        can distinguish it from ``allow`` for execution gating.
+        """
+        pid = PermissionId(permission_id)
+        if pid in self._policies:
+            return self._policies[pid]  # raw, no effective_phase1
+        if declared is not None:
+            return declared.default_policy  # raw
         return PermissionPolicy.deny
 
     def get(self, permission_id: str) -> PermissionPolicy | None:
@@ -339,6 +373,18 @@ class FrozenPermissionSet:
             return self._policies[pid].effective_phase1()
         if declared is not None:
             return declared.default_policy.effective_phase1()
+        return PermissionPolicy.deny
+
+    def resolve_raw(
+        self,
+        permission_id: str,
+        declared: Permission | None = None,
+    ) -> PermissionPolicy:
+        pid = PermissionId(permission_id)
+        if pid in self._policies:
+            return self._policies[pid]
+        if declared is not None:
+            return declared.default_policy
         return PermissionPolicy.deny
 
     def get(self, permission_id: str) -> PermissionPolicy | None:

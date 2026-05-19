@@ -57,8 +57,10 @@ class TestPermissionPolicy:
     def test_effective_phase1_deny(self):
         assert PermissionPolicy.deny.effective_phase1() == PermissionPolicy.deny
 
-    def test_effective_phase1_human_review_is_deny(self):
-        assert PermissionPolicy.human_review.effective_phase1() == PermissionPolicy.deny
+    def test_effective_phase1_human_review_is_allow(self):
+        # human_review → allow at PluginManager level (tool visible)
+        # Execution gating happens in ToolExecutor
+        assert PermissionPolicy.human_review.effective_phase1() == PermissionPolicy.allow
 
     def test_effective_phase1_agent_review_is_allow(self):
         assert PermissionPolicy.agent_review.effective_phase1() == PermissionPolicy.allow
@@ -83,7 +85,9 @@ class TestPermissionSet:
 
     def test_human_review_resolves_to_deny_phase1(self):
         ps = PermissionSet().human_review("python:execute")
-        assert ps.resolve("python:execute") == PermissionPolicy.deny
+        # Phase 1: human_review → allow at PluginManager level (tool visible)
+        # The gating happens in ToolExecutor, not here.
+        assert ps.resolve("python:execute") == PermissionPolicy.allow
 
     def test_agent_review_resolves_to_allow_phase1(self):
         ps = PermissionSet().agent_review("network:fetch")
@@ -286,10 +290,11 @@ class TestPluginManagerPermissions:
         pm.set_permission_set(None)
         assert len(pm.get_tools()) == 1
 
-    def test_human_review_treated_as_deny_phase1(self):
+    def test_human_review_treated_as_allow_in_plugin_manager(self):
+        """human_review tools are VISIBLE to model (gating is in ToolExecutor)."""
         pm = PluginManager(plugins=[WritePlugin()])
         pm.set_permission_set(PermissionSet().human_review("filesystem:write"))
-        assert len(pm.get_tools()) == 0  # hidden
+        assert len(pm.get_tools()) == 1  # visible!
 
     def test_agent_review_treated_as_allow_phase1(self):
         pm = PluginManager(plugins=[WritePlugin()])
