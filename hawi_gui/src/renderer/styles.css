@@ -290,10 +290,9 @@ button:disabled {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
-  background: #33444b;
-  transform: translateX(-1px);
-  opacity: 0.72;
+  right: 0;
+  background: rgba(208, 67, 64, 0.28);
+  border-left: 1px solid rgba(164, 47, 45, 0.34);
 }
 
 .context-meter-label {
@@ -306,6 +305,7 @@ button:disabled {
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
+  z-index: 1;
 }
 
 .context-threshold-line {
