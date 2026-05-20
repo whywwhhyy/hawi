@@ -56,6 +56,9 @@ class AgentRuntime:
     def clear_interrupt_state(self) -> None:
         """Clear interrupt state for a fresh execution."""
         agent = self._owner
+        tool_executor = getattr(agent, "_tool_executor", None)
+        if tool_executor is not None:
+            tool_executor.clear()
         agent._cancel_event.clear()
         agent._interrupted_tool_call_ids.clear()
         agent._current_tool_calls.clear()
@@ -143,6 +146,11 @@ class AgentRuntime:
                 for r in agent._last_unsent_tool_results
             ],
             "last_interrupt_reason": agent._last_interrupt_reason,
+            "tool_executor": (
+                agent._tool_executor.snapshot()
+                if hasattr(agent, "_tool_executor")
+                else {"version": 1, "queue": [], "requests": []}
+            ),
         }
 
     def load_runtime(self, data: dict[str, Any]) -> None:
@@ -151,6 +159,9 @@ class AgentRuntime:
         version = data.get("version", 1)
         if version != 1:
             raise ValueError(f"Unsupported runtime snapshot version: {version}")
+        tool_executor = getattr(agent, "_tool_executor", None)
+        if tool_executor is not None:
+            tool_executor.clear()
         agent._current_tool_calls = list(data.get("current_tool_calls", []))
         agent._interrupted_tool_call_ids = list(
             data.get("interrupted_tool_call_ids", [])

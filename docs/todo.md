@@ -3,7 +3,8 @@
     - [x] 用户消息队列：runner 已有 `normal`
     - [x] runner 已有 `run_forever()` 单循环消费队列
     - [x] 工具执行逻辑已抽出 `ToolExecutor`，agent loop 不再直接承载工具调用细节
-    - [ ] 工具调用请求队列：将 tool call request 显式队列化，而不是只在 agent loop 内顺序执行
+    - [x] 工具调用请求队列：`ToolCallRequest` 在流式 block 完整时显式入队并可立即后台执行，支持 `blocked_by` 依赖；入队返回 `ToolCallPromise`，agent 通过 promise 恢复执行状态并按序提交结果
+    - [ ] ToolExecutor 后续增强：后台 worker / 并发执行 / 跨 run 保留队列调度策略
     - [ ] agent 内部执行循环与 runner 队列模型进一步统一
     - [ ] 明确 urgent / high_prio / normal 在 tool 执行中、model streaming 中、空闲时的完整语义
 

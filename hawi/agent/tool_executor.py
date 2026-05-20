@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import inspect
 import time
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TYPE_CHECKING, cast
@@ -103,6 +104,107 @@ class PreparedToolArguments:
     short_circuit_result: ToolResult | None = None
 
 
+ToolCallRequestStatus = Literal[
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+]
+
+
+@dataclass
+class ToolCallRequest:
+    """A queued request to execute one model-produced tool call.
+
+    ``blocked_by`` accepts either another request id or another tool call id.
+    This keeps dependency edges stable for the executor while still letting
+    agent/runtime snapshots talk in provider-facing tool call ids.
+    """
+
+    tool_call: ToolCallPart
+    run_id: str
+    iteration: int
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    blocked_by: str | None = None
+    event_bus: EventBus | None = field(default=None, repr=False, compare=False)
+    materialize_pending_steer: bool = True
+    add_to_context: bool = True
+    emit_final_event: bool = True
+    run_injection_handlers: bool = True
+    audit_action: Literal["queue", "execute"] = "queue"
+    created_at: float = field(default_factory=time.time)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def tool_call_id(self) -> str:
+        return str(self.tool_call.get("id", ""))
+
+    @property
+    def tool_name(self) -> str:
+        return str(self.tool_call.get("name", ""))
+
+    def snapshot(self, status: ToolCallRequestStatus) -> dict[str, Any]:
+        """Return a JSON-serializable view of this request."""
+
+        return {
+            "request_id": self.request_id,
+            "tool_call_id": self.tool_call_id,
+            "tool_name": self.tool_name,
+            "tool_call": dict(self.tool_call),
+            "run_id": self.run_id,
+            "iteration": self.iteration,
+            "blocked_by": self.blocked_by,
+            "status": status,
+            "created_at": self.created_at,
+            "metadata": dict(self.metadata),
+        }
+
+
+class ToolCallPromise:
+    """Awaitable handle returned when a tool request is enqueued."""
+
+    def __init__(
+        self,
+        request: ToolCallRequest,
+        future: asyncio.Future[ToolCallRecord],
+    ) -> None:
+        self.request = request
+        self._future = future
+
+    @property
+    def request_id(self) -> str:
+        return self.request.request_id
+
+    @property
+    def tool_call_id(self) -> str:
+        return self.request.tool_call_id
+
+    @property
+    def blocked_by(self) -> str | None:
+        return self.request.blocked_by
+
+    @property
+    def done(self) -> bool:
+        return self._future.done()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._future.cancelled()
+
+    def cancel(self) -> bool:
+        return self._future.cancel()
+
+    def result(self) -> ToolCallRecord:
+        return self._future.result()
+
+    async def wait(self) -> ToolCallRecord:
+        return await self._future
+
+    def __await__(self):
+        return self.wait().__await__()
+
+
 @dataclass
 class ToolExecutionOutcome:
     """Internal result of one tool call before/after context persistence."""
@@ -148,6 +250,15 @@ class ToolExecutor:
         self._emit_tool_result_message = emit_tool_result_message
         self._emit_materialized_steer_events = emit_materialized_steer_events
         self._current_tool_calls = current_tool_calls
+        self._requests: dict[str, ToolCallRequest] = {}
+        self._request_queue: list[str] = []
+        self._promises: dict[str, ToolCallPromise] = {}
+        self._request_status: dict[str, ToolCallRequestStatus] = {}
+        self._request_outcomes: dict[str, ToolExecutionOutcome] = {}
+        self._request_by_tool_call_id: dict[str, str] = {}
+        self._completed_request_ids: set[str] = set()
+        self._released_request_ids: set[str] = set()
+        self._dispatcher_task: asyncio.Task[None] | None = None
 
     async def execute_call(
         self,
@@ -164,28 +275,23 @@ class ToolExecutor:
     ) -> ToolCallRecord:
         """Execute one tool call and optionally persist the tool result."""
 
-        outcome = await self._run_tool_call(
-            tool_call,
+        request = ToolCallRequest(
+            tool_call=tool_call,
             run_id=run_id,
             iteration=iteration,
             event_bus=event_bus,
-            run_injection_handlers=run_injection_handlers,
             audit_action=audit_action,
+            materialize_pending_steer=materialize_pending_steer,
+            add_to_context=add_to_context,
+            emit_final_event=emit_final_event,
+            run_injection_handlers=run_injection_handlers,
         )
-        if add_to_context:
-            await self._commit_outcomes(
-                [outcome],
-                run_id=run_id,
-                event_bus=event_bus,
-                materialize_pending_steer=materialize_pending_steer,
-            )
-        if emit_final_event:
-            await self._emit_final_result_event(
-                outcome.record,
-                run_id,
-                event_bus,
-                context_message_id=outcome.context_message_id,
-            )
+        promise = self.enqueue_call(request)
+        try:
+            outcome = await self._drain_until_outcome(promise)
+        except asyncio.CancelledError:
+            self.cancel_requests([promise.request_id])
+            raise
         return outcome.record
 
     async def execute_batch(
@@ -208,66 +314,129 @@ class ToolExecutor:
         if not tool_calls:
             return ToolExecutionBatchResult()
 
-        active_batch_tool_calls = self._register_active_tool_calls(tool_calls)
+        promises = self.enqueue_batch(
+            tool_calls,
+            run_id=run_id,
+            iteration=iteration,
+            event_bus=event_bus,
+            materialize_pending_steer=False,
+            add_to_context=False,
+            emit_final_event=False,
+            run_injection_handlers=True,
+            audit_action="queue",
+            chain_blocked=True,
+        )
+        return await self.resolve_batch(
+            promises,
+            run_id=run_id,
+            iteration=iteration,
+            event_bus=event_bus,
+            is_interrupted=is_interrupted,
+            materialize_pending_steer=materialize_pending_steer,
+        )
+
+    async def resolve_batch(
+        self,
+        promises: list[ToolCallPromise],
+        *,
+        run_id: str,
+        iteration: int,
+        event_bus: EventBus | None = None,
+        is_interrupted: Callable[[], bool] | None = None,
+        materialize_pending_steer: bool = True,
+    ) -> ToolExecutionBatchResult:
+        """Resolve queued tool promises and commit their results in order."""
+
+        if not promises:
+            return ToolExecutionBatchResult()
+
         outcomes: list[ToolExecutionOutcome] = []
         try:
             control: HookResult | None = None
-            for index, tool_call in enumerate(tool_calls):
+            for index, promise in enumerate(promises):
                 if is_interrupted is not None and is_interrupted():
+                    interrupted = self._synthesize_stopped_tool_results(
+                        [item.request.tool_call for item in promises[index:]],
+                        run_id=run_id,
+                        iteration=iteration,
+                        reason="interrupted",
+                    )
+                    outcomes.extend(interrupted)
+                    for interrupted_promise, interrupted_outcome in zip(
+                        promises[index:],
+                        interrupted,
+                    ):
+                        await self._commit_outcomes(
+                            [interrupted_outcome],
+                            run_id=run_id,
+                            event_bus=event_bus,
+                            materialize_pending_steer=False,
+                        )
+                        await self._emit_final_result_event(
+                            interrupted_outcome.record,
+                            run_id,
+                            event_bus,
+                            context_message_id=interrupted_outcome.context_message_id,
+                        )
+                        self._complete_request(
+                            interrupted_promise.request_id,
+                            interrupted_outcome,
+                            release=True,
+                        )
                     break
 
-                outcome = await self._run_tool_call(
-                    tool_call,
-                    run_id=run_id,
-                    iteration=iteration,
-                    event_bus=event_bus,
-                    run_injection_handlers=True,
-                    audit_action="queue",
-                )
+                outcome = await self._drain_until_outcome(promise)
                 outcomes.append(outcome)
-
-                if tool_call in active_batch_tool_calls:
-                    self._unregister_active_tool_calls([tool_call])
-
-                await self._commit_outcomes(
-                    [outcome],
+                await self._commit_outcome_if_needed(
+                    promise,
+                    outcome,
                     run_id=run_id,
                     event_bus=event_bus,
-                    materialize_pending_steer=False,
                 )
-                await self._emit_final_result_event(
-                    outcome.record,
-                    run_id,
-                    event_bus,
-                    context_message_id=outcome.context_message_id,
-                )
+
                 if outcome.control is not None:
                     control = outcome.control
-                    remaining = tool_calls[index + 1 :]
+                    remaining_promises = promises[index + 1 :]
                     skipped = self._synthesize_stopped_tool_results(
-                        remaining,
+                        [item.request.tool_call for item in remaining_promises],
                         run_id=run_id,
                         iteration=iteration,
                         reason=self._control_reason(control),
                     )
                     outcomes.extend(skipped)
-                    if skipped:
+                    for skipped_promise, skipped_outcome in zip(
+                        remaining_promises,
+                        skipped,
+                    ):
                         await self._commit_outcomes(
-                            skipped,
+                            [skipped_outcome],
                             run_id=run_id,
                             event_bus=event_bus,
                             materialize_pending_steer=False,
                         )
-                        for skipped_outcome in skipped:
-                            await self._emit_final_result_event(
-                                skipped_outcome.record,
-                                run_id,
-                                event_bus,
-                                context_message_id=skipped_outcome.context_message_id,
-                            )
+                        await self._emit_final_result_event(
+                            skipped_outcome.record,
+                            run_id,
+                            event_bus,
+                            context_message_id=skipped_outcome.context_message_id,
+                        )
+                        self._complete_request(
+                            skipped_promise.request_id,
+                            skipped_outcome,
+                            release=True,
+                        )
                     break
+        except asyncio.CancelledError:
+            self.cancel_requests([promise.request_id for promise in promises])
+            raise
         finally:
-            self._unregister_active_tool_calls(active_batch_tool_calls)
+            self.cancel_requests(
+                [
+                    promise.request_id
+                    for promise in promises
+                    if not promise.done
+                ]
+            )
 
         if (
             materialize_pending_steer
@@ -287,6 +456,160 @@ class ToolExecutor:
             ],
             control=control,
         )
+
+    def enqueue_call(self, request: ToolCallRequest) -> ToolCallPromise:
+        """Queue a tool call request and return an awaitable promise."""
+
+        if request.request_id in self._requests:
+            raise ValueError(
+                f"Tool call request already exists: {request.request_id}"
+            )
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[ToolCallRecord] = loop.create_future()
+        promise = ToolCallPromise(request, future)
+        self._requests[request.request_id] = request
+        self._promises[request.request_id] = promise
+        self._request_status[request.request_id] = "queued"
+        self._request_queue.append(request.request_id)
+        if request.tool_call_id:
+            self._request_by_tool_call_id[request.tool_call_id] = request.request_id
+        self._register_active_tool_calls([request.tool_call])
+        self.start_dispatcher()
+        return promise
+
+    def enqueue_batch(
+        self,
+        tool_calls: list[ToolCallPart],
+        *,
+        run_id: str,
+        iteration: int,
+        event_bus: EventBus | None = None,
+        materialize_pending_steer: bool = True,
+        add_to_context: bool = True,
+        emit_final_event: bool = True,
+        run_injection_handlers: bool = True,
+        audit_action: Literal["queue", "execute"] = "queue",
+        chain_blocked: bool = True,
+    ) -> list[ToolCallPromise]:
+        """Queue a batch of tool calls.
+
+        When ``chain_blocked`` is true, every request after the first is
+        blocked by the previous request.  This preserves model order while the
+        executor now owns dependency edges explicitly.
+        """
+
+        promises: list[ToolCallPromise] = []
+        blocked_by: str | None = None
+        for tool_call in tool_calls:
+            request = ToolCallRequest(
+                tool_call=tool_call,
+                run_id=run_id,
+                iteration=iteration,
+                blocked_by=blocked_by,
+                event_bus=event_bus,
+                materialize_pending_steer=materialize_pending_steer,
+                add_to_context=add_to_context,
+                emit_final_event=emit_final_event,
+                run_injection_handlers=run_injection_handlers,
+                audit_action=audit_action,
+            )
+            promise = self.enqueue_call(request)
+            promises.append(promise)
+            if chain_blocked:
+                blocked_by = promise.request_id
+        return promises
+
+    async def drain_until_complete(
+        self,
+        promises: list[ToolCallPromise] | None = None,
+    ) -> list[ToolCallRecord]:
+        """Run queued requests until the selected promises are resolved."""
+
+        if promises is None:
+            target_ids = list(self._request_queue)
+            promises = [
+                self._promises[request_id]
+                for request_id in target_ids
+                if request_id in self._promises
+            ]
+
+        outcomes: list[ToolExecutionOutcome] = []
+        for promise in promises:
+            if not promise.done:
+                outcomes.append(await self._drain_until_outcome(promise))
+                self._release_request(promise.request_id)
+            elif promise.request_id in self._request_outcomes:
+                outcomes.append(self._request_outcomes[promise.request_id])
+                self._release_request(promise.request_id)
+
+        return [outcome.record for outcome in outcomes]
+
+    def start_dispatcher(self) -> None:
+        """Start the background dispatcher if there is queued work."""
+
+        if not self._request_queue:
+            return
+        if self._dispatcher_task is not None and not self._dispatcher_task.done():
+            return
+        self._dispatcher_task = asyncio.create_task(self._dispatch_queued())
+
+    async def wait_for_dispatcher(self) -> None:
+        """Wait for the current dispatcher task, if any."""
+
+        task = self._dispatcher_task
+        if task is not None and not task.done():
+            await task
+
+    def cancel_requests(self, request_ids: list[str]) -> None:
+        """Cancel queued requests and forget unresolved promises."""
+
+        for request_id in request_ids:
+            promise = self._promises.get(request_id)
+            request = self._requests.get(request_id)
+            if promise is None or request is None or promise.done:
+                continue
+            if request_id in self._request_queue:
+                self._request_queue.remove(request_id)
+            self._request_status[request_id] = "cancelled"
+            promise.cancel()
+            self._unregister_active_tool_calls([request.tool_call])
+
+    def clear(self) -> None:
+        """Clear queued executor state.
+
+        Completed request metadata is discarded because promises are runtime
+        handles, not persisted session objects.
+        """
+
+        if self._dispatcher_task is not None and not self._dispatcher_task.done():
+            self._dispatcher_task.cancel()
+        self.cancel_requests(list(self._promises))
+        self._requests.clear()
+        self._request_queue.clear()
+        self._promises.clear()
+        self._request_status.clear()
+        self._request_outcomes.clear()
+        self._request_by_tool_call_id.clear()
+        self._completed_request_ids.clear()
+        self._released_request_ids.clear()
+        self._dispatcher_task = None
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a serializable view of queued and recently completed work."""
+
+        return {
+            "version": 1,
+            "queue": list(self._request_queue),
+            "requests": [
+                request.snapshot(
+                    self._request_status.get(request_id, "queued")
+                )
+                for request_id, request in self._requests.items()
+            ],
+            "completed_request_ids": list(self._completed_request_ids),
+            "released_request_ids": list(self._released_request_ids),
+        }
 
     async def prepare_tool_arguments(
         self,
@@ -391,6 +714,197 @@ class ToolExecutor:
         if context_param and self._context.tool_call_context:
             prepared[context_param] = self._context.tool_call_context
         return prepared
+
+    async def _drain_until_outcome(
+        self,
+        promise: ToolCallPromise,
+    ) -> ToolExecutionOutcome:
+        self.start_dispatcher()
+        while not promise.done:
+            task = self._dispatcher_task
+            if task is None or task.done():
+                if task is not None:
+                    exc = self._task_exception(task)
+                    if exc is not None:
+                        raise exc
+                self.start_dispatcher()
+                task = self._dispatcher_task
+            if task is None or task.done():
+                raise RuntimeError(
+                    "No ready tool call requests; unresolved blockers: "
+                    f"{self._blocked_request_debug()}"
+                )
+            done, _ = await asyncio.wait(
+                {promise._future, task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if promise._future in done:
+                break
+            if task in done:
+                exc = self._task_exception(task)
+                if exc is not None:
+                    raise exc
+
+        if promise.cancelled:
+            raise asyncio.CancelledError
+        if promise.request_id not in self._request_outcomes:
+            raise RuntimeError(
+                f"Tool call promise resolved without outcome: {promise.request_id}"
+            )
+        return self._request_outcomes[promise.request_id]
+
+    async def _dispatch_queued(self) -> None:
+        while True:
+            request_id = self._next_ready_request_id()
+            if request_id is None:
+                return
+            outcome = await self._execute_request(request_id)
+            if outcome.control is not None:
+                return
+
+    @staticmethod
+    def _task_exception(task: asyncio.Task[Any]) -> BaseException | None:
+        if task.cancelled():
+            return asyncio.CancelledError()
+        return task.exception()
+
+    def _next_ready_request_id(self) -> str | None:
+        for request_id in list(self._request_queue):
+            request = self._requests.get(request_id)
+            if request is None:
+                self._request_queue.remove(request_id)
+                continue
+            if self._request_status.get(request_id) != "queued":
+                continue
+            if self._is_unblocked(request):
+                return request_id
+        return None
+
+    def _is_unblocked(self, request: ToolCallRequest) -> bool:
+        blocker = request.blocked_by
+        if not blocker:
+            return True
+        if blocker in self._released_request_ids:
+            return True
+        request_id = self._request_by_tool_call_id.get(blocker)
+        return bool(request_id and request_id in self._released_request_ids)
+
+    def _blocked_request_debug(self) -> list[dict[str, str | None]]:
+        blocked: list[dict[str, str | None]] = []
+        for request_id in self._request_queue:
+            request = self._requests.get(request_id)
+            if request is None:
+                continue
+            if self._request_status.get(request_id) != "queued":
+                continue
+            blocked.append(
+                {
+                    "request_id": request_id,
+                    "tool_call_id": request.tool_call_id,
+                    "blocked_by": request.blocked_by,
+                }
+            )
+        return blocked
+
+    async def _execute_request(
+        self,
+        request_id: str,
+    ) -> ToolExecutionOutcome:
+        request = self._requests[request_id]
+        if request_id in self._request_queue:
+            self._request_queue.remove(request_id)
+        self._request_status[request_id] = "running"
+        try:
+            outcome = await self._run_tool_call(
+                request.tool_call,
+                run_id=request.run_id,
+                iteration=request.iteration,
+                event_bus=request.event_bus,
+                run_injection_handlers=request.run_injection_handlers,
+                audit_action=request.audit_action,
+            )
+            if request.add_to_context:
+                await self._commit_outcomes(
+                    [outcome],
+                    run_id=request.run_id,
+                    event_bus=request.event_bus,
+                    materialize_pending_steer=request.materialize_pending_steer,
+                )
+            if request.emit_final_event:
+                await self._emit_final_result_event(
+                    outcome.record,
+                    request.run_id,
+                    request.event_bus,
+                    context_message_id=outcome.context_message_id,
+                )
+            self._complete_request(
+                request_id,
+                outcome,
+                release=request.add_to_context,
+            )
+            return outcome
+        except asyncio.CancelledError:
+            self._request_status[request_id] = "cancelled"
+            self.cancel_requests([request_id])
+            raise
+        except Exception as exc:
+            self._request_status[request_id] = "failed"
+            self._unregister_active_tool_calls([request.tool_call])
+            promise = self._promises.get(request_id)
+            if promise is not None and not promise.done:
+                promise._future.set_exception(exc)
+            raise
+
+    def _complete_request(
+        self,
+        request_id: str,
+        outcome: ToolExecutionOutcome,
+        *,
+        release: bool = False,
+    ) -> None:
+        request = self._requests.get(request_id)
+        promise = self._promises.get(request_id)
+        if request is None or promise is None:
+            return
+        if request_id in self._request_queue:
+            self._request_queue.remove(request_id)
+        self._request_outcomes[request_id] = outcome
+        self._request_status[request_id] = "completed"
+        self._completed_request_ids.add(request_id)
+        if release:
+            self._released_request_ids.add(request_id)
+        self._unregister_active_tool_calls([request.tool_call])
+        if not promise.done:
+            promise._future.set_result(outcome.record)
+
+    async def _commit_outcome_if_needed(
+        self,
+        promise: ToolCallPromise,
+        outcome: ToolExecutionOutcome,
+        *,
+        run_id: str,
+        event_bus: EventBus | None,
+    ) -> None:
+        if outcome.context_message_id is None:
+            await self._commit_outcomes(
+                [outcome],
+                run_id=run_id,
+                event_bus=event_bus,
+                materialize_pending_steer=False,
+            )
+            await self._emit_final_result_event(
+                outcome.record,
+                run_id,
+                event_bus,
+                context_message_id=outcome.context_message_id,
+            )
+        self._release_request(promise.request_id)
+
+    def _release_request(self, request_id: str) -> None:
+        if request_id not in self._completed_request_ids:
+            return
+        self._released_request_ids.add(request_id)
+        self.start_dispatcher()
 
     async def _run_tool_call(
         self,
@@ -809,25 +1323,30 @@ class ToolExecutor:
         self,
         tool_calls: list[ToolCallPart],
     ) -> list[ToolCallPart]:
-        if self._current_tool_calls is None:
+        current_tool_calls = self._active_tool_call_list()
+        if current_tool_calls is None:
             return []
         active_batch_tool_calls = [
             tool_call
             for tool_call in tool_calls
-            if tool_call not in self._current_tool_calls
+            if tool_call not in current_tool_calls
         ]
-        self._current_tool_calls.extend(active_batch_tool_calls)
+        current_tool_calls.extend(active_batch_tool_calls)
         return active_batch_tool_calls
 
     def _unregister_active_tool_calls(
         self,
         active_batch_tool_calls: list[ToolCallPart],
     ) -> None:
-        if self._current_tool_calls is None:
+        current_tool_calls = self._active_tool_call_list()
+        if current_tool_calls is None:
             return
         for tool_call in active_batch_tool_calls:
-            if tool_call in self._current_tool_calls:
-                self._current_tool_calls.remove(tool_call)
+            if tool_call in current_tool_calls:
+                current_tool_calls.remove(tool_call)
+
+    def _active_tool_call_list(self) -> list[ToolCallPart] | None:
+        return getattr(self._agent, "_current_tool_calls", self._current_tool_calls)
 
     def _record_permission_audit(
         self,

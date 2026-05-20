@@ -91,7 +91,12 @@ from .state import (
     _RecentToolResult,
 )
 from .stream_accumulator import StreamBlockAccumulator
-from .tool_executor import PreparedToolArguments, ToolExecutor
+from .tool_executor import (
+    PreparedToolArguments,
+    ToolCallPromise,
+    ToolCallRequest,
+    ToolExecutor,
+)
 
 
 
@@ -257,6 +262,7 @@ class HawiAgent:
         # and cleared in its finally block; SessionManager reads it via
         # snapshot_runtime() to capture run_id and iteration.
         self._active_execution_state: _ExecutionState | None = None
+        self._tool_executor = self._build_tool_executor()
 
         # Core sub-agent lifecycle manager. Imported lazily to avoid module
         # cycles with the runner package during HawiAgent import.
@@ -1525,6 +1531,15 @@ class HawiAgent:
                 self._session_active = False
 
     def _create_tool_executor(self) -> ToolExecutor:
+        """Return the agent-level tool executor."""
+        return self._tool_executor
+
+    @property
+    def tool_executor(self) -> ToolExecutor:
+        """Agent-level manager for queued tool call requests."""
+        return self._tool_executor
+
+    def _build_tool_executor(self) -> ToolExecutor:
         """Build a tool executor bound to the agent's current runtime state."""
         return ToolExecutor(
             agent=self,
@@ -1808,6 +1823,9 @@ class HawiAgent:
                 # Call model with streaming
                 content_parts: list[ContentPart] = []
                 tool_calls: list[ToolCallPart] = []
+                tool_executor = self._create_tool_executor()
+                early_tool_promises: list[ToolCallPromise] = []
+                last_tool_request_blocker: str | None = None
                 stop_reason = "end_turn"
                 usage: TokenUsage | None = None
                 model_call_start = time.time()
@@ -1886,12 +1904,33 @@ class HawiAgent:
                             if part is not None:
                                 content_parts.append(part)
                                 if part["type"] == "tool_call":
-                                    tool_calls.append(part)
+                                    tool_call_part = cast(ToolCallPart, part)
+                                    tool_calls.append(tool_call_part)
+                                    promise = tool_executor.enqueue_call(
+                                        ToolCallRequest(
+                                            tool_call=tool_call_part,
+                                            run_id=run_id,
+                                            iteration=state.iteration,
+                                            blocked_by=last_tool_request_blocker,
+                                            event_bus=event_bus,
+                                            materialize_pending_steer=False,
+                                            add_to_context=False,
+                                            emit_final_event=False,
+                                            run_injection_handlers=True,
+                                            audit_action="queue",
+                                        )
+                                    )
+                                    early_tool_promises.append(promise)
+                                    last_tool_request_blocker = (
+                                        tool_call_part.get("id")
+                                        or promise.request_id
+                                    )
                 finally:
                     # Ensure the model stream generator is properly closed
                     await model_stream_gen.aclose()
 
                 if state.error:
+                    tool_executor.clear()
                     if not inflight_assistant_message_added:
                         inflight_assistant_message_added = await self._persist_interrupted_assistant_message(
                             run_id=run_id,
@@ -2020,9 +2059,11 @@ class HawiAgent:
                 )
                 if _hr:
                     if _hr.action == "abort":
+                        tool_executor.clear()
                         state.should_stop = True
                         state.stop_reason = "hook_abort"
                     elif _hr.action == "reinvoke" and _hr.message is not None:
+                        tool_executor.clear()
                         self._mark_model_input_started()
                         await self._add_hook_injected_user_message(
                             _hr.message,
@@ -2071,6 +2112,18 @@ class HawiAgent:
                 inflight_text_handler = None
                 inflight_thinking_handler = None
 
+                if state.should_stop:
+                    await self._emit_event(
+                        AgentRunStopEvent.create(
+                            run_id=run_id,
+                            stop_reason=state.stop_reason or "hook_abort",
+                            duration_ms=(time.time() - start_time) * 1000,
+                            usage=cumulative_usage,
+                        ),
+                        event_bus,
+                    )
+                    break
+
                 # Check if tool calls need to be executed
                 if not tool_calls:
                     if await self._drain_pending_inputs_to_context(run_id, event_bus):
@@ -2098,14 +2151,24 @@ class HawiAgent:
 
                 # Execute tool calls through the executor in model order.
                 # Calls in one assistant turn may depend on earlier calls.
-                tool_batch = await self._create_tool_executor().execute_batch(
-                    tool_calls,
-                    run_id=run_id,
-                    iteration=state.iteration,
-                    event_bus=event_bus,
-                    is_interrupted=self._check_interrupt,
-                    materialize_pending_steer=True,
-                )
+                if early_tool_promises:
+                    tool_batch = await tool_executor.resolve_batch(
+                        early_tool_promises,
+                        run_id=run_id,
+                        iteration=state.iteration,
+                        event_bus=event_bus,
+                        is_interrupted=self._check_interrupt,
+                        materialize_pending_steer=True,
+                    )
+                else:
+                    tool_batch = await tool_executor.execute_batch(
+                        tool_calls,
+                        run_id=run_id,
+                        iteration=state.iteration,
+                        event_bus=event_bus,
+                        is_interrupted=self._check_interrupt,
+                        materialize_pending_steer=True,
+                    )
                 state.tool_calls.extend(tool_batch.records)
 
                 if tool_batch.records:
@@ -2269,6 +2332,7 @@ class HawiAgent:
             # Clear the live reference so SessionManager.snapshot_runtime()
             # reports an idle agent.
             self._active_execution_state = None
+            self._tool_executor.clear()
 
         if post_conversation_reinvoke_message is not None:
             self._mark_model_input_started()
