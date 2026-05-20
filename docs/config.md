@@ -56,7 +56,10 @@ factories:
 Hawi 会按以下顺序自动加载配置：
 
 1. **用户级配置**：`~/.hawi/models.yaml`
-2. **项目级配置**：`./.hawi/models.yaml`
+2. **项目级配置**：`<workspace>/.hawi/models.yaml`
+
+`<workspace>` 是从当前目录向上查找的最近 Git 仓库根目录（包含 `.git`）。
+如果当前目录不在 Git 仓库内，则使用当前目录。
 
 ```
 ~
@@ -114,7 +117,7 @@ model = model_registry.create_model("my-custom-model")
 
 ### 快速初始化
 
-`hawi-engine` 提供初始化命令，用来生成可直接编辑的 `.hawi/` 模板。默认把内置模板复制到当前目录的 `./.hawi/`，已存在的文件会保持不变：
+`hawi-engine` 提供初始化命令，用来生成可直接编辑的 `.hawi/` 模板。默认从当前目录向上查找最近的 `.git`，把内置模板复制到该 Git 根目录的 `.hawi/`；如果不在 Git 仓库内，则复制到当前目录的 `./.hawi/`。已存在的文件会保持不变：
 
 ```bash
 hawi-engine init
@@ -312,7 +315,7 @@ model = model_registry.create_model(
        api_key: sk-...
    
    # 项目配置继承并定义工厂
-   # ./.hawi/models.yaml
+   # <workspace>/.hawi/models.yaml
    templates:
      openai-config:
        parent: openai-apikey  # 从用户级配置继承 api_key
@@ -341,5 +344,5 @@ model = model_registry.create_model(
    ```
 
 3. **版本控制**
-   - 将 `./.hawi/models.yaml` 加入版本控制（不含敏感信息）
+   - 将 `<workspace>/.hawi/models.yaml` 加入版本控制（不含敏感信息）
    - 将 `~/.hawi/models.yaml` 加入 `.gitignore`

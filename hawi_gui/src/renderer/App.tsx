@@ -97,7 +97,7 @@ interface SessionRuntimeStats {
 }
 
 type EscapeDismissTarget =
-  | "contextCompactDialog"
+  | "contextPopover"
   | "pluginDialog"
   | "modelDialog"
   | "debugMenu"
@@ -106,8 +106,7 @@ type EscapeDismissTarget =
   | "sessionDialog";
 
 interface EscapeDismissState {
-  contextCompactDialogOpen: boolean;
-  contextCompactBusy: boolean;
+  contextPopoverOpen: boolean;
   pluginDialogOpen: boolean;
   modelDialogOpen: boolean;
   debugMenuOpen: boolean;
@@ -117,12 +116,10 @@ interface EscapeDismissState {
 }
 
 export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDismissTarget | null {
-  if (state.contextCompactDialogOpen) {
-    return state.contextCompactBusy ? null : "contextCompactDialog";
-  }
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
+  if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) {
     return state.editingQueueTaskId ? "queueTaskEdit" : "queuePopover";
   }
@@ -131,10 +128,10 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
 }
 
 function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTarget | null {
-  if (state.contextCompactDialogOpen) return "contextCompactDialog";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
+  if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) return "queuePopover";
   if (state.sessionDialogOpen) return "sessionDialog";
   return null;
@@ -142,8 +139,8 @@ function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTar
 
 function dialogScopeSelector(target: EscapeDismissTarget): string | null {
   switch (target) {
-    case "contextCompactDialog":
-      return ".context-compact-modal";
+    case "contextPopover":
+      return ".context-popover";
     case "pluginDialog":
       return ".plugin-modal";
     case "modelDialog":
@@ -213,7 +210,8 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
   if (clickActiveButton(scope)) return true;
   const confirm = (() => {
     switch (target) {
-      case "contextCompactDialog":
+      case "contextPopover":
+        return scope.querySelector<HTMLElement>(".primary-button:not(:disabled)");
       case "pluginDialog":
         return scope.querySelector<HTMLElement>(".modal-actions .primary-button:not(:disabled)");
       case "modelDialog":
@@ -316,7 +314,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
-  const [contextCompactDialogOpen, setContextCompactDialogOpen] = useState(false);
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
@@ -438,8 +436,7 @@ export default function App() {
     function handleDialogKeyboard(event: KeyboardEvent) {
       if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
       const keyboardState = {
-        contextCompactDialogOpen,
-        contextCompactBusy: contextCompactBusy || contextSettingsBusy,
+        contextPopoverOpen,
         pluginDialogOpen,
         modelDialogOpen,
         debugMenuOpen,
@@ -454,8 +451,8 @@ export default function App() {
         event.preventDefault();
         event.stopPropagation();
         switch (target) {
-          case "contextCompactDialog":
-            setContextCompactDialogOpen(false);
+          case "contextPopover":
+            setContextPopoverOpen(false);
             break;
           case "pluginDialog":
             setPluginDialogOpen(false);
@@ -507,9 +504,7 @@ export default function App() {
       document.removeEventListener("keydown", handleDialogKeyboard);
     };
   }, [
-    contextCompactDialogOpen,
-    contextCompactBusy,
-    contextSettingsBusy,
+    contextPopoverOpen,
     pluginDialogOpen,
     modelDialogOpen,
     debugMenuOpen,
@@ -1200,7 +1195,7 @@ export default function App() {
     try {
       const frame = await sendCommand("compact_context", {});
       if (!frame) return;
-      setContextCompactDialogOpen(false);
+      setContextPopoverOpen(false);
       applySessionHistoryFromFrame(frame);
       const status = optionalPayloadString(framePayload(frame)?.status);
       if (status === "skipped") {
@@ -1350,7 +1345,12 @@ export default function App() {
             compression={state.contextCompression}
             busy={contextCompactBusy}
             disabled={!coreRunning}
-            onRequestCompact={() => setContextCompactDialogOpen(true)}
+            open={contextPopoverOpen}
+            settingsBusy={contextSettingsBusy}
+            canManualCompact={canCompactContextManually}
+            onToggle={() => setContextPopoverOpen((value) => !value)}
+            onConfirm={compactContextManually}
+            onThresholdChange={setAutoCompactThreshold}
           />
           <QueueStatusCell
             queueLengths={state.queueLengths}
@@ -1527,20 +1527,6 @@ export default function App() {
           onApply={applyPlugins}
         />
       )}
-      {contextCompactDialogOpen && (
-        <ContextCompactDialog
-          usage={state.contextUsage}
-          autoCompact={state.contextAutoCompact}
-          busy={contextCompactBusy}
-          settingsBusy={contextSettingsBusy}
-          canManualCompact={canCompactContextManually}
-          onClose={() => {
-            if (!contextCompactBusy && !contextSettingsBusy) setContextCompactDialogOpen(false);
-          }}
-          onConfirm={compactContextManually}
-          onThresholdChange={setAutoCompactThreshold}
-        />
-      )}
     </div>
   );
 }
@@ -1647,15 +1633,25 @@ function ContextUsageCell({
   autoCompact,
   compression,
   busy,
+  settingsBusy,
+  canManualCompact,
   disabled,
-  onRequestCompact
+  open,
+  onToggle,
+  onConfirm,
+  onThresholdChange
 }: {
   usage?: ContextUsageState;
   autoCompact?: ContextAutoCompactState;
   compression?: ContextCompressionState;
   busy: boolean;
+  settingsBusy: boolean;
+  canManualCompact: boolean;
   disabled: boolean;
-  onRequestCompact: () => void;
+  open: boolean;
+  onToggle: () => void;
+  onConfirm: () => void;
+  onThresholdChange: (percent: number) => Promise<void>;
 }) {
   const compressing = compression?.active === true;
   const ratio = usage?.ratio ?? 0;
@@ -1674,41 +1670,55 @@ function ContextUsageCell({
         ? `Context ${usageLabel}${thresholdTitle} · 压缩中`
         : `Context ${usageLabel}${thresholdTitle} · 点击查看上下文设置`;
   return (
-    <button
-      type="button"
-      className={`context-status ${compressing ? "compressing" : ""}`}
-      title={title}
-      disabled={inactive}
-      onClick={onRequestCompact}
-      aria-label={`Context ${percent} ${usageLabel}`}
-    >
-      <span className="status-cell-label">Context</span>
-      <span className={`context-status-widget ${compressing ? "compressing" : ""}`}>
-        {compressing ? (
-          <>
-            <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />
-            <span>Compressing</span>
-          </>
-        ) : (
-          <>
-            <span className="context-usage-line">{usageLabel}</span>
-            <span className="context-meter" aria-hidden="true">
-              <span className="context-meter-fill" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+    <div className={`context-status ${compressing ? "compressing" : ""} ${open ? "active" : ""}`}>
+      <button
+        type="button"
+        className="context-status-trigger"
+        title={title}
+        disabled={inactive}
+        onClick={onToggle}
+        aria-label={`Context ${percent} ${usageLabel}`}
+        aria-pressed={open}
+      >
+        <span className="status-cell-label">Context</span>
+        <span className={`context-status-widget ${compressing ? "compressing" : ""}`}>
+          {compressing ? (
+            <>
+              <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />
+              <span>Compressing</span>
+            </>
+          ) : (
+            <>
+              <span className="context-usage-line">{usageLabel}</span>
+              <span className="context-meter" aria-hidden="true">
+                <span className="context-meter-fill" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+                {thresholdPercent !== undefined && (
+                  <span
+                    className="context-meter-threshold"
+                    style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
+                  />
+                )}
+                <strong className="context-meter-label">{percent}</strong>
+              </span>
               {thresholdPercent !== undefined && (
-                <span
-                  className="context-meter-threshold"
-                  style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
-                />
+                <span className="context-threshold-line">auto {thresholdPercent}%</span>
               )}
-              <strong className="context-meter-label">{percent}</strong>
-            </span>
-            {thresholdPercent !== undefined && (
-              <span className="context-threshold-line">auto {thresholdPercent}%</span>
-            )}
-          </>
-        )}
-      </span>
-    </button>
+            </>
+          )}
+        </span>
+      </button>
+      {open && (
+        <ContextPopover
+          usage={usage}
+          autoCompact={autoCompact}
+          busy={busy}
+          settingsBusy={settingsBusy}
+          canManualCompact={canManualCompact}
+          onConfirm={onConfirm}
+          onThresholdChange={onThresholdChange}
+        />
+      )}
+    </div>
   );
 }
 
@@ -3482,13 +3492,12 @@ function formatArtifactData(value: unknown): string {
   }
 }
 
-function ContextCompactDialog({
+function ContextPopover({
   usage,
   autoCompact,
   busy,
   settingsBusy,
   canManualCompact,
-  onClose,
   onConfirm,
   onThresholdChange
 }: {
@@ -3497,7 +3506,6 @@ function ContextCompactDialog({
   busy: boolean;
   settingsBusy: boolean;
   canManualCompact: boolean;
-  onClose: () => void;
   onConfirm: () => void;
   onThresholdChange: (percent: number) => Promise<void>;
 }) {
@@ -3522,33 +3530,12 @@ function ContextCompactDialog({
   }
 
   return (
-    <Modal
-      title="上下文"
-      className="confirm-modal context-compact-modal"
-      onClose={onClose}
-      footer={
-        <div className="modal-action-row">
-          <button className="tool-button" disabled={busy || settingsBusy} onClick={onClose}>取消</button>
-          <button
-            className="primary-button"
-            disabled={busy || !canManualCompact}
-            title={canManualCompact ? "手动压缩上下文" : "Agent idle 后可手动压缩"}
-            onClick={onConfirm}
-          >
-            {busy ? (
-              <>
-                <LoaderCircle className="inline-spinner" size={15} /> 压缩中
-              </>
-            ) : (
-              <>
-                <Brain size={15} /> 压缩
-              </>
-            )}
-          </button>
-        </div>
-      }
-    >
-      <div className="confirm-content">
+    <div className="context-popover">
+      <header>
+        <span>Context</span>
+        <strong>{percent}</strong>
+      </header>
+      <div className="context-popover-body">
         <dl className="context-compact-stats">
           <div>
             <dt>Context</dt>
@@ -3607,8 +3594,26 @@ function ContextCompactDialog({
             </button>
           </div>
         </section>
+        <div className="context-popover-actions">
+          <button
+            className="primary-button"
+            disabled={busy || !canManualCompact}
+            title={canManualCompact ? "手动压缩上下文" : "Agent idle 后可手动压缩"}
+            onClick={onConfirm}
+          >
+            {busy ? (
+              <>
+                <LoaderCircle className="inline-spinner" size={15} /> 压缩中
+              </>
+            ) : (
+              <>
+                <Brain size={15} /> 压缩
+              </>
+            )}
+          </button>
+        </div>
       </div>
-    </Modal>
+    </div>
   );
 }
 

@@ -933,6 +933,31 @@ providers:
         assert config is not None
         assert config.adapter == "OpenAIModel"
 
+    def test_auto_load_uses_git_root_from_nested_cwd(self, tmp_path):
+        """Test auto-loading searches the Git root when cwd is nested."""
+        registry = ModelRegistry()
+        registry.clear()
+
+        repo = tmp_path / "repo"
+        nested = repo / "src" / "package"
+        config_dir = repo / ".hawi"
+        nested.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        config_dir.mkdir()
+        config_file = config_dir / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: auto-provider
+    adapter: OpenAIModel
+    model_ids:
+      - gpt-4
+    properties:
+      api_key: test-key
+""")
+
+        with patch("hawi.models.registry.Path.cwd", return_value=nested):
+            assert registry.has_model("auto-provider/gpt-4")
+
 
 class TestConvenienceFunctions:
     """Tests for module-level convenience functions."""

@@ -65,7 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Existing Hawi config directory to use. "
-            "If omitted, the bundled template is copied into ./.hawi."
+            "If omitted, the bundled template is copied into the nearest "
+            "Git root's .hawi, or ./.hawi when no Git root is found."
         ),
     )
     parser.add_argument("--model", default=None, help="Model factory name from models.yaml")
@@ -285,7 +286,8 @@ async def async_main(args: argparse.Namespace) -> None:
             )
         raise RuntimeError(
             f"No model configurations available. Loaded configs: {loaded_text}. "
-            "Create ~/.hawi/models.yaml, ./.hawi/models.yaml, ./models.yaml, "
+            "Create ~/.hawi/models.yaml, <workspace>/.hawi/models.yaml, "
+            "<workspace>/models.yaml, "
             "pass --models-config PATH, or run `hawi-engine init`."
         )
 

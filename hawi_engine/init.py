@@ -8,6 +8,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
+from hawi.utils.workspace import find_git_root
+
 TemplateAction = Literal["created", "skipped"]
 
 DEFAULT_TEMPLATE_NAME = "hawi_template"
@@ -47,7 +49,8 @@ def prepare_hawi_dir(
     """Resolve or initialize the Hawi config directory.
 
     If ``hawi_dir`` is explicit it must already exist. Without an explicit
-    directory, the bundled template is copied into the current working tree.
+    directory, the bundled template is copied into the nearest ancestor that
+    contains ``.git``. When no Git root exists, the current directory is used.
     """
 
     if hawi_dir is not None:
@@ -56,7 +59,7 @@ def prepare_hawi_dir(
             raise FileNotFoundError(f"Hawi config directory not found: {config_dir}")
         return InitResult(config_dir=config_dir, files=())
 
-    destination_root = Path.cwd().resolve()
+    destination_root = find_git_root(Path.cwd())
     config_dir = destination_root / HAWI_DIR_NAME
     values = _template_values(destination_root, config_dir)
     template_root = files("hawi_engine").joinpath("templates", template_name)

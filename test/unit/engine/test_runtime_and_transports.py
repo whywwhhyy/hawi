@@ -1078,6 +1078,37 @@ def test_load_model_configs_can_skip_user_config(tmp_path, monkeypatch: pytest.M
     assert loaded_paths == [str(workspace_config), str(root_config)]
 
 
+def test_load_model_configs_uses_git_root_from_nested_cwd(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    nested = workspace / "src" / "package"
+    workspace_config = workspace / ".hawi" / "models.yaml"
+    root_config = workspace / "models.yaml"
+    nested.mkdir(parents=True)
+    (workspace / ".git").mkdir()
+    for path in (workspace_config, root_config):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("providers: {}\n", encoding="utf-8")
+
+    loaded_paths: list[str] = []
+    monkeypatch.chdir(nested)
+    monkeypatch.setattr(
+        "hawi_engine.runtime.model_registry._auto_load_needed",
+        True,
+    )
+    monkeypatch.setattr(
+        "hawi_engine.runtime.model_registry.load_config",
+        lambda path, quiet=True: loaded_paths.append(str(path)),
+    )
+
+    loaded = load_model_configs(include_user=False)
+
+    assert loaded == [workspace_config, root_config]
+    assert loaded_paths == [str(workspace_config), str(root_config)]
+
+
 def test_load_model_configs_chains_workspace_then_user_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"

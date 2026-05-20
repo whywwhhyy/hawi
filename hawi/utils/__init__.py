@@ -17,6 +17,7 @@ from .markdown_streaming_parser import (
     BlockCommit,
     MarkdownStreamingParser,
 )
+from .workspace import find_git_root
 
 __all__ = [
     # Lifecycle
@@ -37,4 +38,6 @@ __all__ = [
     "BlockUpdate",
     "BlockCommit",
     "MarkdownStreamingParser",
+    # Workspace
+    "find_git_root",
 ]

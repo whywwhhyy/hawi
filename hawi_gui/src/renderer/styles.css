@@ -204,28 +204,37 @@ button:disabled {
 .context-status {
   position: relative;
   min-width: 166px;
+  padding: 0;
   justify-content: flex-start;
   gap: 8px;
+  border: 0;
   border-right: 1px solid var(--color-border);
+  background: transparent;
   font-size: 12px;
 }
 
-button.context-status {
-  border-top: 0;
-  border-bottom: 0;
-  border-left: 0;
+.context-status-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 38px;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
 }
 
-button.context-status:hover:not(:disabled),
-button.context-status:focus-visible {
+.context-status:hover .context-status-trigger:not(:disabled),
+.context-status.active .context-status-trigger,
+.context-status-trigger:focus-visible {
   background: var(--color-primary-tint);
 }
 
-button.context-status:disabled {
+.context-status-trigger:disabled {
   cursor: default;
 }
 
@@ -305,6 +314,44 @@ button.context-status:disabled {
   font-size: 9px;
   line-height: 1;
   text-align: center;
+}
+
+.context-popover {
+  position: absolute;
+  z-index: var(--layer-popover);
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(380px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: 0 10px 28px rgba(27, 45, 54, 0.16);
+}
+
+.context-popover > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: #4a575d;
+}
+
+.context-popover > header strong {
+  color: var(--color-primary);
+}
+
+.context-popover-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.context-popover-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .session-status {

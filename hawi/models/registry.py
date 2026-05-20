@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from hawi.models.model import Model
 from hawi.utils.config_loader import ConfigLoaderError, load_config_file
+from hawi.utils.workspace import find_git_root
 
 __all__ = [
     "ModelRegistry",
@@ -668,7 +669,8 @@ class ModelRegistry:
             self._load_config_file(user_config, quiet=True)
 
         # 2. 项目级配置
-        project_config = Path.cwd() / ".hawi" / "models.yaml"
+        project_root = find_git_root(Path.cwd())
+        project_config = project_root / ".hawi" / "models.yaml"
         if project_config.exists():
             self._load_config_file(project_config, quiet=True)
 

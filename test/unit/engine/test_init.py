@@ -45,6 +45,24 @@ def test_prepare_hawi_dir_copies_template_when_no_dir_is_given(
         registry.clear()
 
 
+def test_prepare_hawi_dir_uses_nearest_git_root_when_no_dir_is_given(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    nested = repo / "packages" / "demo"
+    nested.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    monkeypatch.chdir(nested)
+    monkeypatch.setenv("HAWI_NO_AUTO_LOAD", "1")
+
+    result = prepare_hawi_dir()
+
+    assert result.config_dir == repo / ".hawi"
+    assert (repo / ".hawi" / "models.yaml").exists()
+    assert not (nested / ".hawi").exists()
+
+
 def test_prepare_hawi_dir_leaves_existing_template_files_alone(
     tmp_path: Path,
     monkeypatch,

@@ -140,8 +140,7 @@ describe("session runtime display helpers", () => {
 
 describe("resolveEscapeDismissTarget", () => {
   const closed = {
-    contextCompactDialogOpen: false,
-    contextCompactBusy: false,
+    contextPopoverOpen: false,
     pluginDialogOpen: false,
     modelDialogOpen: false,
     debugMenuOpen: false,
@@ -163,13 +162,16 @@ describe("resolveEscapeDismissTarget", () => {
     })).toBe("pluginDialog");
   });
 
-  it("does not close the context compact dialog while it is busy", () => {
+  it("closes the context popover after modal dialogs", () => {
     expect(resolveEscapeDismissTarget({
       ...closed,
-      contextCompactDialogOpen: true,
-      contextCompactBusy: true,
       pluginDialogOpen: true
-    })).toBeNull();
+    })).toBe("pluginDialog");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      contextPopoverOpen: true,
+      queuePopoverOpen: true
+    })).toBe("contextPopover");
   });
 
   it("cancels queue item editing before closing the queue popover", () => {

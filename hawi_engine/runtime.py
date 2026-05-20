@@ -21,6 +21,7 @@ from hawi.review import RuntimeReviewBroker, RuntimeReviewDecision
 from hawi.session import SessionLockedError, SessionManager
 from hawi.tool import ToolParameterInjection, ToolResult
 from hawi.utils.debug import debug_assert
+from hawi.utils.workspace import find_git_root
 
 from .blob import BlobStore
 from .blob.commands import dispatch_blob_command
@@ -1964,13 +1965,14 @@ def load_model_configs(
 ) -> list[Path]:
     """Load model configs in core-cli order and return paths that existed."""
     loaded: list[Path] = []
-    # ModelRegistry has its own lazy auto-loader for ~/.hawi and cwd configs.
+    # ModelRegistry has its own lazy auto-loader for ~/.hawi and workspace configs.
     # The engine owns this chain explicitly so GUI and CLI metadata see the
     # same deterministic order.
     model_registry._auto_load_needed = False  # type: ignore[attr-defined]
+    workspace_root = find_git_root(Path.cwd())
     candidates = [
-        Path.cwd() / ".hawi" / "models.yaml",
-        Path.cwd() / "models.yaml",
+        workspace_root / ".hawi" / "models.yaml",
+        workspace_root / "models.yaml",
     ]
     if include_user:
         candidates.append(Path.home() / ".hawi" / "models.yaml")
