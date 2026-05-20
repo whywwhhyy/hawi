@@ -3,7 +3,7 @@ import { VERSION, type CoreFrame, type PluginArtifactPayload, type QueueKind, ty
 const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 
-export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "compact" | "framework";
+export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "compact" | "framework" | "handoff";
 export type DisplayMessageType = "normal" | "steer" | "urgent" | "resume";
 export type FrameworkInjectionKind =
   | "system_prompt"
@@ -174,6 +174,50 @@ export interface ProcessingState {
   content: string;
 }
 
+export interface SubAgentStatusState {
+  id: string;
+  name: string;
+  role: string;
+  state: string;
+  runnerState: string;
+  executorState: string;
+  queueLengths: Record<string, number>;
+  createdAt?: number;
+  updatedAt?: number;
+  closedAt?: number;
+  modelId?: string;
+  workingDir?: string;
+  mode?: string;
+  sharedContext?: boolean;
+  lastResultText?: string;
+  lastError?: string;
+}
+
+interface SubAgentPartialState {
+  runId?: string;
+  text: string;
+  reasoning: string;
+  startedAt?: number;
+  updatedAt?: number;
+}
+
+export interface SubAgentRuntimeState {
+  id: string;
+  name: string;
+  role: string;
+  state: string;
+  mode?: string;
+  sharedContext?: boolean;
+  status?: SubAgentStatusState;
+  messageHistory: SessionHistoryRecord[];
+  nodes: ChatNode[];
+  processing?: ProcessingState;
+  partial: SubAgentPartialState;
+  eventCount: number;
+  lastEventType?: string;
+  lastEventAt?: number;
+}
+
 interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
@@ -205,6 +249,8 @@ export interface AppState {
   pluginMessages: PluginMessageState[];
   pluginStatuses: Record<string, PluginStatusState>;
   toolProgress: Record<string, ToolProgressState>;
+  subagents: Record<string, SubAgentRuntimeState>;
+  subagentOrder: string[];
   sessionMessageCount: number;
   nextContextMessageIndex: number;
   processing?: ProcessingState;
@@ -231,6 +277,8 @@ export function createInitialState(): AppState {
     pluginMessages: [],
     pluginStatuses: {},
     toolProgress: {},
+    subagents: {},
+    subagentOrder: [],
     sessionMessageCount: 0,
     nextContextMessageIndex: 0,
     processing: undefined
@@ -259,6 +307,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         pluginMessages: [],
         pluginStatuses: {},
         toolProgress: {},
+        subagents: {},
+        subagentOrder: [],
         sessionMessageCount: 0,
         nextContextMessageIndex: 0,
         processing: undefined
@@ -289,6 +339,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         pluginMessages: replayState.pluginMessages,
         pluginStatuses: replayState.pluginStatuses,
         toolProgress: replayState.toolProgress,
+        subagents: replayState.subagents,
+        subagentOrder: replayState.subagentOrder,
         sessionMessageCount: history.length,
         nextContextMessageIndex: nextContextMessageIndexFromHistory(history),
         processing: undefined
@@ -707,6 +759,11 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         payload
       );
 
+    case "subagent.created":
+    case "subagent.event":
+    case "subagent.closed":
+      return updateSubAgentFromEvent(state, payload, frame);
+
     case "plugin.status":
       return updatePluginStatus(state, payload, frame);
 
@@ -784,7 +841,7 @@ function updateStatus(state: AppState, payload: Record<string, unknown>): AppSta
   };
 }
 
-interface SessionHistoryRecord {
+export interface SessionHistoryRecord {
   runId: string;
   role: "user" | "assistant" | "tool" | "system" | "error" | "event";
   content: unknown[];
@@ -798,33 +855,39 @@ function normalizeSessionHistory(value: unknown): SessionHistoryRecord[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter(isRecord)
-    .map((item, index): SessionHistoryRecord | null => {
-      const role = item.role;
-      if (
-        role !== "user"
-        && role !== "assistant"
-        && role !== "tool"
-        && role !== "system"
-        && role !== "error"
-        && role !== "event"
-      ) {
-        return null;
-      }
-      const content = Array.isArray(item.content) ? item.content : [];
-      if (content.length === 0) {
-        return null;
-      }
-      return {
-        runId: optionalString(item.run_id ?? item.runId) ?? `history-${index}`,
-        role,
-        content,
-        metadata: isRecord(item.metadata) ? item.metadata : undefined,
-        contextMessageId: optionalString(item.context_message_id ?? item.contextMessageId),
-        contextMessageIndex: optionalNumber(item.context_message_index ?? item.contextMessageIndex),
-        timestamp: optionalNumber(item.timestamp)
-      };
-    })
+    .map((item, index) => normalizeSessionHistoryRecord(item, index))
     .filter((item): item is SessionHistoryRecord => item !== null);
+}
+
+function normalizeSessionHistoryRecord(item: Record<string, unknown>, index: number): SessionHistoryRecord | null {
+  const role = item.role;
+  if (
+    role !== "user"
+    && role !== "assistant"
+    && role !== "tool"
+    && role !== "system"
+    && role !== "error"
+    && role !== "event"
+  ) {
+    return null;
+  }
+  const content = Array.isArray(item.content) ? item.content : [];
+  if (content.length === 0) {
+    return null;
+  }
+  return {
+    runId: optionalString(item.run_id ?? item.runId) ?? `history-${index}`,
+    role,
+    content,
+    metadata: isRecord(item.metadata) ? item.metadata : undefined,
+    contextMessageId: optionalString(item.context_message_id ?? item.contextMessageId),
+    contextMessageIndex: optionalNumber(item.context_message_index ?? item.contextMessageIndex),
+    timestamp: optionalNumber(item.timestamp)
+  };
+}
+
+export function chatNodesFromMessageHistory(value: unknown): ChatNode[] {
+  return sessionHistoryNodes(normalizeSessionHistory(value));
 }
 
 function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
@@ -1096,7 +1159,10 @@ function isSessionHistoryReplayOnlyEvent(eventType: string): boolean {
     || eventType === "plugin.artifact.upsert"
     || eventType === "plugin.artifact.delta"
     || eventType === "plugin.artifact.remove"
-    || eventType === "plugin.artifact.clear";
+    || eventType === "plugin.artifact.clear"
+    || eventType === "subagent.created"
+    || eventType === "subagent.event"
+    || eventType === "subagent.closed";
 }
 
 function historyFrameworkNode(frame: CoreFrame, injection: FrameworkInjectionState, index: number): ChatNode {
@@ -2244,6 +2310,277 @@ function orderFrameworkInjections(items: FrameworkInjectionState[]): FrameworkIn
   });
 }
 
+function updateSubAgentFromEvent(
+  state: AppState,
+  payload: Record<string, unknown>,
+  frame: CoreFrame,
+): AppState {
+  const eventName = frame.type.startsWith("subagent.")
+    ? frame.type
+    : optionalString(payload.event_name);
+  if (!eventName || !eventName.startsWith("subagent.")) {
+    return state;
+  }
+  const status = normalizeSubAgentStatus(payload.status);
+  const id = optionalString(payload.subagent_id) ?? status?.id;
+  if (!id) {
+    return state;
+  }
+
+  const eventAt = frameTime(frame);
+  const current = state.subagents[id] ?? createSubAgentRuntime(id, payload, status, eventAt);
+  const childEvent = isRecord(payload.child_event) ? payload.child_event : undefined;
+  const messageEntry = normalizeSubAgentMessageEntry(
+    payload.message_entry,
+    current.messageHistory.length
+  );
+  const nextHistory = messageEntry
+    ? appendSubAgentMessageEntry(current.messageHistory, messageEntry)
+    : current.messageHistory;
+  const nextPartial = updateSubAgentPartial(current.partial, childEvent, messageEntry, eventAt);
+  const nextStatus = status ?? current.status;
+  const nextStateName = nextStatus?.state ?? lifecycleStateFromEvent(eventName, current.state);
+  const nextMode = nextStatus?.mode ?? current.mode;
+  const nextSharedContext = nextStatus?.sharedContext
+    ?? current.sharedContext
+    ?? nextMode === "fork";
+  const nextSubagent: SubAgentRuntimeState = {
+    ...current,
+    name: nextStatus?.name ?? optionalString(payload.subagent_name) ?? current.name,
+    role: nextStatus?.role ?? optionalString(payload.subagent_role) ?? current.role,
+    state: nextStateName,
+    mode: nextMode,
+    sharedContext: nextSharedContext,
+    status: nextStatus,
+    messageHistory: nextHistory,
+    nodes: subAgentNodes(nextHistory, nextPartial, id, nextSharedContext),
+    processing: subAgentProcessing(
+      id,
+      nextStatus,
+      nextStateName,
+      nextPartial,
+      childEvent
+    ),
+    partial: nextPartial,
+    eventCount: current.eventCount + 1,
+    lastEventType: optionalString(childEvent?.type) ?? eventName,
+    lastEventAt: eventAt,
+  };
+  return {
+    ...state,
+    subagents: {
+      ...state.subagents,
+      [id]: nextSubagent,
+    },
+    subagentOrder: state.subagentOrder.includes(id)
+      ? state.subagentOrder
+      : [...state.subagentOrder, id],
+  };
+}
+
+function createSubAgentRuntime(
+  id: string,
+  payload: Record<string, unknown>,
+  status: SubAgentStatusState | undefined,
+  eventAt: number,
+): SubAgentRuntimeState {
+  return {
+    id,
+    name: status?.name ?? optionalString(payload.subagent_name) ?? id,
+    role: status?.role ?? optionalString(payload.subagent_role) ?? "general",
+    state: status?.state ?? "CREATED",
+    mode: status?.mode,
+    sharedContext: status?.sharedContext ?? status?.mode === "fork",
+    status,
+    messageHistory: [],
+    nodes: [],
+    partial: emptySubAgentPartial(),
+    eventCount: 0,
+    lastEventAt: eventAt,
+  };
+}
+
+function normalizeSubAgentStatus(value: unknown): SubAgentStatusState | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = optionalString(value.id);
+  if (!id) return undefined;
+  return {
+    id,
+    name: optionalString(value.name) ?? id,
+    role: optionalString(value.role) ?? "general",
+    state: optionalString(value.state) ?? "CREATED",
+    runnerState: optionalString(value.runner_state ?? value.runnerState) ?? "",
+    executorState: optionalString(value.executor_state ?? value.executorState) ?? "",
+    queueLengths: normalizeNumberRecord(value.queue_lengths ?? value.queueLengths),
+    createdAt: optionalNumber(value.created_at ?? value.createdAt),
+    updatedAt: optionalNumber(value.updated_at ?? value.updatedAt),
+    closedAt: optionalNumber(value.closed_at ?? value.closedAt),
+    modelId: optionalString(value.model_id ?? value.modelId),
+    workingDir: optionalString(value.working_dir ?? value.workingDir),
+    mode: optionalString(value.mode),
+    sharedContext: optionalBoolean(value.shared_context ?? value.sharedContext),
+    lastResultText: optionalString(value.last_result_text ?? value.lastResultText),
+    lastError: optionalString(value.last_error ?? value.lastError),
+  };
+}
+
+function normalizeNumberRecord(value: unknown): Record<string, number> {
+  if (!isRecord(value)) return {};
+  const result: Record<string, number> = {};
+  Object.entries(value).forEach(([key, item]) => {
+    const numberValue = optionalNumber(item);
+    if (numberValue !== undefined) {
+      result[key] = numberValue;
+    }
+  });
+  return result;
+}
+
+function lifecycleStateFromEvent(eventName: string, current: string): string {
+  if (eventName === "subagent.closed") return "CLOSED";
+  if (eventName === "subagent.created") return current || "CREATED";
+  return current || "RUNNING";
+}
+
+function normalizeSubAgentMessageEntry(value: unknown, index: number): SessionHistoryRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  return normalizeSessionHistoryRecord(value, index) ?? undefined;
+}
+
+function appendSubAgentMessageEntry(
+  history: SessionHistoryRecord[],
+  entry: SessionHistoryRecord,
+): SessionHistoryRecord[] {
+  const entryKey = sessionHistoryRecordKey(entry);
+  if (history.some((item) => sessionHistoryRecordKey(item) === entryKey)) {
+    return history;
+  }
+  return [...history, entry];
+}
+
+function sessionHistoryRecordKey(record: SessionHistoryRecord): string {
+  return [
+    record.timestamp ?? "",
+    record.runId,
+    record.role,
+    record.contextMessageId ?? "",
+    record.contextMessageIndex ?? "",
+    simpleHash(formatToolValue(record.content)),
+  ].join(":");
+}
+
+function updateSubAgentPartial(
+  current: SubAgentPartialState,
+  childEvent: Record<string, unknown> | undefined,
+  messageEntry: SessionHistoryRecord | undefined,
+  eventAt: number,
+): SubAgentPartialState {
+  if (messageEntry?.role === "assistant") {
+    return emptySubAgentPartial();
+  }
+  const eventType = optionalString(childEvent?.type);
+  if (
+    eventType === "agent.run_start"
+    || eventType === "model.stream_start"
+    || eventType === "agent.run_stop"
+    || eventType === "agent.error"
+  ) {
+    return emptySubAgentPartial();
+  }
+  if (eventType !== "model.content_block_delta") {
+    return current;
+  }
+  const delta = optionalString(childEvent?.delta);
+  if (!delta) {
+    return current;
+  }
+  const deltaType = optionalString(childEvent?.delta_type);
+  const base: SubAgentPartialState = {
+    ...current,
+    runId: optionalString(childEvent?.run_id) ?? current.runId,
+    startedAt: current.startedAt ?? eventAt,
+    updatedAt: eventAt,
+  };
+  if (deltaType === "reasoning") {
+    return { ...base, reasoning: base.reasoning + delta };
+  }
+  if (deltaType === "text") {
+    return { ...base, text: base.text + delta };
+  }
+  return current;
+}
+
+function subAgentNodes(
+  history: SessionHistoryRecord[],
+  partial: SubAgentPartialState,
+  subagentId: string,
+  sharedContext?: boolean,
+): ChatNode[] {
+  const nodes = sessionHistoryNodes(history);
+  if (sharedContext) {
+    nodes.unshift(subAgentSharedContextNode(subagentId));
+  }
+  if (partial.reasoning) {
+    nodes.push({
+      id: nodeId("subagent-thinking", `${subagentId}-${partial.runId ?? "partial"}`),
+      kind: "thinking",
+      content: partial.reasoning,
+      complete: false,
+      streamStartedAt: partial.startedAt,
+    });
+  }
+  if (partial.text) {
+    nodes.push({
+      id: nodeId("subagent-agent", `${subagentId}-${partial.runId ?? "partial"}`),
+      kind: "agent",
+      content: partial.text,
+      complete: false,
+      streamStartedAt: partial.startedAt,
+    });
+  }
+  return nodes;
+}
+
+function subAgentSharedContextNode(subagentId: string): ChatNode {
+  return {
+    id: nodeId("subagent-handoff", subagentId),
+    kind: "handoff",
+    content: "前文延续：这个 SubAgent 从主 Agent 的上下文分叉而来。上文仅作为背景，它只负责当前被赋予的任务，并会在完成后回报结果。",
+  };
+}
+
+function subAgentProcessing(
+  subagentId: string,
+  status: SubAgentStatusState | undefined,
+  stateName: string,
+  partial: SubAgentPartialState,
+  childEvent: Record<string, unknown> | undefined,
+): ProcessingState | undefined {
+  if (partial.text || partial.reasoning || !isSubAgentBusy(status, stateName)) {
+    return undefined;
+  }
+  return {
+    id: nodeId("subagent-processing", subagentId),
+    runId: optionalString(childEvent?.run_id) ?? subagentId,
+    content: "SubAgent 处理中...",
+  };
+}
+
+function isSubAgentBusy(status: SubAgentStatusState | undefined, stateName: string): boolean {
+  return stateName === "RUNNING"
+    || stateName === "INTERRUPTING"
+    || status?.runnerState === "RUNNING"
+    || status?.executorState === "RUNNING"
+    || status?.executorState === "INTERRUPTING";
+}
+
+function emptySubAgentPartial(): SubAgentPartialState {
+  return {
+    text: "",
+    reasoning: "",
+  };
+}
+
 function addPluginMessage(state: AppState, payload: Record<string, unknown>, frame: CoreFrame): AppState {
   const plugin = pluginInfo(payload);
   const message = optionalString(payload.message)
@@ -2827,6 +3164,16 @@ function optionalNumber(value: unknown): number | undefined {
   if (value == null || value === "") return undefined;
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {

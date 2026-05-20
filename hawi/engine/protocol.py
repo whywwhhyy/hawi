@@ -109,6 +109,9 @@ EVENT_TYPES = {
     "plugin.artifact.delta",
     "plugin.artifact.remove",
     "plugin.artifact.clear",
+    "subagent.created",
+    "subagent.event",
+    "subagent.closed",
     "blob.chunk",
     "blob.complete",
 }

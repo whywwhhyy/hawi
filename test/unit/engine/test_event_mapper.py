@@ -21,6 +21,7 @@ from hawi.events import (
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockStopEvent,
     PluginEvent,
+    SubAgentEvent,
     AgentRunnerDequeueEvent,
     AgentRunnerEnqueueEvent,
     AgentRunnerInterruptEvent,
@@ -785,3 +786,28 @@ def test_mapper_forwards_plugin_artifact_and_tool_progress_events() -> None:
     assert progress[0]["type"] == "plugin.tool_progress"
     assert progress[0]["payload"]["tool_call_id"] == "tc-plan"
     assert progress[0]["payload"]["progress"] == 0.8
+
+
+def test_mapper_forwards_subagent_events_on_dedicated_channel() -> None:
+    mapper = SemanticEventMapper()
+    frames = mapper.map(
+        SubAgentEvent.create(
+            "subagent.event",
+            subagent_id="sub_1",
+            subagent_name="worker-1",
+            subagent_role="worker",
+            status={"id": "sub_1", "state": "RUNNING"},
+            child_event={"type": "agent.message_added", "run_id": "run-sub"},
+            message_entry={
+                "version": 1,
+                "run_id": "run-sub",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "done"}],
+            },
+        )
+    )
+
+    assert frames[0]["type"] == "subagent.event"
+    assert frames[0]["payload"]["subagent_id"] == "sub_1"
+    assert frames[0]["payload"]["status"]["state"] == "RUNNING"
+    assert frames[0]["payload"]["message_entry"]["role"] == "assistant"

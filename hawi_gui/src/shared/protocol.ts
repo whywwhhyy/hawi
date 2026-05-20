@@ -91,6 +91,11 @@ export type PluginEventType =
   | "plugin.artifact.remove"
   | "plugin.artifact.clear";
 
+export type SubAgentEventType =
+  | "subagent.created"
+  | "subagent.event"
+  | "subagent.closed";
+
 export interface PluginArtifactPayload {
   id?: string;
   artifact_id?: string;

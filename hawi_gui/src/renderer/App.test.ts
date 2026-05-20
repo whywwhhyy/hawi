@@ -143,6 +143,7 @@ describe("resolveEscapeDismissTarget", () => {
     contextPopoverOpen: false,
     pluginDialogOpen: false,
     modelDialogOpen: false,
+    subagentObserverOpen: false,
     debugMenuOpen: false,
     queuePopoverOpen: false,
     editingQueueTaskId: null,
@@ -150,6 +151,11 @@ describe("resolveEscapeDismissTarget", () => {
   };
 
   it("dismisses modal dialogs before popovers", () => {
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      subagentObserverOpen: true,
+      pluginDialogOpen: true
+    })).toBe("subagentObserver");
     expect(resolveEscapeDismissTarget({
       ...closed,
       modelDialogOpen: true,

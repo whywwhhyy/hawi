@@ -13,7 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
-from hawi.events import Event, EventBus, PluginEvent
+from hawi.events import Event, EventBus, SubAgentEvent, SubAgentEventType
 from hawi.models import ContentPart, Message
 from hawi.session import layout as session_layout
 from hawi.session.markdown_export import (
@@ -25,7 +25,12 @@ from hawi.session.message_history import message_history_entry_from_event
 
 from ..context import ToolCallContext
 from ..result import AgentRunResult
-from .prompts import ROLE_SYSTEM_PROMPTS
+from .prompts import (
+    ROLE_SYSTEM_PROMPTS,
+    SUBAGENT_IDENTITY_PROMPT,
+    SUBAGENT_SHARED_CONTEXT_TASK_PROMPT_TEMPLATE,
+    SUBAGENT_TASK_PROMPT_TEMPLATE,
+)
 from .types import (
     SubAgentError,
     SubAgentHandle,
@@ -192,6 +197,8 @@ class SubAgentManager:
             closed_at=handle.closed_at,
             model_id=str(model_id) if model_id is not None else None,
             working_dir=handle.spec.working_dir,
+            mode=handle.spec.mode,
+            shared_context=handle.spec.mode == "fork",
             last_result_text=result.text if result is not None else None,
             last_error=handle.last_error,
         )
@@ -508,6 +515,7 @@ class SubAgentManager:
                 else self._new_agent_without_inherited_plugins(spec, event_bus)
             )
             child.context.clear()
+            child.set_system_prompt(None)
 
         self._rebind_agent_event_bus(child, event_bus)
         self._apply_plugin_policy(child, policy)
@@ -574,10 +582,12 @@ class SubAgentManager:
         if spec.system_prompt is not None:
             return normalize_system_prompt(spec.system_prompt)
 
-        role_prompt = ROLE_SYSTEM_PROMPTS.get(str(spec.role), ROLE_SYSTEM_PROMPTS["general"])
+        role_prompt = ROLE_SYSTEM_PROMPTS.get(
+            str(spec.role),
+            ROLE_SYSTEM_PROMPTS["general"],
+        )
         base = deepcopy(child.context.get_system_prompt() or [])
-        if spec.mode == "fork" and str(spec.role) == "general" and base:
-            return base
+        base.append({"type": "text", "text": SUBAGENT_IDENTITY_PROMPT})
         base.append({"type": "text", "text": role_prompt})
         if spec.working_dir:
             base.append({
@@ -601,8 +611,9 @@ class SubAgentManager:
     ) -> str | list[ContentPart] | None:
         if spec.initial_prompt is None and spec.initial_plan is None:
             return None
+
         if spec.initial_plan is None:
-            return spec.initial_prompt
+            return self._subagent_task_message(spec, spec.initial_prompt)
 
         if isinstance(spec.initial_plan, str):
             plan_text = spec.initial_plan
@@ -610,11 +621,42 @@ class SubAgentManager:
             plan_text = json.dumps(spec.initial_plan, ensure_ascii=False, indent=2)
 
         if spec.initial_prompt is None:
-            return f"Execute the following initial plan:\n\n{plan_text}"
+            return self._subagent_task_message(
+                spec,
+                f"Execute the following initial plan:\n\n{plan_text}"
+            )
         if isinstance(spec.initial_prompt, str):
-            return f"{spec.initial_prompt}\n\nInitial plan:\n{plan_text}"
+            return self._subagent_task_message(
+                spec,
+                f"{spec.initial_prompt}\n\nInitial plan:\n{plan_text}"
+            )
         content = deepcopy(spec.initial_prompt)
         content.append({"type": "text", "text": f"Initial plan:\n{plan_text}"})
+        return self._subagent_task_message(spec, content)
+
+    def _subagent_task_message(
+        self,
+        spec: SubAgentSpec,
+        task: str | list[ContentPart] | None,
+    ) -> str | list[ContentPart] | None:
+        if task is None:
+            return None
+        template = (
+            SUBAGENT_SHARED_CONTEXT_TASK_PROMPT_TEMPLATE
+            if spec.mode == "fork"
+            else SUBAGENT_TASK_PROMPT_TEMPLATE
+        )
+        if isinstance(task, str):
+            return template.format(task=task.strip())
+        content = [
+            {
+                "type": "text",
+                "text": template.format(
+                    task="See the following content parts."
+                ),
+            }
+        ]
+        content.extend(deepcopy(task))
         return content
 
     def _make_event_handler(
@@ -654,6 +696,7 @@ class SubAgentManager:
                 "subagent.event",
                 {
                     "child_event": summary,
+                    **({"message_entry": entry} if entry is not None else {}),
                     "status": self.status(handle.id).to_dict(),
                 },
             )
@@ -667,17 +710,23 @@ class SubAgentManager:
         payload: dict[str, Any],
     ) -> None:
         await self._parent._emit_event(
-            PluginEvent.create(
-                "plugin.event",
-                plugin_name="SubAgent",
-                plugin_id="subagent",
-                payload={
-                    "event_name": event_name,
-                    "subagent_id": handle.id,
-                    "subagent_name": handle.name,
-                    "subagent_role": handle.role,
-                    **payload,
-                },
+            SubAgentEvent.create(
+                cast(SubAgentEventType, event_name),
+                subagent_id=handle.id,
+                subagent_name=handle.name,
+                subagent_role=handle.role,
+                status=payload.get("status") if isinstance(payload.get("status"), dict) else {},
+                child_event=(
+                    payload.get("child_event")
+                    if isinstance(payload.get("child_event"), dict)
+                    else None
+                ),
+                message_entry=(
+                    payload.get("message_entry")
+                    if isinstance(payload.get("message_entry"), dict)
+                    else None
+                ),
+                reason=payload.get("reason") if isinstance(payload.get("reason"), str) else None,
             ),
             None,
         )

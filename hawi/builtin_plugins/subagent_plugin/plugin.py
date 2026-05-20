@@ -57,8 +57,19 @@ class SubAgentPlugin(HawiPlugin):
                 "mode": {
                     "type": "string",
                     "enum": ["fork", "fresh"],
-                    "default": "fork",
-                    "description": "fork copies parent context; fresh starts with no parent messages.",
+                    "default": "fresh",
+                    "description": (
+                        "fresh starts isolated; fork copies parent context. "
+                        "Prefer share_context for the common toggle."
+                    ),
+                },
+                "share_context": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "When true, copy the parent conversation context into "
+                        "the sub-agent. Defaults to false."
+                    ),
                 },
                 "name": {"type": "string"},
                 "role": {
@@ -67,9 +78,22 @@ class SubAgentPlugin(HawiPlugin):
                     "description": "general, planner, reviewer, explorer, implementer, critic, or summarizer.",
                 },
                 "model": {"type": "string"},
-                "system_prompt": {"type": "string"},
+                "system_prompt": {
+                    "type": "string",
+                    "description": (
+                        "Explicit system prompt controlled by the parent agent. "
+                        "If omitted, Hawi uses the role prompt."
+                    ),
+                },
                 "working_dir": {"type": "string"},
-                "initial_prompt": {"type": "string"},
+                "initial_prompt": {
+                    "type": "string",
+                    "description": (
+                        "Required first user prompt for the sub-agent. State "
+                        "that it is a sub-agent task and describe the exact "
+                        "work to perform."
+                    ),
+                },
                 "initial_plan": {},
                 "inherit_plugins": {"type": "boolean", "default": True},
                 "max_runtime_seconds": {"type": "number"},
@@ -87,11 +111,13 @@ class SubAgentPlugin(HawiPlugin):
                     "description": "Seconds to wait for the initial task before returning. 0 returns immediately.",
                 },
             },
+            "required": ["initial_prompt"],
         },
     )
     async def create_subagent(
         self,
-        mode: Literal["fork", "fresh"] = "fork",
+        mode: Literal["fork", "fresh"] = "fresh",
+        share_context: bool | None = None,
         name: str | None = None,
         role: str = "general",
         model: str | None = None,
@@ -111,9 +137,21 @@ class SubAgentPlugin(HawiPlugin):
         """Create a background sub-agent and optionally enqueue its first task."""
         if ctx is None:
             raise RuntimeError("create_subagent requires Hawi tool context")
+        if not isinstance(initial_prompt, str) or not initial_prompt.strip():
+            raise ValueError(
+                "create_subagent requires initial_prompt: give the child a clear "
+                "user prompt that explains it is a sub-agent and states its task."
+            )
+        effective_mode: Literal["fork", "fresh"] = (
+            "fork"
+            if share_context is True
+            else "fresh"
+            if share_context is False
+            else mode
+        )
         handle = await ctx.agent.subagents.spawn(
             SubAgentSpec(
-                mode=mode,
+                mode=effective_mode,
                 name=name,
                 role=role,
                 model=model,

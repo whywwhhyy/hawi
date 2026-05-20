@@ -30,6 +30,14 @@ class SemanticEventMapper:
         """Return zero or more semantic protocol events for one Hawi event."""
         etype = event.type
 
+        if etype.startswith("subagent."):
+            return [
+                make_frame(
+                    etype,
+                    self._subagent_payload(event),
+                )
+            ]
+
         if etype.startswith("plugin."):
             return [
                 make_frame(
@@ -797,4 +805,23 @@ class SemanticEventMapper:
         )
         if message_id:
             payload["message_id"] = message_id
+        return to_json_safe(payload)
+
+    @staticmethod
+    def _subagent_payload(event: Event) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "subagent_id": getattr(event, "subagent_id", ""),
+            "subagent_name": getattr(event, "subagent_name", ""),
+            "subagent_role": getattr(event, "subagent_role", ""),
+            "status": getattr(event, "status", {}),
+        }
+        child_event = getattr(event, "child_event", None)
+        if child_event is not None:
+            payload["child_event"] = child_event
+        message_entry = getattr(event, "message_entry", None)
+        if message_entry is not None:
+            payload["message_entry"] = message_entry
+        reason = getattr(event, "reason", None)
+        if reason is not None:
+            payload["reason"] = reason
         return to_json_safe(payload)

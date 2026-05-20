@@ -89,7 +89,7 @@ class SubAgentPluginPolicy:
 class SubAgentSpec:
     """Configuration for creating a sub-agent."""
 
-    mode: SubAgentMode = "fork"
+    mode: SubAgentMode = "fresh"
     name: str | None = None
     role: SubAgentRole | str = "general"
     model: Model | str | None = None
@@ -129,6 +129,8 @@ class SubAgentStatus:
     closed_at: float | None = None
     model_id: str | None = None
     working_dir: str | None = None
+    mode: SubAgentMode | str = "fresh"
+    shared_context: bool = False
     last_result_text: str | None = None
     last_error: str | None = None
 
@@ -147,6 +149,8 @@ class SubAgentStatus:
             "closed_at": self.closed_at,
             "model_id": self.model_id,
             "working_dir": self.working_dir,
+            "mode": self.mode,
+            "shared_context": self.shared_context,
             "last_result_text": self.last_result_text,
             "last_error": self.last_error,
         }

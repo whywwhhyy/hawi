@@ -20,6 +20,7 @@ from .event import (
     AgentEventType,
     AgentRunnerEventType,
     PluginEventType,
+    SubAgentEventType,
     SessionEventType,
 )
 from .model_events import (
@@ -62,6 +63,10 @@ from .plugin_events import (
     PLUGIN_EVENT_TYPES,
     PluginEvent,
 )
+from .subagent_events import (
+    SUBAGENT_EVENT_TYPES,
+    SubAgentEvent,
+)
 from .session_events import (
     SessionCheckpointRequestedEvent,
     SessionWriteFailedEvent,
@@ -89,6 +94,7 @@ __all__ = [
     "AgentEventType",
     "AgentRunnerEventType",
     "PluginEventType",
+    "SubAgentEventType",
     "SessionEventType",
     # Model
     "ModelStreamStartEvent",
@@ -126,6 +132,8 @@ __all__ = [
     # Plugin
     "PLUGIN_EVENT_TYPES",
     "PluginEvent",
+    "SUBAGENT_EVENT_TYPES",
+    "SubAgentEvent",
     # Session
     "SessionCheckpointRequestedEvent",
     "SessionWriteFailedEvent",

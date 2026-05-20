@@ -93,6 +93,9 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
     "plugin.artifact.delta": (),
     "plugin.artifact.remove": (),
     "plugin.artifact.clear": (),
+    "subagent.created": (),
+    "subagent.event": (),
+    "subagent.closed": (),
 }
 
 

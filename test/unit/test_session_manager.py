@@ -37,6 +37,7 @@ from hawi.events import (
     AgentRunnerInterruptEvent,
     PluginEvent,
     SessionWriteFailedEvent,
+    SubAgentEvent,
 )
 from hawi.models import Model
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse, TokenUsage
@@ -1144,6 +1145,64 @@ class TestSessionManager:
                 layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
             )
             assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
+        finally:
+            sm.detach()
+
+    def test_subagent_events_append_replayable_history(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        runner = _StubAgentRunner()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            agent.event_bus.publish(
+                SubAgentEvent.create(
+                    "subagent.created",
+                    subagent_id="sub_1",
+                    subagent_name="worker-1",
+                    subagent_role="worker",
+                    status={"id": "sub_1", "state": "RUNNING"},
+                )
+            )
+            agent.event_bus.publish(
+                SubAgentEvent.create(
+                    "subagent.event",
+                    subagent_id="sub_1",
+                    subagent_name="worker-1",
+                    subagent_role="worker",
+                    status={"id": "sub_1", "state": "RUNNING"},
+                    child_event={"type": "model.content_block_delta", "delta": "ignored"},
+                )
+            )
+            agent.event_bus.publish(
+                SubAgentEvent.create(
+                    "subagent.event",
+                    subagent_id="sub_1",
+                    subagent_name="worker-1",
+                    subagent_role="worker",
+                    status={"id": "sub_1", "state": "COMPLETED"},
+                    child_event={"type": "agent.message_added", "run_id": "sub-run"},
+                    message_entry={
+                        "version": 1,
+                        "run_id": "sub-run",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "done"}],
+                    },
+                )
+            )
+            sm._writer.wait_idle(timeout=2.0)
+
+            entries = sm.read_message_history(sid)
+            assert [entry["metadata"]["event_type"] for entry in entries] == [
+                "subagent.created",
+                "subagent.event",
+            ]
+            payload = entries[1]["metadata"]["event_payload"]
+            assert payload["subagent_id"] == "sub_1"
+            assert payload["message_entry"]["content"][0]["text"] == "done"
         finally:
             sm.detach()
 

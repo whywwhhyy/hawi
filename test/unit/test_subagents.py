@@ -6,6 +6,10 @@ from typing import Any, AsyncIterator
 import pytest
 
 from hawi.agent import HawiAgent, SubAgentSpec, ToolCallContext
+from hawi.agent.subagent.prompts import (
+    ROLE_SYSTEM_PROMPTS,
+    SUBAGENT_IDENTITY_PROMPT,
+)
 from hawi.models import Model
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
 from hawi.builtin_plugins.subagent_plugin import SubAgentPlugin
@@ -113,9 +117,17 @@ class DelayedStreamingModel(EchoModel):
         }
 
 
+def prompt_text(parts: list[dict[str, Any]] | None) -> str:
+    return "\n".join(
+        str(part.get("text", ""))
+        for part in parts or []
+        if isinstance(part, dict) and part.get("type") == "text"
+    )
+
+
 @pytest.mark.asyncio
 async def test_spawn_fork_and_fresh_context_modes() -> None:
-    agent = HawiAgent(model=EchoModel())
+    agent = HawiAgent(model=EchoModel(), system_prompt="parent prompt")
     agent.context.add_user_message("parent context")
 
     forked = await agent.subagents.spawn(SubAgentSpec(mode="fork", role="reviewer"))
@@ -126,6 +138,51 @@ async def test_spawn_fork_and_fresh_context_modes() -> None:
         assert fresh.agent.context.messages == []
         assert fresh.agent.context.tool_call_context is not None
         assert forked.agent.context.tool_call_context is not None
+        assert agent.subagents.status(forked.id).mode == "fork"
+        assert agent.subagents.status(forked.id).shared_context is True
+        assert agent.subagents.status(fresh.id).mode == "fresh"
+        assert agent.subagents.status(fresh.id).shared_context is False
+        assert "parent prompt" in prompt_text(forked.agent.context.get_system_prompt())
+        assert SUBAGENT_IDENTITY_PROMPT in prompt_text(
+            forked.agent.context.get_system_prompt()
+        )
+        fresh_prompt = prompt_text(fresh.agent.context.get_system_prompt())
+        assert "parent prompt" not in fresh_prompt
+        assert SUBAGENT_IDENTITY_PROMPT in fresh_prompt
+        assert ROLE_SYSTEM_PROMPTS["explorer"] in fresh_prompt
+    finally:
+        await agent.subagents.close_all(reason="test_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_spawn_defaults_to_fresh_context_without_parent_system_prompt() -> None:
+    agent = HawiAgent(model=EchoModel(), system_prompt="parent prompt")
+    agent.context.add_user_message("parent context")
+
+    handle = await agent.subagents.spawn()
+
+    try:
+        assert handle.spec.mode == "fresh"
+        assert handle.agent.context.messages == []
+        child_prompt = prompt_text(handle.agent.context.get_system_prompt())
+        assert "parent prompt" not in child_prompt
+        assert SUBAGENT_IDENTITY_PROMPT in child_prompt
+        assert ROLE_SYSTEM_PROMPTS["general"] in child_prompt
+    finally:
+        await agent.subagents.close_all(reason="test_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_spawn_accepts_parent_controlled_system_prompt() -> None:
+    agent = HawiAgent(model=EchoModel(), system_prompt="parent prompt")
+
+    handle = await agent.subagents.spawn(system_prompt="child controlled prompt")
+
+    try:
+        child_prompt = prompt_text(handle.agent.context.get_system_prompt())
+        assert child_prompt == "child controlled prompt"
+        assert "parent prompt" not in child_prompt
+        assert ROLE_SYSTEM_PROMPTS["general"] not in child_prompt
     finally:
         await agent.subagents.close_all(reason="test_cleanup")
 
@@ -208,12 +265,38 @@ async def test_subagent_runs_initial_prompt_in_background() -> None:
     try:
         result = await agent.subagents.wait(handle.id, timeout=2)
         assert result is not None
-        assert "echo: hello subagent" in result.text
+        assert "You are a managed Hawi sub-agent" in result.text
+        assert "Your task from the parent agent" in result.text
+        assert "hello subagent" in result.text
 
         status = agent.subagents.status(handle.id)
         assert status.state == "COMPLETED"
         assert status.last_result_text is not None
         assert "hello subagent" in status.last_result_text
+    finally:
+        await agent.subagents.close(handle.id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_fork_initial_prompt_clarifies_shared_context_handoff() -> None:
+    agent = HawiAgent(model=EchoModel())
+    agent.context.add_user_message("parent context that should be only background")
+
+    handle = await agent.subagents.spawn(
+        mode="fork",
+        initial_prompt="review only this assigned task",
+    )
+
+    try:
+        result = await agent.subagents.wait(handle.id, timeout=2)
+        assert result is not None
+        assert "The messages before this one are inherited parent-agent context" in (
+            result.text
+        )
+        assert "Treat them only as background material" in result.text
+        assert "responsible only for the task below" in result.text
+        assert "tell the parent agent the result of your work" in result.text
+        assert "review only this assigned task" in result.text
     finally:
         await agent.subagents.close(handle.id, reason="test_cleanup")
 
@@ -326,6 +409,9 @@ async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
     }.issubset(names)
     create_schema = next(d for d in definitions if d["name"] == "create_subagent")["schema"]
     assert "ctx" not in create_schema.get("properties", {})
+    assert create_schema["properties"]["mode"]["default"] == "fresh"
+    assert create_schema["properties"]["share_context"]["default"] is False
+    assert "initial_prompt" in create_schema.get("required", [])
 
     create_tool = agent.plugins.get_tool("create_subagent")
     assert create_tool is not None
@@ -351,6 +437,18 @@ async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
         assert read.output["status"]["id"] == subagent_id  # type: ignore[index]
     finally:
         await agent.subagents.close(subagent_id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_create_subagent_tool_requires_initial_user_prompt() -> None:
+    agent = HawiAgent(model=EchoModel(), plugins=[SubAgentPlugin()])
+    create_tool = agent.plugins.get_tool("create_subagent")
+    assert create_tool is not None
+
+    created = await create_tool.arun(ctx=ToolCallContext(agent))
+
+    assert created.success is False
+    assert "initial_prompt" in created.error
 
 
 async def wait_for_partial_context(

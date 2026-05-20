@@ -26,6 +26,12 @@ REPLAYABLE_PLUGIN_EVENT_TYPES = {
     "plugin.artifact.clear",
 }
 
+REPLAYABLE_SUBAGENT_EVENT_TYPES = {
+    "subagent.created",
+    "subagent.event",
+    "subagent.closed",
+}
+
 
 def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
     """Build a stable message-history record from a user-visible event."""
@@ -33,6 +39,8 @@ def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
         return _replayable_agent_event_entry(event)
     if event.type in REPLAYABLE_PLUGIN_EVENT_TYPES:
         return _replayable_plugin_event_entry(event)
+    if event.type in REPLAYABLE_SUBAGENT_EVENT_TYPES:
+        return _replayable_subagent_event_entry(event)
     if event.type == "model.retry":
         return _model_retry_entry(event)
     if event.type in {"model.error", "agent.error"}:
@@ -214,6 +222,24 @@ def _replayable_plugin_event_entry(event: Event) -> dict[str, Any] | None:
     )
 
 
+def _replayable_subagent_event_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize replayable subagent history event")
+        return None
+    payload = _subagent_event_payload(event.type, data)
+    if event.type == "subagent.event" and not _should_persist_subagent_child(payload):
+        return None
+    return _replayable_event_entry(
+        event.type,
+        timestamp=data.get("timestamp"),
+        run_id=_subagent_run_id(payload),
+        content=_event_content(payload),
+        payload=payload,
+    )
+
+
 def _replayable_event_entry(
     event_type: str,
     *,
@@ -300,6 +326,50 @@ def _plugin_event_payload(data: dict[str, Any]) -> dict[str, Any]:
     if message_id:
         payload["message_id"] = message_id
     return payload
+
+
+def _subagent_event_payload(event_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "event_name": event_type,
+        "subagent_id": data.get("subagent_id"),
+        "subagent_name": data.get("subagent_name"),
+        "subagent_role": data.get("subagent_role"),
+        "status": data.get("status"),
+    }
+    child_event = data.get("child_event")
+    if isinstance(child_event, dict):
+        payload["child_event"] = child_event
+    message_entry = data.get("message_entry")
+    if isinstance(message_entry, dict):
+        payload["message_entry"] = message_entry
+    reason = data.get("reason")
+    if reason is not None:
+        payload["reason"] = reason
+    return payload
+
+
+def _should_persist_subagent_child(payload: dict[str, Any]) -> bool:
+    if isinstance(payload.get("message_entry"), dict):
+        return True
+    child_event = payload.get("child_event")
+    if not isinstance(child_event, dict):
+        return False
+    return child_event.get("type") in {
+        "agent.run_start",
+        "agent.run_stop",
+        "agent.error",
+        "runner.interrupt",
+    }
+
+
+def _subagent_run_id(payload: dict[str, Any]) -> Any:
+    child_event = payload.get("child_event")
+    if isinstance(child_event, dict) and child_event.get("run_id"):
+        return child_event.get("run_id")
+    message_entry = payload.get("message_entry")
+    if isinstance(message_entry, dict) and message_entry.get("run_id"):
+        return message_entry.get("run_id")
+    return payload.get("subagent_id")
 
 
 def _event_content(payload: dict[str, Any]) -> list[dict[str, Any]]:

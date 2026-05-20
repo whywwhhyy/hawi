@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ConfigDict
 logger = logging.getLogger(__name__)
 
 
-EventSource = Literal["model", "agent", "runner", "plugin"]
+EventSource = Literal["model", "agent", "runner", "plugin", "subagent"]
 
 ModelEventType = Literal[
     "model.stream_start",
@@ -71,6 +71,12 @@ PluginEventType = Literal[
     "plugin.artifact.clear",
 ]
 
+SubAgentEventType = Literal[
+    "subagent.created",
+    "subagent.event",
+    "subagent.closed",
+]
+
 SessionEventType = Literal[
     "session.checkpoint_requested",
     "session.write_failed",
@@ -83,6 +89,7 @@ EventType = (
     | AgentEventType
     | AgentRunnerEventType
     | PluginEventType
+    | SubAgentEventType
     | SessionEventType
 )
 
@@ -123,5 +130,6 @@ __all__ = [
     "AgentEventType",
     "AgentRunnerEventType",
     "PluginEventType",
+    "SubAgentEventType",
     "SessionEventType",
 ]

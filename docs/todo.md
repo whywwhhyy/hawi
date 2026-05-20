@@ -79,9 +79,13 @@
     - [x] `HawiAgent` 持有 `subagents` manager，并提供兼容代理方法
     - [x] 实现 `fork` / `fresh` 创建路径、后台 `AgentRunner` task、send/status/wait/interrupt/close
     - [x] 实现角色默认 system prompt：general、planner、reviewer、explorer、implementer、critic、summarizer
+    - [x] 主 agent 可显式控制 subagent `system_prompt`；默认 fresh 不再继承父 system prompt
+    - [x] subagent 默认不共享父上下文；模型工具用 `share_context=false` 作为默认开关
+    - [x] `create_subagent` 要求首条明确 user prompt，并包装为 sub-agent 身份 + 父 agent 指定任务，避免 child 误认为自己是 parent
+    - [x] 共享上下文时首条任务消息强调父上下文仅作背景、child 只负责当前任务并需要回报结果
     - [x] 实现插件策略第一版：继承父插件、禁用继承、追加插件/工厂
     - [x] 实现基础 limits：最大运行时间、最大递归深度、最大子 agent 数（tool call 数仍待 runner/tool budget 接入）
-    - [x] 实现最小事件转发：child events 以 `plugin.event` 关联 `subagent_id`
+    - [x] 实现 subagent 专用事件通道：child events 以 `subagent.created` / `subagent.event` / `subagent.closed` 关联 `subagent_id`
     - [x] 新增 `SubAgentPlugin`，暴露 5 个 agent tools
     - [x] engine/GUI 插件目录注册 `SubAgentPlugin`，GUI 插件弹窗可选择 subagent 工具
     - [x] fork 时裁掉父 agent 尾部未闭合 tool-call turn，避免 child 继承 provider-invalid context
@@ -95,11 +99,13 @@
     - [ ] 将 `send_subagent_message` 返回值升级为 `turn_id` + `message_id`，避免多轮时只依赖 `last_result`
     - [ ] 增加 `wait_turn(subagent_id, turn_id)` / `read_subagent(view="turns")`，支持按轮次等待和查看结果
     - [ ] 将 `WorkflowPlugin` 的 `SubAgentReviewer` 改为复用 core API
+    - [ ] 设计 agent template 配置：通过模板自动设置 subagent system prompt、模型、插件/权限、结果协议和默认任务约束
     - [ ] 接入 SessionManager 持久化：`subagents.json` registry、child `manifest.json`、`context.json`、`turns.json`、`events.ndjson`、`runtime.json`
     - [ ] 明确 subagent 恢复策略：idle/completed 可恢复继续对话；running 标记 interrupted/unknown；queued turn 可保留待用户/父 agent 重试
     - [ ] 持久化 effective permissions 占位：记录权限来源、父权限继承与 overrides，后续接入权限机制
     - [ ] 增加 core protocol 原生命令：`subagent_list` / `subagent_read` / `subagent_send` / `subagent_interrupt` / `subagent_close`
-    - [ ] 增加 engine 级事件族：`subagent.created` / `subagent.updated` / `subagent.turn_*` / `subagent.closed`，GUI 不长期依赖 `plugin.event`
+    - [x] 增加 engine 级基础事件族：`subagent.created` / `subagent.event` / `subagent.closed`，GUI 不再依赖 `plugin.event` 观察 subagent
+    - [ ] 增加 subagent turn 级事件族：`subagent.turn_*`
     - [ ] GUI MVP：主时间线显示 subagent card，侧边栏/抽屉展示状态、turns、events、context tail，并可 send/interrupt/close
     - [ ] GUI 完整形态：Session 区支持 parent/child session tree，点击 subagent 进入 child chat view，breadcrumb 可返回 parent
     - [ ] 设计 `ParentBridgePlugin`：child 可 `report_to_parent` / `ask_parent` / `yield_result`，第一版先用事件和最终结果，不阻塞主循环

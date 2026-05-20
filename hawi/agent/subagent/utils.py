@@ -86,6 +86,7 @@ def event_summary(event: Event) -> dict[str, Any]:
         "request_id",
         "tool_call_id",
         "tool_name",
+        "role",
         "message_id",
         "queue_type",
         "stop_reason",

@@ -1499,6 +1499,144 @@ describe("core event reducer", () => {
     expect(state.nodes[0].framework?.content).toContain('"count": 3');
   });
 
+  it("tracks subagent events as a first-class subsystem", () => {
+    let state = createInitialState();
+    const status = {
+      id: "sub_1",
+      name: "worker-1",
+      role: "worker",
+      state: "RUNNING",
+      runner_state: "RUNNING",
+      executor_state: "RUNNING",
+      queue_lengths: { normal: 0 }
+    };
+
+    state = reduceCoreEvent(state, frame("subagent.created", {
+      subagent_id: "sub_1",
+      subagent_name: "worker-1",
+      subagent_role: "worker",
+      status
+    }, 10));
+    state = reduceCoreEvent(state, frame("subagent.event", {
+      subagent_id: "sub_1",
+      subagent_name: "worker-1",
+      subagent_role: "worker",
+      status,
+      child_event: {
+        type: "model.content_block_delta",
+        run_id: "run-sub",
+        delta_type: "text",
+        delta: "hel"
+      }
+    }, 11));
+
+    expect(state.subagentOrder).toEqual(["sub_1"]);
+    expect(state.subagents.sub_1.nodes).toHaveLength(1);
+    expect(state.subagents.sub_1.nodes[0]).toMatchObject({
+      kind: "agent",
+      content: "hel",
+      complete: false
+    });
+    expect(state.pluginMessages).toHaveLength(0);
+
+    state = reduceCoreEvent(state, frame("subagent.event", {
+      subagent_id: "sub_1",
+      subagent_name: "worker-1",
+      subagent_role: "worker",
+      status,
+      child_event: {
+        type: "agent.message_added",
+        run_id: "run-sub",
+        role: "assistant"
+      },
+      message_entry: {
+        version: 1,
+        timestamp: 12,
+        run_id: "run-sub",
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }]
+      }
+    }, 12));
+
+    expect(state.subagents.sub_1.messageHistory).toHaveLength(1);
+    expect(state.subagents.sub_1.nodes).toHaveLength(1);
+    expect(state.subagents.sub_1.nodes[0]).toMatchObject({
+      kind: "agent",
+      content: "hello",
+      complete: true
+    });
+
+    state = reduceCoreEvent(state, frame("subagent.closed", {
+      subagent_id: "sub_1",
+      subagent_name: "worker-1",
+      subagent_role: "worker",
+      reason: "done",
+      status: { ...status, state: "CLOSED", runner_state: "IDLE", executor_state: "IDLE" }
+    }, 13));
+
+    expect(state.subagents.sub_1.state).toBe("CLOSED");
+  });
+
+  it("marks shared-context subagents with a handoff node", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("subagent.created", {
+      subagent_id: "sub_shared",
+      subagent_name: "reviewer-1",
+      subagent_role: "reviewer",
+      status: {
+        id: "sub_shared",
+        name: "reviewer-1",
+        role: "reviewer",
+        state: "RUNNING",
+        runner_state: "RUNNING",
+        executor_state: "IDLE",
+        queue_lengths: { normal: 1 },
+        mode: "fork",
+        shared_context: true
+      }
+    }, 20));
+
+    expect(state.subagents.sub_shared.sharedContext).toBe(true);
+    expect(state.subagents.sub_shared.mode).toBe("fork");
+    expect(state.subagents.sub_shared.nodes).toHaveLength(1);
+    expect(state.subagents.sub_shared.nodes[0]).toMatchObject({
+      kind: "handoff",
+      content: expect.stringContaining("前文延续")
+    });
+
+    state = reduceCoreEvent(state, frame("subagent.event", {
+      subagent_id: "sub_shared",
+      subagent_name: "reviewer-1",
+      subagent_role: "reviewer",
+      status: {
+        id: "sub_shared",
+        name: "reviewer-1",
+        role: "reviewer",
+        state: "RUNNING",
+        runner_state: "RUNNING",
+        executor_state: "RUNNING",
+        queue_lengths: { normal: 0 },
+        mode: "fork",
+        shared_context: true
+      },
+      child_event: {
+        type: "model.content_block_delta",
+        run_id: "run-shared",
+        delta_type: "text",
+        delta: "working"
+      }
+    }, 21));
+
+    expect(state.subagents.sub_shared.nodes).toHaveLength(2);
+    expect(state.subagents.sub_shared.nodes[0].kind).toBe("handoff");
+    expect(state.subagents.sub_shared.nodes[1]).toMatchObject({
+      kind: "agent",
+      content: "working",
+      complete: false
+    });
+  });
+
   it("tracks plugin artifacts and streamed artifact deltas", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("plugin.artifact.upsert", {

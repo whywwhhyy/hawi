@@ -27,6 +27,7 @@ from hawi.events import (
     AgentMessageAddedEvent,
     AgentErrorEvent,
     PluginEvent,
+    SubAgentEvent,
 )
 from hawi.agent.printers import RichPrinter
 from hawi.errors import AgentError, ModelError
@@ -235,6 +236,26 @@ class TestPluginEvents:
         assert event.type == "plugin.tool_progress"
         assert event.tool_call_id == "tc-1"
         assert event.payload["progress"] == 0.5
+
+
+class TestSubAgentEvents:
+    """Tests for first-class sub-agent events."""
+
+    def test_subagent_event_has_dedicated_source(self):
+        event = SubAgentEvent.create(
+            "subagent.event",
+            subagent_id="sub_1",
+            subagent_name="worker-1",
+            subagent_role="worker",
+            status={"id": "sub_1", "state": "RUNNING"},
+            child_event={"type": "agent.run_start", "run_id": "run-sub"},
+        )
+
+        assert event.type == "subagent.event"
+        assert event.source == "subagent"
+        assert event.subagent_id == "sub_1"
+        assert event.status["state"] == "RUNNING"
+        assert event.child_event == {"type": "agent.run_start", "run_id": "run-sub"}
 
 
 class TestEventBus:

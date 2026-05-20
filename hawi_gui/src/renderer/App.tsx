@@ -14,7 +14,7 @@ import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRi
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type ToolProgressState, type ToolState } from "./state";
+import { createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -97,6 +97,7 @@ interface SessionRuntimeStats {
 }
 
 type EscapeDismissTarget =
+  | "subagentObserver"
   | "contextPopover"
   | "pluginDialog"
   | "modelDialog"
@@ -109,6 +110,7 @@ interface EscapeDismissState {
   contextPopoverOpen: boolean;
   pluginDialogOpen: boolean;
   modelDialogOpen: boolean;
+  subagentObserverOpen: boolean;
   debugMenuOpen: boolean;
   queuePopoverOpen: boolean;
   editingQueueTaskId: string | null;
@@ -116,6 +118,7 @@ interface EscapeDismissState {
 }
 
 export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDismissTarget | null {
+  if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
@@ -128,6 +131,7 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
 }
 
 function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTarget | null {
+  if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
@@ -141,6 +145,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
   switch (target) {
     case "contextPopover":
       return ".context-popover";
+    case "subagentObserver":
+      return ".subagent-modal";
     case "pluginDialog":
       return ".plugin-modal";
     case "modelDialog":
@@ -318,6 +324,8 @@ export default function App() {
   const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
+  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
+  const [subagentObserverId, setSubagentObserverId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [queueTaskDraft, setQueueTaskDraft] = useState("");
@@ -366,10 +374,15 @@ export default function App() {
   const queueTaskCompositionEndTimerRef = useRef<number | null>(null);
   const artifactPanelSessionRef = useRef<string | null>(null);
   const previousArtifactCountRef = useRef(0);
+  const subagentPanelSessionRef = useRef<string | null>(null);
+  const previousSubagentCountRef = useRef(0);
   const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0;
   const fallbackState = useMemo(createInitialState, []);
   const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
   const hasArtifacts = state.artifactOrder.some((key) => Boolean(state.artifacts[key]));
+  const subagentList = state.subagentOrder.map((id) => state.subagents[id]).filter(Boolean);
+  const hasSubagents = subagentList.length > 0;
+  const observedSubagent = subagentObserverId ? state.subagents[subagentObserverId] : undefined;
   const showDebug = config?.showDebug ?? true;
   const visibleChatNodes = useMemo(
     () => state.nodes.filter((node) => showDebug || node.kind !== "debug"),
@@ -439,6 +452,7 @@ export default function App() {
         contextPopoverOpen,
         pluginDialogOpen,
         modelDialogOpen,
+        subagentObserverOpen: subagentObserverId !== null,
         debugMenuOpen,
         queuePopoverOpen,
         editingQueueTaskId,
@@ -451,6 +465,9 @@ export default function App() {
         event.preventDefault();
         event.stopPropagation();
         switch (target) {
+          case "subagentObserver":
+            setSubagentObserverId(null);
+            break;
           case "contextPopover":
             setContextPopoverOpen(false);
             break;
@@ -507,6 +524,7 @@ export default function App() {
     contextPopoverOpen,
     pluginDialogOpen,
     modelDialogOpen,
+    subagentObserverId,
     debugMenuOpen,
     queuePopoverOpen,
     editingQueueTaskId,
@@ -533,6 +551,27 @@ export default function App() {
     }
     previousArtifactCountRef.current = artifactCount;
   }, [currentSessionId, state.artifactOrder, state.artifacts]);
+
+  useEffect(() => {
+    if (subagentPanelSessionRef.current !== currentSessionId) {
+      subagentPanelSessionRef.current = currentSessionId;
+      previousSubagentCountRef.current = 0;
+    }
+    const subagentCount = state.subagentOrder.length;
+    if (subagentCount === 0) {
+      previousSubagentCountRef.current = 0;
+      setSubagentPanelOpen(false);
+      setSubagentObserverId(null);
+      return;
+    }
+    if (previousSubagentCountRef.current === 0) {
+      setSubagentPanelOpen(true);
+    }
+    if (subagentObserverId && !state.subagents[subagentObserverId]) {
+      setSubagentObserverId(null);
+    }
+    previousSubagentCountRef.current = subagentCount;
+  }, [currentSessionId, state.subagentOrder, state.subagents, subagentObserverId]);
 
   useEffect(() => {
     function syncSelection() {
@@ -1447,7 +1486,7 @@ export default function App() {
         />
       </section>
 
-      <section className={`workspace-row ${hasArtifacts ? "has-artifacts" : ""}`}>
+      <section className={`workspace-row ${hasArtifacts ? "has-artifacts" : ""} ${hasSubagents ? "has-subagents" : ""}`}>
         <ChatTranscript
           ref={chatRef}
           nodes={visibleChatNodes}
@@ -1472,6 +1511,14 @@ export default function App() {
               dispatch({ version: VERSION, type: "gui.select_artifact", payload: { artifact_key: artifactKey } });
             }}
             onPluginAction={(payload) => sendCommand("plugin_action", payload)}
+          />
+        )}
+        {hasSubagents && (
+          <SubAgentPreviewPanel
+            subagents={subagentList}
+            open={subagentPanelOpen}
+            onOpenChange={setSubagentPanelOpen}
+            onObserve={(id) => setSubagentObserverId(id)}
           />
         )}
       </section>
@@ -1525,6 +1572,12 @@ export default function App() {
           pluginConfigs={config.pluginConfigs}
           onClose={() => setPluginDialogOpen(false)}
           onApply={applyPlugins}
+        />
+      )}
+      {observedSubagent && (
+        <SubAgentObserverModal
+          subagent={observedSubagent}
+          onClose={() => setSubagentObserverId(null)}
         />
       )}
     </div>
@@ -2251,17 +2304,21 @@ function QueueTaskItem({
 interface ChatTranscriptProps {
   nodes: ChatNode[];
   processing?: ProcessingState;
-  onForkMessage: (node: ChatNode) => void;
-  onScroll: () => void;
-  onWheel: (event: WheelEvent<HTMLElement>) => void;
-  onTouchStart: () => void;
-  onMouseDown: (event: ReactMouseEvent<HTMLElement>) => void;
+  onForkMessage?: (node: ChatNode) => void;
+  allowFork?: boolean;
+  emptyLabel?: string;
+  onScroll?: () => void;
+  onWheel?: (event: WheelEvent<HTMLElement>) => void;
+  onTouchStart?: () => void;
+  onMouseDown?: (event: ReactMouseEvent<HTMLElement>) => void;
 }
 
 const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(function ChatTranscript({
   nodes,
   processing,
   onForkMessage,
+  allowFork = true,
+  emptyLabel,
   onScroll,
   onWheel,
   onTouchStart,
@@ -2276,8 +2333,16 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
       onTouchStart={onTouchStart}
       onMouseDown={onMouseDown}
     >
+      {nodes.length === 0 && !processing && emptyLabel && (
+        <div className="preview-empty">{emptyLabel}</div>
+      )}
       {nodes.map((node) => (
-        <ChatBubble node={node} key={node.id} onForkMessage={onForkMessage} />
+        <ChatBubble
+          node={node}
+          key={node.id}
+          allowFork={allowFork}
+          onForkMessage={onForkMessage}
+        />
       ))}
       {processing && <ProcessingLine processing={processing} />}
     </main>
@@ -2311,10 +2376,12 @@ function guardNativeToggleDuringSelection(event: ReactMouseEvent<HTMLElement>) {
 
 const ChatBubble = memo(function ChatBubble({
   node,
+  allowFork,
   onForkMessage
 }: {
   node: ChatNode;
-  onForkMessage: (node: ChatNode) => void;
+  allowFork: boolean;
+  onForkMessage?: (node: ChatNode) => void;
 }) {
   if (node.kind === "divider") {
     return (
@@ -2344,10 +2411,13 @@ const ChatBubble = memo(function ChatBubble({
   if (node.kind === "framework" && node.framework) {
     return <FrameworkNodeBubble node={node} />;
   }
+  if (node.kind === "handoff") {
+    return <HandoffBubble node={node} />;
+  }
   if (node.kind === "thinking") {
     return <ThinkingBubble node={node} />;
   }
-  return <MessageBubble node={node} onForkMessage={onForkMessage} />;
+  return <MessageBubble node={node} allowFork={allowFork} onForkMessage={onForkMessage} />;
 });
 
 function ProcessingLine({ processing }: { processing: ProcessingState }) {
@@ -2377,6 +2447,18 @@ const FrameworkNodeBubble = memo(function FrameworkNodeBubble({ node }: { node: 
         ))}
       </div>
     </div>
+  );
+});
+
+const HandoffBubble = memo(function HandoffBubble({ node }: { node: ChatNode }) {
+  return (
+    <article className="bubble handoff">
+      <div className="handoff-title">
+        <GitFork size={15} />
+        <span>前文延续</span>
+      </div>
+      <p>{node.content}</p>
+    </article>
   );
 });
 
@@ -2480,17 +2562,21 @@ const FrameworkBubble = memo(function FrameworkBubble({
 
 const MessageBubble = memo(function MessageBubble({
   node,
+  allowFork,
   onForkMessage
 }: {
   node: ChatNode;
-  onForkMessage: (node: ChatNode) => void;
+  allowFork: boolean;
+  onForkMessage?: (node: ChatNode) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
-  const canFork = node.canFork === true
+  const canFork = allowFork
+    && node.canFork === true
+    && onForkMessage
     && (Boolean(node.contextMessageId) || typeof node.contextMessageIndex === "number");
   const beforeInjections = (node.injections ?? []).filter((item) => item.mergePosition === "before");
   const afterInjections = (node.injections ?? []).filter((item) => item.mergePosition !== "before");
@@ -2515,7 +2601,7 @@ const MessageBubble = memo(function MessageBubble({
               aria-label={node.kind === "user" ? "Fork 到这条用户消息前" : "Fork 到这条回复后"}
               onClick={(event) => {
                 event.stopPropagation();
-                onForkMessage(node);
+                onForkMessage?.(node);
               }}
             >
               <GitFork size={14} />
@@ -3229,6 +3315,161 @@ interface PluginActionPayload extends Record<string, unknown> {
   plugin_id: string;
   action: string;
   arguments: Record<string, unknown>;
+}
+
+function SubAgentPreviewPanel({
+  subagents,
+  open,
+  onOpenChange,
+  onObserve,
+}: {
+  subagents: SubAgentRuntimeState[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onObserve: (subagentId: string) => void;
+}) {
+  const activeCount = subagents.filter(isSubAgentActive).length;
+  const sorted = [...subagents].sort(compareSubAgents);
+
+  return (
+    <aside className={`subagent-preview-shell ${open ? "open" : "closed"}`} aria-label="SubAgent sidebar">
+      {open && (
+        <section className="subagent-preview">
+          <header className="preview-head">
+            <span><Bot size={15} /> SubAgents</span>
+            <button
+              type="button"
+              className="icon-button"
+              title="隐藏 SubAgents"
+              aria-label="隐藏 SubAgents"
+              onClick={() => onOpenChange(false)}
+            >
+              <ChevronRight size={17} />
+            </button>
+          </header>
+          <div className="subagent-summary">
+            <strong>{activeCount}</strong>
+            <span>running</span>
+            <strong>{subagents.length}</strong>
+            <span>total</span>
+          </div>
+          <div className="subagent-list">
+            {sorted.map((item) => (
+              <button
+                type="button"
+                className={`subagent-item ${isSubAgentActive(item) ? "active" : ""}`}
+                key={item.id}
+                title={item.id}
+                onClick={() => onObserve(item.id)}
+              >
+                <span className="subagent-item-head">
+                  <strong>{item.name}</strong>
+                  <em>{subAgentStateLabel(item)}</em>
+                </span>
+                <span className="subagent-item-meta">
+                  {item.role}
+                  {item.nodes.length > 0 ? ` · ${item.nodes.length} nodes` : ""}
+                </span>
+                {item.lastEventType && (
+                  <span className="subagent-item-event">{item.lastEventType}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+      <nav className="subagent-rail" aria-label="SubAgent tabs">
+        <button
+          type="button"
+          className={open ? "subagent-rail-tab active" : "subagent-rail-tab"}
+          title={`SubAgents (${subagents.length})`}
+          aria-pressed={open}
+          onClick={() => onOpenChange(!open)}
+        >
+          <span>SubAgents</span>
+          <strong>{subagents.length}</strong>
+        </button>
+      </nav>
+    </aside>
+  );
+}
+
+function SubAgentObserverModal({
+  subagent,
+  onClose,
+}: {
+  subagent: SubAgentRuntimeState;
+  onClose: () => void;
+}) {
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const tailKey = useMemo(
+    () => transcriptTailKey(subagent.nodes, subagent.processing),
+    [subagent.nodes, subagent.processing]
+  );
+
+  useBrowserLayoutEffect(() => {
+    const element = transcriptRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+  }, [tailKey]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal subagent-modal" role="dialog" aria-modal="true" aria-label={`SubAgent ${subagent.name}`}>
+        <header>
+          <div className="subagent-modal-title">
+            <h2>{subagent.name}</h2>
+            <span>{subagent.role} · {subAgentStateLabel(subagent)} · {subagent.id}</span>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            title="关闭"
+            aria-label="关闭"
+            data-dialog-close="true"
+            onClick={onClose}
+          >
+            <X size={17} />
+          </button>
+        </header>
+        <div className="subagent-modal-meta">
+          <span><Activity size={14} /> {subagent.lastEventType ?? "waiting"}</span>
+          {subagent.status?.modelId && <span>{subagent.status.modelId}</span>}
+          {subagent.status?.workingDir && <span>{subagent.status.workingDir}</span>}
+        </div>
+        <ChatTranscript
+          ref={transcriptRef}
+          nodes={subagent.nodes}
+          processing={subagent.processing}
+          allowFork={false}
+          emptyLabel="等待 SubAgent 消息..."
+        />
+      </section>
+    </div>
+  );
+}
+
+function isSubAgentActive(item: SubAgentRuntimeState): boolean {
+  return item.state === "RUNNING"
+    || item.state === "INTERRUPTING"
+    || item.status?.runnerState === "RUNNING"
+    || item.status?.executorState === "RUNNING"
+    || item.processing !== undefined
+    || item.partial.text.length > 0
+    || item.partial.reasoning.length > 0;
+}
+
+function subAgentStateLabel(item: SubAgentRuntimeState): string {
+  if (item.status?.lastError) return "failed";
+  const state = item.state || item.status?.state || "CREATED";
+  return state.toLowerCase();
+}
+
+function compareSubAgents(left: SubAgentRuntimeState, right: SubAgentRuntimeState): number {
+  const leftActive = isSubAgentActive(left) ? 1 : 0;
+  const rightActive = isSubAgentActive(right) ? 1 : 0;
+  if (leftActive !== rightActive) return rightActive - leftActive;
+  return (right.lastEventAt ?? 0) - (left.lastEventAt ?? 0);
 }
 
 function PluginPreviewPanel({

@@ -40,7 +40,6 @@ from hawi.agent.subagent import SubAgentManager, SubAgentSpec
 
 ```python
 handle = await agent.subagents.spawn(
-    mode="fork",
     name="reviewer",
     role="reviewer",
     initial_prompt="Review this plan and return JSON.",
@@ -59,14 +58,14 @@ await agent.subagents.close(handle.id)
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `mode` | `"fork"` | `"fork"` 复制父上下文；`"fresh"` 创建空上下文 |
+| `mode` | `"fresh"` | `"fresh"` 创建隔离上下文；`"fork"` 显式复制父上下文 |
 | `name` | 自动生成 | 人类可读名称，便于日志和 GUI 展示 |
 | `role` | `"general"` | 角色预设：`planner`、`reviewer`、`explorer`、`implementer`、`critic`、`summarizer` |
 | `model` | 父 agent 模型 | 可传模型名或 `Model` 实例 |
-| `system_prompt` | 角色默认值 | 显式覆盖子 agent system prompt |
+| `system_prompt` | 身份护栏 + 角色默认值 | 主 agent 显式控制子 agent system prompt；未传时使用 sub-agent 身份护栏与角色 prompt |
 | `plugins` | 继承父插件 | 插件策略，见下文 |
 | `working_dir` | `None` | 子 agent 的逻辑工作目录；不使用进程级 `os.chdir()` |
-| `initial_prompt` | `None` | 创建后立即入队的首条任务 |
+| `initial_prompt` | `None` | 创建后立即入队的首条任务；模型工具侧必填 |
 | `initial_plan` | `None` | 结构化计划，可渲染进首条任务或作为 metadata |
 | `limits` | 保守默认值 | 最大轮数、最长运行时间、最大 tool call 数、最大递归深度 |
 | `result_contract` | `"text"` | 期望结果：`text`、`json`、`plan`、`review`、`diff`、`artifact` |
@@ -79,14 +78,25 @@ await agent.subagents.close(handle.id)
 
 - 基于 `parent.clone()`。
 - 深拷贝消息历史、system prompt、cache 配置和工具定义。
+- 追加 sub-agent 身份护栏与角色 prompt，避免 child 误认为自己是 parent。
 - 插件按现有 `clone()` / factory 规则隔离。
 - 适合 reviewer、critic、summarizer 这类需要理解父上下文的任务。
 
 `fresh`：
 
-- 新建 `HawiAgent(model=..., plugins=..., system_prompt=...)`。
-- 默认没有父对话历史，只注入角色 prompt、初始任务和显式材料。
+- 默认模式。
+- 不继承父对话历史，也不继承父 system prompt。
+- 只注入 sub-agent 身份护栏、角色 prompt、初始任务和显式材料。
 - 适合 explorer、implementer、实验性分支和低污染探索。
+
+模型工具 `create_subagent` 额外提供 `share_context` 布尔开关，默认
+`false`。传 `share_context=true` 等价于选择 `mode="fork"`；传
+`share_context=false` 会强制使用隔离上下文，即使模型同时传了
+`mode="fork"`。
+
+当共享上下文开启时，子 agent 收到的首条任务消息会额外说明：前面的消息
+只是从父 agent 继承来的背景材料；自己已经是被创建出来的 sub-agent；
+只对眼前被赋予的任务负责；完成后需要把任务结果告知父 agent。
 
 后续可加两个受控模式：
 
@@ -163,8 +173,9 @@ CREATED -> IDLE -> RUNNING -> IDLE
 1. 创建 child agent。
 2. 创建 child runner。
 3. 启动 `runner.run_forever()` 后台 task。
-4. 如果有 `initial_prompt` 或 `initial_plan`，入 `normal` 队列。
-5. 返回 `SubAgentHandle`，不阻塞等待最终结果。
+4. 如果有 `initial_prompt` 或 `initial_plan`，生成一条明确的 user prompt：说明对方是 sub-agent、不是 parent agent，并列出父 agent 指定的任务。
+5. 这条首条任务入 `normal` 队列。
+6. 返回 `SubAgentHandle`，不阻塞等待最终结果。
 
 `run_subagent()` 是 Python 便利 API，可内部 `spawn + wait + close`，但不建议第一版作为模型默认工具暴露。
 
@@ -174,7 +185,6 @@ CREATED -> IDLE -> RUNNING -> IDLE
 
 ```python
 handle = await agent.subagents.spawn(
-    mode="fork",
     role="reviewer",
     system_prompt=None,
     working_dir="/repo",
@@ -250,13 +260,12 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
 
 ## 事件与审计
 
-子 agent 事件需要能关联回父任务。第一版不要修改所有事件模型，可以先通过转发器生成父侧 plugin event：
+子 agent 事件需要能关联回父任务。当前使用与 plugin 平级的
+`subagent.*` 事件族，而不是复用 `plugin.event`：
 
 ```json
 {
-  "type": "plugin.event",
-  "plugin_id": "subagent",
-  "event_name": "subagent.event",
+  "type": "subagent.event",
   "payload": {
     "subagent_id": "...",
     "subagent_role": "reviewer",
@@ -267,8 +276,6 @@ Python 侧 `wait_report(..., timeout_action="raise")` 可保留抛错行为，�
   }
 }
 ```
-
-后续如果需要更强类型，再增加 `subagent.*` 事件族。
 
 审计记录至少包含：
 
