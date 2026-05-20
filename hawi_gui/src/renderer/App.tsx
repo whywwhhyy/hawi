@@ -57,7 +57,6 @@ const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
 const COPY_FEEDBACK_MS = 1200;
 const SYSTEM_PROMPT_MAX_ROWS = 3;
-const THINKING_SUMMARY_MAX_CHARS = 360;
 const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
 const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
@@ -1347,6 +1346,7 @@ export default function App() {
           />
           <ContextUsageCell
             usage={state.contextUsage}
+            autoCompact={state.contextAutoCompact}
             compression={state.contextCompression}
             busy={contextCompactBusy}
             disabled={!coreRunning}
@@ -1383,14 +1383,6 @@ export default function App() {
             onTaskClear={clearNormalQueue}
           />
         </div>
-        <button
-          className="tool-button"
-          title="导出当前 Session Markdown"
-          disabled={!currentSessionId || state.sessionMessageCount === 0 || exportBusy}
-          onClick={exportCurrentSession}
-        >
-          <FileText size={17} /> {exportBusy ? "导出中" : "导出"}
-        </button>
         <button className="tool-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
           <Plug size={17} /> 插件配置
         </button>
@@ -1407,6 +1399,17 @@ export default function App() {
           </button>
           {debugMenuOpen && (
             <div className="menu-popover">
+              <button
+                className="menu-item"
+                title="导出当前 Session Markdown"
+                disabled={!currentSessionId || state.sessionMessageCount === 0 || exportBusy}
+                onClick={() => {
+                  setDebugMenuOpen(false);
+                  void exportCurrentSession();
+                }}
+              >
+                <FileText size={15} /> {exportBusy ? "导出中" : "导出 Markdown"}
+              </button>
               <label className="menu-item">
                 <input
                   type="checkbox"
@@ -1641,12 +1644,14 @@ function QueueStatusCell({
 
 function ContextUsageCell({
   usage,
+  autoCompact,
   compression,
   busy,
   disabled,
   onRequestCompact
 }: {
   usage?: ContextUsageState;
+  autoCompact?: ContextAutoCompactState;
   compression?: ContextCompressionState;
   busy: boolean;
   disabled: boolean;
@@ -1658,14 +1663,16 @@ function ContextUsageCell({
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
   const usageLabel = `${usage?.source === "estimate" ? "~" : ""}${used}/${max}`;
+  const thresholdPercent = autoCompact ? autoCompactThresholdPercent(autoCompact, usage) : undefined;
+  const thresholdTitle = thresholdPercent === undefined ? "" : ` · 自动压缩 ${thresholdPercent}%`;
   const inactive = disabled;
   const title = compressing
-    ? `Context compressing ${usageLabel} · 点击查看上下文设置`
+    ? `Context compressing ${usageLabel}${thresholdTitle} · 点击查看上下文设置`
     : inactive
-      ? `Context ${usageLabel}`
+      ? `Context ${usageLabel}${thresholdTitle}`
       : busy
-        ? `Context ${usageLabel} · 压缩中`
-        : `Context ${usageLabel} · 点击查看上下文设置`;
+        ? `Context ${usageLabel}${thresholdTitle} · 压缩中`
+        : `Context ${usageLabel}${thresholdTitle} · 点击查看上下文设置`;
   return (
     <button
       type="button"
@@ -1687,8 +1694,17 @@ function ContextUsageCell({
             <span className="context-usage-line">{usageLabel}</span>
             <span className="context-meter" aria-hidden="true">
               <span className="context-meter-fill" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+              {thresholdPercent !== undefined && (
+                <span
+                  className="context-meter-threshold"
+                  style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
+                />
+              )}
               <strong className="context-meter-label">{percent}</strong>
             </span>
+            {thresholdPercent !== undefined && (
+              <span className="context-threshold-line">auto {thresholdPercent}%</span>
+            )}
           </>
         )}
       </span>
@@ -2613,18 +2629,6 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
         <div className="collapsible-body-inner">
           <MarkdownView html={html} />
         </div>
-      </div>
-      <div
-        className={`thinking-summary ${collapsed ? "is-visible" : ""}`}
-        onClick={
-          collapsed
-            ? (event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))
-            : undefined
-        }
-        title={collapsed ? "点击展开思考内容" : undefined}
-        aria-hidden={!collapsed}
-      >
-        {thinkingExcerpt(node.content, THINKING_SUMMARY_MAX_CHARS)}
       </div>
     </article>
   );

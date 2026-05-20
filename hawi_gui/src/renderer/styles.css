@@ -203,7 +203,7 @@ button:disabled {
 
 .context-status {
   position: relative;
-  min-width: 148px;
+  min-width: 166px;
   justify-content: flex-start;
   gap: 8px;
   border-right: 1px solid var(--color-border);
@@ -241,8 +241,8 @@ button.context-status:disabled {
 
 .context-status-widget {
   display: grid;
-  flex: 0 0 72px;
-  min-width: 72px;
+  flex: 0 0 86px;
+  min-width: 86px;
   gap: 2px;
 }
 
@@ -277,6 +277,16 @@ button.context-status:disabled {
   background: var(--color-primary-soft);
 }
 
+.context-meter-threshold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #33444b;
+  transform: translateX(-1px);
+  opacity: 0.72;
+}
+
 .context-meter-label {
   position: absolute;
   inset: 0;
@@ -287,6 +297,14 @@ button.context-status:disabled {
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
+}
+
+.context-threshold-line {
+  display: block;
+  color: #5f6d73;
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
 }
 
 .session-status {
@@ -628,6 +646,16 @@ button.context-status:disabled {
 
 .menu-item:hover {
   background: var(--color-primary-tint);
+}
+
+.menu-item:disabled {
+  color: var(--color-text-muted);
+  cursor: default;
+  opacity: 0.58;
+}
+
+.menu-item:disabled:hover {
+  background: transparent;
 }
 
 .tool-button,
@@ -1749,44 +1777,6 @@ button.context-status:disabled {
     linear-gradient(to bottom, rgba(238, 247, 243, 0), #eef7f3 88%);
 }
 
-.thinking-summary {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  max-height: 0;
-  padding: 0 12px;
-  color: #7b858a;
-  font-size: 12px;
-  line-height: 1.45;
-  user-select: text;
-  visibility: hidden;
-  opacity: 0;
-  transform: translateY(-4px);
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  transition:
-    max-height 190ms ease,
-    padding 190ms ease,
-    opacity 140ms ease,
-    transform 190ms ease,
-    visibility 0s linear 190ms;
-}
-
-.thinking-summary.is-visible {
-  max-height: calc(4.35em + 19px);
-  padding: 9px 12px 10px;
-  visibility: visible;
-  opacity: 1;
-  transform: translateY(0);
-  cursor: pointer;
-  transition:
-    max-height 190ms ease,
-    padding 190ms ease,
-    opacity 140ms ease,
-    transform 190ms ease,
-    visibility 0s linear 0s;
-}
-
 .markdown {
   padding: 10px 12px;
   line-height: 1.48;
@@ -1800,9 +1790,7 @@ button.context-status:disabled {
   .collapsible-body.is-collapsed,
   .message-body,
   .message-injections,
-  .bubble.message-collapsed .message-injections,
-  .thinking-summary,
-  .thinking-summary.is-visible {
+  .bubble.message-collapsed .message-injections {
     transition: none;
     animation: none;
   }
