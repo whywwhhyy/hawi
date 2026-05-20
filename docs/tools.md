@@ -244,7 +244,7 @@ tools = [CalculatorTool(), WeatherTool()]
 agent = HawiAgent(model=model, tools=tools)
 
 # 方式二：使用插件
-from hawi_plugins.python_interpreter import PythonInterpreter
+from hawi.builtin_plugins.python_interpreter import PythonInterpreter
 
 agent = HawiAgent(
     model=model,
@@ -452,7 +452,7 @@ Hawi 提供多个内置插件，可以直接集成到 Agent 中使用。
 文件系统操作插件，提供文件读写、编辑、搜索能力。
 
 ```python
-from hawi_plugins.filesystem_plugin import FileSystemPlugin
+from hawi.builtin_plugins.filesystem_plugin import FileSystemPlugin
 
 plugin = FileSystemPlugin()
 agent = HawiAgent(model=model, plugins=[plugin])
@@ -529,7 +529,7 @@ agent = HawiAgent(model=model, plugins=[plugin])
 Shell 命令执行插件。
 
 ```python
-from hawi_plugins.shell_plugin import ShellPlugin
+from hawi.builtin_plugins.shell_plugin import ShellPlugin
 
 plugin = ShellPlugin()
 agent = HawiAgent(model=model, plugins=[plugin])
@@ -546,7 +546,7 @@ agent = HawiAgent(model=model, plugins=[plugin])
 Claude Skills 架构实现，支持动态加载技能指令。
 
 ```python
-from hawi_plugins.skills_plugin import SkillsPlugin
+from hawi.builtin_plugins.skills_plugin import SkillsPlugin
 
 plugin = SkillsPlugin(skills_dir=".skills")
 agent = HawiAgent(model=model, plugins=[plugin])

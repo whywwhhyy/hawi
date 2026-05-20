@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from hawi_engine.plugin_registry import (
+from hawi.engine.plugin_registry import (
     KNOWN_PLUGINS,
     PLUGIN_DISPLAY_NAMES,
     create_plugin,

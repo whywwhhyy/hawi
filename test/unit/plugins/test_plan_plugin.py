@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from hawi.agent.context import AgentContext
 from hawi.events import Event, EventBus
 from hawi.plugin import HookContext
-from hawi_plugins.plan_plugin import PlanPlugin
-from hawi_plugins.plan_plugin.plugin import (
+from hawi.builtin_plugins.plan_plugin import PlanPlugin
+from hawi.builtin_plugins.plan_plugin.plugin import (
     PLAN_COMPLETION_CACHE_POINT_SOURCE,
     PLAN_PROMPT_BEGIN,
     PLAN_REMINDER_BEGIN,

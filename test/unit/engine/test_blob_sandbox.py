@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hawi_engine.blob.sandbox import (
+from hawi.engine.blob.sandbox import (
     Direction,
     SandboxViolation,
     blob_id_to_relpath,

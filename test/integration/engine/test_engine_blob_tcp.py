@@ -12,11 +12,11 @@ from typing import Any
 
 import pytest
 
-import hawi_engine.builtin_gateways as builtin_gateways
-from hawi_engine.blob.store import BlobStore
-from hawi_engine.protocol import VERSION
-from hawi_engine.runtime import CoreRuntime
-from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
+import hawi.engine.builtin_gateways as builtin_gateways
+from hawi.engine.blob.store import BlobStore
+from hawi.engine.protocol import VERSION
+from hawi.engine.runtime import CoreRuntime
+from hawi.engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 
 
 async def _connect_tcp_with_retry(port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:

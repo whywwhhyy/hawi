@@ -2,7 +2,7 @@ import os
 import tempfile
 import shutil
 import pytest
-from hawi_plugins.filesystem_plugin.plugin import FileSystemPlugin
+from hawi.builtin_plugins.filesystem_plugin.plugin import FileSystemPlugin
 
 
 class TestFileSystemPlugin:

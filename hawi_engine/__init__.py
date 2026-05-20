@@ -1,5 +1,7 @@
-"""Hawi engine package — agent runtime + JSON protocol server."""
+"""Compatibility wrapper for :mod:`hawi.engine`."""
 
-from .protocol import VERSION
+from hawi import engine as _engine
+from hawi.engine import *  # noqa: F401,F403
+from hawi.engine import __all__  # noqa: F401
 
-__all__ = ["VERSION"]
+__path__ = _engine.__path__

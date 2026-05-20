@@ -8,7 +8,7 @@ import shutil
 import pytest
 from typing import Generator
 
-from hawi_plugins.python_interpreter import PythonInterpreter
+from hawi.builtin_plugins.python_interpreter import PythonInterpreter
 
 
 class TestPythonInterpreter:

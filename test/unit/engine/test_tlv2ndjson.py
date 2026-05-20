@@ -8,8 +8,8 @@ import json
 import subprocess
 import sys
 
-from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame
-from hawi_engine.tlv2ndjson import translate_stream
+from hawi.engine.tlv import TYPE_JSON_FRAME, encode_frame
+from hawi.engine.tlv2ndjson import translate_stream
 
 
 def _make_stream(frames: list[dict]) -> bytes:
@@ -76,7 +76,7 @@ async def test_translate_stream_reports_truncated_frame_to_stderr(capsys):
 def test_cli_entry_point_exists():
     """`tlv2ndjson` should be installed as a console script."""
     result = subprocess.run(
-        [sys.executable, "-m", "hawi_engine.tlv2ndjson", "--help"],
+        [sys.executable, "-m", "hawi.engine.tlv2ndjson", "--help"],
         capture_output=True,
         text=True,
         timeout=5,

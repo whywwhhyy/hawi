@@ -12,7 +12,7 @@ type RoutableCoreProcess = {
 function makeRoutableCore(events: Array<{ channel: string; payload: unknown }>): RoutableCoreProcess {
   const launcher: EngineLauncher = {
     command: "uv",
-    argsPrefix: ["run", "--project", "/repo", "python", "-m", "hawi_engine"],
+    argsPrefix: ["run", "--project", "/repo", "python", "-m", "hawi.engine"],
     source: "uv",
   };
   const core = new CoreProcess(

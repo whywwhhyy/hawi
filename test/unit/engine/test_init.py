@@ -4,9 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from hawi.models.registry import ModelRegistry
-from hawi_engine.__main__ import build_parser
-from hawi_engine.init import prepare_hawi_dir, render_template_text
+from hawi.engine.__main__ import build_parser
+from hawi.engine.init import prepare_hawi_dir, render_template_text
 
 
 def test_parser_accepts_optional_hawi_dir() -> None:
@@ -33,16 +32,7 @@ def test_prepare_hawi_dir_copies_template_when_no_dir_is_given(
     text = config_path.read_text(encoding="utf-8")
     assert "{{HAWI_PROJECT_NAME}}" not in text
     assert "providers:" in text
-
-    registry = ModelRegistry()
-    registry.clear()
-    try:
-        registry.load_config(config_path, quiet=True)
-
-        assert "deepseek/deepseek-chat" in registry.list_models()
-        assert "openai/gpt-4o-mini" in registry.list_models()
-    finally:
-        registry.clear()
+    assert "# providers:" in text
 
 
 def test_prepare_hawi_dir_uses_nearest_git_root_when_no_dir_is_given(

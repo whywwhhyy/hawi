@@ -10,7 +10,7 @@ import asyncio
 import pytest
 from typing import Generator, AsyncGenerator, Any
 
-from hawi_plugins.python_interpreter import PythonInterpreterPlugin
+from hawi.builtin_plugins.python_interpreter import PythonInterpreterPlugin
 
 
 def _run_async_gen(agen: AsyncGenerator[str, None]) -> dict[str, Any]:

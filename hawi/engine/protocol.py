@@ -20,7 +20,7 @@ Hello ack payload (added in Plan 2):
 
 Old clients that omit `client_caps` get an empty `negotiated` set; old servers
 that don't return `server_caps`/`negotiated` are simply ignored by future-aware
-clients. SERVER_CAPS lives in `hawi_engine.runtime` and is empty in Plan 2;
+clients. SERVER_CAPS lives in `hawi.engine.runtime` and is empty in Plan 2;
 Plans 3-5 add concrete capability strings (`tlv_v1`, `binary_frames`, etc.).
 """
 

@@ -40,13 +40,13 @@
   - `hawi/agent/runtime.py`
     - pending steer inputs 存在 agent runtime 内，当前可能在中断后被继续 drain。
 - Engine：
-  - `hawi_engine/protocol.py`
+  - `hawi/engine/protocol.py`
     - 已有命令：`enqueue`、`interrupt`、`clear_queue`、`get_status`。
     - 没有 `resume`、队列编辑、队列排序命令。
-  - `hawi_engine/runtime.py`
+  - `hawi/engine/runtime.py`
     - `_handle_enqueue()` 直接把 payload 里的 queue 传给 runner。
     - `_status_payload()` 已返回 `queue_lengths` 和 `queue_messages`。
-  - `hawi_engine/event_mapper.py`
+  - `hawi/engine/event_mapper.py`
     - `agent.message_added` 映射为 GUI 的 `run.start`。
     - `display_message_type` 目前只有 `normal` / `steer` / `urgent`。
 - GUI：
@@ -553,7 +553,7 @@ load 时：
 
 目标文件：
 
-- `hawi_engine/protocol.py`
+- `hawi/engine/protocol.py`
 - `hawi_gui/src/shared/protocol.ts`
 
 新增：
@@ -793,7 +793,7 @@ engine 兼容策略：
 
 目标文件：
 
-- `hawi_engine/runtime.py`
+- `hawi/engine/runtime.py`
 - `hawi_gui/src/renderer/state.ts`
 
 新增 payload：
@@ -1238,9 +1238,9 @@ MVP 可接受保留现有 pending inputs 行为，但必须保证它们不会在
 
 文件：
 
-- `hawi_engine/protocol.py`
-- `hawi_engine/runtime.py`
-- `hawi_engine/event_mapper.py`
+- `hawi/engine/protocol.py`
+- `hawi/engine/runtime.py`
+- `hawi/engine/event_mapper.py`
 - `hawi_gui/src/shared/protocol.ts`
 
 任务：

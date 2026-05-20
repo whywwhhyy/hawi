@@ -159,7 +159,7 @@ export function resolveBundledEngineCommand(resourcesPath = process.resourcesPat
 }
 
 export function buildUvEngineArgsPrefix(repoRoot: string): string[] {
-  return ["run", "--project", repoRoot, "python", "-m", "hawi_engine"];
+  return ["run", "--project", repoRoot, "python", "-m", "hawi.engine"];
 }
 
 export function buildEngineRunArgs(

@@ -1,10 +1,10 @@
 import pytest
 from unittest.mock import Mock, patch
-from hawi_plugins.web.fetch import Fetcher, FetchResult
+from hawi.builtin_plugins.web.fetch import Fetcher, FetchResult
 
 
 def test_web_plugin_instance():
-    from hawi_plugins.web.plugin import WebPlugin
+    from hawi.builtin_plugins.web.plugin import WebPlugin
     plugin = WebPlugin()
     assert plugin is not None
     assert hasattr(plugin, 'tools')
@@ -94,7 +94,7 @@ def test_fetcher_http_error():
 
 
 def test_web_plugin_returns_failed_tool_result_when_fetcher_fails():
-    from hawi_plugins.web.plugin import WebPlugin
+    from hawi.builtin_plugins.web.plugin import WebPlugin
 
     plugin = WebPlugin()
     failed = FetchResult(

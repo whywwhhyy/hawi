@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from hawi_engine.protocol import VERSION
-from hawi_engine.runtime import SERVER_CAPS, CoreRuntime
+from hawi.engine.protocol import VERSION
+from hawi.engine.runtime import SERVER_CAPS, CoreRuntime
 
 
 class _FakeClient:
@@ -42,7 +42,7 @@ async def test_hello_without_caps_yields_empty_negotiated(runtime):
 
 async def test_hello_with_known_caps_intersects(runtime, monkeypatch):
     # Force the server caps to a known value for the test
-    monkeypatch.setattr("hawi_engine.runtime.SERVER_CAPS", frozenset({"alpha", "beta"}))
+    monkeypatch.setattr("hawi.engine.runtime.SERVER_CAPS", frozenset({"alpha", "beta"}))
     client = _FakeClient()
     await runtime.register_client(client)
     frame = {

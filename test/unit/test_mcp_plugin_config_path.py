@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-import hawi_plugins.mcp_plugin.plugin as mcp_plugin_module
-from hawi_plugins.mcp_plugin import MCPPlugin
+import hawi.builtin_plugins.mcp_plugin.plugin as mcp_plugin_module
+from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
 
 class _FakePool:

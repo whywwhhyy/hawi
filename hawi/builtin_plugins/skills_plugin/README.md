@@ -21,7 +21,7 @@ This plugin provides essential skills for the Hawi Agent, implementing the **Cla
 
 ```python
 from hawi.agent import HawiAgent
-from hawi_plugins.skills_plugin import SkillsPlugin
+from hawi.builtin_plugins.skills_plugin import SkillsPlugin
 
 # Initialize the plugin
 skills_plugin = SkillsPlugin(skills_dir="./skills")

@@ -1,6 +1,7 @@
 """Infrastructure utilities for agent framework."""
 
 from .lifecycle import ExitHandler, exit_scope, register_exit_handler
+from .context import ContextManager, context_scope
 from .loader import (
     ModuleLoader,
     has_subclass,
@@ -18,8 +19,12 @@ from .markdown_streaming_parser import (
     MarkdownStreamingParser,
 )
 from .workspace import find_git_root
+from .terminal import user_select
 
 __all__ = [
+    # Context
+    "ContextManager",
+    "context_scope",
     # Lifecycle
     "ExitHandler",
     "exit_scope",
@@ -40,4 +45,6 @@ __all__ = [
     "MarkdownStreamingParser",
     # Workspace
     "find_git_root",
+    # Terminal
+    "user_select",
 ]

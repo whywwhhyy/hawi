@@ -6,7 +6,7 @@ MCP (Model Context Protocol) Hawi 插件
 基本用法:
     from hawi.agent import HawiAgent
     from hawi.models.kimi import KimiModel
-    from hawi_plugins.mcp_plugin import MCPPlugin
+    from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
     # 创建插件
     mcp_plugin = MCPPlugin()
@@ -37,7 +37,7 @@ MCP (Model Context Protocol) Hawi 插件
     result = await agent.run("List files in /home/user/docs")
 
 高级用法 - 使用客户端池:
-    from hawi_plugins.mcp import MCPClient, MCPClientPool
+    from hawi.builtin_plugins.mcp import MCPClient, MCPClientPool
     
     # 创建客户端
     client = MCPClient.from_stdio("python", ["-m", "my_mcp_server"])

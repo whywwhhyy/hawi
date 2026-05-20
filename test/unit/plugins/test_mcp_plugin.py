@@ -2,13 +2,13 @@
 MCP 插件测试
 
 运行测试:
-    pytest hawi_plugins/mcp/test_mcp_plugin.py -v
+    pytest hawi/builtin_plugins/mcp/test_mcp_plugin.py -v
 """
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from hawi_plugins.mcp_plugin import MCPPlugin, MCPClient, MCPClientPool, MCPTool, MCPResource
+from hawi.builtin_plugins.mcp_plugin import MCPPlugin, MCPClient, MCPClientPool, MCPTool, MCPResource
 
 
 class TestMCPTool:
@@ -142,7 +142,7 @@ class TestMCPPlugin:
         mock_client.tools = []
         mock_client.resources = []
         
-        with patch("hawi_plugins.mcp_plugin.plugin.MCPClient") as MockClient:
+        with patch("hawi.builtin_plugins.mcp_plugin.plugin.MCPClient") as MockClient:
             MockClient.from_stdio.return_value = mock_client
             
             await plugin.connect()

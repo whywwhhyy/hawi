@@ -14,7 +14,7 @@ from contextlib import closing
 
 import pytest
 
-from hawi_engine.http_gateway import HttpGatewayClient
+from hawi.engine.http_gateway import HttpGatewayClient
 
 
 @pytest.fixture
@@ -102,8 +102,8 @@ def _free_port() -> int:
 @pytest.fixture
 async def http_engine(tmp_path):
     """Start an HttpGateway on a free port wired to a real CoreRuntime; yield (port, runtime)."""
-    from hawi_engine.runtime import CoreRuntime
-    from hawi_engine.http_gateway import HttpGateway
+    from hawi.engine.runtime import CoreRuntime
+    from hawi.engine.http_gateway import HttpGateway
 
     runtime = CoreRuntime(
         model_name="dummy/dummy",
@@ -148,7 +148,7 @@ async def http_engine(tmp_path):
 @pytest.fixture
 async def http_engine_with_token():
     """HTTP gateway wired to a runtime stub that requires Bearer auth."""
-    from hawi_engine.http_gateway import HttpGateway
+    from hawi.engine.http_gateway import HttpGateway
 
     runtime = _MinimalTestRuntime(
         token="secret",
@@ -213,7 +213,7 @@ class _MinimalTestRuntime:
         self._clients.discard(client)
 
     async def handle_frame(self, client, raw) -> None:
-        from hawi_engine.protocol import make_ack, make_frame, parse_frame
+        from hawi.engine.protocol import make_ack, make_frame, parse_frame
 
         if isinstance(raw, dict):
             frame_dict = raw
@@ -223,7 +223,7 @@ class _MinimalTestRuntime:
             command = parse_frame(raw)
         else:
             # Build a CoreCommand-like object from the dict.
-            from hawi_engine.protocol import CoreCommand
+            from hawi.engine.protocol import CoreCommand
             command = CoreCommand(
                 type=frame_dict["type"],
                 payload=frame_dict.get("payload") or {},
@@ -233,7 +233,7 @@ class _MinimalTestRuntime:
         if command.type == "hello":
             self.hello_payloads.append(dict(command.payload))
             if self._token is not None and command.payload.get("token") != self._token:
-                from hawi_engine.protocol import make_error
+                from hawi.engine.protocol import make_error
                 await client.send(
                     make_error(
                         "Invalid authentication token.",
@@ -262,7 +262,7 @@ class _MinimalTestRuntime:
                 make_frame("pong", {"ok": True}, request_id=command.id)
             )
         else:
-            from hawi_engine.protocol import make_error
+            from hawi.engine.protocol import make_error
             await client.send(make_error("unhandled in test", request_id=command.id))
 
     async def wait_shutdown(self) -> None:

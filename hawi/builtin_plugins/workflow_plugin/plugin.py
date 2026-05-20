@@ -28,7 +28,7 @@ from hawi.plugin import (
 from hawi.tool import ToolResult
 from hawi.utils.debug import debug_assert
 
-from hawi_plugins.workflow_plugin.models import (
+from hawi.builtin_plugins.workflow_plugin.models import (
     NodeExecution,
     ReviewDecision,
     ReviewRecord,
@@ -36,7 +36,7 @@ from hawi_plugins.workflow_plugin.models import (
     WorkflowNode,
     WorkflowRun,
 )
-from hawi_plugins.workflow_plugin.reviewers import (
+from hawi.builtin_plugins.workflow_plugin.reviewers import (
     HumanReviewer,
     LoggerReviewer,
     SubAgentReviewer,
@@ -345,7 +345,7 @@ class WorkflowPlugin(HawiPlugin):
                 ),
             )
         try:
-            from hawi_plugins.workflow_plugin.persistence import load_workflow as _load
+            from hawi.builtin_plugins.workflow_plugin.persistence import load_workflow as _load
             self._workflow = _load(name.strip())
             self._active_run = None
             self._sync_artifact_definition()
@@ -362,7 +362,7 @@ class WorkflowPlugin(HawiPlugin):
     )
     def list_workflows(self) -> ToolResult:
         try:
-            from hawi_plugins.workflow_plugin.persistence import list_workflows as _list
+            from hawi.builtin_plugins.workflow_plugin.persistence import list_workflows as _list
             return ToolResult(success=True, output={"workflows": _list()})
         except Exception as e:
             return ToolResult(success=False, error=str(e))

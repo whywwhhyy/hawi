@@ -70,12 +70,12 @@ from hawi.models import DeepSeekModel
 model = DeepSeekModel(model_id="deepseek-chat", api_key="...")
 ```
 
-#### Python Interpreter (`hawi_plugins/python_interpreter/`)
+#### Python Interpreter (`hawi/builtin_plugins/python_interpreter/`)
 
 Persistent subprocess Python execution with state management.
 
 ```python
-from hawi_plugins.python_interpreter import PythonInterpreterPlugin
+from hawi.builtin_plugins.python_interpreter import PythonInterpreterPlugin
 
 interpreter = PythonInterpreterPlugin()
 agent = HawiAgent(model=model, plugins=[interpreter])
@@ -247,7 +247,7 @@ hawi/
     ├── markdown_streaming_parser.py
     └── terminal.py
 
-hawi_plugins/           # Plugin implementations
+hawi/builtin_plugins/           # Plugin implementations
 ├── filesystem_plugin/   # File operations (read/write/edit/glob/grep)
 ├── shell_plugin/       # Shell command execution
 ├── python_interpreter/ # Persistent Python interpreter

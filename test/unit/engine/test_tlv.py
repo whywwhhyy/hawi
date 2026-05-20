@@ -1,4 +1,4 @@
-"""Tests for hawi_engine.tlv: TLV framing primitives."""
+"""Tests for hawi.engine.tlv: TLV framing primitives."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from hawi_engine.tlv import (
+from hawi.engine.tlv import (
     DEFAULT_MAX_FRAME_SIZE,
     TYPE_JSON_FRAME,
     FrameTooLargeError,

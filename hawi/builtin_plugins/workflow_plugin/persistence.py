@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from hawi.utils.config_loader import load_config_file, save_config_file
-from hawi_plugins.workflow_plugin.models import Workflow
+from hawi.builtin_plugins.workflow_plugin.models import Workflow
 
 logger = logging.getLogger(__name__)
 

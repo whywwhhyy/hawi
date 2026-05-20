@@ -1,7 +1,7 @@
 """Workflow Plugin for Hawi — gated, reviewable agentic workflows."""
 
-from hawi_plugins.workflow_plugin.plugin import WorkflowPlugin
-from hawi_plugins.workflow_plugin.models import (
+from hawi.builtin_plugins.workflow_plugin.plugin import WorkflowPlugin
+from hawi.builtin_plugins.workflow_plugin.models import (
     Workflow,
     WorkflowNode,
     WorkflowEdge,
@@ -11,7 +11,7 @@ from hawi_plugins.workflow_plugin.models import (
     ReviewDecision,
     ReviewRecord,
 )
-from hawi_plugins.workflow_plugin.reviewers import (
+from hawi.builtin_plugins.workflow_plugin.reviewers import (
     Reviewer,
     LoggerReviewer,
     SubAgentReviewer,

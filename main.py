@@ -21,7 +21,7 @@ warnings.filterwarnings(
 from hawi.agent import AutoCompactConfig, HawiAgent
 from hawi.agent.printers import create_printer
 from hawi.models import Model, model_registry
-from utils.terminal import user_select
+from hawi.utils.terminal import user_select
 
 
 QUICK_ARGUMENTS: list[str] = []
@@ -118,10 +118,10 @@ def create_agent(
 ) -> HawiAgent:
     """Create a HawiAgent with the specified provider."""
     # print(model.get_balance())
-    from hawi_plugins.filesystem_plugin import FileSystemPlugin
-    from hawi_plugins.shell_plugin import ShellPlugin
-    from hawi_plugins.skills_plugin import SkillsPlugin
-    from hawi_plugins.web import WebPlugin
+    from hawi.builtin_plugins.filesystem_plugin import FileSystemPlugin
+    from hawi.builtin_plugins.shell_plugin import ShellPlugin
+    from hawi.builtin_plugins.skills_plugin import SkillsPlugin
+    from hawi.builtin_plugins.web import WebPlugin
 
     return HawiAgent(
         model=model,

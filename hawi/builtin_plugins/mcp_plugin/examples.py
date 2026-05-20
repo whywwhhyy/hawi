@@ -6,7 +6,7 @@ MCP 插件使用示例
     npm install -g @modelcontextprotocol/server-filesystem
     
     # 运行示例
-    python -m hawi_plugins.mcp_plugin.examples
+    python -m hawi.builtin_plugins.mcp_plugin.examples
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import asyncio
 
 async def example_basic_usage():
     """基础使用示例"""
-    from hawi_plugins.mcp_plugin import MCPPlugin
+    from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
     # 创建插件
     plugin = MCPPlugin()
@@ -56,7 +56,7 @@ async def example_with_agent():
     """与 Hawi Agent 集成示例"""
     from hawi.agent import HawiAgent
     from hawi.models.kimi import KimiModel
-    from hawi_plugins.mcp_plugin import MCPPlugin
+    from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
     # 创建 MCP 插件
     mcp_plugin = MCPPlugin()
@@ -88,7 +88,7 @@ async def example_with_agent():
 
 async def example_multiple_servers():
     """多服务器连接示例"""
-    from hawi_plugins.mcp_plugin import MCPPlugin
+    from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
     plugin = MCPPlugin()
 
@@ -121,7 +121,7 @@ async def example_multiple_servers():
 
 async def example_direct_client():
     """直接使用 MCPClient 示例"""
-    from hawi_plugins.mcp_plugin import MCPClient
+    from hawi.builtin_plugins.mcp_plugin import MCPClient
 
     # 创建客户端
     client = MCPClient.from_stdio(
@@ -155,7 +155,7 @@ async def example_direct_client():
 
 async def example_client_pool():
     """使用 MCPClientPool 管理多个连接"""
-    from hawi_plugins.mcp_plugin import MCPClient, MCPClientPool
+    from hawi.builtin_plugins.mcp_plugin import MCPClient, MCPClientPool
 
     pool = MCPClientPool()
 
@@ -187,7 +187,7 @@ async def example_client_pool():
 
 async def example_resource_tools():
     """使用资源查询工具示例"""
-    from hawi_plugins.mcp_plugin import MCPPlugin
+    from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
     plugin = MCPPlugin()
 

@@ -62,7 +62,7 @@ def prepare_hawi_dir(
     destination_root = find_git_root(Path.cwd())
     config_dir = destination_root / HAWI_DIR_NAME
     values = _template_values(destination_root, config_dir)
-    template_root = files("hawi_engine").joinpath("templates", template_name)
+    template_root = files("hawi.engine").joinpath("templates", template_name)
     if not template_root.is_dir():
         raise FileNotFoundError(f"Hawi init template not found: {template_name}")
 

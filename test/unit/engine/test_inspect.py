@@ -6,8 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from hawi_engine.inspect import build_inspect_payload
-from hawi_engine.plugin_registry import KNOWN_PLUGINS
+from hawi.engine.inspect import build_inspect_payload
+from hawi.engine.plugin_registry import KNOWN_PLUGINS
 
 
 def test_inspect_payload_contains_models_and_plugin_catalog() -> None:
@@ -47,7 +47,7 @@ providers:
         "PYTHONPATH": str(Path.cwd()),
     }
     result = subprocess.run(
-        [sys.executable, "-m", "hawi_engine", "--inspect"],
+        [sys.executable, "-m", "hawi.engine", "--inspect"],
         cwd=tmp_path,
         env=env,
         capture_output=True,

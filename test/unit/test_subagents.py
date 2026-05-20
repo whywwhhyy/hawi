@@ -8,7 +8,7 @@ import pytest
 from hawi.agent import HawiAgent, SubAgentSpec, ToolCallContext
 from hawi.models import Model
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
-from hawi_plugins.subagent_plugin import SubAgentPlugin
+from hawi.builtin_plugins.subagent_plugin import SubAgentPlugin
 
 
 class EchoModel(Model):

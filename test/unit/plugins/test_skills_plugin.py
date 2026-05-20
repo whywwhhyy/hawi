@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from hawi.plugin import HookContext
 from hawi.agent.context import AgentContext
-from hawi_plugins.skills_plugin.plugin import SkillsPlugin
+from hawi.builtin_plugins.skills_plugin.plugin import SkillsPlugin
 
 class TestSkillsPlugin:
     @pytest.fixture

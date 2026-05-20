@@ -1,4 +1,4 @@
-"""Tests for hawi_engine.gateway: ABC contract, registry, discovery."""
+"""Tests for hawi.engine.gateway: ABC contract, registry, discovery."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 
 import pytest
 
-from hawi_engine.gateway import (
+from hawi.engine.gateway import (
     GATEWAY_REGISTRY,
     Gateway,
     register_gateway,
@@ -64,12 +64,12 @@ def test_unregister_unknown_gateway_is_noop():
 
 def test_discover_gateways_idempotent():
     """discover_gateways() can be called multiple times without raising."""
-    from hawi_engine.gateway import discover_gateways
+    from hawi.engine.gateway import discover_gateways
 
     # Plan 4 replaced the standalone WebSocket gateway with HTTP+WS-upgrade.
     # Side-effect import is required so http is registered before assertions.
-    from hawi_engine import builtin_gateways  # noqa: F401
-    from hawi_engine import http_gateway  # noqa: F401
+    from hawi.engine import builtin_gateways  # noqa: F401
+    from hawi.engine import http_gateway  # noqa: F401
 
     discover_gateways()
     discover_gateways()  # second call must not raise
@@ -83,7 +83,7 @@ def test_discover_gateways_idempotent():
 def test_discover_gateways_finds_builtins_via_entry_points():
     """The pyproject.toml entry_points should resolve the 3 built-in gateways."""
     from importlib.metadata import entry_points
-    eps = entry_points(group="hawi_engine.gateways")
+    eps = entry_points(group="hawi.engine.gateways")
     names = {ep.name for ep in eps}
     # Plan 4: websocket entry-point removed, http added.
     assert {"stdio", "tcp", "http"} <= names

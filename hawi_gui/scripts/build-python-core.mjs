@@ -40,13 +40,13 @@ const pyinstallerArgs = [
   "--paths",
   repoRoot,
   "--add-data",
-  `${path.join(repoRoot, "hawi_engine", "templates")}${dataSeparator}${path.join("hawi_engine", "templates")}`,
+  `${path.join(repoRoot, "hawi", "engine", "templates")}${dataSeparator}${path.join("hawi", "engine", "templates")}`,
   "--collect-submodules",
   "hawi",
   "--collect-submodules",
-  "hawi_engine",
+  "hawi.engine",
   "--collect-submodules",
-  "hawi_plugins",
+  "hawi.builtin_plugins",
   path.join(repoRoot, "packaging", "pyinstaller", "hawi_engine_entry.py")
 ];
 

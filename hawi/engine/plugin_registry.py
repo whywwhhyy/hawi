@@ -112,14 +112,14 @@ class PluginDescriptor:
 
 
 def _create_skills_plugin(config: dict[str, Any]) -> Any:
-    from hawi_plugins.skills_plugin import SkillsPlugin
+    from hawi.builtin_plugins.skills_plugin import SkillsPlugin
 
     skills_dir = str(config.get("skills_dir") or ".skills")
     return SkillsPlugin(skills_dir=skills_dir)
 
 
 def _create_python_interpreter_plugin(config: dict[str, Any]) -> Any:
-    from hawi_plugins.python_interpreter import PythonInterpreterPlugin
+    from hawi.builtin_plugins.python_interpreter import PythonInterpreterPlugin
 
     work_dir_raw = config.get("work_dir")
     work_dir = str(work_dir_raw).strip() if isinstance(work_dir_raw, str) else None
@@ -130,7 +130,7 @@ def _create_python_interpreter_plugin(config: dict[str, Any]) -> Any:
 
 
 async def _create_mcp_plugin(config: dict[str, Any]) -> Any:
-    from hawi_plugins.mcp_plugin import MCPPlugin
+    from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
     config_path = str(config.get("config_path") or "").strip()
     if not config_path:
@@ -141,7 +141,7 @@ async def _create_mcp_plugin(config: dict[str, Any]) -> Any:
 
 
 def _create_plan_plugin(config: dict[str, Any]) -> Any:
-    from hawi_plugins.plan_plugin import PlanPlugin
+    from hawi.builtin_plugins.plan_plugin import PlanPlugin
 
     return PlanPlugin(
         fold_completed_tasks=bool(config.get("fold_completed_tasks", False))
@@ -149,7 +149,7 @@ def _create_plan_plugin(config: dict[str, Any]) -> Any:
 
 
 def _create_environ_prompt_plugin(config: dict[str, Any]) -> Any:
-    from hawi_plugins.environ_prompt_plugin import EnvironPromptPlugin
+    from hawi.builtin_plugins.environ_prompt_plugin import EnvironPromptPlugin
 
     config_path = str(config.get("config_path") or "").strip() or None
     return EnvironPromptPlugin(config_path=config_path)
@@ -160,52 +160,52 @@ PLUGIN_REGISTRY: dict[str, PluginDescriptor] = {
     # the prompt before normal tool plugins run.
     PLUGIN_ENVIRON_PROMPT: PluginDescriptor(
         key=PLUGIN_ENVIRON_PROMPT,
-        import_path="hawi_plugins.environ_prompt_plugin:EnvironPromptPlugin",
+        import_path="hawi.builtin_plugins.environ_prompt_plugin:EnvironPromptPlugin",
         factory=_create_environ_prompt_plugin,
     ),
     PLUGIN_FILESYSTEM: PluginDescriptor(
         key=PLUGIN_FILESYSTEM,
-        import_path="hawi_plugins.filesystem_plugin:FileSystemPlugin",
+        import_path="hawi.builtin_plugins.filesystem_plugin:FileSystemPlugin",
     ),
     PLUGIN_SHELL: PluginDescriptor(
         key=PLUGIN_SHELL,
-        import_path="hawi_plugins.shell_plugin:ShellPlugin",
+        import_path="hawi.builtin_plugins.shell_plugin:ShellPlugin",
     ),
     PLUGIN_WEB: PluginDescriptor(
         key=PLUGIN_WEB,
-        import_path="hawi_plugins.web:WebPlugin",
+        import_path="hawi.builtin_plugins.web:WebPlugin",
     ),
     PLUGIN_SKILLS: PluginDescriptor(
         key=PLUGIN_SKILLS,
-        import_path="hawi_plugins.skills_plugin:SkillsPlugin",
+        import_path="hawi.builtin_plugins.skills_plugin:SkillsPlugin",
         factory=_create_skills_plugin,
     ),
     PLUGIN_PYTHON_INTERPRETER: PluginDescriptor(
         key=PLUGIN_PYTHON_INTERPRETER,
-        import_path="hawi_plugins.python_interpreter:PythonInterpreterPlugin",
+        import_path="hawi.builtin_plugins.python_interpreter:PythonInterpreterPlugin",
         factory=_create_python_interpreter_plugin,
     ),
     PLUGIN_MCP: PluginDescriptor(
         key=PLUGIN_MCP,
-        import_path="hawi_plugins.mcp_plugin:MCPPlugin",
+        import_path="hawi.builtin_plugins.mcp_plugin:MCPPlugin",
         factory=_create_mcp_plugin,
     ),
     PLUGIN_TASKFLOW: PluginDescriptor(
         key=PLUGIN_TASKFLOW,
-        import_path="hawi_plugins.taskflow_plugin:TaskflowPlugin",
+        import_path="hawi.builtin_plugins.taskflow_plugin:TaskflowPlugin",
     ),
     PLUGIN_PLAN: PluginDescriptor(
         key=PLUGIN_PLAN,
-        import_path="hawi_plugins.plan_plugin:PlanPlugin",
+        import_path="hawi.builtin_plugins.plan_plugin:PlanPlugin",
         factory=_create_plan_plugin,
     ),
     PLUGIN_WORKFLOW: PluginDescriptor(
         key=PLUGIN_WORKFLOW,
-        import_path="hawi_plugins.workflow_plugin:WorkflowPlugin",
+        import_path="hawi.builtin_plugins.workflow_plugin:WorkflowPlugin",
     ),
     PLUGIN_SUBAGENT: PluginDescriptor(
         key=PLUGIN_SUBAGENT,
-        import_path="hawi_plugins.subagent_plugin:SubAgentPlugin",
+        import_path="hawi.builtin_plugins.subagent_plugin:SubAgentPlugin",
     ),
 }
 

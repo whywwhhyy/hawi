@@ -419,7 +419,7 @@ describe("SessionEngineManager", () => {
 function makeManager(events: Array<{ channel: string; payload: unknown }>): SessionEngineManager {
   const launcher: EngineLauncher = {
     command: "uv",
-    argsPrefix: ["run", "--project", "/repo", "python", "-m", "hawi_engine"],
+    argsPrefix: ["run", "--project", "/repo", "python", "-m", "hawi.engine"],
     source: "uv",
   };
   const manager = new SessionEngineManager(

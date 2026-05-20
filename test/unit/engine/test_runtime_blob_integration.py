@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-from hawi_engine.blob.store import BlobStore
-from hawi_engine.protocol import VERSION
-from hawi_engine.runtime import CoreRuntime
+from hawi.engine.blob.store import BlobStore
+from hawi.engine.protocol import VERSION
+from hawi.engine.runtime import CoreRuntime
 
 
 @dataclass(eq=False)

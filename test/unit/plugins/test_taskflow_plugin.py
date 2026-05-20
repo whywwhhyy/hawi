@@ -7,8 +7,8 @@ import pytest
 
 from hawi.agent.context import AgentContext
 from hawi.tool import ToolResult
-from hawi_plugins.taskflow_plugin import TaskflowPlugin
-from hawi_plugins.taskflow_plugin.plugin import TASKFLOW_SUBMIT_CACHE_POINT_SOURCE
+from hawi.builtin_plugins.taskflow_plugin import TaskflowPlugin
+from hawi.builtin_plugins.taskflow_plugin.plugin import TASKFLOW_SUBMIT_CACHE_POINT_SOURCE
 
 
 def _create_two_step_workflow(plugin: TaskflowPlugin) -> ToolResult:

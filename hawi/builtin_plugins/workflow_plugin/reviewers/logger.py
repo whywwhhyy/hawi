@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from hawi_plugins.workflow_plugin.models import (
+from hawi.builtin_plugins.workflow_plugin.models import (
     NodeExecution,
     ReviewDecision,
     WorkflowNode,
     WorkflowRun,
 )
-from hawi_plugins.workflow_plugin.reviewers.base import Reviewer
+from hawi.builtin_plugins.workflow_plugin.reviewers.base import Reviewer
 
 if TYPE_CHECKING:
     from hawi.agent import HawiAgent

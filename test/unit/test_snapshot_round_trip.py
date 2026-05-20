@@ -17,8 +17,8 @@ from hawi.agent.runner.queue import (
 )
 from hawi.events import EventBus
 from hawi.tool.types import PendingToolCall
-from hawi_plugins.plan_plugin.plugin import PlanPlugin
-from hawi_plugins.python_interpreter import PythonInterpreterPlugin
+from hawi.builtin_plugins.plan_plugin.plugin import PlanPlugin
+from hawi.builtin_plugins.python_interpreter import PythonInterpreterPlugin
 
 
 class TestAgentContextSnapshot:

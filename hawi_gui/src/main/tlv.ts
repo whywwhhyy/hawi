@@ -1,5 +1,5 @@
 /**
- * TLV (Type-Length-Value) framing — TypeScript counterpart of hawi_engine.tlv.
+ * TLV (Type-Length-Value) framing — TypeScript counterpart of hawi.engine.tlv.
  * Wire layout: [type:1B][length:4B BE][value:length B]
  *   type 0x01 = JSON_FRAME (UTF-8 JSON object)
  *   type 0x02 = BINARY_BLOB (reserved, Plan 5)

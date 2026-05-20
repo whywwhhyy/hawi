@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from hawi_engine.protocol import VERSION, ProtocolError, json_dumps, make_ack, make_frame, parse_frame
+from hawi.engine.protocol import VERSION, ProtocolError, json_dumps, make_ack, make_frame, parse_frame
 
 
 def test_parse_valid_command_frame() -> None:

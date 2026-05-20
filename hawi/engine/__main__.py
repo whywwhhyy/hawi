@@ -297,7 +297,7 @@ async def async_main(args: argparse.Namespace) -> None:
 
     blob_store = None
     if not args.blob_disabled:
-        from hawi_engine.blob import BlobStore
+        from hawi.engine.blob import BlobStore
 
         blob_store = BlobStore(
             root=Path(args.blob_dir).expanduser().resolve(),

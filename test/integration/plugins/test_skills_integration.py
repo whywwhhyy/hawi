@@ -11,9 +11,9 @@ from hawi.models import (
     DeltaPart, DeltaTextPart, DeltaToolCallPart, DeltaFinishPart,
     ContentPart
 )
-from hawi_plugins.filesystem_plugin import FileSystemPlugin
-from hawi_plugins.shell_plugin import ShellPlugin
-from hawi_plugins.skills_plugin import SkillsPlugin
+from hawi.builtin_plugins.filesystem_plugin import FileSystemPlugin
+from hawi.builtin_plugins.shell_plugin import ShellPlugin
+from hawi.builtin_plugins.skills_plugin import SkillsPlugin
 
 class MockModel(Model):
     default_steer_merge_mode = "tool_result_assistant_template_and_user_message"

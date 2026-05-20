@@ -9,11 +9,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import hawi_engine.builtin_gateways as builtin_gateways
-from hawi_engine.protocol import VERSION, make_ack, make_frame
-from hawi_engine.runtime import CoreRuntime, load_model_configs, parse_extra_tool_parameter, parse_extra_tool_parameters
-from hawi_engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
-from hawi_engine.transports import QueuedJsonClient
+import hawi.engine.builtin_gateways as builtin_gateways
+from hawi.engine.protocol import VERSION, make_ack, make_frame
+from hawi.engine.runtime import CoreRuntime, load_model_configs, parse_extra_tool_parameter, parse_extra_tool_parameters
+from hawi.engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
+from hawi.engine.transports import QueuedJsonClient
 from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext
 from hawi.models import model_registry
@@ -976,7 +976,7 @@ def test_parse_extra_tool_parameter_allows_colons_in_description() -> None:
 
 
 def test_parser_accepts_space_separated_extra_tool_parameters() -> None:
-    from hawi_engine.__main__ import build_parser
+    from hawi.engine.__main__ import build_parser
 
     args = build_parser().parse_args([
         "--model",
@@ -1064,11 +1064,11 @@ def test_load_model_configs_can_skip_user_config(tmp_path, monkeypatch: pytest.M
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(workspace)
     monkeypatch.setattr(
-        "hawi_engine.runtime.model_registry._auto_load_needed",
+        "hawi.engine.runtime.model_registry._auto_load_needed",
         True,
     )
     monkeypatch.setattr(
-        "hawi_engine.runtime.model_registry.load_config",
+        "hawi.engine.runtime.model_registry.load_config",
         lambda path, quiet=True: loaded_paths.append(str(path)),
     )
 
@@ -1095,11 +1095,11 @@ def test_load_model_configs_uses_git_root_from_nested_cwd(
     loaded_paths: list[str] = []
     monkeypatch.chdir(nested)
     monkeypatch.setattr(
-        "hawi_engine.runtime.model_registry._auto_load_needed",
+        "hawi.engine.runtime.model_registry._auto_load_needed",
         True,
     )
     monkeypatch.setattr(
-        "hawi_engine.runtime.model_registry.load_config",
+        "hawi.engine.runtime.model_registry.load_config",
         lambda path, quiet=True: loaded_paths.append(str(path)),
     )
 
@@ -1125,11 +1125,11 @@ def test_load_model_configs_chains_workspace_then_user_config(tmp_path, monkeypa
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.chdir(workspace)
     monkeypatch.setattr(
-        "hawi_engine.runtime.model_registry._auto_load_needed",
+        "hawi.engine.runtime.model_registry._auto_load_needed",
         True,
     )
     monkeypatch.setattr(
-        "hawi_engine.runtime.model_registry.load_config",
+        "hawi.engine.runtime.model_registry.load_config",
         lambda path, quiet=True: loaded_paths.append(str(path)),
     )
 
@@ -1164,7 +1164,7 @@ async def test_runtime_can_create_taskflow_plugin() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_plugin_action_approves_taskflow_review_and_resumes() -> None:
-    from hawi_plugins.taskflow_plugin import TaskflowPlugin
+    from hawi.builtin_plugins.taskflow_plugin import TaskflowPlugin
 
     runtime = CoreRuntime(model_name="test-model")
     runner = DummyAgentRunner()
@@ -1215,7 +1215,7 @@ async def test_runtime_plugin_action_approves_taskflow_review_and_resumes() -> N
 
 @pytest.mark.asyncio
 async def test_runtime_review_action_resolves_blocking_taskflow_review_without_resume_enqueue() -> None:
-    from hawi_plugins.taskflow_plugin import TaskflowPlugin
+    from hawi.builtin_plugins.taskflow_plugin import TaskflowPlugin
 
     runtime = CoreRuntime(model_name="test-model")
     runner = DummyAgentRunner()
@@ -1518,7 +1518,7 @@ async def test_tcp_gateway_rejects_oversized_frame_and_closes(unused_tcp_port: i
 
 @pytest.mark.asyncio
 async def test_tcp_gateway_discards_binary_and_unknown_frames_then_continues(unused_tcp_port: int) -> None:
-    from hawi_engine.tlv import TYPE_BINARY_BLOB
+    from hawi.engine.tlv import TYPE_BINARY_BLOB
 
     runtime = FakeTransportRuntime()
     args = argparse.Namespace(

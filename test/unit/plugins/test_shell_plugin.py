@@ -1,7 +1,7 @@
 import pytest
 import re
 import time
-from hawi_plugins.shell_plugin.plugin import ShellPlugin
+from hawi.builtin_plugins.shell_plugin.plugin import ShellPlugin
 
 
 class TestShellPlugin:

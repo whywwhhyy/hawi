@@ -51,7 +51,7 @@ class MyPlugin(HawiPlugin):
 ### 包结构
 
 ```
-hawi_plugins/
+hawi/builtin_plugins/
   my_plugin/
     __init__.py          # 导出插件类
     plugin.py            # 核心实现
@@ -73,7 +73,7 @@ __all__ = ["MyPlugin"]
 
 ### 1. 定义插件 Key 常量
 
-在 `hawi_engine/runtime.py` 中添加：
+在 `hawi/engine/runtime.py` 中添加：
 
 ```python
 # === 第 1 步：定义 key 常量 ===
@@ -102,14 +102,14 @@ async def _create_plugins(self, selected_plugins, plugin_configs):
         cfg = dict(plugin_configs.get(plugin_key, {}))
         # ...
         elif plugin_key == PLUGIN_MY_PLUGIN:
-            from hawi_plugins.my_plugin import MyPlugin
+            from hawi.builtin_plugins.my_plugin import MyPlugin
             plugin = MyPlugin(**cfg)  # 传递配置参数
         # ...
 ```
 
 ### 3. 注册到 GUI 目录
 
-在 `hawi_engine/inspect.py` 中添加：
+在 `hawi/engine/inspect.py` 中添加：
 
 ```python
 from .runtime import (
@@ -119,7 +119,7 @@ from .runtime import (
 
 def _plugin_entries():
     # ...
-    from hawi_plugins.my_plugin import MyPlugin
+    from hawi.builtin_plugins.my_plugin import MyPlugin
 
     return [
         # ... 已有条目 ...
@@ -598,7 +598,7 @@ class EnvironPromptPlugin(HawiPlugin):
         self._last_prompt_ts = time.time()
 ```
 
-完整源码见 `hawi_plugins/environ_prompt_plugin/plugin.py`。
+完整源码见 `hawi/builtin_plugins/environ_prompt_plugin/plugin.py`。
 
 ---
 
@@ -637,8 +637,8 @@ agent.plugins.unmask_tool("dangerous_tool")
 | `hawi/plugin/decorators.py` | Hook 装饰器定义 |
 | `hawi/plugin/types.py` | 类型别名 |
 | `hawi/plugin/manager.py` | `PluginManager` + 动态管理 |
-| `hawi_engine/runtime.py` | 插件创建 + 注册 |
-| `hawi_engine/inspect.py` | GUI 插件目录 |
+| `hawi/engine/runtime.py` | 插件创建 + 注册 |
+| `hawi/engine/inspect.py` | GUI 插件目录 |
 | `hawi/agent/agent.py` | Agent 主循环与 Hook facade 调用位置 |
 | `hawi/agent/hook_dispatcher.py` | Hook dispatch 实现 |
 | `hawi/agent/runtime.py` | interrupt / steer / runtime snapshot |

@@ -13,7 +13,7 @@ import pytest
 from hawi.agent.context import AgentContext
 from hawi.tool import ToolResult
 
-from hawi_plugins.workflow_plugin.models import (
+from hawi.builtin_plugins.workflow_plugin.models import (
     NodeExecution,
     ReviewConfig,
     ReviewDecision,
@@ -23,12 +23,12 @@ from hawi_plugins.workflow_plugin.models import (
     WorkflowNode,
     WorkflowRun,
 )
-from hawi_plugins.workflow_plugin.reviewers import (
+from hawi.builtin_plugins.workflow_plugin.reviewers import (
     HumanReviewer,
     LoggerReviewer,
     SubAgentReviewer,
 )
-from hawi_plugins.workflow_plugin.plugin import (
+from hawi.builtin_plugins.workflow_plugin.plugin import (
     WorkflowPlugin,
     GATE_PROMPT_BEGIN,
     GATE_PROMPT_END,
@@ -84,7 +84,7 @@ def _inject_workflow(plugin: WorkflowPlugin, wf: Workflow) -> None:
 
 class TestLoadAndList:
     def test_load_workflow(self, tmp_path: Path, monkeypatch):
-        from hawi_plugins.workflow_plugin import persistence
+        from hawi.builtin_plugins.workflow_plugin import persistence
         monkeypatch.setattr(persistence, "_ensure_dir", lambda: tmp_path)
         monkeypatch.setattr(persistence, "_workflow_path",
                            lambda name: tmp_path / f"{name}.yaml")
@@ -107,7 +107,7 @@ class TestLoadAndList:
         assert "not found" in r.error
 
     def test_list_workflows(self, tmp_path: Path, monkeypatch):
-        from hawi_plugins.workflow_plugin import persistence
+        from hawi.builtin_plugins.workflow_plugin import persistence
         monkeypatch.setattr(persistence, "_ensure_dir", lambda: tmp_path)
         monkeypatch.setattr(persistence, "_workflow_path",
                            lambda name: tmp_path / f"{name}.yaml")
@@ -120,7 +120,7 @@ class TestLoadAndList:
         assert len(r.output["workflows"]) >= 1
 
     def test_run_workflow_auto_loads(self, tmp_path: Path, monkeypatch):
-        from hawi_plugins.workflow_plugin import persistence
+        from hawi.builtin_plugins.workflow_plugin import persistence
         monkeypatch.setattr(persistence, "_ensure_dir", lambda: tmp_path)
         monkeypatch.setattr(persistence, "_workflow_path",
                            lambda name: tmp_path / f"{name}.yaml")

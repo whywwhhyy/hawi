@@ -18,7 +18,7 @@ describe("engine launch helpers", () => {
       "C:\\repo\\hawi",
       "python",
       "-m",
-      "hawi_engine",
+      "hawi.engine",
       "--inspect",
     ]);
   });

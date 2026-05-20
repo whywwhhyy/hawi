@@ -72,7 +72,7 @@ async for event in agent.arun("讲一个短故事", stream=True):
 ### 使用内置工具
 
 ```python
-from hawi_plugins.python_interpreter import PythonInterpreter
+from hawi.builtin_plugins.python_interpreter import PythonInterpreter
 
 # 创建带 Python 解释器的 Agent
 interpreter = PythonInterpreter()

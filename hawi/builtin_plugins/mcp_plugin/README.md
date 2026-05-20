@@ -25,7 +25,7 @@ uv sync
 ```python
 from hawi.agent import HawiAgent
 from hawi.models.kimi import KimiModel
-from hawi_plugins.mcp_plugin import MCPPlugin
+from hawi.builtin_plugins.mcp_plugin import MCPPlugin
 
 # 创建插件
 mcp_plugin = MCPPlugin()
@@ -236,13 +236,13 @@ uvx mcp-server-git
 npm install -g @modelcontextprotocol/server-filesystem
 
 # 运行示例
-python -m hawi_plugins.mcp_plugin.examples
+python -m hawi.builtin_plugins.mcp_plugin.examples
 ```
 
 ## 测试
 
 ```bash
-pytest hawi_plugins/mcp/test_mcp_plugin.py -v
+pytest hawi/builtin_plugins/mcp/test_mcp_plugin.py -v
 ```
 
 ## 参考资料

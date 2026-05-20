@@ -28,7 +28,7 @@ from hawi.events import (
 from hawi.errors import ModelError
 from hawi.models.message import DeltaPart, TokenUsage
 from hawi.tool.types import ToolResult
-from hawi_engine.event_mapper import SemanticEventMapper
+from hawi.engine.event_mapper import SemanticEventMapper
 
 
 def with_timestamp(event, timestamp: float):

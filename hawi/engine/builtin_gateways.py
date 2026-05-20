@@ -1,7 +1,7 @@
 """Built-in gateways: stdio, tcp.
 
 Each gateway is registered with `gateway.GATEWAY_REGISTRY` at import time.
-The HTTP gateway (`http`) lives in `hawi_engine.http_gateway`; its
+The HTTP gateway (`http`) lives in `hawi.engine.http_gateway`; its
 WS-upgrade path replaces the standalone WebSocket gateway removed in Plan 4.
 """
 

@@ -69,8 +69,8 @@
 - `hawi/agent/compaction.py` — compact 路径
 - `hawi/agent/context.py` — `AgentContext` 与 `ContextCompactionRecord`
 - `hawi/events/agent_events.py` — agent 级事件
-- `hawi_plugins/workflow_plugin/plugin.py` — 受 Phase 0 影响
-- `hawi_plugins/python_interpreter/plugin.py` — 受 Phase 4 影响
+- `hawi/builtin_plugins/workflow_plugin/plugin.py` — 受 Phase 0 影响
+- `hawi/builtin_plugins/python_interpreter/plugin.py` — 受 Phase 4 影响
 
 ### Hook 调用语义（不变）
 
@@ -150,7 +150,7 @@ await self._invoke_after_tool_calling(
 
 #### 实际后果
 
-[workflow_plugin/plugin.py:215-250](../hawi_plugins/workflow_plugin/plugin.py#L215-L250)
+[workflow_plugin/plugin.py:215-250](../hawi/builtin_plugins/workflow_plugin/plugin.py#L215-L250)
 的 `gate_guard`（@after_tool_calling）通过 `_on_approved` / `_on_rejected`
 返回 `HookResult.reinvoke(...)` 推进工作流——**当前根本不生效**。
 
@@ -1855,12 +1855,12 @@ async def test_tool_error_event_published_on_exception():
 
 ## 既有插件迁移
 
-`hawi_plugins/` 下 10 个插件的影响详表。Phase 0 修复 bug 让某些插件
+`hawi/builtin_plugins/` 下 10 个插件的影响详表。Phase 0 修复 bug 让某些插件
 "从无效变为按设计运行"，需要回归测试覆盖。
 
 ### `workflow_plugin`
 
-**影响**：Phase 0 让 [workflow_plugin/plugin.py:215-250](../hawi_plugins/workflow_plugin/plugin.py#L215-L250)
+**影响**：Phase 0 让 [workflow_plugin/plugin.py:215-250](../hawi/builtin_plugins/workflow_plugin/plugin.py#L215-L250)
 的 `gate_guard`（@after_tool_calling）真正生效。
 
 **改动**：无代码改动。
@@ -1868,11 +1868,11 @@ async def test_tool_error_event_published_on_exception():
 **测试**：新增 `test/integration/test_workflow_gate_guard.py` 覆盖：
 - approve 路径：gate 通过 → reinvoke → 下一节点
 - reject 路径：gate 驳回 → reinvoke 让 agent 修正
-- STATUS: FAILED 重试机制（[workflow_plugin/plugin.py:670-715](../hawi_plugins/workflow_plugin/plugin.py#L670-L715)）
+- STATUS: FAILED 重试机制（[workflow_plugin/plugin.py:670-715](../hawi/builtin_plugins/workflow_plugin/plugin.py#L670-L715)）
 
 ### `plan_plugin`
 
-**影响**：[plan_plugin/plugin.py:259+](../hawi_plugins/plan_plugin/plugin.py#L259) 的
+**影响**：[plan_plugin/plugin.py:259+](../hawi/builtin_plugins/plan_plugin/plugin.py#L259) 的
 `@after_tool_calling` 同样在 Phase 0 之前不生效（如有 `HookResult.reinvoke`
 返回路径）。
 
@@ -1886,7 +1886,7 @@ async def test_tool_error_event_published_on_exception():
 **改动**：
 
 ```python
-# hawi_plugins/python_interpreter/plugin.py
+# hawi/builtin_plugins/python_interpreter/plugin.py
 
 from hawi.plugin import HawiPlugin
 from hawi.plugin.decorators import on_interrupt
@@ -1901,7 +1901,7 @@ class PythonInterpreterPlugin(HawiPlugin):
         self.close()
 ```
 
-**保留** [plugin.py:85-88](../hawi_plugins/python_interpreter/plugin.py#L85-L88) 的
+**保留** [plugin.py:85-88](../hawi/builtin_plugins/python_interpreter/plugin.py#L85-L88) 的
 `exit_handler.register(cleanup_wrapper, ...)`：那是进程退出时的兜底，
 on_interrupt 是 run 中断时的更早清理。两者不冲突，因为 close 是幂等的。
 

@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from hawi_engine.blob.store import (
+from hawi.engine.blob.store import (
     BlobNotFound,
     BlobStore,
     QuotaExceeded,
     Sha256Mismatch,
 )
-from hawi_engine.blob.sandbox import resolve_blob_path
+from hawi.engine.blob.sandbox import resolve_blob_path
 
 
 @pytest.fixture

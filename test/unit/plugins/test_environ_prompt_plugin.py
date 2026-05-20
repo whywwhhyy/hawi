@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from hawi.agent.context import AgentContext
 from hawi.plugin import HookContext
-from hawi_plugins.environ_prompt_plugin import EnvironPromptPlugin
+from hawi.builtin_plugins.environ_prompt_plugin import EnvironPromptPlugin
 
 
 def test_project_steering_loads_scoped_files_for_first_matching_filename(

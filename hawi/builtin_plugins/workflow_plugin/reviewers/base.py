@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from hawi_plugins.workflow_plugin.models import (
+from hawi.builtin_plugins.workflow_plugin.models import (
     NodeExecution,
     ReviewDecision,
     WorkflowNode,

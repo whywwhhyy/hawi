@@ -42,9 +42,9 @@
     - [ ] `hawi_gui/src/renderer/App.tsx`：拆成 session header、timeline、composer、plugin config、artifacts/subagent panels 等组件
     - [ ] `hawi_gui/src/renderer/state.ts`：按 session、runtime status、plugin catalog、subagent/runtime events、artifacts 拆分 state slice 与 action
     - [ ] `hawi/agent/context.py`：拆出 token accounting、snapshot/restore、message rendering、compaction/recovery helpers
-    - [ ] `hawi_engine/runtime.py`：拆出 command handlers、session commands、plugin catalog/loading、runner lifecycle、subagent protocol
-    - [ ] `hawi_plugins/workflow_plugin/plugin.py`：拆出 workflow state、工具定义、gate review、持久化和 subagent reviewer adapter
-    - [ ] 后续评估 provider/model adapter 与大型 plugin：`hawi/models/*/_model.py`、`hawi/models/model.py`、`hawi_plugins/python_interpreter`、`filesystem_plugin`、`mcp_plugin`
+    - [ ] `hawi/engine/runtime.py`：拆出 command handlers、session commands、plugin catalog/loading、runner lifecycle、subagent protocol
+    - [ ] `hawi/builtin_plugins/workflow_plugin/plugin.py`：拆出 workflow state、工具定义、gate review、持久化和 subagent reviewer adapter
+    - [ ] 后续评估 provider/model adapter 与大型 plugin：`hawi/models/*/_model.py`、`hawi/models/model.py`、`hawi/builtin_plugins/python_interpreter`、`filesystem_plugin`、`mcp_plugin`
 
 - [x] 还需要提供持久化机制，确保 agent 可以做到不管什么时候 crash 再拉起来都可以恢复 session
     - [x] `AgentContext.save/load` 已支持 JSON 保存/恢复 messages、system prompt、cache 配置、compaction records

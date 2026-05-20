@@ -7,7 +7,7 @@ Web 抓取插件
 3. 正则清理后的裸 HTML
 
 示例:
-    from hawi_plugins.web import WebPlugin
+    from hawi.builtin_plugins.web import WebPlugin
 
     plugin = WebPlugin()
     agent = HawiAgent(model=model, plugins=[plugin])

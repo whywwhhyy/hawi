@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from hawi_engine.blob.commands import dispatch_blob_command
-from hawi_engine.blob.store import BlobStore
-from hawi_engine.protocol import CoreCommand, VERSION
+from hawi.engine.blob.commands import dispatch_blob_command
+from hawi.engine.blob.store import BlobStore
+from hawi.engine.protocol import CoreCommand, VERSION
 
 
 @pytest.fixture
