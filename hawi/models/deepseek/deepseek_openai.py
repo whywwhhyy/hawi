@@ -84,7 +84,7 @@ class DeepSeekOpenAIModel(DeepSeekTokenEstimateMixin, OpenAIModel):
         )
     """
 
-    default_steer_merge_mode = "append_to_tool_result"
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
 
     def __init__(
         self,

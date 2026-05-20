@@ -1465,6 +1465,11 @@ button.context-status:disabled {
   color: #7f8f8b;
 }
 
+.block-stream-count {
+  color: #6c7a80;
+  font-variant-numeric: tabular-nums;
+}
+
 .block-stream-status .live-spinner {
   width: 18px;
   height: 18px;

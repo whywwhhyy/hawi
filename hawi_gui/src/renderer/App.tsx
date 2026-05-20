@@ -2494,6 +2494,7 @@ const MessageBubble = memo(function MessageBubble({
             receiving={receiving}
             durationMs={node.streamDurationMs}
             receivingTitle="正在接收消息"
+            receivedChars={receivedCharCount(node.content)}
           />
         </span>
         <span className="message-actions">
@@ -2608,6 +2609,7 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
             receiving={receiving}
             durationMs={node.streamDurationMs}
             receivingTitle="正在接收思考内容"
+            receivedChars={receivedCharCount(node.content)}
           />
         </span>
         <span className="message-actions">
@@ -2652,6 +2654,7 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
               receiving={receivingArguments}
               durationMs={tool.streamDurationMs}
               receivingTitle="正在接收工具调用"
+              receivedChars={receivedCharCount(tool.argsRaw)}
             />
           </span>
           {presentation.detail && (
@@ -2976,15 +2979,20 @@ function BlockStreamStatus({
   receiving,
   durationMs,
   receivingTitle,
+  receivedChars,
 }: {
   receiving: boolean;
   durationMs?: number;
   receivingTitle: string;
+  receivedChars?: number;
 }) {
   if (receiving) {
     return (
       <span className="block-stream-status receiving">
         <LiveSpinner title={receivingTitle} />
+        {receivedChars !== undefined && (
+          <span className="block-stream-count">{formatReceivedCharsLabel(receivedChars)}</span>
+        )}
       </span>
     );
   }
@@ -2993,6 +3001,14 @@ function BlockStreamStatus({
     return null;
   }
   return <span className="block-stream-status">{label}</span>;
+}
+
+function receivedCharCount(value: string): number {
+  return Array.from(value).length;
+}
+
+function formatReceivedCharsLabel(value: number): string {
+  return `${Math.max(0, value)} 字符`;
 }
 
 function LiveSpinner({ title }: { title: string }) {

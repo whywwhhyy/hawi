@@ -304,7 +304,8 @@ class TestHawiAgentSteer:
         assert steer_message["content"][0]["type"] == "steer"
         assert steer_message["content"][0]["tool_call_id"] == "call_late"
 
-    def test_deepseek_appends_pre_tool_call_pending_steer_to_tool_result(self):
+    def test_deepseek_interrupt_and_continue_with_assistant_template(self):
+        """DeepSeek 使用打断并继续策略：tool 结果 + assistant 模板 + user steer 消息."""
         agent = HawiAgent(model=MagicMock())
         agent._session_active = True
 
@@ -313,13 +314,27 @@ class TestHawiAgentSteer:
 
         model = DeepSeekOpenAIModel(api_key="test-key")
         lowered = model.lower_messages(agent.context.messages)
-        openai_message = model._convert_message_to_openai(lowered[0])[0]
+        tool_msg = model._convert_message_to_openai(lowered[0])[0]
 
-        assert len(lowered) == 1
-        assert openai_message["role"] == "tool"
-        assert openai_message["tool_call_id"] == "call_late"
-        assert "tool output" in openai_message["content"]
-        assert "用户补充：请优先处理这个新要求" in openai_message["content"]
+        # 3 条消息：tool 结果 + assistant 确认模板 + user steer
+        assert len(lowered) == 3
+        assert lowered[0]["role"] == "tool"
+        assert lowered[1]["role"] == "assistant"
+        assert lowered[2]["role"] == "user"
+
+        # tool 消息仍然保留原始内容
+        assert tool_msg["role"] == "tool"
+        assert tool_msg["tool_call_id"] == "call_late"
+        assert "tool output" in tool_msg["content"]
+
+        # assistant 确认消息包含打断模板
+        assistant_msg = model._convert_message_to_openai(lowered[1])[0]
+        assert "steering message" in assistant_msg["content"]
+
+        # user steer 消息包含用户的新要求
+        user_msg = model._convert_message_to_openai(lowered[2])[0]
+        assert user_msg["role"] == "user"
+        assert "用户补充：请优先处理这个新要求" in user_msg["content"]
 
     def test_batch_tool_results_materialize_steer_after_all_results(self):
         agent = HawiAgent(model=MagicMock())
