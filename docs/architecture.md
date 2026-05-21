@@ -213,7 +213,7 @@ PlainPrinter           # 纯文本逐行输出
 
 ```bash
 # 命令行启动
-./hawi_gui/start.sh
+./start.sh
 ```
 
 ```text

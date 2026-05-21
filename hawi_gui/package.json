@@ -7,14 +7,17 @@
   "scripts": {
     "build": "tsc -p tsconfig.node.json && vite build",
     "build:core": "node scripts/build-python-core.mjs",
-    "start": "npm run build && electron .",
-    "dev": "npm run build && electron .",
-    "dev:fast": "tsc -p tsconfig.node.json && vite build && electron .",
-    "package": "npm run build:core && npm run build && electron-builder --dir",
-    "dist": "npm run build:core && npm run build && electron-builder",
-    "dist:mac": "npm run build:core && npm run build && electron-builder --mac",
-    "dist:win": "npm run build:core && npm run build && electron-builder --win",
-    "dist:linux": "npm run build:core && npm run build && electron-builder --linux",
+    "build:all": "npm run build:core && npm run build",
+    "run": "electron .",
+    "start": "npm run run",
+    "dev": "npm run build && npm run run",
+    "dev:fast": "tsc -p tsconfig.node.json && vite build && npm run run",
+    "package": "npm run build:all && electron-builder --dir",
+    "release:local": "node scripts/release-local.mjs",
+    "dist": "npm run build:all && electron-builder",
+    "dist:mac": "npm run build:all && electron-builder --mac",
+    "dist:win": "npm run build:all && electron-builder --win",
+    "dist:linux": "npm run build:all && electron-builder --linux",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
@@ -62,11 +65,8 @@
     ],
     "extraResources": [
       {
-        "from": "build/bin",
-        "to": "bin",
-        "filter": [
-          "hawi-engine*"
-        ]
+        "from": "build/bin/hawi-engine",
+        "to": "bin/hawi-engine"
       }
     ],
     "mac": {
@@ -75,7 +75,7 @@
         "zip"
       ],
       "category": "public.app-category.productivity",
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "notarize": false

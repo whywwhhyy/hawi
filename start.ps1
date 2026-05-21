@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$guiDir = Join-Path $scriptDir "hawi_gui"
 $launchCwd = (Get-Location).Path
 
 $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
@@ -26,11 +27,19 @@ function Invoke-Npm {
     }
 }
 
-Push-Location -LiteralPath $scriptDir
+Push-Location -LiteralPath $guiDir
 try {
     if (-not (Test-Path -LiteralPath "node_modules" -PathType Container)) {
         Write-Host "Installing Hawi GUI dependencies..."
         Invoke-Npm install
+    }
+
+    if (
+        -not (Test-Path -LiteralPath "dist/index.html" -PathType Leaf) -or
+        -not (Test-Path -LiteralPath "dist-electron/main/main.js" -PathType Leaf)
+    ) {
+        [Console]::Error.WriteLine("Hawi GUI build output is missing. Run '$scriptDir/release.ps1' once, or run 'npm run build' in $guiDir.")
+        exit 1
     }
 
     $startArgs = @($args)

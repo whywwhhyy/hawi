@@ -12,7 +12,7 @@ const outputDir = path.join(guiRoot, "build", "bin");
 const workDir = path.join(guiRoot, "build", "pyinstaller", "work");
 const specDir = path.join(guiRoot, "build", "pyinstaller", "spec");
 const executableName = process.platform === "win32" ? "hawi-engine.exe" : "hawi-engine";
-const executablePath = path.join(outputDir, executableName);
+const executablePath = path.join(outputDir, "hawi-engine", executableName);
 const dataSeparator = process.platform === "win32" ? ";" : ":";
 const uvCommand = process.env.HAWI_GUI_UV_COMMAND || "uv";
 
@@ -28,7 +28,7 @@ const pyinstallerArgs = [
   "pyinstaller",
   "--clean",
   "--noconfirm",
-  "--onefile",
+  "--onedir",
   "--name",
   "hawi-engine",
   "--distpath",
@@ -57,7 +57,7 @@ const env = {
     : repoRoot
 };
 
-console.log(`[build-core] Building ${os.platform()} ${os.arch()} hawi-engine executable...`);
+console.log(`[build-core] Building ${os.platform()} ${os.arch()} hawi-engine directory...`);
 const result = spawnSync(uvCommand, pyinstallerArgs, {
   cwd: repoRoot,
   env,
@@ -77,4 +77,4 @@ if (process.platform !== "win32") {
   chmodSync(executablePath, 0o755);
 }
 
-console.log(`[build-core] Created ${path.relative(guiRoot, executablePath)}`);
+console.log(`[build-core] Created ${path.relative(guiRoot, path.dirname(executablePath))}`);

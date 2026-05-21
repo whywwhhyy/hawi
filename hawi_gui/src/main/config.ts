@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { InspectPayload, PersistedConfig } from "../shared/protocol";
@@ -153,9 +153,19 @@ export function resolveBundledEngineCommand(resourcesPath = process.resourcesPat
   const executable = process.platform === "win32" ? "hawi-engine.exe" : "hawi-engine";
   const candidates = [
     path.join(resourcesPath, "bin", executable),
+    path.join(resourcesPath, "bin", "hawi-engine", executable),
     path.join(resourcesPath, "app.asar.unpacked", "build", "bin", executable),
+    path.join(resourcesPath, "app.asar.unpacked", "build", "bin", "hawi-engine", executable),
   ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+  return candidates.find(isExecutableFile) ?? null;
+}
+
+function isExecutableFile(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
 }
 
 export function buildUvEngineArgsPrefix(repoRoot: string): string[] {

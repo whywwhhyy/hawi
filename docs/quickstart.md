@@ -202,11 +202,18 @@ Hawi 提供了基于 Electron 的图形界面，支持流式对话、工具调�
 ### 启动 GUI
 
 ```bash
-# 一键启动（首次会自动安装 GUI 依赖，并弹出模型选择对话框）
-./hawi_gui/start.sh
+# 构建并安装本地 release
+./release.sh
+
+# 日常启动已有 GUI build（会弹出模型选择对话框）
+./start.sh
 
 # 指定模型工厂启动
-./hawi_gui/start.sh kimi-k2-5
+./start.sh kimi-k2-5
+
+# PowerShell 下使用同名 .ps1 入口
+./release.ps1
+./start.ps1 kimi-k2-5
 ```
 
 ### GUI 功能

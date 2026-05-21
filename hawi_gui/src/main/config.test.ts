@@ -1,4 +1,5 @@
-import { homedir } from "node:os";
+import fs from "node:fs";
+import os, { homedir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,6 +7,7 @@ import {
   buildEngineRunArgs,
   isUsablePackagedWorkspaceCwd,
   preserveProviderOrder,
+  resolveBundledEngineCommand,
   resolveWorkspaceRoot,
   type EngineLauncher,
 } from "./config";
@@ -31,6 +33,20 @@ describe("engine launch helpers", () => {
     const launcher: EngineLauncher = { command: "/app/resources/bin/hawi-engine", argsPrefix: [], source: "bundled" };
 
     expect(buildEngineRunArgs("/repo/hawi", ["--inspect"], launcher)).toEqual(["--inspect"]);
+  });
+
+  it("resolves a bundled one-dir engine executable", () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "hawi-engine-dir-"));
+    try {
+      const executable = process.platform === "win32" ? "hawi-engine.exe" : "hawi-engine";
+      const enginePath = path.join(temp, "bin", "hawi-engine", executable);
+      fs.mkdirSync(path.dirname(enginePath), { recursive: true });
+      fs.writeFileSync(enginePath, "");
+
+      expect(resolveBundledEngineCommand(temp)).toBe(enginePath);
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
   });
 
   it("adds the repo root to PYTHONPATH", () => {
