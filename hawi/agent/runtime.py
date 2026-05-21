@@ -13,6 +13,7 @@ from hawi.models import CachePoint, ContentPart
 from hawi.tool.types import ToolResult
 
 from .content_utils import (
+    merge_content_parts,
     normalize_content_parts,
     serialize_content_parts,
     tool_result_content,
@@ -388,31 +389,38 @@ class AgentRuntime:
         if not pending_inputs:
             return False
 
-        for pending in pending_inputs:
-            metadata = {
-                "message_id": pending.id,
-                "queue": "normal",
-                "display_message_type": "normal",
-                "source_queue": "high_prio",
-                "materialized_as": "plain_user_message",
-            }
-            context_message_id = agent._context.add_user_message(
-                pending.content,
+        merged_content = merge_content_parts(
+            pending.content for pending in pending_inputs
+        )
+        metadata = {
+            "message_id": pending_inputs[0].id,
+            "queue": "normal",
+            "display_message_type": "normal",
+            "source_queue": "high_prio",
+            "materialized_as": "plain_user_message",
+        }
+        if len(pending_inputs) > 1:
+            metadata["merged_message_ids"] = [
+                pending.id for pending in pending_inputs
+            ]
+            metadata["merged_message_count"] = len(pending_inputs)
+        context_message_id = agent._context.add_user_message(
+            merged_content,
+            metadata=metadata,
+        )
+        refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
+        if callable(refresher):
+            refresher()
+        await agent._emit_event(
+            AgentMessageAddedEvent.create(
+                run_id=run_id,
+                role="user",
+                content=merged_content,
                 metadata=metadata,
-            )
-            refresher = getattr(agent, "_refresh_context_usage_snapshot", None)
-            if callable(refresher):
-                refresher()
-            await agent._emit_event(
-                AgentMessageAddedEvent.create(
-                    run_id=run_id,
-                    role="user",
-                    content=pending.content,
-                    metadata=metadata,
-                    context_message_id=context_message_id,
-                ),
-                event_bus,
-            )
+                context_message_id=context_message_id,
+            ),
+            event_bus,
+        )
         return True
 
     def clear_autonomous_run_task(self, task: asyncio.Task[AgentRunResult]) -> None:
@@ -541,20 +549,38 @@ class AgentRuntime:
                 materialized.append((item, matched_tool_call_id))
             agent._pending_inputs = remaining
 
-        materialized_messages: list[MaterializedSteerMessage] = []
+        grouped: dict[str, list[PendingInput]] = {}
         for pending_input, matched_tool_call_id in materialized:
+            grouped.setdefault(matched_tool_call_id, []).append(pending_input)
+
+        materialized_messages: list[MaterializedSteerMessage] = []
+        for matched_tool_call_id, pending_group in grouped.items():
+            first_pending = pending_group[0]
+            merge_modes = {item.preferred_merge_mode for item in pending_group}
+            preferred_merge_mode = (
+                first_pending.preferred_merge_mode
+                if len(merge_modes) == 1
+                else None
+            )
             steer_part: ContentPart = {
                 "type": "steer",
-                "content": list(pending_input.content),
+                "content": merge_content_parts(
+                    item.content for item in pending_group
+                ),
                 "tool_call_id": matched_tool_call_id,
                 "preferred_merge_mode": (
-                    pending_input.preferred_merge_mode.value
-                    if pending_input.preferred_merge_mode is not None
+                    preferred_merge_mode.value
+                    if preferred_merge_mode is not None
                     else None
                 ),
             }
             content = [steer_part]
-            metadata = self.steer_message_metadata(pending_input, matched_tool_call_id)
+            metadata = self.steer_message_metadata(first_pending, matched_tool_call_id)
+            if len(pending_group) > 1:
+                metadata["merged_message_ids"] = [item.id for item in pending_group]
+                metadata["merged_message_count"] = len(pending_group)
+                if len(merge_modes) != 1:
+                    metadata["merge_mode"] = None
             context_message_id = agent._context.add_user_message(
                 content,
                 metadata=metadata,

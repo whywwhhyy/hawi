@@ -99,6 +99,7 @@ from .tool_executor import (
 )
 
 
+SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY = "skip_before_conversation_hooks"
 
 
 class HawiAgent:
@@ -1718,8 +1719,14 @@ class HawiAgent:
                 event_bus,
             )
 
+        skip_before_conversation_hooks = (
+            isinstance(message_metadata, dict)
+            and message_metadata.get(SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY)
+            is True
+        )
+
         # before_conversation hook
-        if not state.should_stop:
+        if not state.should_stop and not skip_before_conversation_hooks:
             hook_message_count = len(self._context.messages)
             _hr = await self._invoke_session_hook(
                 "before_conversation",

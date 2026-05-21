@@ -123,6 +123,16 @@ class TestMessageQueueManager:
         assert peeked and peeked.id == msg.id
         assert qm.has_high_prio()  # Should not remove
 
+    def test_dequeue_all_high_prio(self):
+        qm = MessageQueueManager()
+        first = qm.enqueue_high_prio("first")
+        second = qm.enqueue_high_prio("second")
+
+        messages = qm.dequeue_all_high_prio()
+
+        assert [msg.id for msg in messages] == [first.id, second.id]
+        assert not qm.has_high_prio()
+
     def test_insert_front_normal(self):
         qm = MessageQueueManager()
         msg1 = qm.enqueue_normal("first")
@@ -471,6 +481,35 @@ class TestAgentRunnerBasic:
         # not the legacy urgent queue.
         assert executed_message.queue_type == QueueType.HIGH_PRIO
         assert executed_message.metadata.get("intent") == "stop_with_message"
+
+    @pytest.mark.asyncio
+    async def test_runner_merges_queued_high_prio_messages_at_execution_point(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        first_id = runner.enqueue("first steer", "high_prio", metadata={"source": "gui"})
+        second_id = runner.enqueue("second steer", "high_prio")
+        executed_messages: list[QueuedMessage] = []
+
+        def fake_execute(message: QueuedMessage):
+            executed_messages.append(message)
+            runner.stop()
+            return object()
+
+        runner._executor.execute = MagicMock(side_effect=fake_execute)
+
+        await runner.run_forever(poll_interval=0.001)
+
+        assert len(executed_messages) == 1
+        executed = executed_messages[0]
+        assert executed.id == first_id
+        assert executed.queue_type == QueueType.HIGH_PRIO
+        assert executed.content == [
+            {"type": "text", "text": "first steer"},
+            {"type": "text", "text": "\n\n"},
+            {"type": "text", "text": "second steer"},
+        ]
+        assert executed.metadata["source"] == "gui"
+        assert executed.metadata["merged_message_ids"] == [first_id, second_id]
+        assert executed.metadata["merged_message_count"] == 2
 
 
 class TestAgentRunnerErrorHooks:

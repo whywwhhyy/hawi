@@ -725,7 +725,7 @@ class SemanticEventMapper:
         metadata = getattr(event, "metadata", None)
         if isinstance(metadata, dict):
             display_message_type = str(metadata.get("display_message_type", "") or "")
-            if display_message_type in {"normal", "steer", "urgent"}:
+            if display_message_type in {"normal", "steer", "urgent", "resume"}:
                 return display_message_type
         if queue == "urgent":
             return "urgent"

@@ -117,6 +117,36 @@ class TestHawiAgentSteer:
         }
 
     @pytest.mark.asyncio
+    async def test_drained_pending_inputs_are_merged_into_one_user_message(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._session_active = True
+        events = []
+        agent.subscribe_blocking(events.append, ["agent.message_added"])
+
+        first_id = agent.steer("first follow-up")
+        second_id = agent.steer("second follow-up")
+        drained = await agent._drain_pending_inputs_to_context("run-plain", None)
+
+        assert drained is True
+        assert len(events) == 1
+        event = events[0]
+        assert event.content == [
+            {"type": "text", "text": "first follow-up"},
+            {"type": "text", "text": "\n\n"},
+            {"type": "text", "text": "second follow-up"},
+        ]
+        assert event.metadata == {
+            "message_id": first_id,
+            "queue": "normal",
+            "display_message_type": "normal",
+            "source_queue": "high_prio",
+            "materialized_as": "plain_user_message",
+            "merged_message_ids": [first_id, second_id],
+            "merged_message_count": 2,
+        }
+        assert len(agent.context.messages) == 1
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "merge_mode",
         [
@@ -151,6 +181,42 @@ class TestHawiAgentSteer:
             "materialized_as": "steer",
             "tool_call_id": "call_1",
             "merge_mode": merge_mode.value,
+        }
+
+    @pytest.mark.asyncio
+    async def test_materialized_steers_for_same_tool_are_merged(self):
+        agent = HawiAgent(model=MagicMock())
+        agent._current_tool_calls.append({"id": "call_1", "name": "tool", "arguments": {}})
+        events = []
+        agent.subscribe_blocking(events.append, ["agent.message_added"])
+
+        first_id = agent.steer("first steer")
+        second_id = agent.steer("second steer")
+        materialized = agent._add_tool_result_with_pending_steer("call_1", "tool output")
+        await agent._emit_materialized_steer_events("run-steer", materialized, None)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.content == [{
+            "type": "steer",
+            "content": [
+                {"type": "text", "text": "first steer"},
+                {"type": "text", "text": "\n\n"},
+                {"type": "text", "text": "second steer"},
+            ],
+            "tool_call_id": "call_1",
+            "preferred_merge_mode": None,
+        }]
+        assert event.metadata == {
+            "message_id": first_id,
+            "queue": "high_prio",
+            "display_message_type": "steer",
+            "source_queue": "high_prio",
+            "materialized_as": "steer",
+            "tool_call_id": "call_1",
+            "merge_mode": None,
+            "merged_message_ids": [first_id, second_id],
+            "merged_message_count": 2,
         }
 
     def test_user_message_template_lowering_combines_tool_and_steer(self):

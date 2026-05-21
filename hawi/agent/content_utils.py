@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Iterable, cast
 
 from hawi.models import ContentPart
 from hawi.tool.types import ToolResult
@@ -13,6 +13,20 @@ def normalize_content_parts(content: str | list[ContentPart]) -> list[ContentPar
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     return list(content)
+
+
+def merge_content_parts(
+    contents: Iterable[str | list[ContentPart]],
+    *,
+    separator: str = "\n\n",
+) -> list[ContentPart]:
+    """Merge multiple user content payloads into one content-part list."""
+    merged: list[ContentPart] = []
+    for content in contents:
+        if merged and separator:
+            merged.append({"type": "text", "text": separator})
+        merged.extend(normalize_content_parts(content))
+    return merged
 
 
 def truncate_preview(text: str, max_length: int) -> str:

@@ -115,6 +115,7 @@ class DummyAgentRunner:
         self._executor = DummyExecutor()
         self.agent = DummyAgent()
         self.enqueued: list[tuple[Any, str, dict[str, Any]]] = []
+        self.resumed = False
 
     @property
     def agent_state(self) -> DummyState:
@@ -126,6 +127,12 @@ class DummyAgentRunner:
 
     def get_queue_lengths(self) -> dict[str, int]:
         return {"normal": 0, "high_prio": 0, "urgent": 0}
+
+    def has_pending_immediate_work(self) -> bool:
+        return False
+
+    def resume(self) -> None:
+        self.resumed = True
 
     def control_snapshot(self) -> dict[str, Any]:
         return {"paused": False, "resumable": False}
@@ -1160,6 +1167,55 @@ async def test_runtime_can_create_taskflow_plugin() -> None:
     assert len(plugins) == 1
     assert plugins[0].plugin_id == "hawi/taskflow"
     assert plugins[0].plugin_name == "Taskflow"
+
+
+@pytest.mark.asyncio
+async def test_runtime_resume_continues_existing_high_prio_work_without_prompt() -> None:
+    class PendingRunner(DummyAgentRunner):
+        def has_pending_immediate_work(self) -> bool:
+            return True
+
+    runtime = CoreRuntime(model_name="test-model")
+    runner = PendingRunner()
+    runtime._runner = runner  # type: ignore[assignment]
+    client = FakeClient(authenticated=True)
+
+    await runtime.handle_command(
+        client,
+        argparse.Namespace(type="resume", id="cmd-resume", payload={}),
+    )
+
+    assert runner.resumed is True
+    assert runner.enqueued == []
+    assert client.sent[-1]["payload"] == {
+        "command": "resume",
+        "ok": True,
+        "message_id": None,
+        "queue": None,
+        "resumed_existing_work": True,
+        "control": {"paused": False, "resumable": False},
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_default_resume_prompt_skips_before_conversation_hooks() -> None:
+    runtime = CoreRuntime(model_name="test-model")
+    runner = DummyAgentRunner()
+    runtime._runner = runner  # type: ignore[assignment]
+    client = FakeClient(authenticated=True)
+
+    await runtime.handle_command(
+        client,
+        argparse.Namespace(type="resume", id="cmd-resume", payload={}),
+    )
+
+    assert runner.enqueued
+    _, queue, metadata = runner.enqueued[-1]
+    assert queue == "high_prio"
+    assert metadata["intent"] == "resume"
+    assert metadata["display_message_type"] == "resume"
+    assert metadata["auto_generated"] is True
+    assert metadata["skip_before_conversation_hooks"] is True
 
 
 @pytest.mark.asyncio

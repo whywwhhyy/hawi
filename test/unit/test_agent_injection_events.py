@@ -188,6 +188,27 @@ async def test_agent_runs_session_hooks_before_user_message_processing() -> None
 
 
 @pytest.mark.asyncio
+async def test_auto_resume_message_can_skip_before_conversation_injections() -> None:
+    model = OneShotModel()
+    agent = HawiAgent(model=model, plugins=[PromptInjectionPlugin()])
+    events = []
+    agent.subscribe_blocking(events.append, ["agent.context_injected"])
+
+    await agent._arun_internal(
+        "继续",
+        message_metadata={
+            "intent": "resume",
+            "display_message_type": "resume",
+            "auto_generated": True,
+            "skip_before_conversation_hooks": True,
+        },
+    )
+
+    assert events == []
+    assert [message["role"] for message in model.requests[-1].messages] == ["user"]
+
+
+@pytest.mark.asyncio
 async def test_hook_reinvoke_message_emits_context_injected_event() -> None:
     agent = HawiAgent(model=OneShotModel(), plugins=[ReinvokePlugin()])
     events = []

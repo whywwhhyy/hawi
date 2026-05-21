@@ -15,6 +15,7 @@ from typing import Any, Literal, Protocol, Sequence, cast
 
 from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext, ToolCallContext
+from hawi.agent.agent import SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY
 from hawi.events import Event
 from hawi.models import model_registry
 from hawi.review import RuntimeReviewBroker, RuntimeReviewDecision
@@ -47,6 +48,8 @@ logger = logging.getLogger(__name__)
 QueueKind = Literal["normal", "high_prio", "urgent"]
 
 DEFAULT_SYSTEM_PROMPT = "你是Hawi，一个通用agent"
+
+DEFAULT_RESUME_PROMPT = "继续"
 
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -623,15 +626,36 @@ class CoreRuntime:
         if message is not None and not isinstance(message, (str, list)):
             raise ValueError("'resume.payload.message' must be a string or content part list when present")
 
-        DEFAULT_RESUME_PROMPT = (
-            "请从刚才中断或停止的位置继续。"
-            "如果无法可靠继续，请说明当前状态并等待我的下一步指示。"
-        )
+        if message is None and self._runner_has_pending_immediate_work(runner):
+            runner.resume()
+            await client.send(
+                make_ack(
+                    "resume",
+                    request_id=command.id,
+                    payload={
+                        "message_id": None,
+                        "queue": None,
+                        "resumed_existing_work": True,
+                        "control": runner.control_snapshot(),
+                    },
+                )
+            )
+            return
+
         content = message if message else DEFAULT_RESUME_PROMPT
         msg_id = runner.submit_immediate_message(
             content,
             intent="resume",
-            metadata={"intent": "resume", "display_message_type": "resume", "auto_generated": message is None},
+            metadata={
+                "intent": "resume",
+                "display_message_type": "resume",
+                "auto_generated": message is None,
+                **(
+                    {SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY: True}
+                    if message is None
+                    else {}
+                ),
+            },
         )
         await client.send(
             make_ack(
@@ -642,6 +666,22 @@ class CoreRuntime:
                     "queue": "high_prio",
                 },
             )
+        )
+
+    @staticmethod
+    def _runner_has_pending_immediate_work(runner: Any) -> bool:
+        getter = getattr(runner, "has_pending_immediate_work", None)
+        if callable(getter):
+            return bool(getter())
+        lengths_getter = getattr(runner, "get_queue_lengths", None)
+        if not callable(lengths_getter):
+            return False
+        lengths = lengths_getter()
+        if not isinstance(lengths, dict):
+            return False
+        return any(
+            int(lengths.get(queue, 0) or 0) > 0
+            for queue in ("urgent", "high_prio")
         )
 
     async def _handle_queue_task_add(

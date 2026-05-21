@@ -134,6 +134,11 @@ class MessageQueueManager:
             return self._high_prio_queue.pop(0)
         return None
 
+    def dequeue_all_high_prio(self) -> list[QueuedMessage]:
+        messages = self._high_prio_queue
+        self._high_prio_queue = []
+        return messages
+
     def peek_high_prio(self) -> QueuedMessage | None:
         if self._high_prio_queue:
             return self._high_prio_queue[0]

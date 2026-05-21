@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -255,6 +255,18 @@ describe("shouldInitializeSessionState", () => {
     expect(shouldInitializeSessionState(null)).toBe(false);
     expect(shouldInitializeSessionState(makeMetadata(false))).toBe(false);
     expect(shouldInitializeSessionState(makeMetadata(true))).toBe(true);
+  });
+});
+
+describe("resumePayloadFromInput", () => {
+  it("uses non-empty input as the resume prompt", () => {
+    expect(resumePayloadFromInput("  从这里继续处理  ")).toEqual({
+      message: "从这里继续处理"
+    });
+  });
+
+  it("falls back to the engine default resume prompt for empty input", () => {
+    expect(resumePayloadFromInput("   ")).toEqual({});
   });
 });
 

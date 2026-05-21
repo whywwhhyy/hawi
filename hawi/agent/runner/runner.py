@@ -16,6 +16,7 @@ import time
 from typing import Any, Callable, Literal
 
 from hawi.agent.agent import HawiAgent
+from hawi.agent.content_utils import merge_content_parts
 from hawi.agent.state import SteerPartMergeMode
 from hawi.errors import ConfigurationError
 from hawi.agent.result import AgentRunResult
@@ -498,6 +499,14 @@ class AgentRunner:
         """
         self._resume_internal()
 
+    def has_pending_immediate_work(self) -> bool:
+        """Return whether resume can continue already queued immediate work."""
+        return (
+            self._queue_manager.has_urgent()
+            or self._queue_manager.has_high_prio()
+            or self._agent_has_pending_inputs()
+        )
+
     def _resume_internal(self) -> None:
         """Internal: clear pause state without emitting events."""
         self._paused = False
@@ -664,6 +673,26 @@ class AgentRunner:
             return True
         return False
 
+    def _dequeue_merged_high_prio_message(self) -> QueuedMessage | None:
+        messages = self._queue_manager.dequeue_all_high_prio()
+        if not messages:
+            return None
+        if len(messages) == 1:
+            return messages[0]
+
+        first = messages[0]
+        merged_metadata = dict(first.metadata)
+        merged_metadata["merged_message_ids"] = [msg.id for msg in messages]
+        merged_metadata["merged_message_count"] = len(messages)
+        return QueuedMessage(
+            id=first.id,
+            content=merge_content_parts(msg.content for msg in messages),
+            queue_type=QueueType.HIGH_PRIO,
+            created_at=first.created_at,
+            event_bus=first.event_bus,
+            metadata=merged_metadata,
+        )
+
     async def _start_pending_input_execution(self) -> bool:
         """Run agent pending steer inputs before moving on to queued messages."""
         await self._emit_event(
@@ -722,7 +751,7 @@ class AgentRunner:
 
                 # Check high priority (only when idle)
                 if self._executor.is_idle and self._queue_manager.has_high_prio():
-                    msg = self._queue_manager.dequeue_high_prio()
+                    msg = self._dequeue_merged_high_prio_message()
                     if msg:
                         if await self._start_message_execution(msg):
                             continue

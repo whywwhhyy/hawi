@@ -1106,6 +1106,18 @@ export default function App() {
     }
   }
 
+  async function resumeConversation() {
+    const text = input.trim();
+    if (text) {
+      setInput("");
+      resetInputHistoryNavigation();
+    }
+    const frame = await sendCommand("resume", resumePayloadFromInput(text));
+    if (frame && text) {
+      rememberInputHistory(text);
+    }
+  }
+
   function startInputComposition() {
     if (inputCompositionEndTimerRef.current !== null) {
       window.clearTimeout(inputCompositionEndTimerRef.current);
@@ -1646,7 +1658,7 @@ export default function App() {
           <Send size={18} /> 发送
         </button>
         {state.control.paused && state.control.resumable ? (
-          <button className="primary-button" onClick={() => sendCommand("resume", {})}>
+          <button className="primary-button" onClick={resumeConversation}>
             <Play size={16} /> 继续
           </button>
         ) : (
@@ -4470,6 +4482,11 @@ function normalizeMarkdownExportPayload(value: unknown): MarkdownExportPayload |
     markdown: value.markdown,
     references
   };
+}
+
+export function resumePayloadFromInput(input: string): Record<string, unknown> {
+  const message = input.trim();
+  return message ? { message } : {};
 }
 
 function normalizeSessionList(value: unknown): SessionMetaPayload[] {
