@@ -437,7 +437,10 @@ class TestSessionManager:
         runner = _StubAgentRunner()
         sm = SessionManager(
             root=session_root,
-            manifest_metadata_provider=lambda: {"gui_launch_profile": profile},
+            manifest_metadata_provider=lambda: {
+                "gui_launch_profile": profile,
+                "last_cwd": "/tmp/hawi-workspace",
+            },
         )
         sm.attach(agent, runner, event_bus=agent.event_bus)
         try:
@@ -449,7 +452,9 @@ class TestSessionManager:
                 layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
             )
             assert manifest["gui_launch_profile"] == profile
-            assert sm.list_sessions()[0].gui_launch_profile == profile
+            meta = sm.list_sessions()[0]
+            assert meta.gui_launch_profile == profile
+            assert meta.last_cwd == "/tmp/hawi-workspace"
         finally:
             sm.detach()
 

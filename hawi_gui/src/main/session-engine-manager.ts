@@ -21,6 +21,7 @@ interface EngineRecord {
   sessionId: string;
   core: CoreProcess;
   launchProfile: SessionLaunchProfile;
+  workspaceRoot: string;
   loadedAt: number;
   lastFinishedAt?: number;
   hasVisibleMessages: boolean;
@@ -192,6 +193,7 @@ export class SessionEngineManager {
   }
 
   private async createSession(payload: Record<string, unknown>): Promise<CoreFrame> {
+    const workspaceRoot = this.currentWorkspaceRoot();
     await this.saveCurrentSession();
     await this.discardCurrentEmptySession();
     const sessionId = generateSessionId();
@@ -204,6 +206,7 @@ export class SessionEngineManager {
     this.startRecord(sessionId, profile, {
       initialSessionId: sessionId,
       initialSessionName: name,
+      workspaceRoot,
     });
     this.emitSessionRuntimeStatus(sessionId);
     void this.enforceLoadedLimit();
@@ -221,8 +224,15 @@ export class SessionEngineManager {
       launchProfileFromUnknown(sourceMeta?.gui_launch_profile) ??
       this.loaded.get(sourceSessionId)?.launchProfile ??
       profileFromConfig(this.requireDefaultConfig());
+    const sourceWorkspaceRoot =
+      workspaceRootFromMeta(sourceMeta) ??
+      this.loaded.get(sourceSessionId)?.workspaceRoot ??
+      this.currentWorkspaceRoot();
     const provisionalId = `forking-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const record = this.startRecord(provisionalId, sourceProfile, { suppressEvents: true });
+    const record = this.startRecord(provisionalId, sourceProfile, {
+      suppressEvents: true,
+      workspaceRoot: sourceWorkspaceRoot,
+    });
     let frame: CoreFrame;
     try {
       frame = await record.core.sendCommand("session_fork", payload, FORK_COMMAND_TIMEOUT_MS);
@@ -253,24 +263,35 @@ export class SessionEngineManager {
       throw new Error("'session_id' is required");
     }
     if (this.loaded.has(sessionId)) {
+      const previousWorkspaceRoot = this.currentWorkspaceRoot();
+      const record = this.loaded.get(sessionId);
       await this.saveCurrentSession();
       if (sessionId !== this.currentSessionId) {
         await this.discardCurrentEmptySession();
       }
       this.currentSessionId = sessionId;
       this.emitSessionRuntimeStatus(sessionId);
+      if (record && !sameWorkspaceRoot(previousWorkspaceRoot, record.workspaceRoot)) {
+        this.emitWorkspaceChanged(sessionId, previousWorkspaceRoot, record.workspaceRoot);
+      }
       void this.enforceLoadedLimit();
       return ackFrame("session_switch", {
         session_id: sessionId,
         already_loaded: true,
+        workspace_switched: Boolean(record && !sameWorkspaceRoot(previousWorkspaceRoot, record.workspaceRoot)),
+        previous_cwd: previousWorkspaceRoot,
+        last_cwd: record?.workspaceRoot ?? previousWorkspaceRoot,
       });
     }
 
     const meta = await this.findSessionMeta(sessionId);
+    const previousWorkspaceRoot = this.currentWorkspaceRoot();
     await this.saveCurrentSession();
     await this.discardCurrentEmptySession();
+    const targetWorkspaceRoot = workspaceRootFromMeta(meta) ?? previousWorkspaceRoot;
+    const workspaceSwitched = !sameWorkspaceRoot(previousWorkspaceRoot, targetWorkspaceRoot);
     const profile = launchProfileFromUnknown(meta?.gui_launch_profile) ?? profileFromConfig(this.requireDefaultConfig());
-    const record = this.startRecord(sessionId, profile, {});
+    const record = this.startRecord(sessionId, profile, { workspaceRoot: targetWorkspaceRoot });
     let frame: CoreFrame;
     try {
       frame = await record.core.sendCommand("session_load", { session_id: sessionId }, SESSION_COMMAND_TIMEOUT_MS);
@@ -281,6 +302,9 @@ export class SessionEngineManager {
     record.hasVisibleMessages = true;
     this.currentSessionId = sessionId;
     this.emitSessionRuntimeStatus(sessionId);
+    if (workspaceSwitched) {
+      this.emitWorkspaceChanged(sessionId, previousWorkspaceRoot, targetWorkspaceRoot);
+    }
     void this.enforceLoadedLimit();
     return {
       ...frame,
@@ -288,6 +312,9 @@ export class SessionEngineManager {
         ...framePayload(frame),
         command: "session_switch",
         session_id: sessionId,
+        workspace_switched: workspaceSwitched,
+        previous_cwd: previousWorkspaceRoot,
+        last_cwd: targetWorkspaceRoot,
       },
     };
   }
@@ -334,6 +361,7 @@ export class SessionEngineManager {
       initialSessionId?: string;
       initialSessionName?: string;
       suppressEvents?: boolean;
+      workspaceRoot?: string;
     },
   ): EngineRecord {
     const existing = this.loaded.get(sessionId);
@@ -342,18 +370,20 @@ export class SessionEngineManager {
     }
     const metadata = this.requireMetadata();
     const config = configFromProfile(launchProfile, this.requireDefaultConfig(), metadata);
+    const workspaceRoot = normalizeWorkspaceRoot(options.workspaceRoot) ?? this.currentWorkspaceRoot();
     const record = {} as EngineRecord;
     const core = new CoreProcess(
       (channel, payload) => this.handleEngineEmit(record, channel, payload),
       this.repoRoot,
-      this.workspaceRoot,
-      this.logPathForSession(sessionId),
+      workspaceRoot,
+      this.logPathForSession(sessionId, workspaceRoot),
       this.engineLauncher,
     );
     Object.assign(record, {
       sessionId,
       core,
       launchProfile,
+      workspaceRoot,
       loadedAt: Date.now(),
       hasVisibleMessages: false,
       agentState: "IDLE",
@@ -495,6 +525,7 @@ export class SessionEngineManager {
         loaded_at: record.loadedAt,
         last_finished_at: record.lastFinishedAt,
         gui_launch_profile: record.launchProfile,
+        last_cwd: record.workspaceRoot,
       });
     }
     return ackFrame("session_list", {
@@ -582,6 +613,7 @@ export class SessionEngineManager {
         loaded_at: record?.loadedAt,
         last_finished_at: record?.lastFinishedAt,
         has_visible_messages: record?.hasVisibleMessages ?? false,
+        last_cwd: record?.workspaceRoot,
         current_session_id: this.currentSessionId,
         running_session_count: this.runningSessionCount(),
         loaded_session_count: this.visibleLoadedSessionCount(),
@@ -598,9 +630,30 @@ export class SessionEngineManager {
     return [...this.loaded.values()].filter((record) => record.hasVisibleMessages).length;
   }
 
-  private logPathForSession(sessionId: string): string {
+  private currentWorkspaceRoot(): string {
+    return this.currentRecord()?.workspaceRoot ?? this.workspaceRoot;
+  }
+
+  private emitWorkspaceChanged(sessionId: string, previousWorkspaceRoot: string, nextWorkspaceRoot: string): void {
+    this.emitToRenderer("core:event", {
+      version: VERSION,
+      type: "gui.workspace_changed",
+      payload: {
+        session_id: sessionId,
+        previous_cwd: previousWorkspaceRoot,
+        last_cwd: nextWorkspaceRoot,
+        message: `已根据 Session 记录切换工作目录：${previousWorkspaceRoot} -> ${nextWorkspaceRoot}`,
+      },
+    });
+  }
+
+  private logPathForSession(sessionId: string, workspaceRoot = this.workspaceRoot): string {
     const parsed = path.parse(this.backendLogPath);
-    return path.join(parsed.dir, `${parsed.name}-${safeFilename(sessionId)}${parsed.ext || ".log"}`);
+    return path.join(
+      workspaceRoot,
+      ".hawi",
+      `${parsed.name}-${safeFilename(sessionId)}${parsed.ext || ".log"}`,
+    );
   }
 
   private requireMetadata(): InspectPayload {
@@ -709,7 +762,24 @@ function normalizeSessionMeta(value: unknown): SessionMetaPayload | null {
     loaded_at: optionalNumber(value.loaded_at),
     last_finished_at: optionalNumber(value.last_finished_at),
     gui_launch_profile: launchProfileFromUnknown(value.gui_launch_profile),
+    last_cwd: stringOrNull(value.last_cwd),
   };
+}
+
+function workspaceRootFromMeta(meta: SessionMetaPayload | null | undefined): string | null {
+  return normalizeWorkspaceRoot(meta?.last_cwd);
+}
+
+function normalizeWorkspaceRoot(value: unknown): string | null {
+  const raw = stringOrNull(value);
+  if (!raw) {
+    return null;
+  }
+  return path.resolve(raw);
+}
+
+function sameWorkspaceRoot(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
 }
 
 function ackFrame(command: string, payload: Record<string, unknown>): CoreFrame {

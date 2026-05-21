@@ -36,6 +36,7 @@ interface FakeRecord {
   sessionId: string;
   core: FakeCore;
   launchProfile: SessionLaunchProfile;
+  workspaceRoot: string;
   loadedAt: number;
   lastFinishedAt?: number;
   hasVisibleMessages: boolean;
@@ -343,6 +344,59 @@ describe("SessionEngineManager", () => {
     });
   });
 
+  it("starts resumed sessions in their recorded working directory", async () => {
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const persistedProfile = profileFromConfig({ ...baseConfig, modelName: "kimi" });
+    const catalog = new FakeCore({
+      session_list: ackFrame("session_list", {
+        sessions: [
+          {
+            session_id: "session-saved",
+            name: "Saved",
+            created_at: "2025-01-01T00:00:00",
+            updated_at: "2025-01-01T00:00:00",
+            last_checkpoint_event: "save_now",
+            components_present: ["context"],
+            gui_launch_profile: persistedProfile,
+            last_cwd: "/other/workspace",
+          },
+        ],
+        current_session_id: "session-catalog",
+      }),
+    });
+    const manager = makeManager(events);
+    const internals = manager as unknown as ManagerInternals;
+    internals.currentSessionId = "session-catalog";
+    internals.loaded.set("session-catalog", fakeRecord("session-catalog", 1, catalog));
+
+    let launchedWorkspaceRoot: string | null = null;
+    internals.startRecord = (sessionId, launchProfile, options) => {
+      launchedWorkspaceRoot = typeof options.workspaceRoot === "string" ? options.workspaceRoot : null;
+      const record = fakeRecord(sessionId, 2, new FakeCore({ session_load: ackFrame("session_load", { message_history: [] }) }), launchProfile);
+      record.workspaceRoot = launchedWorkspaceRoot ?? "/workspace";
+      internals.loaded.set(sessionId, record);
+      return record;
+    };
+
+    const frame = await manager.sendCommand("session_switch", { session_id: "session-saved" });
+
+    expect(launchedWorkspaceRoot).toBe("/other/workspace");
+    expect(frame.payload).toMatchObject({
+      command: "session_switch",
+      session_id: "session-saved",
+      workspace_switched: true,
+      previous_cwd: "/workspace",
+      last_cwd: "/other/workspace",
+    });
+    const notice = events.find((event) => event.channel === "core:event" && (event.payload as CoreFrame).type === "gui.workspace_changed")
+      ?.payload as CoreFrame | undefined;
+    expect(notice?.payload).toMatchObject({
+      session_id: "session-saved",
+      previous_cwd: "/workspace",
+      last_cwd: "/other/workspace",
+    });
+  });
+
   it("uses recently applied plugins as the fallback profile for new sessions", async () => {
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;
@@ -438,6 +492,7 @@ function fakeRecord(sessionId: string, index: number, core = new FakeCore(), lau
     sessionId,
     core,
     launchProfile,
+    workspaceRoot: "/workspace",
     loadedAt: index * 1000,
     lastFinishedAt: undefined,
     hasVisibleMessages: false,

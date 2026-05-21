@@ -1253,6 +1253,7 @@ class CoreRuntime:
                 "locked": m.locked,
                 "lock_owner": m.lock_owner,
                 "gui_launch_profile": to_json_safe(m.gui_launch_profile),
+                "last_cwd": m.last_cwd,
             }
             for m in sm.list_sessions()
         ]
@@ -1877,10 +1878,13 @@ class CoreRuntime:
         return payload
 
     def _session_manifest_metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {"last_cwd": str(Path.cwd().resolve())}
         if self._gui_launch_profile is None:
-            return {}
+            return metadata
         profile = self._effective_gui_launch_profile()
-        return {"gui_launch_profile": to_json_safe(profile)} if profile else {}
+        if profile:
+            metadata["gui_launch_profile"] = to_json_safe(profile)
+        return metadata
 
     def _effective_gui_launch_profile(self) -> dict[str, Any] | None:
         if self._gui_launch_profile is not None:

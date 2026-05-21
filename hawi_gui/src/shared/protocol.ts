@@ -71,6 +71,7 @@ export interface SessionMetaPayload {
   loaded_at?: number;
   last_finished_at?: number;
   gui_launch_profile?: SessionLaunchProfile | null;
+  last_cwd?: string | null;
 }
 
 export interface CoreFrame<TPayload = Record<string, unknown>> {

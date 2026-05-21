@@ -916,6 +916,19 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.resultPreview).toBe("Error: Parameter validation failed");
   });
 
+  it("shows workspace switch notices as metadata bubbles", () => {
+    const state = reduceCoreEvent(createInitialState(), frame("gui.workspace_changed", {
+      message: "已根据 Session 记录切换工作目录：/a -> /b",
+      previous_cwd: "/a",
+      last_cwd: "/b"
+    }));
+
+    expect(state.nodes[0]).toMatchObject({
+      kind: "meta",
+      content: "已根据 Session 记录切换工作目录：/a -> /b"
+    });
+  });
+
   it("preserves full long tool results for scrollable rendering", () => {
     const output = `${"line\n".repeat(300)}final line`;
     let state = createInitialState();

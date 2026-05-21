@@ -112,6 +112,7 @@ class SessionMeta:
     locked: bool = False
     lock_owner: dict[str, Any] | None = None
     gui_launch_profile: dict[str, Any] | None = None
+    last_cwd: str | None = None
 
 
 @dataclass
@@ -312,6 +313,11 @@ class SessionManager:
                     gui_launch_profile=(
                         data.get("gui_launch_profile")
                         if isinstance(data.get("gui_launch_profile"), dict)
+                        else None
+                    ),
+                    last_cwd=(
+                        data.get("last_cwd")
+                        if isinstance(data.get("last_cwd"), str)
                         else None
                     ),
                 )

@@ -751,6 +751,9 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         ]
       };
 
+    case "gui.workspace_changed":
+      return addMeta(state, String(payload.message ?? "工作目录已切换"));
+
     case "error":
       return {
         ...appendChatNode(state, {

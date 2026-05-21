@@ -687,7 +687,8 @@ export default function App() {
     setSessions((items) => upsertSessionRuntime(items, sessionId, {
       load_state: loadState,
       loaded_at: optionalPayloadNumber(payload.loaded_at),
-      last_finished_at: optionalPayloadNumber(payload.last_finished_at)
+      last_finished_at: optionalPayloadNumber(payload.last_finished_at),
+      last_cwd: optionalPayloadString(payload.last_cwd)
     }, {
       createIfMissing: payload.has_visible_messages === true
     }));
@@ -4494,7 +4495,8 @@ function normalizeSessionList(value: unknown): SessionMetaPayload[] {
       load_state: normalizeSessionLoadState(item.load_state),
       loaded_at: optionalPayloadNumber(item.loaded_at),
       last_finished_at: optionalPayloadNumber(item.last_finished_at),
-      gui_launch_profile: normalizeLaunchProfile(item.gui_launch_profile)
+      gui_launch_profile: normalizeLaunchProfile(item.gui_launch_profile),
+      last_cwd: optionalPayloadString(item.last_cwd)
     }))
     .filter((item) => item.session_id);
 }
@@ -4506,7 +4508,7 @@ function frameSessionId(frame: CoreFrame): string | null {
 export function upsertSessionRuntime(
   sessions: SessionMetaPayload[],
   sessionId: string,
-  patch: Pick<SessionMetaPayload, "load_state" | "loaded_at" | "last_finished_at">,
+  patch: Pick<SessionMetaPayload, "load_state" | "loaded_at" | "last_finished_at" | "last_cwd">,
   options: { createIfMissing?: boolean } = {}
 ): SessionMetaPayload[] {
   const index = sessions.findIndex((session) => session.session_id === sessionId);
