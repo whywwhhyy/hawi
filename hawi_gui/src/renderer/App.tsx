@@ -1375,9 +1375,8 @@ export default function App() {
       : selectedPlugins;
     const appliedConfigs = normalizePluginConfigs(payload.plugin_configs ?? pluginConfigs);
     const nextConfig = { ...(configRef.current ?? config), selectedPlugins: appliedPlugins, pluginConfigs: appliedConfigs };
-    configRef.current = nextConfig;
-    setConfig(nextConfig);
-    setMetadata((current) => current ? { ...current, config: nextConfig } : current);
+    const savedConfig = await saveGlobalAndSet(nextConfig);
+    configRef.current = savedConfig;
     setPluginDialogOpen(false);
   }
 
