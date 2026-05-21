@@ -1770,11 +1770,13 @@ button:disabled {
 .bubble-head .tool-title {
   min-width: 0;
   flex: 1;
+  flex-wrap: wrap;
   gap: 8px;
+  row-gap: 4px;
 }
 
 .tool-name {
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
 .tool-description {
@@ -1787,7 +1789,8 @@ button:disabled {
 }
 
 .tool-subject {
-  min-width: 0;
+  flex: 1 1 180px;
+  min-width: min(120px, 100%);
   max-width: 280px;
   padding: 1px 6px;
   border: 1px solid #d7e0e2;
@@ -1801,7 +1804,7 @@ button:disabled {
 }
 
 .tool-subject.purpose {
-  max-width: 360px;
+  max-width: min(360px, 100%);
   background: #f7faf9;
   color: #4c5b61;
   font-family: inherit;

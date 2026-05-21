@@ -2746,18 +2746,18 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
         <span className="tool-title">
           <span className="tool-name">
             <Wrench size={15} /> {presentation.label}
-            <BlockStreamStatus
-              receiving={receivingArguments}
-              durationMs={tool.streamDurationMs}
-              receivingTitle="正在接收工具调用"
-              receivedChars={receivedCharCount(tool.argsRaw)}
-            />
           </span>
           {presentation.detail && (
             <span className={`tool-subject ${presentation.detailKind}`}>
               {presentation.detail}
             </span>
           )}
+          <BlockStreamStatus
+            receiving={receivingArguments}
+            durationMs={tool.streamDurationMs}
+            receivingTitle="正在接收工具调用"
+            receivedChars={receivedCharCount(tool.argsRaw)}
+          />
         </span>
         <span className="tool-actions">
           <strong>{running ? "running" : tool.status}</strong>
