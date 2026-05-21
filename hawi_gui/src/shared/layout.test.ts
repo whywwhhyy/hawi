@@ -3,7 +3,7 @@ import { MIN_CONTENT_SIZE, minimumWindowSizeForContent, normalizeMinimumContentS
 
 describe("layout sizing helpers", () => {
   it("keeps the configured minimum content size as the lower bound", () => {
-    expect(normalizeMinimumContentSize({ width: 900, height: 500 })).toEqual(MIN_CONTENT_SIZE);
+    expect(normalizeMinimumContentSize({ width: 500, height: 500 })).toEqual(MIN_CONTENT_SIZE);
   });
 
   it("rounds dynamic content measurements up to whole pixels", () => {
@@ -19,7 +19,7 @@ describe("layout sizing helpers", () => {
 
   it("adds native frame insets to content minimums", () => {
     expect(minimumWindowSizeForContent(MIN_CONTENT_SIZE, { width: 16, height: 39 })).toEqual({
-      width: 1096,
+      width: 656,
       height: 699,
     });
   });

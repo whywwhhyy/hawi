@@ -13,6 +13,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
+import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
 
@@ -1371,13 +1372,123 @@ export default function App() {
     }
   }
 
+  function updateShowDebug(enabled: boolean) {
+    const baseConfig = configRef.current ?? config;
+    if (!baseConfig) return;
+    const next = { ...baseConfig, showDebug: enabled };
+    setConfig(next);
+    void saveGlobalAndSet(next);
+  }
+
   if (!metadata || !config) {
     return <div className="boot">Loading Hawi metadata...</div>;
   }
 
+  const toolbarItemClass = (placement: OverflowToolbarPlacement, active = false) => {
+    if (placement === "overflow") return "menu-item";
+    return `tool-button ${active ? "active" : ""}`.trim();
+  };
+  const toolbarIconSize = (placement: OverflowToolbarPlacement) => placement === "overflow" ? 15 : 17;
+  const toolbarItems: OverflowToolbarItem[] = [
+    {
+      id: "plugins",
+      render: (placement, closeOverflow) => (
+        <button
+          type="button"
+          className={toolbarItemClass(placement)}
+          title="插件配置"
+          onClick={() => {
+            closeOverflow();
+            setPluginDialogOpen(true);
+          }}
+        >
+          <Plug size={toolbarIconSize(placement)} /> 插件配置
+        </button>
+      )
+    },
+    {
+      id: "model",
+      render: (placement, closeOverflow) => (
+        <button
+          type="button"
+          className={toolbarItemClass(placement)}
+          title="切换模型"
+          onClick={() => {
+            closeOverflow();
+            setModelDialogOpen(true);
+          }}
+        >
+          <Bot size={toolbarIconSize(placement)} /> Model: {selectedModel}
+        </button>
+      )
+    },
+    {
+      id: "export-markdown",
+      render: (placement, closeOverflow) => (
+        <button
+          type="button"
+          className={toolbarItemClass(placement)}
+          title="导出当前 Session Markdown"
+          disabled={!currentSessionId || state.sessionMessageCount === 0 || exportBusy}
+          onClick={() => {
+            closeOverflow();
+            void exportCurrentSession();
+          }}
+        >
+          <FileText size={toolbarIconSize(placement)} /> {exportBusy ? "导出中" : "导出 Markdown"}
+        </button>
+      )
+    },
+    {
+      id: "debug",
+      render: (placement) => placement === "overflow" ? (
+        <label className="menu-item">
+          <input
+            type="checkbox"
+            checked={showDebug}
+            onChange={(event) => updateShowDebug(event.target.checked)}
+          />
+          Debug 信息
+        </label>
+      ) : (
+        <button
+          type="button"
+          className={toolbarItemClass(placement, showDebug)}
+          title={showDebug ? "隐藏 Debug 信息" : "显示 Debug 信息"}
+          aria-pressed={showDebug}
+          onClick={() => updateShowDebug(!showDebug)}
+        >
+          <Activity size={toolbarIconSize(placement)} /> Debug
+        </button>
+      )
+    },
+    {
+      id: "restart",
+      render: (placement, closeOverflow) => (
+        <button
+          type="button"
+          className={toolbarItemClass(placement)}
+          onClick={() => {
+            closeOverflow();
+            void restartWith(config);
+          }}
+        >
+          <RotateCcw size={toolbarIconSize(placement)} /> 重启 Engine
+        </button>
+      )
+    }
+  ];
+
   return (
     <div className="app-shell">
       <header className="topbar">
+        <OverflowToolbar
+          className="top-action-toolbar"
+          label="Hawi 操作栏"
+          items={toolbarItems}
+          overflowOpen={debugMenuOpen}
+          onOverflowOpenChange={setDebugMenuOpen}
+        />
         <div className="status-strip">
           <SessionStatusCell
             messageCount={state.sessionMessageCount}
@@ -1436,51 +1547,6 @@ export default function App() {
             onTaskMove={moveQueueTask}
             onTaskClear={clearNormalQueue}
           />
-        </div>
-        <button className="tool-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
-          <Plug size={17} /> 插件配置
-        </button>
-        <button className="tool-button" title="切换模型" onClick={() => setModelDialogOpen(true)}>
-          <Bot size={17} /> Model: {selectedModel}
-        </button>
-        <div className="toolbar-menu">
-          <button
-            className={`tool-button ${debugMenuOpen ? "active" : ""}`}
-            title="菜单"
-            onClick={() => setDebugMenuOpen((v) => !v)}
-          >
-            <span style={{ letterSpacing: "1px", fontWeight: 700 }}>···</span>
-          </button>
-          {debugMenuOpen && (
-            <div className="menu-popover">
-              <button
-                className="menu-item"
-                title="导出当前 Session Markdown"
-                disabled={!currentSessionId || state.sessionMessageCount === 0 || exportBusy}
-                onClick={() => {
-                  setDebugMenuOpen(false);
-                  void exportCurrentSession();
-                }}
-              >
-                <FileText size={15} /> {exportBusy ? "导出中" : "导出 Markdown"}
-              </button>
-              <label className="menu-item">
-                <input
-                  type="checkbox"
-                  checked={showDebug}
-                  onChange={(event) => {
-                    const next = { ...config, showDebug: event.target.checked };
-                    setConfig(next);
-                    void saveGlobalAndSet(next);
-                  }}
-                />
-                Debug 信息
-              </label>
-              <button className="menu-item" onClick={() => restartWith(config)}>
-                <RotateCcw size={15} /> 重启 Engine
-              </button>
-            </div>
-          )}
         </div>
       </header>
 

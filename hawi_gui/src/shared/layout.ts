@@ -4,7 +4,7 @@ export interface LayoutSize {
 }
 
 export const MIN_CONTENT_SIZE: LayoutSize = {
-  width: 1080,
+  width: 640,
   height: 660,
 };
 

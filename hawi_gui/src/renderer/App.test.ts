@@ -4,6 +4,7 @@ import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
 describe("App", () => {
@@ -95,6 +96,20 @@ describe("renderPriorityStatusText", () => {
         normal: [{ id: "steer-plain", queue: "normal", contentPreview: "plain" }]
       }
     )).toBe("Message Insert 0 · Queue 1");
+  });
+});
+
+describe("resolveOverflowVisibleCount", () => {
+  it("keeps every item visible when the toolbar has enough width", () => {
+    expect(resolveOverflowVisibleCount(196, [50, 60, 70], 40, 8)).toBe(3);
+  });
+
+  it("moves trailing items into overflow while preserving prefix order", () => {
+    expect(resolveOverflowVisibleCount(170, [50, 60, 70], 40, 8)).toBe(2);
+  });
+
+  it("shows only the overflow trigger when the first item cannot fit beside it", () => {
+    expect(resolveOverflowVisibleCount(95, [50, 60, 70], 40, 8)).toBe(0);
   });
 });
 

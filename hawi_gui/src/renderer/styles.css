@@ -41,7 +41,7 @@ body {
 
 body {
   margin: 0;
-  min-width: 1080px;
+  min-width: 640px;
   min-height: 660px;
 }
 
@@ -93,11 +93,65 @@ button:disabled {
 .topbar {
   position: relative;
   z-index: var(--layer-topbar);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+}
+
+.overflow-toolbar {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.overflow-toolbar-list {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.overflow-toolbar-item,
+.overflow-toolbar-menu-anchor {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.overflow-toolbar-menu-anchor {
+  position: relative;
+}
+
+.overflow-toolbar-menu {
+  right: 0;
+}
+
+.overflow-toolbar-menu-item {
+  display: contents;
+}
+
+.overflow-toolbar-measure {
+  position: absolute;
+  top: -10000px;
+  left: -10000px;
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  gap: 8px;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .status-strip {
   display: flex;
   align-items: center;
+  justify-self: start;
+  max-width: 100%;
   min-width: 0;
   flex: 0 1 auto;
   margin-right: auto;
@@ -648,15 +702,9 @@ button:disabled {
   padding: 0 12px;
 }
 
-.toolbar-menu {
-  position: relative;
-}
-
-.topbar > .tool-button:hover:not(:disabled),
-.topbar > .tool-button:focus-visible,
-.toolbar-menu > .tool-button:hover:not(:disabled),
-.toolbar-menu > .tool-button:focus-visible,
-.toolbar-menu > .tool-button.active {
+.overflow-toolbar .tool-button:hover:not(:disabled),
+.overflow-toolbar .tool-button:focus-visible,
+.overflow-toolbar .tool-button.active {
   background: var(--color-primary-tint);
   border-color: var(--color-border-strong);
   color: var(--color-text-strong);
@@ -753,6 +801,7 @@ button:disabled {
 }
 
 .chat-panel {
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   scrollbar-gutter: stable;
@@ -1580,7 +1629,9 @@ button:disabled {
 .bubble {
   --bubble-border-color: #d8ddde;
   position: relative;
-  max-width: 860px;
+  width: fit-content;
+  min-width: 0;
+  max-width: min(860px, 100%);
   margin: 0 0 10px 0;
   border: 1px solid var(--bubble-border-color);
   border-radius: 8px;
@@ -1743,6 +1794,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
   min-height: 30px;
   padding: 6px 10px;
   border-bottom: 1px solid #e1e5e6;
@@ -1758,6 +1810,7 @@ button:disabled {
 .bubble-head span {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -1914,6 +1967,7 @@ button:disabled {
   display: grid;
   justify-items: start;
   gap: 5px;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -1996,6 +2050,7 @@ button:disabled {
 .code-block-shell {
   display: flow-root;
   position: relative;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -2079,12 +2134,15 @@ button:disabled {
 }
 
 .collapsible-body-inner {
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
 .message-body {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
   max-height: none;
   overflow: visible;
   transition: max-height 190ms ease;
@@ -2120,8 +2178,11 @@ button:disabled {
 }
 
 .markdown {
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 12px;
   line-height: 1.48;
+  overflow-wrap: anywhere;
   user-select: text;
 }
 
@@ -2224,6 +2285,8 @@ button:disabled {
 
 .markdown pre,
 .bubble pre {
+  max-width: 100%;
+  min-width: 0;
   overflow: auto;
   margin: 8px 0 0 0;
   padding: 10px 12px;
