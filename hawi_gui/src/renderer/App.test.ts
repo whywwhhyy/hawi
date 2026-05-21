@@ -381,6 +381,54 @@ describe("renderMarkdown", () => {
     expect(html).not.toContain("<script>");
   });
 
+  it("renders svg fenced blocks as a sanitized preview plus copyable code", () => {
+    const html = renderMarkdown("```svg\n<svg viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\" /></svg>\n```");
+
+    expect(html).toContain("class=\"svg-preview-shell\"");
+    expect(html).toContain("data:image/svg+xml;charset=utf-8,");
+    expect(html).toContain("class=\"code-copy-button\"");
+    expect(html).toContain("class=\"hljs language-xml\"");
+  });
+
+  it("sanitizes svg fenced previews without hiding the source code block", () => {
+    const html = renderMarkdown("```svg\n<svg viewBox=\"0 0 10 10\"><script>alert(1)</script><rect onclick=\"alert(2)\" width=\"10\" height=\"10\" /></svg>\n```");
+    const src = html.match(/src="([^"]+)"/)?.[1] ?? "";
+    const decodedSvg = decodeURIComponent(src.replace("data:image/svg+xml;charset=utf-8,", ""));
+
+    expect(decodedSvg).not.toContain("<script");
+    expect(decodedSvg).not.toContain("onclick");
+    expect(html).toContain("script");
+    expect(html).toContain("onclick");
+  });
+
+  it("renders sanitized raw HTML blocks", () => {
+    const html = renderMarkdown("<details open><summary>More</summary><table><tr><td>A</td></tr></table></details>");
+
+    expect(html).toContain("<details open>");
+    expect(html).toContain("<summary>More</summary>");
+    expect(html).toContain("<table>");
+    expect(html).toContain("<td>A</td>");
+  });
+
+  it("sanitizes dangerous raw HTML", () => {
+    const html = renderMarkdown("<script>alert(1)</script><img src=\"javascript:alert(2)\" onerror=\"alert(3)\"><a href=\"jav&#x3a;ascript:alert(4)\">bad</a>");
+
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("onerror");
+    expect(html).toContain("<img>");
+    expect(html).toContain("<a>bad</a>");
+  });
+
+  it("renders sanitized inline raw SVG", () => {
+    const html = renderMarkdown("<svg viewBox=\"0 0 10 10\" onload=\"alert(1)\"><script>alert(2)</script><circle cx=\"5\" cy=\"5\" r=\"4\" /></svg>");
+
+    expect(html).toContain("<svg viewBox=\"0 0 10 10\">");
+    expect(html).toContain("<circle");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("onload");
+  });
+
   it("renders links for external opening instead of current-window navigation", () => {
     const html = renderMarkdown("https://example.com");
 

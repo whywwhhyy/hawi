@@ -32,6 +32,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   jsx: "javascript",
   md: "markdown",
   py: "python",
+  svg: "xml",
   sh: "bash",
   shell: "bash",
   ts: "typescript",
@@ -41,7 +42,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
 };
 
 const markdown = new MarkdownIt({
-  html: false,
+  html: true,
   linkify: true,
   breaks: true,
   highlight: highlightCode
@@ -52,6 +53,15 @@ markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrSet("target", "_blank");
   tokens[idx].attrSet("rel", "noopener noreferrer");
   return defaultLinkOpen(tokens, idx, options, env, self);
+};
+const defaultFence = markdown.renderer.rules.fence;
+markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const language = token.info.trim().split(/\s+/)[0]?.toLowerCase();
+  if (language === "svg") {
+    return renderSvgFence(token.content);
+  }
+  return defaultFence(tokens, idx, options, env, self);
 };
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
@@ -4791,7 +4801,7 @@ function isInputComposing(event: InputKeyEvent, inputComposing: boolean): boolea
 }
 
 export function renderMarkdown(value: string): string {
-  return markdown.render(value);
+  return sanitizeRenderedHtml(markdown.render(value));
 }
 
 export function formatStreamFinishedLabel(durationMs?: number): string | null {
@@ -4879,6 +4889,115 @@ function highlightCode(value: string, language: string): string {
   return codeBlock(escapeHtml(value));
 }
 
+function renderSvgFence(value: string): string {
+  const preview = renderSvgPreview(value);
+  const highlighted = highlightedCode(value, "svg");
+  return `${preview}${codeBlock(highlighted.html, highlighted.language)}`;
+}
+
+function sanitizeRenderedHtml(value: string): string {
+  return value
+    .replace(/<(script|style|iframe|object|embed|link|meta|base|form|input|textarea|select|option|foreignObject)\b[\s\S]*?<\/\1>/gi, "")
+    .replace(/<(script|style|iframe|object|embed|link|meta|base|form|input|textarea|select|option|foreignObject)\b[^>]*\/?>/gi, "")
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+srcdoc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+style\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(
+      /\s+(href|src|xlink:href|formaction)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,
+      (match: string, name: string, rawValue: string) => {
+        const valueText = unquoteHtmlAttribute(rawValue).trim();
+        if (!isSafeHtmlUrl(valueText)) return "";
+        return ` ${name}=${rawValue}`;
+      }
+    );
+}
+
+function unquoteHtmlAttribute(value: string): string {
+  if (
+    (value.startsWith("\"") && value.endsWith("\""))
+    || (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function isSafeHtmlUrl(value: string): boolean {
+  const normalized = stripUnsafeUrlWhitespace(
+    decodeHtmlAttributeEntities(value)
+  ).toLowerCase();
+  if (!normalized) return true;
+  if (normalized.startsWith("#")) return true;
+  if (
+    normalized.startsWith("/")
+    || normalized.startsWith("./")
+    || normalized.startsWith("../")
+  ) {
+    return true;
+  }
+  if (
+    normalized.startsWith("http:")
+    || normalized.startsWith("https:")
+    || normalized.startsWith("mailto:")
+    || normalized.startsWith("tel:")
+  ) {
+    return true;
+  }
+  if (/^data:image\/(?:png|jpe?g|gif|webp|svg\+xml)[;,]/.test(normalized)) {
+    return true;
+  }
+  return !/^[a-z][a-z0-9+.-]*:/i.test(normalized);
+}
+
+function stripUnsafeUrlWhitespace(value: string): string {
+  return Array.from(value)
+    .filter((char) => {
+      const codePoint = char.codePointAt(0) ?? 0;
+      return codePoint > 31 && codePoint !== 127 && !/\s/.test(char);
+    })
+    .join("");
+}
+
+function decodeHtmlAttributeEntities(value: string): string {
+  return value
+    .replace(/&colon;/gi, ":")
+    .replace(/&tab;/gi, "")
+    .replace(/&newline;/gi, "")
+    .replace(/&#0*58;/gi, ":")
+    .replace(/&#x0*3a;/gi, ":");
+}
+
+function renderSvgPreview(value: string): string {
+  const sanitized = sanitizeSvgForPreview(value);
+  if (!sanitized) return "";
+  const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sanitized)}`;
+  return [
+    "<div class=\"svg-preview-shell\">",
+    `<img class="svg-preview" alt="SVG preview" src="${escapeHtmlAttributeValue(src)}" />`,
+    "</div>"
+  ].join("");
+}
+
+function sanitizeSvgForPreview(value: string): string | null {
+  let svg = value.trim();
+  if (!svg) return null;
+  svg = svg
+    .replace(/<\?xml[\s\S]*?\?>/gi, "")
+    .replace(/<!doctype[\s\S]*?>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .trim();
+  if (!/^<svg[\s>]/i.test(svg) || !/<\/svg>\s*$/i.test(svg)) {
+    return null;
+  }
+  svg = svg
+    .replace(/<(script|foreignObject|iframe|object|embed|link|meta|base|audio|video|canvas|image)\b[\s\S]*?<\/\1>/gi, "")
+    .replace(/<(script|foreignObject|iframe|object|embed|link|meta|base|audio|video|canvas|image)\b[^>]*\/?>/gi, "")
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+(?:href|xlink:href|src)\s*=\s*(?:"(?!#)[^"]*"|'(?!#)[^']*'|(?!#)[^\s>]+)/gi, "")
+    .replace(/\s+style\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  return svg.trim();
+}
+
 function highlightedCode(value: string, language?: string): { html: string; language?: string } {
   const normalizedLanguage = language ? normalizeHighlightLanguage(language) : null;
   if (normalizedLanguage) {
@@ -4907,6 +5026,10 @@ function codeBlock(value: string, language?: string): string {
 
 function escapeHtmlAttribute(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, "");
+}
+
+function escapeHtmlAttributeValue(value: string): string {
+  return value.replace(/[&"]/g, (char) => char === "&" ? "&amp;" : "&quot;");
 }
 
 function escapeHtml(value: string): string {
