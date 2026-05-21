@@ -484,6 +484,10 @@ async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
         handle = agent.subagents._handles[subagent_id]  # type: ignore[attr-defined]
         assert handle.agent.plugins.get_tool("dummy_tool") is not None
         assert handle.agent.plugins.get_tool("create_subagent") is None
+        status = agent.subagents.status(subagent_id).to_dict()
+        assert status["plugin_ids"] == ["hawi/dummy-tools"]
+        assert status["tool_names"] == ["dummy_tool"]
+        assert status["tool_count"] == 1
         await agent.subagents.wait(subagent_id, timeout=2)
         read_tool = agent.plugins.get_tool("read_subagent")
         assert read_tool is not None
@@ -537,6 +541,34 @@ async def test_create_subagent_plugins_none_inherits_and_empty_list_disables_too
         assert inherited_handle.agent.plugins.get_tool("dummy_tool") is not None
         assert inherited_handle.agent.plugins.get_tool("create_subagent") is not None
         assert no_tools_handle.agent.plugins.get_tool_definitions() == []
+        inherited_status = agent.subagents.status(inherited_id).to_dict()
+        no_tools_status = agent.subagents.status(no_tools_id).to_dict()
+        assert set(inherited_status["plugin_ids"]) == {
+            "hawi/subagent",
+            "hawi/dummy-tools",
+        }
+        assert set(inherited_status["tool_names"]) >= {
+            "create_subagent",
+            "dummy_tool",
+        }
+        await agent.subagents.wait(inherited_id, timeout=2)
+        record = await inherited_handle.agent.tool_executor.execute_call(
+            {
+                "type": "tool_call",
+                "id": "call_dummy",
+                "name": "dummy_tool",
+                "arguments": {"value": "ok"},
+            },
+            run_id="test-run",
+            iteration=1,
+            add_to_context=False,
+            emit_final_event=False,
+        )
+        assert record.result.success is True
+        assert record.result.output == {"value": "ok"}
+        assert no_tools_status["plugins"] == []
+        assert no_tools_status["tool_names"] == []
+        assert no_tools_status["tool_count"] == 0
     finally:
         await agent.subagents.close(inherited_id, reason="test_cleanup")
         await agent.subagents.close(no_tools_id, reason="test_cleanup")

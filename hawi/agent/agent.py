@@ -372,6 +372,8 @@ class HawiAgent:
         """
         self._context = context
         self._context.tool_call_context = ToolCallContext(agent=self)
+        if hasattr(self, "_tool_executor"):
+            self._tool_executor = self._build_tool_executor()
 
     def set_system_prompt(self, system_prompt: str | list[ContentPart] | None) -> None:
         """Replace the agent system prompt and keep clone defaults in sync."""

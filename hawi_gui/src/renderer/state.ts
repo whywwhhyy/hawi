@@ -189,8 +189,19 @@ export interface SubAgentStatusState {
   workingDir?: string;
   mode?: string;
   sharedContext?: boolean;
+  plugins: SubAgentPluginInfoState[];
+  pluginIds: string[];
+  toolNames: string[];
+  toolCount: number;
   lastResultText?: string;
   lastError?: string;
+}
+
+export interface SubAgentPluginInfoState {
+  id: string;
+  name: string;
+  displayName?: string;
+  className?: string;
 }
 
 interface SubAgentPartialState {
@@ -206,6 +217,7 @@ export interface SubAgentRuntimeState {
   name: string;
   role: string;
   state: string;
+  createdAt?: number;
   mode?: string;
   sharedContext?: boolean;
   status?: SubAgentStatusState;
@@ -2349,6 +2361,7 @@ function updateSubAgentFromEvent(
     name: nextStatus?.name ?? optionalString(payload.subagent_name) ?? current.name,
     role: nextStatus?.role ?? optionalString(payload.subagent_role) ?? current.role,
     state: nextStateName,
+    createdAt: current.createdAt ?? nextStatus?.createdAt ?? eventAt,
     mode: nextMode,
     sharedContext: nextSharedContext,
     status: nextStatus,
@@ -2389,6 +2402,7 @@ function createSubAgentRuntime(
     name: status?.name ?? optionalString(payload.subagent_name) ?? id,
     role: status?.role ?? optionalString(payload.subagent_role) ?? "general",
     state: status?.state ?? "CREATED",
+    createdAt: status?.createdAt ?? eventAt,
     mode: status?.mode,
     sharedContext: status?.sharedContext ?? status?.mode === "fork",
     status,
@@ -2404,6 +2418,9 @@ function normalizeSubAgentStatus(value: unknown): SubAgentStatusState | undefine
   if (!isRecord(value)) return undefined;
   const id = optionalString(value.id);
   if (!id) return undefined;
+  const plugins = normalizeSubAgentPlugins(value.plugins);
+  const pluginIds = normalizeStringList(value.plugin_ids ?? value.pluginIds);
+  const toolNames = normalizeStringList(value.tool_names ?? value.toolNames);
   return {
     id,
     name: optionalString(value.name) ?? id,
@@ -2419,9 +2436,36 @@ function normalizeSubAgentStatus(value: unknown): SubAgentStatusState | undefine
     workingDir: optionalString(value.working_dir ?? value.workingDir),
     mode: optionalString(value.mode),
     sharedContext: optionalBoolean(value.shared_context ?? value.sharedContext),
+    plugins,
+    pluginIds: pluginIds.length > 0 ? pluginIds : plugins.map((plugin) => plugin.id),
+    toolNames,
+    toolCount: optionalNumber(value.tool_count ?? value.toolCount) ?? toolNames.length,
     lastResultText: optionalString(value.last_result_text ?? value.lastResultText),
     lastError: optionalString(value.last_error ?? value.lastError),
   };
+}
+
+function normalizeSubAgentPlugins(value: unknown): SubAgentPluginInfoState[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const id = optionalString(item.id);
+    if (!id) return [];
+    return [{
+      id,
+      name: optionalString(item.name) ?? id,
+      displayName: optionalString(item.display_name ?? item.displayName),
+      className: optionalString(item.class_name ?? item.className),
+    }];
+  });
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const text = optionalString(item);
+    return text ? [text] : [];
+  });
 }
 
 function normalizeNumberRecord(value: unknown): Record<string, number> {

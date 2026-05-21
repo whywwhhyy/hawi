@@ -1531,6 +1531,8 @@ describe("core event reducer", () => {
     }, 11));
 
     expect(state.subagentOrder).toEqual(["sub_1"]);
+    expect(state.subagents.sub_1.status?.plugins).toEqual([]);
+    expect(state.subagents.sub_1.status?.toolNames).toEqual([]);
     expect(state.subagents.sub_1.nodes).toHaveLength(1);
     expect(state.subagents.sub_1.nodes[0]).toMatchObject({
       kind: "agent",
@@ -1575,6 +1577,80 @@ describe("core event reducer", () => {
     }, 13));
 
     expect(state.subagents.sub_1.state).toBe("CLOSED");
+  });
+
+  it("keeps a subagent's creation timestamp stable across status updates", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("subagent.created", {
+      subagent_id: "sub_1",
+      status: {
+        id: "sub_1",
+        name: "worker-1",
+        role: "worker",
+        state: "RUNNING",
+        runner_state: "RUNNING",
+        executor_state: "RUNNING",
+        queue_lengths: { normal: 0 },
+        created_at: 100,
+        updated_at: 100
+      }
+    }, 100));
+    state = reduceCoreEvent(state, frame("subagent.event", {
+      subagent_id: "sub_1",
+      status: {
+        id: "sub_1",
+        name: "worker-1",
+        role: "worker",
+        state: "RUNNING",
+        runner_state: "RUNNING",
+        executor_state: "RUNNING",
+        queue_lengths: { normal: 0 },
+        updated_at: 999
+      },
+      child_event: { type: "subagent.status" }
+    }, 999));
+
+    expect(state.subagents.sub_1.createdAt).toBe(100);
+    expect(state.subagents.sub_1.status?.updatedAt).toBe(999);
+  });
+
+  it("captures subagent plugin and tool configuration from status snapshots", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("subagent.created", {
+      subagent_id: "sub_tools",
+      status: {
+        id: "sub_tools",
+        name: "worker-tools",
+        role: "worker",
+        state: "RUNNING",
+        runner_state: "RUNNING",
+        executor_state: "IDLE",
+        queue_lengths: { normal: 0 },
+        plugins: [
+          {
+            id: "hawi/filesystem",
+            name: "Filesystem",
+            display_name: "Filesystem",
+            class_name: "FileSystemPlugin"
+          }
+        ],
+        plugin_ids: ["hawi/filesystem"],
+        tool_names: ["read_file", "grep"],
+        tool_count: 2
+      }
+    }, 30));
+
+    expect(state.subagents.sub_tools.status?.pluginIds).toEqual(["hawi/filesystem"]);
+    expect(state.subagents.sub_tools.status?.plugins[0]).toMatchObject({
+      id: "hawi/filesystem",
+      name: "Filesystem",
+      displayName: "Filesystem",
+      className: "FileSystemPlugin"
+    });
+    expect(state.subagents.sub_tools.status?.toolNames).toEqual(["read_file", "grep"]);
+    expect(state.subagents.sub_tools.status?.toolCount).toBe(2);
   });
 
   it("marks shared-context subagents with a handoff node", () => {

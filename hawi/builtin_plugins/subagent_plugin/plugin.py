@@ -58,7 +58,9 @@ class SubAgentPlugin(HawiPlugin):
             "it to [] to give the child no tools; set it to a list of active "
             "parent plugin ids to choose tools for the task type. When "
             "share_context is true, plugins must be omitted or null/None "
-            "because shared-context sub-agents inherit the parent plugin setup."
+            "because shared-context sub-agents inherit the parent plugin setup. "
+            "The returned status includes plugin_ids and tool_names so you can "
+            "verify which tools the child actually received."
         ),
         context="ctx",
         tags=["subagent", "orchestration"],
@@ -119,7 +121,8 @@ class SubAgentPlugin(HawiPlugin):
                         "hawi/python_interpreter, hawi/web, or hawi/mcp) to "
                         "choose tools for the task type. When share_context is "
                         "true, plugin settings cannot be changed; omit this "
-                        "field or use null/None."
+                        "field or use null/None. The returned status includes "
+                        "plugin_ids and tool_names for verification."
                     ),
                 },
                 "max_runtime_seconds": {"type": "number"},

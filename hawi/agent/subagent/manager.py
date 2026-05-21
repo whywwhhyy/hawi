@@ -36,6 +36,7 @@ from .types import (
     SubAgentHandle,
     SubAgentLifecycleState,
     SubAgentLimits,
+    SubAgentPluginInfo,
     SubAgentPluginPolicy,
     SubAgentQueue,
     SubAgentSpec,
@@ -201,9 +202,27 @@ class SubAgentManager:
             working_dir=handle.spec.working_dir,
             mode=handle.spec.mode,
             shared_context=handle.spec.mode == "fork",
+            plugins=self._plugin_info(handle),
+            tool_names=self._tool_names(handle),
             last_result_text=result.text if result is not None else None,
             last_error=handle.last_error,
         )
+
+    def _plugin_info(self, handle: SubAgentHandle) -> list[SubAgentPluginInfo]:
+        plugins = []
+        for plugin in handle.agent.plugins.get_plugins():
+            plugins.append(
+                SubAgentPluginInfo(
+                    id=str(plugin.plugin_id),
+                    name=str(plugin.plugin_name),
+                    display_name=plugin.display_name,
+                    class_name=plugin.__class__.__name__,
+                )
+            )
+        return plugins
+
+    def _tool_names(self, handle: SubAgentHandle) -> list[str]:
+        return [tool.name for tool in handle.agent.plugins.get_tools()]
 
     async def wait(
         self,

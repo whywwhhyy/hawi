@@ -3329,7 +3329,7 @@ function SubAgentPreviewPanel({
   onObserve: (subagentId: string) => void;
 }) {
   const activeCount = subagents.filter(isSubAgentActive).length;
-  const sorted = [...subagents].sort(compareSubAgents);
+  const sorted = sortSubAgentsByCreatedAt(subagents);
 
   return (
     <aside className={`subagent-preview-shell ${open ? "open" : "closed"}`} aria-label="SubAgent sidebar">
@@ -3402,6 +3402,9 @@ function SubAgentObserverModal({
   onClose: () => void;
 }) {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const plugins = subagent.status?.plugins ?? [];
+  const toolNames = subagent.status?.toolNames ?? [];
+  const toolCount = subagent.status?.toolCount ?? toolNames.length;
   const tailKey = useMemo(
     () => transcriptTailKey(subagent.nodes, subagent.processing),
     [subagent.nodes, subagent.processing]
@@ -3436,6 +3439,30 @@ function SubAgentObserverModal({
           <span><Activity size={14} /> {subagent.lastEventType ?? "waiting"}</span>
           {subagent.status?.modelId && <span>{subagent.status.modelId}</span>}
           {subagent.status?.workingDir && <span>{subagent.status.workingDir}</span>}
+          <span>{plugins.length} plugins</span>
+          <span>{toolCount} tools</span>
+        </div>
+        <div className="subagent-modal-config">
+          <span className="subagent-config-label">Plugins</span>
+          <span className="subagent-config-values">
+            {plugins.length > 0
+              ? plugins.map((plugin) => (
+                <span className="subagent-config-chip" key={plugin.id} title={plugin.id}>
+                  {plugin.id}
+                </span>
+              ))
+              : <em>none</em>}
+          </span>
+          <span className="subagent-config-label">Tools</span>
+          <span className="subagent-config-values">
+            {toolNames.length > 0
+              ? toolNames.map((toolName) => (
+                <span className="subagent-config-chip" key={toolName} title={toolName}>
+                  {toolName}
+                </span>
+              ))
+              : <em>none</em>}
+          </span>
         </div>
         <ChatTranscript
           ref={transcriptRef}
@@ -3465,11 +3492,19 @@ function subAgentStateLabel(item: SubAgentRuntimeState): string {
   return state.toLowerCase();
 }
 
-function compareSubAgents(left: SubAgentRuntimeState, right: SubAgentRuntimeState): number {
-  const leftActive = isSubAgentActive(left) ? 1 : 0;
-  const rightActive = isSubAgentActive(right) ? 1 : 0;
-  if (leftActive !== rightActive) return rightActive - leftActive;
-  return (right.lastEventAt ?? 0) - (left.lastEventAt ?? 0);
+export function sortSubAgentsByCreatedAt(subagents: SubAgentRuntimeState[]): SubAgentRuntimeState[] {
+  return [...subagents].sort(compareSubAgentsByCreatedAt);
+}
+
+function compareSubAgentsByCreatedAt(left: SubAgentRuntimeState, right: SubAgentRuntimeState): number {
+  const leftCreatedAt = subAgentCreatedAt(left);
+  const rightCreatedAt = subAgentCreatedAt(right);
+  if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt;
+  return left.id.localeCompare(right.id);
+}
+
+function subAgentCreatedAt(item: SubAgentRuntimeState): number {
+  return item.createdAt ?? item.status?.createdAt ?? item.lastEventAt ?? 0;
 }
 
 function PluginPreviewPanel({

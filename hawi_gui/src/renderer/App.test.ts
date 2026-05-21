@@ -3,8 +3,8 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
-import type { PluginArtifactState } from "./state";
+import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -29,6 +29,20 @@ function makeMetadata(coreRunning: boolean): GuiMetadata {
       showDebug: true
     },
     coreRunning
+  };
+}
+
+function makeSubAgent(overrides: Partial<SubAgentRuntimeState>): SubAgentRuntimeState {
+  return {
+    id: "subagent",
+    name: "SubAgent",
+    role: "general",
+    state: "CREATED",
+    messageHistory: [],
+    nodes: [],
+    partial: { text: "", reasoning: "" },
+    eventCount: 0,
+    ...overrides
   };
 }
 
@@ -254,6 +268,27 @@ describe("sortSessionsByCreatedAt", () => {
       "newer",
       "older-but-updated"
     ]);
+  });
+});
+
+describe("sortSubAgentsByCreatedAt", () => {
+  it("keeps the sidebar order tied to creation time instead of recent updates", () => {
+    const sorted = sortSubAgentsByCreatedAt([
+      makeSubAgent({
+        id: "newer-but-updated",
+        createdAt: 200,
+        lastEventAt: 1000,
+        state: "RUNNING"
+      }),
+      makeSubAgent({
+        id: "older",
+        createdAt: 100,
+        lastEventAt: 10,
+        state: "COMPLETED"
+      })
+    ]);
+
+    expect(sorted.map((item) => item.id)).toEqual(["older", "newer-but-updated"]);
   });
 });
 

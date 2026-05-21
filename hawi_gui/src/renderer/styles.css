@@ -1524,6 +1524,48 @@ button:disabled {
   white-space: nowrap;
 }
 
+.subagent-modal-config {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  flex: 0 0 auto;
+  gap: 8px 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.subagent-config-label {
+  padding-top: 3px;
+  color: #66747a;
+  font-weight: 700;
+}
+
+.subagent-config-values {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+  color: #6c797f;
+}
+
+.subagent-config-values em {
+  color: #9aa4a8;
+  font-style: normal;
+}
+
+.subagent-config-chip {
+  max-width: 240px;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid #d7e0e2;
+  border-radius: 6px;
+  background: #f8faf9;
+  color: #46555b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .subagent-modal .chat-panel {
   flex: 1 1 auto;
   border: 0;

@@ -41,6 +41,24 @@ SubAgentResultContract = Literal[
 ]
 
 
+@dataclass
+class SubAgentPluginInfo:
+    """Serializable plugin identity for a sub-agent."""
+
+    id: str
+    name: str
+    display_name: str | None = None
+    class_name: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "display_name": self.display_name,
+            "class_name": self.class_name,
+        }
+
+
 class SubAgentLifecycleState(str, Enum):
     """Lifecycle state for a managed sub-agent."""
 
@@ -131,6 +149,8 @@ class SubAgentStatus:
     working_dir: str | None = None
     mode: SubAgentMode | str = "fresh"
     shared_context: bool = False
+    plugins: list[SubAgentPluginInfo] = field(default_factory=list)
+    tool_names: list[str] = field(default_factory=list)
     last_result_text: str | None = None
     last_error: str | None = None
 
@@ -151,6 +171,10 @@ class SubAgentStatus:
             "working_dir": self.working_dir,
             "mode": self.mode,
             "shared_context": self.shared_context,
+            "plugins": [plugin.to_dict() for plugin in self.plugins],
+            "plugin_ids": [plugin.id for plugin in self.plugins],
+            "tool_names": list(self.tool_names),
+            "tool_count": len(self.tool_names),
             "last_result_text": self.last_result_text,
             "last_error": self.last_error,
         }
