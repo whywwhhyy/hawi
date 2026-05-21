@@ -37,8 +37,11 @@ preparePackagedApp(packaged);
 clearDirectory(currentDir);
 
 const installedApp = installPackagedApp(packaged, currentDir);
-verifyBundledEngine(installedApp);
+const externalEngineCommand = installExternalEngine(packaged, currentDir);
+installedApp.engineCommand = externalEngineCommand;
+verifyEngineCommand(externalEngineCommand);
 verifyInstalledApp(installedApp);
+prewarmEngine(externalEngineCommand, currentDir);
 if (!options.noShim) {
   installShim(installedApp, binDir);
 }
@@ -204,6 +207,17 @@ function installPackagedApp(packaged, destinationRoot) {
   };
 }
 
+function installExternalEngine(packaged, destinationRoot) {
+  const sourceCommand = resolveBundledEngineCommand(resourcesRootFor(packaged));
+  if (!sourceCommand) {
+    throw new Error(`Bundled hawi-engine executable was not found in ${resourcesRootFor(packaged)}.`);
+  }
+  const sourceRoot = path.dirname(sourceCommand);
+  const targetRoot = path.join(destinationRoot, "bin", "hawi-engine");
+  ditto(sourceRoot, targetRoot);
+  return path.join(targetRoot, path.basename(sourceCommand));
+}
+
 function clearDirectory(directory) {
   mkdirSync(directory, { recursive: true });
   for (const entry of readdirSync(directory)) {
@@ -235,6 +249,36 @@ function verifyBundledEngine(app) {
   const command = resolveBundledEngineCommand(resourcesRootFor(app));
   if (!command) {
     throw new Error(`Bundled hawi-engine executable was not found in ${resourcesRootFor(app)}.`);
+  }
+}
+
+function verifyEngineCommand(command) {
+  try {
+    if (statSync(command).isFile()) {
+      return;
+    }
+  } catch {
+    // Report a clearer error below.
+  }
+  throw new Error(`Installed hawi-engine executable was not found at ${command}.`);
+}
+
+function prewarmEngine(command, cwd) {
+  console.log(`[release-local] prewarm ${command} --inspect`);
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const result = spawnSync(command, ["--inspect"], {
+    cwd,
+    env,
+    encoding: "utf-8",
+    stdio: ["ignore", "ignore", "inherit"],
+    shell: process.platform === "win32"
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`Installed hawi-engine prewarm failed with exit ${result.status ?? "unknown"}.`);
   }
 }
 
@@ -274,9 +318,9 @@ function installShim(installedApp, targetBinDir) {
   mkdirSync(targetBinDir, { recursive: true });
   const target = path.join(targetBinDir, shimName());
   if (process.platform === "win32") {
-    writeFileSync(target, windowsShim(installedApp.executable), "utf-8");
+    writeFileSync(target, windowsShim(installedApp.executable, installedApp.engineCommand), "utf-8");
   } else {
-    writeFileSync(target, posixShim(installedApp.executable), "utf-8");
+    writeFileSync(target, posixShim(installedApp.executable, installedApp.engineCommand), "utf-8");
     chmodSync(target, 0o755);
   }
 }
@@ -285,18 +329,20 @@ function shimName() {
   return process.platform === "win32" ? "hawi.cmd" : "hawi";
 }
 
-function posixShim(executable) {
+function posixShim(executable, engineCommand) {
   return `#!/usr/bin/env bash
 set -euo pipefail
 export HAWI_GUI_CWD="\${HAWI_GUI_CWD:-$PWD}"
+export HAWI_GUI_ENGINE_COMMAND=${shellQuote(engineCommand)}
 unset ELECTRON_RUN_AS_NODE
 exec ${shellQuote(executable)} "$@"
 `;
 }
 
-function windowsShim(executable) {
+function windowsShim(executable, engineCommand) {
   return `@echo off\r
-set HAWI_GUI_CWD=%CD%\r
+set "HAWI_GUI_CWD=%CD%"\r
+set "HAWI_GUI_ENGINE_COMMAND=${engineCommand}"\r
 set ELECTRON_RUN_AS_NODE=\r
 "${executable}" %*\r
 `;

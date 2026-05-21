@@ -17,7 +17,7 @@ if [[ ! -d node_modules ]]; then
 fi
 
 if [[ ! -f dist/index.html || ! -f dist-electron/main/main.js ]]; then
-  echo "Hawi GUI build output is missing. Run '$script_dir/release.sh' once, or run 'npm run build' in $gui_dir." >&2
+  echo "Hawi GUI build output is missing. Run '$script_dir/install.sh' once, or run 'npm run build' in $gui_dir." >&2
   exit 1
 fi
 

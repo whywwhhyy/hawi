@@ -10,7 +10,7 @@ if ($null -eq $npm) {
 }
 
 if ($null -eq $npm) {
-    [Console]::Error.WriteLine("npm is required to release Hawi GUI.")
+    [Console]::Error.WriteLine("npm is required to install Hawi GUI.")
     exit 1
 }
 
@@ -52,7 +52,7 @@ try {
     }
 
     if ([string]::IsNullOrEmpty($env:HAWI_RELEASE_COMMAND)) {
-        $env:HAWI_RELEASE_COMMAND = Join-Path $scriptDir "release.ps1"
+        $env:HAWI_RELEASE_COMMAND = Join-Path $scriptDir "install.ps1"
     }
 
     Invoke-Npm run release:local '--' @args

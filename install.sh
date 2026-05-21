@@ -6,7 +6,7 @@ gui_dir="$script_dir/hawi_gui"
 cd "$gui_dir"
 
 if ! command -v npm >/dev/null 2>&1; then
-  echo "npm is required to release Hawi GUI." >&2
+  echo "npm is required to install Hawi GUI." >&2
   exit 1
 fi
 
@@ -29,5 +29,5 @@ if [[ ! -d node_modules ]]; then
   npm install
 fi
 
-export HAWI_RELEASE_COMMAND="${HAWI_RELEASE_COMMAND:-$script_dir/release.sh}"
+export HAWI_RELEASE_COMMAND="${HAWI_RELEASE_COMMAND:-$script_dir/install.sh}"
 exec npm run release:local -- "$@"
