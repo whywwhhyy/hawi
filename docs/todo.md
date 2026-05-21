@@ -58,6 +58,7 @@
     - [x] 增加原子 checkpoint 与 crash recovery 测试（`test_session_manager.py`、`test_snapshot_round_trip.py`）
     - [x] 完整可见消息历史增量持久化：新消息产生时发送给 SessionManager；不需要展示给用户的消息不持久化到 `message_history`
     - [x] SessionManager 提供读取当前/指定 session 完整历史事件的接口，供 GUI 加载聊天窗口
+    - [ ] Session 历史分页加载：按 `docs/session_history_paging.md` 设计实现 `message_history` tail 首屏加载、offset index、`before/after` 查询和 GUI 顶部按需加载
     - [x] `AgentContext` 持久化 `context_usage`，切换 session 后 GUI Context 区跟随恢复
     - [x] core protocol 增加 session_list / new / load / switch / delete / save_now 命令
     - [x] GUI Renderer 增加 Session 区：消息数、当前 session id、列表弹框、切换、新建、删除非当前 session

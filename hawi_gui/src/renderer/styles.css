@@ -791,6 +791,7 @@ button:disabled {
   gap: 6px;
 }
 
+.workspace-row.has-sidebar,
 .workspace-row.has-artifacts,
 .workspace-row.has-subagents {
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1059,6 +1060,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.workspace-sidebar,
 .plugin-preview-shell {
   display: grid;
   grid-template-columns: 44px;
@@ -1067,10 +1069,12 @@ button:disabled {
   gap: 6px;
 }
 
+.workspace-sidebar.open,
 .plugin-preview-shell.open {
   grid-template-columns: minmax(300px, 360px) 44px;
 }
 
+.workspace-sidebar-content,
 .plugin-preview {
   min-width: 0;
   min-height: 0;
@@ -1081,6 +1085,7 @@ button:disabled {
   flex-direction: column;
 }
 
+.workspace-sidebar-rail,
 .artifact-type-rail {
   display: flex;
   flex-direction: column;
@@ -1117,6 +1122,7 @@ button:disabled {
   background: transparent;
 }
 
+.workspace-sidebar-tab,
 .artifact-type-tab {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -1130,12 +1136,15 @@ button:disabled {
   color: #4a575d;
 }
 
+.workspace-sidebar-tab:hover,
+.workspace-sidebar-tab.active,
 .artifact-type-tab:hover,
 .artifact-type-tab.active {
   background: var(--color-primary-tint);
   color: var(--color-primary-dark);
 }
 
+.workspace-sidebar-tab span,
 .artifact-type-tab span {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
@@ -1148,6 +1157,7 @@ button:disabled {
   white-space: nowrap;
 }
 
+.workspace-sidebar-tab strong,
 .artifact-type-tab strong {
   display: inline-flex;
   align-items: center;
@@ -1161,6 +1171,7 @@ button:disabled {
   line-height: 1;
 }
 
+.workspace-sidebar-tab.active strong,
 .artifact-type-tab.active strong {
   background: var(--color-primary);
   color: var(--color-surface);

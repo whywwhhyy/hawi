@@ -26,6 +26,7 @@ Hawi Agent 框架的官方文档。
 | [result.md](./result.md) | Agent 执行结果 |
 | [printers.md](./printers.md) | 打印机系统 |
 | [context.md](./context.md) | AgentContext 使用指南 |
+| [session_history_paging.md](./session_history_paging.md) | Session 历史分页加载与存储演进设计 |
 | [resources.md](./resources.md) | MCP 兼容资源系统 |
 | [errors.md](./errors.md) | 错误处理指南 |
 | [agent_runner.md](./agent_runner.md) | AgentRunner 运行器 |

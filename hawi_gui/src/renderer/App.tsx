@@ -283,6 +283,17 @@ interface ArtifactTypeGroup {
   artifacts: PluginArtifactState[];
 }
 
+type WorkspaceSidebarTab = "subagents" | `artifact:${string}`;
+
+function artifactSidebarTab(type: string): WorkspaceSidebarTab {
+  return `artifact:${type}`;
+}
+
+function artifactTypeFromSidebarTab(tab: WorkspaceSidebarTab | null): string | null {
+  if (!tab?.startsWith("artifact:")) return null;
+  return tab.slice("artifact:".length);
+}
+
 export function artifactTypeLabel(type: string): string {
   const normalized = type.trim();
   if (!normalized) return "Artifact";
@@ -339,8 +350,7 @@ export default function App() {
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
-  const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
-  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
+  const [rightSidebarTab, setRightSidebarTab] = useState<WorkspaceSidebarTab | null>(null);
   const [subagentObserverId, setSubagentObserverId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionMetaPayload[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -395,9 +405,23 @@ export default function App() {
   const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0;
   const fallbackState = useMemo(createInitialState, []);
   const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
-  const hasArtifacts = state.artifactOrder.some((key) => Boolean(state.artifacts[key]));
+  const artifactList = useMemo(
+    () => state.artifactOrder.map((key) => state.artifacts[key]).filter(Boolean),
+    [state.artifactOrder, state.artifacts]
+  );
+  const artifactGroups = useMemo(() => groupArtifactsByType(artifactList), [artifactList]);
+  const selectedArtifactForSidebar = state.selectedArtifactId && state.artifacts[state.selectedArtifactId]
+    ? state.artifacts[state.selectedArtifactId]
+    : artifactList[0];
+  const selectedArtifactTab = selectedArtifactForSidebar
+    ? artifactSidebarTab(selectedArtifactForSidebar.artifactType)
+    : artifactGroups[0]
+      ? artifactSidebarTab(artifactGroups[0].type)
+      : null;
+  const hasArtifacts = artifactList.length > 0;
   const subagentList = state.subagentOrder.map((id) => state.subagents[id]).filter(Boolean);
   const hasSubagents = subagentList.length > 0;
+  const hasRightSidebar = hasArtifacts || hasSubagents;
   const observedSubagent = subagentObserverId ? state.subagents[subagentObserverId] : undefined;
   const showDebug = config?.showDebug ?? true;
   const visibleChatNodes = useMemo(
@@ -559,14 +583,16 @@ export default function App() {
     const artifactCount = state.artifactOrder.filter((key) => Boolean(state.artifacts[key])).length;
     if (artifactCount === 0) {
       previousArtifactCountRef.current = 0;
-      setArtifactPanelOpen(false);
+      setRightSidebarTab((current) => (
+        artifactTypeFromSidebarTab(current) ? (hasSubagents ? "subagents" : null) : current
+      ));
       return;
     }
-    if (previousArtifactCountRef.current === 0) {
-      setArtifactPanelOpen(true);
+    if (previousArtifactCountRef.current === 0 && selectedArtifactTab) {
+      setRightSidebarTab(selectedArtifactTab);
     }
     previousArtifactCountRef.current = artifactCount;
-  }, [currentSessionId, state.artifactOrder, state.artifacts]);
+  }, [currentSessionId, hasSubagents, selectedArtifactTab, state.artifactOrder, state.artifacts]);
 
   useEffect(() => {
     if (subagentPanelSessionRef.current !== currentSessionId) {
@@ -576,18 +602,20 @@ export default function App() {
     const subagentCount = state.subagentOrder.length;
     if (subagentCount === 0) {
       previousSubagentCountRef.current = 0;
-      setSubagentPanelOpen(false);
+      setRightSidebarTab((current) => (
+        current === "subagents" ? selectedArtifactTab : current
+      ));
       setSubagentObserverId(null);
       return;
     }
     if (previousSubagentCountRef.current === 0) {
-      setSubagentPanelOpen(true);
+      setRightSidebarTab("subagents");
     }
     if (subagentObserverId && !state.subagents[subagentObserverId]) {
       setSubagentObserverId(null);
     }
     previousSubagentCountRef.current = subagentCount;
-  }, [currentSessionId, state.subagentOrder, state.subagents, subagentObserverId]);
+  }, [currentSessionId, selectedArtifactTab, state.subagentOrder, state.subagents, subagentObserverId]);
 
   useEffect(() => {
     function syncSelection() {
@@ -1567,7 +1595,7 @@ export default function App() {
         />
       </section>
 
-      <section className={`workspace-row ${hasArtifacts ? "has-artifacts" : ""} ${hasSubagents ? "has-subagents" : ""}`}>
+      <section className={`workspace-row ${hasRightSidebar ? "has-sidebar" : ""}`}>
         <ChatTranscript
           ref={chatRef}
           nodes={visibleChatNodes}
@@ -1578,27 +1606,22 @@ export default function App() {
           onTouchStart={markChatUserScrollIntent}
           onMouseDown={pauseChatFollowForSelection}
         />
-        {hasArtifacts && (
-          <PluginPreviewPanel
+        {hasRightSidebar && (
+          <WorkspaceSidebar
             artifacts={state.artifacts}
             artifactOrder={state.artifactOrder}
             selectedArtifactId={state.selectedArtifactId}
-            open={artifactPanelOpen}
+            artifactGroups={artifactGroups}
             messages={state.pluginMessages}
             statuses={state.pluginStatuses}
             toolProgress={state.toolProgress}
-            onOpenChange={setArtifactPanelOpen}
+            subagents={subagentList}
+            activeTab={rightSidebarTab}
+            onActiveTabChange={setRightSidebarTab}
             onSelectArtifact={(artifactKey) => {
               dispatch({ version: VERSION, type: "gui.select_artifact", payload: { artifact_key: artifactKey } });
             }}
             onPluginAction={(payload) => sendCommand("plugin_action", payload)}
-          />
-        )}
-        {hasSubagents && (
-          <SubAgentPreviewPanel
-            subagents={subagentList}
-            open={subagentPanelOpen}
-            onOpenChange={setSubagentPanelOpen}
             onObserve={(id) => setSubagentObserverId(id)}
           />
         )}
@@ -3411,80 +3434,186 @@ interface PluginActionPayload extends Record<string, unknown> {
   arguments: Record<string, unknown>;
 }
 
-function SubAgentPreviewPanel({
+function WorkspaceSidebar({
+  artifacts,
+  artifactOrder,
+  selectedArtifactId,
+  artifactGroups,
+  messages,
+  statuses,
+  toolProgress,
   subagents,
-  open,
-  onOpenChange,
+  activeTab,
+  onActiveTabChange,
+  onSelectArtifact,
+  onPluginAction,
+  onObserve
+}: {
+  artifacts: Record<string, PluginArtifactState>;
+  artifactOrder: string[];
+  selectedArtifactId?: string;
+  artifactGroups: ArtifactTypeGroup[];
+  messages: PluginMessageState[];
+  statuses: Record<string, PluginStatusState>;
+  toolProgress: Record<string, ToolProgressState>;
+  subagents: SubAgentRuntimeState[];
+  activeTab: WorkspaceSidebarTab | null;
+  onActiveTabChange: (tab: WorkspaceSidebarTab | null) => void;
+  onSelectArtifact: (artifactKey: string) => void;
+  onPluginAction: (payload: PluginActionPayload) => Promise<CoreFrame | null>;
+  onObserve: (subagentId: string) => void;
+}) {
+  const artifactList = artifactOrder.map((key) => artifacts[key]).filter(Boolean);
+  const activeArtifactType = artifactTypeFromSidebarTab(activeTab);
+  const selectedCandidate = selectedArtifactId && artifacts[selectedArtifactId]
+    ? artifacts[selectedArtifactId]
+    : artifactList[0];
+  const selectedGroup = activeArtifactType
+    ? artifactGroups.find((group) => group.type === activeArtifactType)
+    : undefined;
+  const fallbackGroup = selectedCandidate
+    ? artifactGroups.find((group) => group.type === selectedCandidate.artifactType)
+    : artifactGroups[0];
+  const displayedGroup = selectedGroup ?? fallbackGroup;
+  const selected = selectedCandidate && selectedCandidate.artifactType === displayedGroup?.type
+    ? selectedCandidate
+    : displayedGroup?.artifacts[0];
+  const canShowArtifact = activeArtifactType !== null && displayedGroup !== undefined && selected !== undefined;
+  const canShowSubagents = activeTab === "subagents" && subagents.length > 0;
+  const open = canShowArtifact || canShowSubagents;
+
+  function toggleArtifactGroup(group: ArtifactTypeGroup) {
+    const tab = artifactSidebarTab(group.type);
+    if (activeTab === tab) {
+      onActiveTabChange(null);
+      return;
+    }
+    onSelectArtifact(group.artifacts[0].key);
+    onActiveTabChange(tab);
+  }
+
+  function toggleSubagents() {
+    onActiveTabChange(activeTab === "subagents" ? null : "subagents");
+  }
+
+  return (
+    <aside className={`workspace-sidebar ${open ? "open" : "closed"}`} aria-label="Workspace sidebar">
+      {canShowArtifact && displayedGroup && selected && (
+        <ArtifactSidebarContent
+          group={displayedGroup}
+          selected={selected}
+          messages={messages}
+          statuses={statuses}
+          toolProgress={toolProgress}
+          onClose={() => onActiveTabChange(null)}
+          onSelectArtifact={(artifactKey) => {
+            onSelectArtifact(artifactKey);
+            const artifact = artifacts[artifactKey];
+            if (artifact) {
+              onActiveTabChange(artifactSidebarTab(artifact.artifactType));
+            }
+          }}
+          onPluginAction={onPluginAction}
+        />
+      )}
+      {canShowSubagents && (
+        <SubAgentSidebarContent
+          subagents={subagents}
+          onClose={() => onActiveTabChange(null)}
+          onObserve={onObserve}
+        />
+      )}
+      <nav className="workspace-sidebar-rail" aria-label="Workspace side panels">
+        {artifactGroups.map((group) => {
+          const tab = artifactSidebarTab(group.type);
+          const active = activeTab === tab;
+          return (
+            <button
+              key={group.type}
+              type="button"
+              className={active ? "workspace-sidebar-tab active" : "workspace-sidebar-tab"}
+              title={`${group.label} (${group.artifacts.length})`}
+              aria-pressed={active}
+              onClick={() => toggleArtifactGroup(group)}
+            >
+              <span>{group.label}</span>
+              <strong>{group.artifacts.length}</strong>
+            </button>
+          );
+        })}
+        {subagents.length > 0 && (
+          <button
+            type="button"
+            className={activeTab === "subagents" ? "workspace-sidebar-tab active" : "workspace-sidebar-tab"}
+            title={`SubAgents (${subagents.length})`}
+            aria-pressed={activeTab === "subagents"}
+            onClick={toggleSubagents}
+          >
+            <span>SubAgents</span>
+            <strong>{subagents.length}</strong>
+          </button>
+        )}
+      </nav>
+    </aside>
+  );
+}
+
+function SubAgentSidebarContent({
+  subagents,
+  onClose,
   onObserve,
 }: {
   subagents: SubAgentRuntimeState[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onClose: () => void;
   onObserve: (subagentId: string) => void;
 }) {
   const activeCount = subagents.filter(isSubAgentActive).length;
   const sorted = sortSubAgentsByCreatedAt(subagents);
 
   return (
-    <aside className={`subagent-preview-shell ${open ? "open" : "closed"}`} aria-label="SubAgent sidebar">
-      {open && (
-        <section className="subagent-preview">
-          <header className="preview-head">
-            <span><Bot size={15} /> SubAgents</span>
-            <button
-              type="button"
-              className="icon-button"
-              title="隐藏 SubAgents"
-              aria-label="隐藏 SubAgents"
-              onClick={() => onOpenChange(false)}
-            >
-              <ChevronRight size={17} />
-            </button>
-          </header>
-          <div className="subagent-summary">
-            <strong>{activeCount}</strong>
-            <span>running</span>
-            <strong>{subagents.length}</strong>
-            <span>total</span>
-          </div>
-          <div className="subagent-list">
-            {sorted.map((item) => (
-              <button
-                type="button"
-                className={`subagent-item ${isSubAgentActive(item) ? "active" : ""}`}
-                key={item.id}
-                title={item.id}
-                onClick={() => onObserve(item.id)}
-              >
-                <span className="subagent-item-head">
-                  <strong>{item.name}</strong>
-                  <em>{subAgentStateLabel(item)}</em>
-                </span>
-                <span className="subagent-item-meta">
-                  {item.role}
-                  {item.nodes.length > 0 ? ` · ${item.nodes.length} nodes` : ""}
-                </span>
-                {item.lastEventType && (
-                  <span className="subagent-item-event">{item.lastEventType}</span>
-                )}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-      <nav className="subagent-rail" aria-label="SubAgent tabs">
+    <section className="subagent-preview workspace-sidebar-content">
+      <header className="preview-head">
+        <span><Bot size={15} /> SubAgents</span>
         <button
           type="button"
-          className={open ? "subagent-rail-tab active" : "subagent-rail-tab"}
-          title={`SubAgents (${subagents.length})`}
-          aria-pressed={open}
-          onClick={() => onOpenChange(!open)}
+          className="icon-button"
+          title="隐藏 SubAgents"
+          aria-label="隐藏 SubAgents"
+          onClick={onClose}
         >
-          <span>SubAgents</span>
-          <strong>{subagents.length}</strong>
+          <ChevronRight size={17} />
         </button>
-      </nav>
-    </aside>
+      </header>
+      <div className="subagent-summary">
+        <strong>{activeCount}</strong>
+        <span>running</span>
+        <strong>{subagents.length}</strong>
+        <span>total</span>
+      </div>
+      <div className="subagent-list">
+        {sorted.map((item) => (
+          <button
+            type="button"
+            className={`subagent-item ${isSubAgentActive(item) ? "active" : ""}`}
+            key={item.id}
+            title={item.id}
+            onClick={() => onObserve(item.id)}
+          >
+            <span className="subagent-item-head">
+              <strong>{item.name}</strong>
+              <em>{subAgentStateLabel(item)}</em>
+            </span>
+            <span className="subagent-item-meta">
+              {item.role}
+              {item.nodes.length > 0 ? ` · ${item.nodes.length} nodes` : ""}
+            </span>
+            {item.lastEventType && (
+              <span className="subagent-item-event">{item.lastEventType}</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -3657,140 +3786,95 @@ function subAgentCreatedAt(item: SubAgentRuntimeState): number {
   return item.createdAt ?? item.status?.createdAt ?? item.lastEventAt ?? 0;
 }
 
-function PluginPreviewPanel({
-  artifacts,
-  artifactOrder,
-  selectedArtifactId,
-  open,
+function ArtifactSidebarContent({
+  group,
+  selected,
   messages,
   statuses,
   toolProgress,
-  onOpenChange,
+  onClose,
   onSelectArtifact,
   onPluginAction
 }: {
-  artifacts: Record<string, PluginArtifactState>;
-  artifactOrder: string[];
-  selectedArtifactId?: string;
-  open: boolean;
+  group: ArtifactTypeGroup;
+  selected: PluginArtifactState;
   messages: PluginMessageState[];
   statuses: Record<string, PluginStatusState>;
   toolProgress: Record<string, ToolProgressState>;
-  onOpenChange: (open: boolean) => void;
+  onClose: () => void;
   onSelectArtifact: (artifactKey: string) => void;
   onPluginAction: (payload: PluginActionPayload) => Promise<CoreFrame | null>;
 }) {
-  const artifactList = artifactOrder.map((key) => artifacts[key]).filter(Boolean);
-  const groups = groupArtifactsByType(artifactList);
-  const selectedCandidate = selectedArtifactId && artifacts[selectedArtifactId]
-    ? artifacts[selectedArtifactId]
-    : artifactList[0];
-  const selectedGroup = groups.find((group) => group.type === selectedCandidate?.artifactType) ?? groups[0];
-  const selected = selectedCandidate && selectedCandidate.artifactType === selectedGroup?.type
-    ? selectedCandidate
-    : selectedGroup?.artifacts[0];
   const statusList = Object.values(statuses).sort((a, b) => b.updatedAt - a.updatedAt);
   const progressList = Object.values(toolProgress).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4);
   const messageList = messages.slice(-5).reverse();
 
-  function selectType(group: ArtifactTypeGroup) {
-    if (open && group.type === selectedGroup?.type) {
-      onOpenChange(false);
-      return;
-    }
-    onSelectArtifact(group.artifacts[0].key);
-    onOpenChange(true);
-  }
-
   function selectArtifact(artifactKey: string) {
     onSelectArtifact(artifactKey);
-    onOpenChange(true);
   }
 
   return (
-    <aside className={`plugin-preview-shell ${open ? "open" : "closed"}`} aria-label="Artifact sidebar">
-      {open && selectedGroup && selected && (
-        <section className="plugin-preview">
-          <header className="preview-head">
-            <span><FileText size={15} /> {selectedGroup.label}</span>
+    <section className="plugin-preview workspace-sidebar-content">
+      <header className="preview-head">
+        <span><FileText size={15} /> {group.label}</span>
+        <button
+          type="button"
+          className="icon-button"
+          title="隐藏 Artifacts"
+          aria-label="隐藏 Artifacts"
+          onClick={onClose}
+        >
+          <ChevronRight size={17} />
+        </button>
+      </header>
+      {group.artifacts.length > 1 && (
+        <div className="artifact-list">
+          {group.artifacts.map((artifact) => (
             <button
-              type="button"
-              className="icon-button"
-              title="隐藏 Artifacts"
-              aria-label="隐藏 Artifacts"
-              onClick={() => onOpenChange(false)}
+              key={artifact.key}
+              className={artifact.key === selected.key ? "artifact-item active" : "artifact-item"}
+              title={artifact.title}
+              onClick={() => selectArtifact(artifact.key)}
             >
-              <ChevronRight size={17} />
+              <span>{artifact.title}</span>
+              <small>{artifact.pluginName}</small>
             </button>
-          </header>
-          {selectedGroup.artifacts.length > 1 && (
-            <div className="artifact-list">
-              {selectedGroup.artifacts.map((artifact) => (
-                <button
-                  key={artifact.key}
-                  className={artifact.key === selected.key ? "artifact-item active" : "artifact-item"}
-                  title={artifact.title}
-                  onClick={() => selectArtifact(artifact.key)}
-                >
-                  <span>{artifact.title}</span>
-                  <small>{artifact.pluginName}</small>
-                </button>
-              ))}
+          ))}
+        </div>
+      )}
+      <ArtifactPreview artifact={selected} />
+
+      {(statusList.length > 0 || progressList.length > 0) && (
+        <section className="plugin-side-section">
+          <h3><Activity size={14} /> Progress</h3>
+          {progressList.map((item, index) => (
+            <ToolProgress progress={item} compact key={`${item.pluginId}-${item.updatedAt}-${index}`} />
+          ))}
+          {statusList.slice(0, 4).map((item) => (
+            <div className="plugin-status" key={item.pluginId}>
+              <div>
+                <strong>{item.label ?? item.pluginName}</strong>
+                <span>{item.message ?? item.status}</span>
+              </div>
+              {item.progress != null && <em>{Math.round(item.progress * 100)}%</em>}
             </div>
-          )}
-          <ArtifactPreview artifact={selected} />
-
-          {(statusList.length > 0 || progressList.length > 0) && (
-            <section className="plugin-side-section">
-              <h3><Activity size={14} /> Progress</h3>
-              {progressList.map((item, index) => (
-                <ToolProgress progress={item} compact key={`${item.pluginId}-${item.updatedAt}-${index}`} />
-              ))}
-              {statusList.slice(0, 4).map((item) => (
-                <div className="plugin-status" key={item.pluginId}>
-                  <div>
-                    <strong>{item.label ?? item.pluginName}</strong>
-                    <span>{item.message ?? item.status}</span>
-                  </div>
-                  {item.progress != null && <em>{Math.round(item.progress * 100)}%</em>}
-                </div>
-              ))}
-            </section>
-          )}
-
-          {messageList.length > 0 && (
-            <section className="plugin-side-section">
-              <h3>Messages</h3>
-              {messageList.map((item) => (
-                <div className={`plugin-message ${item.level}`} key={item.id}>
-                  <strong>{item.title ?? item.pluginName}</strong>
-                  <span>{item.message}</span>
-                  <PluginMessageActions item={item} onPluginAction={onPluginAction} />
-                </div>
-              ))}
-            </section>
-          )}
+          ))}
         </section>
       )}
-      <nav className="artifact-type-rail" aria-label="Artifact types">
-        {groups.map((group) => {
-          const active = group.type === selectedGroup?.type;
-          return (
-            <button
-              key={group.type}
-              type="button"
-              className={active && open ? "artifact-type-tab active" : "artifact-type-tab"}
-              title={`${group.label} (${group.artifacts.length})`}
-              aria-pressed={active && open}
-              onClick={() => selectType(group)}
-            >
-              <span>{group.label}</span>
-              <strong>{group.artifacts.length}</strong>
-            </button>
-          );
-        })}
-      </nav>
-    </aside>
+
+      {messageList.length > 0 && (
+        <section className="plugin-side-section">
+          <h3>Messages</h3>
+          {messageList.map((item) => (
+            <div className={`plugin-message ${item.level}`} key={item.id}>
+              <strong>{item.title ?? item.pluginName}</strong>
+              <span>{item.message}</span>
+              <PluginMessageActions item={item} onPluginAction={onPluginAction} />
+            </div>
+          ))}
+        </section>
+      )}
+    </section>
   );
 }
 
