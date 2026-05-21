@@ -113,8 +113,11 @@ Options:
 
 function run(command, args, cwd) {
   console.log(`[release-local] ${command} ${args.join(" ")}`);
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
   const result = spawnSync(command, args, {
     cwd,
+    env,
     stdio: "inherit",
     shell: process.platform === "win32"
   });
@@ -286,6 +289,7 @@ function posixShim(executable) {
   return `#!/usr/bin/env bash
 set -euo pipefail
 export HAWI_GUI_CWD="\${HAWI_GUI_CWD:-$PWD}"
+unset ELECTRON_RUN_AS_NODE
 exec ${shellQuote(executable)} "$@"
 `;
 }
@@ -293,6 +297,7 @@ exec ${shellQuote(executable)} "$@"
 function windowsShim(executable) {
   return `@echo off\r
 set HAWI_GUI_CWD=%CD%\r
+set ELECTRON_RUN_AS_NODE=\r
 "${executable}" %*\r
 `;
 }

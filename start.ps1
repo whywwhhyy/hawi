@@ -50,6 +50,7 @@ try {
     if ([string]::IsNullOrEmpty($env:HAWI_GUI_CWD)) {
         $env:HAWI_GUI_CWD = $launchCwd
     }
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
     if ($startArgs.Count -gt 0) {
         Invoke-Npm run start '--' @startArgs

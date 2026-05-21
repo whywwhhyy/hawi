@@ -1629,9 +1629,9 @@ button:disabled {
 .bubble {
   --bubble-border-color: #d8ddde;
   position: relative;
-  width: fit-content;
+  width: min(860px, 100%);
   min-width: 0;
-  max-width: min(860px, 100%);
+  max-width: 100%;
   margin: 0 0 10px 0;
   border: 1px solid var(--bubble-border-color);
   border-radius: 8px;

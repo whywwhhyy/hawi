@@ -27,6 +27,8 @@ if [[ ${#args[@]} -eq 1 && "${args[0]}" != --* ]]; then
   args=(--model "${args[0]}")
 fi
 
+unset ELECTRON_RUN_AS_NODE
+
 if [[ ${#args[@]} -gt 0 ]]; then
   exec npm run start -- "${args[@]}"
 else
