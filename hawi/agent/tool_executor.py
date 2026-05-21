@@ -1225,8 +1225,12 @@ class ToolExecutor:
 
                 if inspect.isasyncgen(raw_result):
                     parts: list[str] = []
+                    final_result: ToolResult | None = None
                     async_gen = cast(AsyncGenerator[Any, None], raw_result)
                     async for part in async_gen:
+                        if isinstance(part, ToolResult):
+                            final_result = part
+                            continue
                         part_text = str(part)
                         parts.append(part_text)
                         await self._emit_event(
@@ -1249,6 +1253,10 @@ class ToolExecutor:
                         ),
                         event_bus,
                     )
+                    if final_result is not None:
+                        if final_result.output is None and parts:
+                            final_result.output = "".join(parts)
+                        return final_result
                     return ToolResult(success=True, output="".join(parts))
 
                 if isinstance(raw_result, ToolResult):

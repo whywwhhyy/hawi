@@ -931,6 +931,38 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.resultPreview).toContain("final line");
   });
 
+  it("appends streaming tool result parts without completing the tool", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-streaming-tool",
+      tool_call_id: "tc-streaming-tool",
+      tool_name: "run_shell"
+    }, 100));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-streaming-tool",
+      tool_call_id: "tc-streaming-tool",
+      part: "first\n",
+      is_part: true
+    }, 110));
+
+    expect(state.nodes[0].tool?.status).toBe("running");
+    expect(state.nodes[0].tool?.resultPreview).toBe("first\n");
+    expect(state.nodes[0].tool?.streamFinishedAt).toBeUndefined();
+
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-streaming-tool",
+      tool_call_id: "tc-streaming-tool",
+      tool_name: "run_shell",
+      success: true,
+      output: "Exit code: 0\n\nStdout:\nfirst\nsecond\n",
+      is_part: false
+    }, 150));
+
+    expect(state.nodes[0].tool?.status).toBe("success");
+    expect(state.nodes[0].tool?.resultPreview).toContain("second");
+    expect(state.nodes[0].tool?.streamFinishedAt).toBe(150000);
+  });
+
   it("shows failed tool output when error is empty", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-output-fail", tool_call_id: "tc-output-fail", tool_name: "shell" }));

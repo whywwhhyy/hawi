@@ -1,7 +1,9 @@
+import inspect
 import pytest
 import re
 import time
 from hawi.builtin_plugins.shell_plugin.plugin import ShellPlugin
+from hawi.tool import ToolResult
 
 
 class TestShellPlugin:
@@ -141,6 +143,36 @@ class TestShellPlugin:
 
         assert "notify_timeout" in properties
         assert "timeout" not in properties
+
+    @pytest.mark.asyncio
+    async def test_run_shell_tool_streams_output_parts(self, plugin):
+        run_shell_tool = next(tool for tool in plugin.tools if tool.name == "run_shell")
+        command = (
+            "python -c \"import time; print('first', flush=True); "
+            "time.sleep(0.05); print('second', flush=True)\""
+        )
+
+        raw_result = await run_shell_tool.arun(
+            command=command,
+            notify_timeout=1,
+        )
+
+        assert inspect.isasyncgen(raw_result)
+        parts: list[str] = []
+        final: ToolResult | None = None
+        async for item in raw_result:
+            if isinstance(item, ToolResult):
+                final = item
+            else:
+                parts.append(item)
+
+        assert "first" in "".join(parts)
+        assert "second" in "".join(parts)
+        assert final is not None
+        assert final.success is True
+        assert "Exit code: 0" in str(final.output)
+        assert "first" in str(final.output)
+        assert "second" in str(final.output)
 
     def test_shell_control_schema_uses_notify_timeout_parameter(self, plugin):
         shell_control_tool = next(tool for tool in plugin.tools if tool.name == "shell_control")

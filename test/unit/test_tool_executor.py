@@ -11,9 +11,11 @@ import pytest
 import hawi.agent.tool_executor as tool_executor_module
 from hawi.agent import HawiAgent, ToolCallRequest, ToolExecutor
 from hawi.agent.agent import _ExecutionState
+from hawi.events import AgentToolResultPartEvent
 from hawi.models import Model
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse, TokenUsage
 from hawi.plugin import HawiPlugin, tool
+from hawi.tool import ToolResult
 
 
 class OrderedToolModel(Model):
@@ -184,6 +186,27 @@ class OversizeToolPlugin(HawiPlugin):
     )
     async def big_dict_tool(self) -> dict[str, str]:
         return {"payload": "x" * 5000}
+
+
+class StreamingToolPlugin(HawiPlugin):
+    @tool(
+        name="streaming_tool",
+        description="Stream partial output and then return a final result",
+        parameters_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    )
+    async def streaming_tool(self) -> AsyncGenerator[str | ToolResult, None]:
+        yield "alpha"
+        await asyncio.sleep(0)
+        yield " beta"
+        yield ToolResult(
+            success=False,
+            output="final output",
+            error="final error",
+        )
 
 
 def _tool_result_ids(agent: HawiAgent) -> list[str]:
@@ -408,3 +431,33 @@ async def test_tool_executor_raises_on_oversized_tool_result_in_debug(
             },
             _ExecutionState(run_id="run-big", iteration=1),
         )
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_streams_parts_and_uses_generator_final_result() -> None:
+    agent = HawiAgent(
+        model=OrderedToolModel(),
+        plugins=[StreamingToolPlugin()],
+        streaming=True,
+    )
+    part_events: list[AgentToolResultPartEvent] = []
+    agent.subscribe_blocking(
+        lambda event: part_events.append(event),
+        ["agent.tool_result_part"],
+    )
+
+    record = await agent._execute_tool(
+        {
+            "type": "tool_call",
+            "id": "call-stream",
+            "name": "streaming_tool",
+            "arguments": {},
+        },
+        _ExecutionState(run_id="run-stream", iteration=1),
+    )
+
+    assert [event.part for event in part_events] == ["alpha", " beta", ""]
+    assert [event.is_final for event in part_events] == [False, False, True]
+    assert record.result.success is False
+    assert record.result.output == "final output"
+    assert record.result.error == "final error"

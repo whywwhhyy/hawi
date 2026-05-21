@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import subprocess
@@ -7,7 +8,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import IO, Literal
+from typing import IO, AsyncGenerator, Literal
 
 from hawi.plugin import HawiPlugin, tool
 from hawi.tool import ToolResult
@@ -15,6 +16,8 @@ from hawi.tool import ToolResult
 
 DEFAULT_NOTIFY_TIMEOUT_SECONDS = 300.0
 CONTROL_WAIT_SECONDS = 2.0
+STREAM_POLL_SECONDS = 0.05
+STREAM_CHUNK_CHARS = 8192
 
 
 @dataclass
@@ -82,12 +85,21 @@ class ShellPlugin(HawiPlugin):
     def gui_default_config(cls) -> dict:
         return {}
 
-    @tool(name="run_shell")
     def run_shell(self, command: str, notify_timeout: float = DEFAULT_NOTIFY_TIMEOUT_SECONDS) -> ToolResult:
+        """Run a shell command synchronously for direct Python callers."""
+        return self._run_shell_blocking(command, notify_timeout)
+
+    @tool(name="run_shell")
+    async def _run_shell_tool(
+        self,
+        command: str,
+        notify_timeout: float = DEFAULT_NOTIFY_TIMEOUT_SECONDS,
+    ) -> AsyncGenerator[str | ToolResult, None]:
         """
         运行 shell 命令。
 
-        这是一个可控的长命令启动工具。
+        这是一个可控的长命令启动工具。命令运行期间，已产生的 stdout/stderr
+        会实时分片返回给界面；工具最终仍会返回完整的进程摘要。
 
         notify_timeout 表示本工具调用愿意在前台等待命令完成并通知 agent 的秒数，
         默认 300 秒。它不是 shell 的 timeout 命令，也不是命令的最大运行时长。
@@ -113,6 +125,10 @@ class ShellPlugin(HawiPlugin):
             notify_timeout: 前台等待命令完成并通知 agent 的秒数。默认 300 秒。
                 到时只返回当前状态并保留后台进程，不会杀掉命令。
         """
+        async for item in self._run_shell_stream(command, notify_timeout):
+            yield item
+
+    def _run_shell_blocking(self, command: str, notify_timeout: float) -> ToolResult:
         try:
             notify_timeout = _normalize_notify_timeout(notify_timeout)
             shell_command = self._start_command(command)
@@ -144,6 +160,83 @@ class ShellPlugin(HawiPlugin):
             return ToolResult(success=True, output=output)
         except Exception as e:
             return ToolResult(success=False, error=f"Error running command: {type(e).__name__}: {e}")
+
+    async def _run_shell_stream(
+        self,
+        command: str,
+        notify_timeout: float,
+    ) -> AsyncGenerator[str | ToolResult, None]:
+        try:
+            notify_timeout = _normalize_notify_timeout(notify_timeout)
+            shell_command = self._start_command(command)
+            stdout_offset = 0
+            stderr_offset = 0
+            stderr_header_emitted = False
+            deadline = time.time() + notify_timeout
+
+            while True:
+                stdout, stderr = shell_command.stdout(), shell_command.stderr()
+                for chunk in _iter_stream_chunks(stdout[stdout_offset:]):
+                    yield chunk
+                stdout_offset = len(stdout)
+                stderr_delta = stderr[stderr_offset:]
+                if stderr_delta:
+                    if not stderr_header_emitted:
+                        yield "\n[stderr]\n"
+                        stderr_header_emitted = True
+                    for chunk in _iter_stream_chunks(stderr_delta):
+                        yield chunk
+                    stderr_offset = len(stderr)
+
+                returncode = shell_command.process.poll()
+                if returncode is not None:
+                    shell_command.join_readers()
+                    stdout = shell_command.stdout()
+                    stderr = shell_command.stderr()
+                    for chunk in _iter_stream_chunks(stdout[stdout_offset:]):
+                        yield chunk
+                    stderr_delta = stderr[stderr_offset:]
+                    if stderr_delta:
+                        if not stderr_header_emitted:
+                            yield "\n[stderr]\n"
+                            stderr_header_emitted = True
+                        for chunk in _iter_stream_chunks(stderr_delta):
+                            yield chunk
+
+                    output = _format_process_result(
+                        command=command,
+                        returncode=returncode,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+                    self._forget_command(shell_command.id)
+                    if returncode != 0:
+                        yield ToolResult(
+                            success=False,
+                            output=output,
+                            error=f"Command exited with status {returncode}",
+                        )
+                    else:
+                        yield ToolResult(success=True, output=output)
+                    return
+
+                if time.time() >= deadline:
+                    yield ToolResult(
+                        success=True,
+                        output=_format_running_command(
+                            shell_command,
+                            notify_timeout=notify_timeout,
+                        ),
+                    )
+                    return
+
+                sleep_seconds = min(
+                    STREAM_POLL_SECONDS,
+                    max(deadline - time.time(), 0.0),
+                )
+                await asyncio.sleep(sleep_seconds)
+        except Exception as e:
+            yield ToolResult(success=False, error=f"Error running command: {type(e).__name__}: {e}")
 
     @tool(name="shell_control")
     def shell_control(
@@ -362,6 +455,15 @@ def _start_reader(
     thread = threading.Thread(target=read_pipe, name=name, daemon=True)
     thread.start()
     return thread
+
+
+def _iter_stream_chunks(text: str) -> list[str]:
+    if not text:
+        return []
+    return [
+        text[index:index + STREAM_CHUNK_CHARS]
+        for index in range(0, len(text), STREAM_CHUNK_CHARS)
+    ]
 
 
 def _send_process_signal(process: subprocess.Popen[str], sig: signal.Signals) -> None:

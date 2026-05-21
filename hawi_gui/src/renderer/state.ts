@@ -582,19 +582,21 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const updated = updateToolResult(state, toolCallId, payload, (tool) => {
         const eventAt = frameTime(frame);
         const text = formatToolResultText(payload);
-        return completeToolStream({
+        const isPart = payload.is_part === true;
+        const nextTool = {
           ...tool,
-          status: payload.success === false ? "fail" : "success",
+          status: isPart ? tool.status : payload.success === false ? "fail" : "success",
           name: String(payload.tool_name || tool.name),
           description: optionalToolPurpose(payload) ?? tool.description,
-          resultPreview: payload.is_part === true
+          resultPreview: isPart
             ? tool.resultPreview + text
             : text || tool.resultPreview,
-          resultData: payload.is_part === true ? tool.resultData : payload.output,
+          resultData: isPart ? tool.resultData : payload.output,
           contextMessageId: tool.contextMessageId ?? optionalString(payload.context_message_id),
           contextMessageIndex: tool.contextMessageIndex ?? contextMessageIndex,
-          durationMs: Number(payload.duration_ms ?? tool.durationMs ?? 0)
-        }, eventAt);
+          durationMs: isPart ? tool.durationMs : Number(payload.duration_ms ?? tool.durationMs ?? 0)
+        };
+        return isPart ? nextTool : completeToolStream(nextTool, eventAt);
       });
       const withContextIndex = contextMessageIndex === undefined
         ? updated
