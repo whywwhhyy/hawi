@@ -148,6 +148,34 @@ class StreamBlockAccumulator:
         if chunk_args:
             acc["arguments"] += chunk_args
 
+    def _tool_call_id_for_delta(
+        self,
+        idx: int,
+        chunk: DeltaPart,
+        acc: dict[str, Any] | None = None,
+    ) -> str:
+        chunk_id = chunk.get("id") or ""
+        if chunk_id:
+            return str(chunk_id)
+
+        if acc is not None:
+            acc_id = acc.get("id") or ""
+            if acc_id:
+                return str(acc_id)
+
+        indexed_acc = self._tool_accumulators.get(idx)
+        if indexed_acc is not None:
+            acc_id = indexed_acc.get("id") or ""
+            if acc_id:
+                return str(acc_id)
+
+        if isinstance(self._accumulator, dict):
+            acc_id = self._accumulator.get("id") or ""
+            if acc_id:
+                return str(acc_id)
+
+        return ""
+
     def _build_tool_part(self, acc: dict[str, Any]) -> ToolCallPart:
         return ToolCallPart(
             type="tool_call",
@@ -311,7 +339,7 @@ class StreamBlockAccumulator:
             events.append(ModelToolCallBlockDeltaEvent.create(
                 request_id=request_id,
                 block_index=idx,
-                tool_call_id=chunk.get("id") or "",
+                tool_call_id=self._tool_call_id_for_delta(idx, chunk),
                 arguments_delta=chunk.get("arguments_delta", ""),
                 is_streaming=is_streaming,
             ))
@@ -426,7 +454,7 @@ class StreamBlockAccumulator:
         events.append(ModelToolCallBlockDeltaEvent.create(
             request_id=request_id,
             block_index=idx,
-            tool_call_id=chunk.get("id") or "",
+            tool_call_id=self._tool_call_id_for_delta(idx, chunk, acc),
             arguments_delta=chunk.get("arguments_delta", ""),
             is_streaming=is_streaming,
         ))

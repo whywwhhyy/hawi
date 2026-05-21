@@ -1884,8 +1884,8 @@ button:disabled {
 }
 
 .tool-subject {
-  flex: 1 1 180px;
-  min-width: min(120px, 100%);
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 280px;
   padding: 1px 6px;
   border: 1px solid #d7e0e2;
@@ -1899,10 +1899,16 @@ button:disabled {
 }
 
 .tool-subject.purpose {
+  display: inline-block;
   max-width: min(360px, 100%);
   background: #f7faf9;
   color: #4c5b61;
   font-family: inherit;
+  line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .tool-subject.path {

@@ -137,6 +137,43 @@ class TestBasicLifecycle:
         assert p["name"] == "search"
         assert p["arguments"] == {"q": "python"}
 
+    def test_tool_delta_reuses_accumulated_id_when_chunk_id_omitted(self):
+        acc = StreamBlockAccumulator.create_tool_handler()
+
+        acc.handle(tool_chunk(0, tool_id="tc1", name="write_file", is_start=True), REQUEST_ID)
+        [(part, events)] = acc.handle(tool_chunk(0, args='{"content": "large'), REQUEST_ID)
+
+        assert part is None
+        delta_events = [
+            event for event in events
+            if event.type == "model.tool_call_block_delta"
+        ]
+        assert len(delta_events) == 1
+        assert delta_events[0].tool_call_id == "tc1"
+        assert delta_events[0].arguments_delta == '{"content": "large'
+
+    def test_interleaved_tool_deltas_reuse_each_block_id(self):
+        acc = StreamBlockAccumulator.create_tool_handler()
+
+        acc.handle(tool_chunk(0, tool_id="tc1", name="write_file", is_start=True), REQUEST_ID)
+        acc.handle(tool_chunk(1, tool_id="tc2", name="edit_file", is_start=True), REQUEST_ID)
+
+        [(part0, events0)] = acc.handle(tool_chunk(0, args='{"content": "a'), REQUEST_ID)
+        [(part1, events1)] = acc.handle(tool_chunk(1, args='{"old_string": "b'), REQUEST_ID)
+
+        assert part0 is None
+        assert part1 is None
+        delta0 = [
+            event for event in events0
+            if event.type == "model.tool_call_block_delta"
+        ][0]
+        delta1 = [
+            event for event in events1
+            if event.type == "model.tool_call_block_delta"
+        ][0]
+        assert delta0.tool_call_id == "tc1"
+        assert delta1.tool_call_id == "tc2"
+
     def test_interleaved_tool_blocks_processed_independently(self):
         acc = StreamBlockAccumulator.create_tool_handler()
 
