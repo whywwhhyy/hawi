@@ -41,6 +41,10 @@ class FileSystemPlugin(HawiPlugin):
     display_name = "Filesystem"
     description = "提供文件读取、写入、编辑、目录列表、glob 和 grep 搜索工具。"
     dependencies = ()
+    _GLOB_MAX_MATCHES = 5000
+    _GREP_MAX_CONTENT_BYTES = 1_000_000
+    _GREP_MAX_RESULT_LINES = 2000
+    _GREP_MAX_FILENAMES = 500
 
     @property
     def permissions(self):
@@ -917,9 +921,17 @@ class FileSystemPlugin(HawiPlugin):
             search_pattern = os.path.join(root, pattern)
         try:
             results = glob_module.glob(search_pattern, recursive=True)
+            matches = sorted(results)
+            returned_matches = matches[: self._GLOB_MAX_MATCHES]
+            truncated = len(matches) > len(returned_matches)
             return ToolResult(
                 success=True,
-                output={"matches": sorted(results)},
+                output={
+                    "matches": returned_matches,
+                    "numMatches": len(matches),
+                    "isTruncated": truncated,
+                    "maxReturnedMatches": self._GLOB_MAX_MATCHES,
+                },
             )
         except Exception as e:
             return ToolResult(success=False, error=f"Error: {e}")
@@ -991,27 +1003,94 @@ class FileSystemPlugin(HawiPlugin):
                 error=f"Error: path '{target}' does not exist",
             )
 
-        results = []
+        result_lines: list[str] = []
+        content_bytes = 0
+        total_matches = 0
+        content_truncated = False
+        matching_files: set[str] = set()
         for filepath in files_to_search:
             try:
                 with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                     for line_no, line in enumerate(f, start=1):
                         if regex.search(line):
-                            results.append(f"{filepath}:{line_no}: {line.rstrip()}")
+                            total_matches += 1
+                            matching_files.add(filepath)
+                            result_line = f"{filepath}:{line_no}: {line.rstrip()}"
+                            if content_truncated:
+                                continue
+                            if len(result_lines) >= self._GREP_MAX_RESULT_LINES:
+                                content_truncated = True
+                                continue
+                            separator_bytes = 1 if result_lines else 0
+                            line_bytes = len(result_line.encode("utf-8"))
+                            if (
+                                content_bytes
+                                + separator_bytes
+                                + line_bytes
+                                > self._GREP_MAX_CONTENT_BYTES
+                            ):
+                                remaining = (
+                                    self._GREP_MAX_CONTENT_BYTES
+                                    - content_bytes
+                                    - separator_bytes
+                                )
+                                if remaining > 32:
+                                    result_lines.append(
+                                        self._truncate_utf8(result_line, remaining)
+                                    )
+                                    content_bytes = self._GREP_MAX_CONTENT_BYTES
+                                content_truncated = True
+                                continue
+                            result_lines.append(result_line)
+                            content_bytes += separator_bytes + line_bytes
             except Exception:
                 continue
 
-        filenames = sorted({match.split(":", 1)[0] for match in results})
-        content = "\n".join(results)
+        filenames = sorted(matching_files)
+        returned_filenames = filenames[: self._GREP_MAX_FILENAMES]
+        filenames_truncated = len(filenames) > len(returned_filenames)
+        returned_matches = len(result_lines)
+        truncated = (
+            content_truncated
+            or filenames_truncated
+            or returned_matches < total_matches
+        )
+        content = "\n".join(result_lines)
+        if truncated:
+            footer = (
+                f"... (truncated: returned {returned_matches} of {total_matches} "
+                f"matches across {len(returned_filenames)} of {len(filenames)} files; "
+                "narrow path/file_glob/pattern or search a smaller directory)"
+            )
+            content = f"{content}\n{footer}" if content else footer
 
         return ToolResult(
             success=True,
             output={
                 "mode": "content",
                 "numFiles": len(filenames),
-                "filenames": filenames,
+                "filenames": returned_filenames,
                 "content": content,
-                "numLines": len(results),
-                "numMatches": len(results),
+                "numLines": returned_matches,
+                "numMatches": total_matches,
+                "isTruncated": truncated,
+                "filenamesIsTruncated": filenames_truncated,
+                "maxReturnedBytes": self._GREP_MAX_CONTENT_BYTES,
+                "maxReturnedLines": self._GREP_MAX_RESULT_LINES,
+                "maxReturnedFilenames": self._GREP_MAX_FILENAMES,
+                "omittedMatches": max(total_matches - returned_matches, 0),
+                "omittedFiles": max(len(filenames) - len(returned_filenames), 0),
             },
         )
+
+    @staticmethod
+    def _truncate_utf8(text: str, max_bytes: int) -> str:
+        encoded = text.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return text
+        suffix = "... [line truncated]"
+        suffix_bytes = suffix.encode("utf-8")
+        if max_bytes <= len(suffix_bytes):
+            return suffix[:max(max_bytes, 0)]
+        prefix = encoded[: max_bytes - len(suffix_bytes)]
+        return prefix.decode("utf-8", errors="ignore") + suffix

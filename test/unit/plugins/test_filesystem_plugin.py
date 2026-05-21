@@ -300,6 +300,40 @@ class TestFileSystemPlugin:
         assert result.output["numLines"] == 1
         assert result.output["content"] == f"{file_path}:2: beta"
 
+    def test_grep_truncates_large_results(self, plugin, temp_dir):
+        """grep should cap returned content while preserving total counts."""
+        plugin._GREP_MAX_RESULT_LINES = 3
+        plugin._GREP_MAX_CONTENT_BYTES = 10_000
+        for index in range(5):
+            plugin.write_file(
+                os.path.join(temp_dir, f"{index}.txt"),
+                f"needle {index}\n",
+            )
+
+        result = plugin.grep("needle", path=temp_dir)
+
+        assert result.success is True
+        assert result.output["numMatches"] == 5
+        assert result.output["numLines"] == 3
+        assert result.output["isTruncated"] is True
+        assert result.output["omittedMatches"] == 2
+        assert "returned 3 of 5 matches" in result.output["content"]
+
+    def test_grep_truncates_by_byte_budget(self, plugin, temp_dir):
+        """grep should not return a single huge matching line in full."""
+        plugin._GREP_MAX_RESULT_LINES = 10
+        plugin._GREP_MAX_CONTENT_BYTES = 80
+        file_path = os.path.join(temp_dir, "large.txt")
+        plugin.write_file(file_path, "needle " + ("x" * 500) + "\n")
+
+        result = plugin.grep("needle", path=temp_dir)
+
+        assert result.success is True
+        assert result.output["numMatches"] == 1
+        assert result.output["numLines"] == 1
+        assert result.output["isTruncated"] is True
+        assert "[line truncated]" in result.output["content"]
+
     def test_grep_invalid_regex(self, plugin, temp_dir):
         """Invalid regex patterns should return a structured failure."""
         result = plugin.grep("(", path=temp_dir)
@@ -590,6 +624,19 @@ class TestFileSystemPlugin:
         assert result.success is True
         matches = result.output["matches"]
         assert any("x.py" in m for m in matches)
+
+    def test_glob_truncates_large_results(self, plugin, temp_dir):
+        """glob should cap returned matches and expose full counts."""
+        plugin._GLOB_MAX_MATCHES = 2
+        for index in range(4):
+            open(os.path.join(temp_dir, f"{index}.txt"), "w").close()
+
+        result = plugin.glob("*.txt", directory=temp_dir)
+
+        assert result.success is True
+        assert len(result.output["matches"]) == 2
+        assert result.output["numMatches"] == 4
+        assert result.output["isTruncated"] is True
 
     def test_read_file_structure_python(self, plugin, temp_dir):
         """read_file_structure extracts functions and classes from Python files."""

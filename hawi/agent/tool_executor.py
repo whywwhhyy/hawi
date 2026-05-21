@@ -12,6 +12,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
+import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -46,6 +49,17 @@ from .state import AddedToolResultMessages
 
 if TYPE_CHECKING:
     from .agent import HawiAgent
+
+logger = logging.getLogger(__name__)
+
+TOOL_RESULT_MAX_BYTES = 2 * 1024 * 1024
+TOOL_RESULT_TRUNCATION_WARNING = (
+    "Tool result was truncated before being written to context. "
+    "Narrow the request, use pagination, or write large output to a file/artifact instead."
+)
+TOOL_RESULT_TRUNCATION_SUFFIX = (
+    f"\n\n[Hawi warning: {TOOL_RESULT_TRUNCATION_WARNING}]"
+)
 
 
 class EmitEventCallback(Protocol):
@@ -739,6 +753,11 @@ class ToolExecutor:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if promise._future in done:
+                if promise.cancelled:
+                    raise asyncio.CancelledError
+                exc = promise._future.exception()
+                if exc is not None:
+                    raise exc
                 break
             if task in done:
                 exc = self._task_exception(task)
@@ -747,6 +766,10 @@ class ToolExecutor:
 
         if promise.cancelled:
             raise asyncio.CancelledError
+        if promise.done:
+            exc = promise._future.exception()
+            if exc is not None:
+                raise exc
         if promise.request_id not in self._request_outcomes:
             raise RuntimeError(
                 f"Tool call promise resolved without outcome: {promise.request_id}"
@@ -1088,6 +1111,12 @@ class ToolExecutor:
                     )
 
         duration_ms = (time.time() - start_time) * 1000
+        result = self._enforce_tool_result_size(
+            result,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+        )
         after_hook_result = await self._invoke_after_tool_calling(
             tool_name,
             arguments,
@@ -1236,6 +1265,115 @@ class ToolExecutor:
                 success=False,
                 error=f"{err.__class__.__name__}: {err.message}",
             )
+
+    def _enforce_tool_result_size(
+        self,
+        result: ToolResult,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+        run_id: str,
+    ) -> ToolResult:
+        serialized = self._serialize_tool_result_for_limit(result)
+        size_bytes = len(serialized.encode("utf-8"))
+        if size_bytes <= TOOL_RESULT_MAX_BYTES:
+            return result
+
+        message = (
+            f"Tool result from '{tool_name}' ({tool_call_id}) is {size_bytes} bytes, "
+            f"exceeding limit {TOOL_RESULT_MAX_BYTES} bytes"
+        )
+        if self._debug_enabled():
+            raise AssertionError(message)
+
+        logger.warning("%s; truncating before persisting to context", message)
+        return self._truncated_tool_result(
+            result,
+            serialized=serialized,
+            size_bytes=size_bytes,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+        )
+
+    @staticmethod
+    def _debug_enabled() -> bool:
+        return os.environ.get("HAWI_DEBUG", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    @staticmethod
+    def _serialize_tool_result_for_limit(result: ToolResult) -> str:
+        try:
+            return json.dumps(
+                {
+                    "success": result.success,
+                    "output": result.output,
+                    "error": result.error,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+        except Exception:
+            return repr(result)
+
+    @staticmethod
+    def _truncate_utf8(text: str, max_bytes: int) -> str:
+        encoded = text.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return text
+        suffix = TOOL_RESULT_TRUNCATION_SUFFIX
+        suffix_bytes = suffix.encode("utf-8")
+        if max_bytes <= len(suffix_bytes):
+            return suffix[:max(max_bytes, 0)]
+        prefix = encoded[: max_bytes - len(suffix_bytes)]
+        return prefix.decode("utf-8", errors="ignore") + suffix
+
+    def _truncated_tool_result(
+        self,
+        result: ToolResult,
+        *,
+        serialized: str,
+        size_bytes: int,
+        tool_name: str,
+        tool_call_id: str,
+        run_id: str,
+    ) -> ToolResult:
+        error_budget_bytes = 1024 if result.error else 0
+        max_payload_bytes = max(
+            0,
+            TOOL_RESULT_MAX_BYTES - 2048 - error_budget_bytes,
+        )
+        if isinstance(result.output, str):
+            output: Any = self._truncate_utf8(result.output, max_payload_bytes)
+        else:
+            output = {
+                "hawi_truncated_tool_result": True,
+                "warning": TOOL_RESULT_TRUNCATION_WARNING,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "run_id": run_id,
+                "original_size_bytes": size_bytes,
+                "max_size_bytes": TOOL_RESULT_MAX_BYTES,
+                "original_output_type": type(result.output).__name__,
+                "serialized_preview": self._truncate_utf8(serialized, max_payload_bytes),
+            }
+
+        error = result.error
+        if error:
+            error = self._truncate_utf8(error, error_budget_bytes)
+
+        return ToolResult(
+            success=result.success,
+            output=output,
+            error=error,
+            cache_point=result.cache_point,
+            cache_point_source=result.cache_point_source,
+        )
 
     async def _commit_outcomes(
         self,

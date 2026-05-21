@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
 
+import hawi.agent.tool_executor as tool_executor_module
 from hawi.agent import HawiAgent, ToolCallRequest, ToolExecutor
+from hawi.agent.agent import _ExecutionState
 from hawi.models import Model
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse, TokenUsage
 from hawi.plugin import HawiPlugin, tool
@@ -157,6 +160,32 @@ class OrderedToolPlugin(HawiPlugin):
         return f"fast saw {self.shared_state}"
 
 
+class OversizeToolPlugin(HawiPlugin):
+    @tool(
+        name="big_text_tool",
+        description="Return a large text result",
+        parameters_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    )
+    async def big_text_tool(self) -> str:
+        return "x" * 5000
+
+    @tool(
+        name="big_dict_tool",
+        description="Return a large structured result",
+        parameters_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    )
+    async def big_dict_tool(self) -> dict[str, str]:
+        return {"payload": "x" * 5000}
+
+
 def _tool_result_ids(agent: HawiAgent) -> list[str]:
     ids: list[str] = []
     for message in agent.context.messages:
@@ -286,3 +315,96 @@ async def test_tool_executor_promises_honor_blocked_by_tool_call_id() -> None:
         ("start", "fast"),
         ("finish", "fast"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_truncates_oversized_tool_result_in_release(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delenv("HAWI_DEBUG", raising=False)
+    monkeypatch.setattr(tool_executor_module, "TOOL_RESULT_MAX_BYTES", 3000)
+    caplog.set_level(logging.WARNING, logger=tool_executor_module.__name__)
+    agent = HawiAgent(
+        model=OrderedToolModel(),
+        plugins=[OversizeToolPlugin()],
+        streaming=True,
+    )
+
+    record = await agent._execute_tool(
+        {
+            "type": "tool_call",
+            "id": "call-big",
+            "name": "big_text_tool",
+            "arguments": {},
+        },
+        _ExecutionState(run_id="run-big", iteration=1),
+    )
+
+    assert record.result.success is True
+    assert isinstance(record.result.output, str)
+    assert "Hawi warning:" in record.result.output
+    assert "Tool result was truncated" in record.result.output
+    serialized = tool_executor_module.ToolExecutor._serialize_tool_result_for_limit(
+        record.result
+    )
+    assert len(serialized.encode("utf-8")) <= 3000
+    assert len(record.result.output.encode("utf-8")) <= 3000
+    assert "exceeding limit 3000 bytes" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_wraps_oversized_structured_result_in_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HAWI_DEBUG", raising=False)
+    monkeypatch.setattr(tool_executor_module, "TOOL_RESULT_MAX_BYTES", 3000)
+    agent = HawiAgent(
+        model=OrderedToolModel(),
+        plugins=[OversizeToolPlugin()],
+        streaming=True,
+    )
+
+    record = await agent._execute_tool(
+        {
+            "type": "tool_call",
+            "id": "call-big-dict",
+            "name": "big_dict_tool",
+            "arguments": {},
+        },
+        _ExecutionState(run_id="run-big", iteration=1),
+    )
+
+    assert record.result.success is True
+    assert isinstance(record.result.output, dict)
+    assert record.result.output["hawi_truncated_tool_result"] is True
+    assert record.result.output["original_output_type"] == "dict"
+    assert "serialized_preview" in record.result.output
+    serialized = tool_executor_module.ToolExecutor._serialize_tool_result_for_limit(
+        record.result
+    )
+    assert len(serialized.encode("utf-8")) <= 3000
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_raises_on_oversized_tool_result_in_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HAWI_DEBUG", "1")
+    monkeypatch.setattr(tool_executor_module, "TOOL_RESULT_MAX_BYTES", 3000)
+    agent = HawiAgent(
+        model=OrderedToolModel(),
+        plugins=[OversizeToolPlugin()],
+        streaming=True,
+    )
+
+    with pytest.raises(AssertionError, match="Tool result from 'big_text_tool'"):
+        await agent._execute_tool(
+            {
+                "type": "tool_call",
+                "id": "call-big-debug",
+                "name": "big_text_tool",
+                "arguments": {},
+            },
+            _ExecutionState(run_id="run-big", iteration=1),
+        )
