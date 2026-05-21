@@ -3402,6 +3402,10 @@ function SubAgentObserverModal({
   onClose: () => void;
 }) {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const followTailRef = useRef(true);
+  const userScrollIntentRef = useRef(false);
+  const selectingTranscriptRef = useRef(false);
+  const isAutoScrollingRef = useRef(false);
   const plugins = subagent.status?.plugins ?? [];
   const toolNames = subagent.status?.toolNames ?? [];
   const toolCount = subagent.status?.toolCount ?? toolNames.length;
@@ -3410,11 +3414,59 @@ function SubAgentObserverModal({
     [subagent.nodes, subagent.processing]
   );
 
+  useEffect(() => {
+    followTailRef.current = true;
+    userScrollIntentRef.current = false;
+    selectingTranscriptRef.current = false;
+    isAutoScrollingRef.current = false;
+  }, [subagent.id]);
+
   useBrowserLayoutEffect(() => {
     const element = transcriptRef.current;
     if (!element) return;
+    if (!followTailRef.current && !isNearChatBottom(element)) return;
+    followTailRef.current = true;
+    isAutoScrollingRef.current = true;
     element.scrollTop = element.scrollHeight;
+    isAutoScrollingRef.current = false;
   }, [tailKey]);
+
+  function updateFollowTail() {
+    const element = transcriptRef.current;
+    if (!element) return;
+    selectingTranscriptRef.current = hasTranscriptSelection(element);
+    followTailRef.current = resolveFollowTailOnScroll(
+      followTailRef.current,
+      isNearChatBottom(element),
+      userScrollIntentRef.current,
+      selectingTranscriptRef.current,
+      isAutoScrollingRef.current
+    );
+    userScrollIntentRef.current = false;
+  }
+
+  function markUserScrollIntent() {
+    userScrollIntentRef.current = true;
+    isAutoScrollingRef.current = false;
+  }
+
+  function handleWheel(event: WheelEvent<HTMLElement>) {
+    markUserScrollIntent();
+    if (event.deltaY < 0) {
+      followTailRef.current = false;
+    }
+  }
+
+  function handleTouchStart() {
+    markUserScrollIntent();
+  }
+
+  function handleMouseDown(event: ReactMouseEvent<HTMLElement>) {
+    if (event.button !== 0 || isInteractiveTranscriptTarget(event.target)) return;
+    selectingTranscriptRef.current = true;
+    followTailRef.current = false;
+    markUserScrollIntent();
+  }
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -3470,6 +3522,10 @@ function SubAgentObserverModal({
           processing={subagent.processing}
           allowFork={false}
           emptyLabel="等待 SubAgent 消息..."
+          onScroll={updateFollowTail}
+          onWheel={handleWheel}
+          onTouchStart={handleTouchStart}
+          onMouseDown={handleMouseDown}
         />
       </section>
     </div>
@@ -4590,6 +4646,21 @@ function hasActiveTextSelection(): boolean {
   if (typeof window === "undefined") return false;
   const selection = window.getSelection();
   return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+}
+
+function hasTranscriptSelection(element: HTMLElement): boolean {
+  if (typeof window === "undefined") return false;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  return Boolean(
+    anchor
+    && focus
+    && element.contains(anchor)
+    && element.contains(focus)
+    && selection.toString().trim()
+  );
 }
 
 function isInteractiveTranscriptTarget(target: EventTarget | null): boolean {
