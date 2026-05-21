@@ -359,6 +359,7 @@ def _should_persist_subagent_child(payload: dict[str, Any]) -> bool:
         "agent.run_stop",
         "agent.error",
         "runner.interrupt",
+        "subagent.status",
     }
 
 

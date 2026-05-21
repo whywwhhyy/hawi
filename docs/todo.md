@@ -84,6 +84,7 @@
     - [x] `create_subagent` 要求首条明确 user prompt，并包装为 sub-agent 身份 + 父 agent 指定任务，避免 child 误认为自己是 parent
     - [x] 共享上下文时首条任务消息强调父上下文仅作背景、child 只负责当前任务并需要回报结果
     - [x] 实现插件策略第一版：继承父插件、禁用继承、追加插件/工厂
+    - [x] `create_subagent.plugins` 语义明确：`None`/省略表示继承父插件，`[]` 表示无工具，插件 id 列表表示从父 agent 当前已启用插件中按任务类型选择；共享上下文时禁止改插件策略
     - [x] 实现基础 limits：最大运行时间、最大递归深度、最大子 agent 数（tool call 数仍待 runner/tool budget 接入）
     - [x] 实现 subagent 专用事件通道：child events 以 `subagent.created` / `subagent.event` / `subagent.closed` 关联 `subagent_id`
     - [x] 新增 `SubAgentPlugin`，暴露 5 个 agent tools

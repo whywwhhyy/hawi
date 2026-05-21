@@ -13,6 +13,7 @@ from hawi.agent.subagent.prompts import (
 from hawi.models import Model
 from hawi.models.message import DeltaPart, MessageRequest, MessageResponse
 from hawi.builtin_plugins.subagent_plugin import SubAgentPlugin
+from hawi.plugin import HawiPlugin, tool as plugin_tool
 
 
 class EchoModel(Model):
@@ -115,6 +116,16 @@ class DelayedStreamingModel(EchoModel):
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 1, "output_tokens": 1},
         }
+
+
+class DummyToolsPlugin(HawiPlugin):
+    name = "hawi/dummy-tools"
+    display_name = "Dummy Tools"
+
+    @plugin_tool(name="dummy_tool")
+    def dummy_tool(self, value: str) -> dict[str, str]:
+        """Return a dummy value."""
+        return {"value": value}
 
 
 def prompt_text(parts: list[dict[str, Any]] | None) -> str:
@@ -341,6 +352,43 @@ async def test_subagent_status_tracks_latest_completed_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subagent_run_stop_event_reports_completed_status() -> None:
+    agent = HawiAgent(model=EchoModel())
+    events: list[Any] = []
+    agent.subscribe_blocking(events.append, ["subagent.event"])
+
+    handle = await agent.subagents.spawn(mode="fresh", initial_prompt="finish task")
+
+    try:
+        await agent.subagents.wait(handle.id, timeout=2)
+        run_stop_events = [
+            event
+            for event in events
+            if (event.child_event or {}).get("type") == "agent.run_stop"
+        ]
+        assert run_stop_events
+        assert run_stop_events[-1].status["state"] == "COMPLETED"
+        deadline = asyncio.get_running_loop().time() + 2
+        settled_events: list[Any] = []
+        while asyncio.get_running_loop().time() < deadline:
+            settled_events = [
+                event
+                for event in events
+                if (event.child_event or {}).get("type") == "subagent.status"
+            ]
+            if settled_events:
+                break
+            await asyncio.sleep(0.01)
+        assert settled_events
+        settled_status = settled_events[-1].status
+        assert settled_status["state"] == "COMPLETED"
+        assert settled_status["runner_state"] == "IDLE"
+        assert settled_status["executor_state"] == "IDLE"
+    finally:
+        await agent.subagents.close(handle.id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
 async def test_subagent_markdown_export_uses_message_history(tmp_path) -> None:
     agent = HawiAgent(model=EchoModel())
     agent.subagents.configure_session_storage(
@@ -396,7 +444,7 @@ async def test_subagent_read_exposes_streaming_delta_and_partial_context() -> No
 
 @pytest.mark.asyncio
 async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
-    agent = HawiAgent(model=EchoModel(), plugins=[SubAgentPlugin()])
+    agent = HawiAgent(model=EchoModel(), plugins=[SubAgentPlugin(), DummyToolsPlugin()])
     definitions = agent.plugins.get_tool_definitions()
     names = {definition["name"] for definition in definitions}
 
@@ -412,19 +460,30 @@ async def test_subagent_plugin_exposes_lifecycle_tools() -> None:
     assert create_schema["properties"]["mode"]["default"] == "fresh"
     assert create_schema["properties"]["share_context"]["default"] is False
     assert "initial_prompt" in create_schema.get("required", [])
+    assert "plugins" not in create_schema.get("required", [])
+    assert create_schema["properties"]["plugins"]["default"] is None
+    plugin_description = create_schema["properties"]["plugins"]["description"]
+    assert "null/None" in plugin_description
+    assert "[]" in plugin_description
+    assert "share_context" in plugin_description
 
     create_tool = agent.plugins.get_tool("create_subagent")
     assert create_tool is not None
+    assert "plugins argument controls the child's tools" in create_tool.description
     created = await create_tool.arun(
         mode="fresh",
         role="reviewer",
         initial_prompt="plugin task",
+        plugins=["hawi/dummy-tools"],
         ctx=ToolCallContext(agent),
     )
     assert created.success is True
     subagent_id = created.output["subagent_id"]  # type: ignore[index]
 
     try:
+        handle = agent.subagents._handles[subagent_id]  # type: ignore[attr-defined]
+        assert handle.agent.plugins.get_tool("dummy_tool") is not None
+        assert handle.agent.plugins.get_tool("create_subagent") is None
         await agent.subagents.wait(subagent_id, timeout=2)
         read_tool = agent.plugins.get_tool("read_subagent")
         assert read_tool is not None
@@ -449,6 +508,79 @@ async def test_create_subagent_tool_requires_initial_user_prompt() -> None:
 
     assert created.success is False
     assert "initial_prompt" in created.error
+
+
+@pytest.mark.asyncio
+async def test_create_subagent_plugins_none_inherits_and_empty_list_disables_tools() -> None:
+    agent = HawiAgent(model=EchoModel(), plugins=[SubAgentPlugin(), DummyToolsPlugin()])
+    create_tool = agent.plugins.get_tool("create_subagent")
+    assert create_tool is not None
+
+    inherited = await create_tool.arun(
+        initial_prompt="inherit tools",
+        ctx=ToolCallContext(agent),
+    )
+    assert inherited.success is True
+    inherited_id = inherited.output["subagent_id"]  # type: ignore[index]
+
+    no_tools = await create_tool.arun(
+        initial_prompt="no tools",
+        plugins=[],
+        ctx=ToolCallContext(agent),
+    )
+    assert no_tools.success is True
+    no_tools_id = no_tools.output["subagent_id"]  # type: ignore[index]
+
+    try:
+        inherited_handle = agent.subagents._handles[inherited_id]  # type: ignore[attr-defined]
+        no_tools_handle = agent.subagents._handles[no_tools_id]  # type: ignore[attr-defined]
+        assert inherited_handle.agent.plugins.get_tool("dummy_tool") is not None
+        assert inherited_handle.agent.plugins.get_tool("create_subagent") is not None
+        assert no_tools_handle.agent.plugins.get_tool_definitions() == []
+    finally:
+        await agent.subagents.close(inherited_id, reason="test_cleanup")
+        await agent.subagents.close(no_tools_id, reason="test_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_create_subagent_shared_context_must_inherit_plugins() -> None:
+    agent = HawiAgent(model=EchoModel(), plugins=[SubAgentPlugin(), DummyToolsPlugin()])
+    create_tool = agent.plugins.get_tool("create_subagent")
+    assert create_tool is not None
+
+    rejected = await create_tool.arun(
+        share_context=True,
+        initial_prompt="shared task",
+        plugins=["hawi/dummy-tools"],
+        ctx=ToolCallContext(agent),
+    )
+    assert rejected.success is False
+    assert "inherit the parent plugin setup" in rejected.error
+
+    rejected_no_tools = await create_tool.arun(
+        share_context=True,
+        initial_prompt="shared task",
+        plugins=[],
+        ctx=ToolCallContext(agent),
+    )
+    assert rejected_no_tools.success is False
+    assert "inherit the parent plugin setup" in rejected_no_tools.error
+
+    accepted = await create_tool.arun(
+        share_context=True,
+        initial_prompt="shared task",
+        ctx=ToolCallContext(agent),
+    )
+    assert accepted.success is True
+    subagent_id = accepted.output["subagent_id"]  # type: ignore[index]
+
+    try:
+        handle = agent.subagents._handles[subagent_id]  # type: ignore[attr-defined]
+        assert handle.spec.mode == "fork"
+        assert handle.agent.plugins.get_tool("dummy_tool") is not None
+        assert handle.agent.plugins.get_tool("create_subagent") is not None
+    finally:
+        await agent.subagents.close(subagent_id, reason="test_cleanup")
 
 
 async def wait_for_partial_context(
@@ -482,6 +614,7 @@ async def test_wait_subagent_tool_returns_running_status_on_timeout() -> None:
     created = await create_tool.arun(
         mode="fresh",
         initial_prompt="slow task",
+        plugins=["hawi/subagent"],
         ctx=ToolCallContext(agent),
     )
     assert created.success is True

@@ -63,7 +63,7 @@ await agent.subagents.close(handle.id)
 | `role` | `"general"` | 角色预设：`planner`、`reviewer`、`explorer`、`implementer`、`critic`、`summarizer` |
 | `model` | 父 agent 模型 | 可传模型名或 `Model` 实例 |
 | `system_prompt` | 身份护栏 + 角色默认值 | 主 agent 显式控制子 agent system prompt；未传时使用 sub-agent 身份护栏与角色 prompt |
-| `plugins` | 继承父插件 | 插件策略，见下文 |
+| `plugins` | `None` / 继承父插件 | 插件策略，见下文 |
 | `working_dir` | `None` | 子 agent 的逻辑工作目录；不使用进程级 `os.chdir()` |
 | `initial_prompt` | `None` | 创建后立即入队的首条任务；模型工具侧必填 |
 | `initial_plan` | `None` | 结构化计划，可渲染进首条任务或作为 metadata |
@@ -126,6 +126,14 @@ SubAgentPluginPolicy(
 - `extra_factories`
 
 `allowlist/denylist` 和 tool 级过滤作为下一步落地，避免第一版卡在权限系统重构上。
+
+模型工具 `create_subagent` 暴露的是更直接的 `plugins` 参数：
+
+- 省略 `plugins` 或传 `plugins=null` / Python `None`：继承父 agent 当前插件配置。
+- 传 `plugins=[]`：创建没有任何工具的子 agent。
+- 传 `plugins=["hawi/filesystem", "hawi/shell"]` 这类列表：从父 agent 当前已启用插件中按 id/name 选择并克隆给子 agent；主 agent 应按任务类型显式选择需要的工具。
+
+当 `share_context=true` 时，子 agent 是父上下文的分叉，插件配置也必须保持继承；此时不允许传 `[]` 或插件列表来更改工具集。
 
 ## 角色默认 System Prompt
 

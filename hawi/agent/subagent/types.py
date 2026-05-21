@@ -181,6 +181,7 @@ class SubAgentHandle:
     recent_events: list[dict[str, Any]] = field(default_factory=list)
     event_handler: Callable[[Event], Any] | None = None
     monitor_task: asyncio.Task[None] | None = None
+    status_refresh_task: asyncio.Task[None] | None = None
 
     @property
     def name(self) -> str:

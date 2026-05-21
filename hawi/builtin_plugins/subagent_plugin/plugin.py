@@ -49,6 +49,17 @@ class SubAgentPlugin(HawiPlugin):
 
     @tool(
         name="create_subagent",
+        description=(
+            "Create a managed background sub-agent and optionally enqueue its "
+            "first task. Always provide a clear initial_prompt that tells the "
+            "child it is a sub-agent and states the exact assigned task. The "
+            "plugins argument controls the child's tools: omit it or set it to "
+            "null/None to inherit the parent agent's current plugin setup; set "
+            "it to [] to give the child no tools; set it to a list of active "
+            "parent plugin ids to choose tools for the task type. When "
+            "share_context is true, plugins must be omitted or null/None "
+            "because shared-context sub-agents inherit the parent plugin setup."
+        ),
         context="ctx",
         tags=["subagent", "orchestration"],
         parameters_schema={
@@ -95,7 +106,22 @@ class SubAgentPlugin(HawiPlugin):
                     ),
                 },
                 "initial_plan": {},
-                "inherit_plugins": {"type": "boolean", "default": True},
+                "plugins": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "default": None,
+                    "description": (
+                        "Child plugin policy. Omit this field or set it to "
+                        "null/None to inherit the parent agent's current plugin "
+                        "setup. Set it to [] to create a child with no tools. "
+                        "Set it to a list of active parent plugin ids (for "
+                        "example hawi/filesystem, hawi/shell, "
+                        "hawi/python_interpreter, hawi/web, or hawi/mcp) to "
+                        "choose tools for the task type. When share_context is "
+                        "true, plugin settings cannot be changed; omit this "
+                        "field or use null/None."
+                    ),
+                },
                 "max_runtime_seconds": {"type": "number"},
                 "max_iterations": {"type": "integer"},
                 "result_contract": {
@@ -125,7 +151,7 @@ class SubAgentPlugin(HawiPlugin):
         working_dir: str | None = None,
         initial_prompt: str | None = None,
         initial_plan: Any | None = None,
-        inherit_plugins: bool = True,
+        plugins: list[str] | None = None,
         max_runtime_seconds: float | None = None,
         max_iterations: int | None = None,
         result_contract: str = "text",
@@ -149,6 +175,11 @@ class SubAgentPlugin(HawiPlugin):
             if share_context is False
             else mode
         )
+        plugin_policy = self._plugin_policy_for_request(
+            ctx,
+            mode=effective_mode,
+            plugins=plugins,
+        )
         handle = await ctx.agent.subagents.spawn(
             SubAgentSpec(
                 mode=effective_mode,
@@ -156,7 +187,7 @@ class SubAgentPlugin(HawiPlugin):
                 role=role,
                 model=model,
                 system_prompt=system_prompt,
-                plugin_policy=SubAgentPluginPolicy(inherit=inherit_plugins),
+                plugin_policy=plugin_policy,
                 working_dir=working_dir,
                 initial_prompt=initial_prompt,
                 initial_plan=initial_plan,
@@ -177,6 +208,98 @@ class SubAgentPlugin(HawiPlugin):
                 if notify_timeout > 0
                 else None
             ),
+        }
+
+    def _plugin_policy_for_request(
+        self,
+        ctx: ToolCallContext,
+        *,
+        mode: Literal["fork", "fresh"],
+        plugins: list[str] | None,
+    ) -> SubAgentPluginPolicy:
+        requested = self._normalize_plugin_names(plugins)
+        if mode == "fork":
+            if plugins is not None:
+                raise ValueError(
+                    "shared-context sub-agents must inherit the parent plugin "
+                    "setup; set plugins to null/None when share_context is true."
+                )
+            return SubAgentPluginPolicy(inherit=True)
+        if plugins is None:
+            return SubAgentPluginPolicy(inherit=True)
+        if not requested:
+            return SubAgentPluginPolicy(inherit=False)
+        return SubAgentPluginPolicy(
+            inherit=False,
+            extra_plugins=self._clone_selected_parent_plugins(ctx, requested),
+        )
+
+    @staticmethod
+    def _normalize_plugin_names(plugins: list[str] | None) -> list[str]:
+        if plugins is None:
+            return []
+        if not isinstance(plugins, list):
+            raise TypeError("plugins must be null/None or a list of plugin ids")
+        names: list[str] = []
+        for item in plugins:
+            if not isinstance(item, str):
+                raise TypeError("plugins entries must be strings")
+            normalized = item.strip()
+            if normalized:
+                names.append(normalized)
+        return names
+
+    def _clone_selected_parent_plugins(
+        self,
+        ctx: ToolCallContext,
+        requested: list[str],
+    ) -> list[HawiPlugin]:
+        active_plugins = ctx.agent.plugins.get_plugins()
+        selected: list[HawiPlugin] = []
+        seen: set[str] = set()
+        available = {
+            alias.casefold(): plugin
+            for plugin in active_plugins
+            for alias in self._plugin_aliases(plugin)
+        }
+        for name in requested:
+            plugin = available.get(name.casefold())
+            if plugin is None:
+                choices = ", ".join(
+                    sorted({
+                        alias
+                        for item in active_plugins
+                        for alias in self._plugin_aliases(item)
+                        if "/" in alias or alias.startswith("hawi/")
+                    })
+                )
+                raise ValueError(
+                    f"Unknown sub-agent plugin: {name}. Active plugin ids: {choices}"
+                )
+            plugin_key = plugin.plugin_id
+            if plugin_key in seen:
+                continue
+            seen.add(plugin_key)
+            clone = plugin.clone()
+            clone.bind_plugin_identity(
+                plugin_id=getattr(plugin, "_plugin_id", None),
+                plugin_name=getattr(plugin, "_plugin_name", None),
+            )
+            selected.append(clone)
+        return selected
+
+    @staticmethod
+    def _plugin_aliases(plugin: HawiPlugin) -> set[str]:
+        return {
+            str(value)
+            for value in (
+                plugin.plugin_id,
+                plugin.name,
+                plugin.plugin_name,
+                plugin.display_name,
+                plugin.__class__.__name__,
+            )
+            if value
         }
 
     @tool(

@@ -71,6 +71,7 @@ class SubAgentManager:
         self._lock = asyncio.Lock()
         self._session_root: Path | None = None
         self._session_id_provider: Callable[[], str | None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def configure_session_storage(
         self,
@@ -93,6 +94,7 @@ class SubAgentManager:
     ) -> SubAgentHandle:
         """Create a sub-agent, start its runner, and optionally enqueue work."""
         spec = self._coerce_spec(spec, kwargs)
+        self._loop = asyncio.get_running_loop()
         async with self._lock:
             self._validate_spawn(spec)
 
@@ -329,6 +331,10 @@ class SubAgentManager:
             handle.monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await handle.monitor_task
+        if handle.status_refresh_task and not handle.status_refresh_task.done():
+            handle.status_refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await handle.status_refresh_task
         if not handle.runner_task.done():
             handle.runner_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -684,10 +690,12 @@ class SubAgentManager:
             elif event.type == "agent.run_stop":
                 handle.state = SubAgentLifecycleState.COMPLETED
                 self._clear_partial_assistant(handle)
+                self._schedule_settled_status_refresh(handle, event.type)
             elif event.type == "agent.error":
                 handle.state = SubAgentLifecycleState.FAILED
                 handle.last_error = summary.get("error") or "Sub-agent failed"
                 self._clear_partial_assistant(handle)
+                self._schedule_settled_status_refresh(handle, event.type)
             elif event.type == "runner.interrupt":
                 handle.state = SubAgentLifecycleState.INTERRUPTING
 
@@ -702,6 +710,55 @@ class SubAgentManager:
             )
 
         return on_child_event
+
+    def _schedule_settled_status_refresh(
+        self,
+        handle: SubAgentHandle,
+        trigger_event_type: str,
+    ) -> None:
+        loop = self._loop
+
+        def start() -> None:
+            if handle.status_refresh_task and not handle.status_refresh_task.done():
+                handle.status_refresh_task.cancel()
+            handle.status_refresh_task = asyncio.create_task(
+                self._emit_settled_status_refresh(handle.id, trigger_event_type),
+                name=f"hawi-subagent-status-{handle.id}",
+            )
+
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(start)
+        else:
+            start()
+
+    async def _emit_settled_status_refresh(
+        self,
+        subagent_id: str,
+        trigger_event_type: str,
+    ) -> None:
+        while True:
+            handle = self._handles.get(subagent_id)
+            if handle is None or handle.state == SubAgentLifecycleState.CLOSED:
+                return
+            queue_lengths = handle.runner.get_queue_lengths()
+            if (
+                handle.runner.state.name == "IDLE"
+                and handle.runner.executor_is_idle
+                and not any(queue_lengths.values())
+            ):
+                await self._emit_manager_event(
+                    handle,
+                    "subagent.event",
+                    {
+                        "child_event": {
+                            "type": "subagent.status",
+                            "trigger_event_type": trigger_event_type,
+                        },
+                        "status": self.status(subagent_id).to_dict(),
+                    },
+                )
+                return
+            await asyncio.sleep(self._poll_interval)
 
     async def _emit_manager_event(
         self,
@@ -931,12 +988,12 @@ class SubAgentManager:
             return SubAgentLifecycleState.CLOSED
         if handle.last_error:
             return handle.state
-        if executor_state in {"RUNNING", "INTERRUPTING"}:
-            return SubAgentLifecycleState(executor_state)
         if any(queue_lengths.values()):
             return SubAgentLifecycleState.RUNNING
         if handle.state == SubAgentLifecycleState.COMPLETED:
             return SubAgentLifecycleState.COMPLETED
+        if executor_state in {"RUNNING", "INTERRUPTING"}:
+            return SubAgentLifecycleState(executor_state)
         return SubAgentLifecycleState.IDLE
 
     def _is_settled(
