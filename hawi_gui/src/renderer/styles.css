@@ -1695,6 +1695,10 @@ button:disabled {
   background: #faf9f6;
 }
 
+.bubble.thinking.collapsed .bubble-head {
+  border-bottom-color: transparent;
+}
+
 .bubble.tool {
   background: #f3f6f8;
   border-color: #cdd7df;
