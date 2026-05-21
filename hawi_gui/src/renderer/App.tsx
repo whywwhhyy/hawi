@@ -58,6 +58,9 @@ const defaultFence = markdown.renderer.rules.fence;
 markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const language = token.info.trim().split(/\s+/)[0]?.toLowerCase();
+  if (language === "mermaid") {
+    return renderMermaidFence(token.content);
+  }
   if (language === "svg") {
     return renderSvgFence(token.content);
   }
@@ -72,6 +75,8 @@ const MAX_INPUT_HISTORY = 100;
 const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const markdownCodeCopyTimers = new WeakMap<HTMLButtonElement, number>();
+let mermaidRenderSequence = 0;
+let mermaidModulePromise: Promise<typeof import("mermaid")> | null = null;
 
 const queueLabels: Record<QueueKind, string> = {
   normal: "稍后任务",
@@ -3126,6 +3131,18 @@ function LiveSpinner({ title }: { title: string }) {
 }
 
 function MarkdownView({ html, className = "" }: { html: string; className?: string }) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let cancelled = false;
+    void renderMermaidDiagrams(root, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
+  }, [html]);
+
   async function handleClick(event: ReactMouseEvent<HTMLDivElement>) {
     if (hasActiveTextSelection()) return;
     const target = event.target instanceof Element
@@ -3141,6 +3158,7 @@ function MarkdownView({ html, className = "" }: { html: string; className?: stri
 
   return (
     <div
+      ref={rootRef}
       className={`markdown ${className}`.trim()}
       onClick={handleClick}
       dangerouslySetInnerHTML={{ __html: html }}
@@ -4887,6 +4905,79 @@ function highlightCode(value: string, language: string): string {
     return codeBlock(result.value, normalizedLanguage);
   }
   return codeBlock(escapeHtml(value));
+}
+
+function renderMermaidFence(value: string): string {
+  const source = encodeURIComponent(value);
+  return [
+    `<div class="mermaid-preview-shell" data-mermaid-source="${escapeHtmlAttributeValue(source)}">`,
+    "<span class=\"mermaid-preview-status\">Rendering diagram...</span>",
+    "</div>",
+    codeBlock(escapeHtml(value), "mermaid")
+  ].join("");
+}
+
+async function renderMermaidDiagrams(
+  root: HTMLElement,
+  isCancelled: () => boolean,
+): Promise<void> {
+  const containers = Array.from(
+    root.querySelectorAll<HTMLElement>(".mermaid-preview-shell[data-mermaid-source]")
+  ).filter((container) => container.dataset.mermaidRendered !== "true");
+  if (containers.length === 0 || typeof window === "undefined") return;
+
+  let mermaid: Awaited<ReturnType<typeof loadMermaid>>;
+  try {
+    mermaid = await loadMermaid();
+  } catch (error) {
+    renderMermaidError(containers, error);
+    return;
+  }
+  if (isCancelled()) return;
+
+  for (const container of containers) {
+    if (isCancelled()) return;
+    const source = container.dataset.mermaidSource ?? "";
+    try {
+      const definition = decodeURIComponent(source);
+      const renderId = `hawi-mermaid-${++mermaidRenderSequence}`;
+      const rendered = await mermaid.render(renderId, definition);
+      if (isCancelled()) return;
+      container.innerHTML = sanitizeRenderedHtml(rendered.svg);
+      container.dataset.mermaidRendered = "true";
+      delete container.dataset.mermaidSource;
+    } catch (error) {
+      container.dataset.mermaidRendered = "true";
+      container.classList.add("mermaid-preview-error");
+      container.textContent = mermaidErrorMessage(error);
+    }
+  }
+}
+
+async function loadMermaid() {
+  if (mermaidModulePromise === null) {
+    mermaidModulePromise = import("mermaid");
+  }
+  const module = await mermaidModulePromise;
+  const mermaid = module.default;
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    theme: "default",
+  });
+  return mermaid;
+}
+
+function renderMermaidError(containers: HTMLElement[], error: unknown) {
+  for (const container of containers) {
+    container.dataset.mermaidRendered = "true";
+    container.classList.add("mermaid-preview-error");
+    container.textContent = mermaidErrorMessage(error);
+  }
+}
+
+function mermaidErrorMessage(error: unknown): string {
+  return `Mermaid render failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
 function renderSvgFence(value: string): string {

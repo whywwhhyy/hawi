@@ -390,6 +390,17 @@ describe("renderMarkdown", () => {
     expect(html).toContain("class=\"hljs language-xml\"");
   });
 
+  it("renders mermaid fenced blocks as an async preview target plus copyable code", () => {
+    const html = renderMarkdown("```mermaid\ngraph TD\n  A-->B\n```");
+
+    expect(html).toContain("class=\"mermaid-preview-shell\"");
+    expect(html).toContain("data-mermaid-source=");
+    expect(html).toContain(encodeURIComponent("graph TD\n  A-->B\n"));
+    expect(html).toContain("Rendering diagram...");
+    expect(html).toContain("class=\"code-copy-button\"");
+    expect(html).toContain("language-mermaid");
+  });
+
   it("sanitizes svg fenced previews without hiding the source code block", () => {
     const html = renderMarkdown("```svg\n<svg viewBox=\"0 0 10 10\"><script>alert(1)</script><rect onclick=\"alert(2)\" width=\"10\" height=\"10\" /></svg>\n```");
     const src = html.match(/src="([^"]+)"/)?.[1] ?? "";

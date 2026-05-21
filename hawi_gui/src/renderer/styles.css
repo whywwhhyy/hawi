@@ -2265,6 +2265,34 @@ button:disabled {
   max-height: 420px;
 }
 
+.markdown .mermaid-preview-shell {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #dbe1e4;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.markdown .mermaid-preview-shell svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown .mermaid-preview-status {
+  color: #6c797f;
+  font-size: 12px;
+}
+
+.markdown .mermaid-preview-error {
+  justify-content: flex-start;
+  color: #9d3028;
+  white-space: pre-wrap;
+}
+
 .markdown pre code,
 .bubble pre code {
   display: block;
