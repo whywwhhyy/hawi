@@ -416,6 +416,8 @@ class CoreRuntime:
                 await self._handle_session_switch(client, command)
             elif command.type == "session_delete":
                 await self._handle_session_delete(client, command)
+            elif command.type == "session_rename":
+                await self._handle_session_rename(client, command)
             elif command.type == "session_save_now":
                 await self._handle_session_save_now(client, command)
             elif command.type == "session_history":
@@ -1548,6 +1550,30 @@ class CoreRuntime:
                 "session_delete",
                 request_id=command.id,
                 payload={"session_id": session_id},
+            )
+        )
+
+    async def _handle_session_rename(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        session_id = command.payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError(
+                "'session_rename.payload.session_id' must be a non-empty string"
+            )
+        name = command.payload.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("'session_rename.payload.name' must be a non-empty string")
+        next_name = name.strip()
+        sm.rename_session(session_id, next_name)
+        await client.send(
+            make_ack(
+                "session_rename",
+                request_id=command.id,
+                payload={"session_id": session_id, "name": next_name},
             )
         )
 

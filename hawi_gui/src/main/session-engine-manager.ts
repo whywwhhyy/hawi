@@ -133,6 +133,8 @@ export class SessionEngineManager {
         return this.switchSession(payload);
       case "session_delete":
         return this.deleteSession(payload);
+      case "session_rename":
+        return this.renameSession(payload);
       default:
         return this.routeCommand(type, payload, targetSessionId);
     }
@@ -346,6 +348,33 @@ export class SessionEngineManager {
       payload: {
         ...framePayload(frame),
         session_id: sessionId,
+        current_session_id: this.currentSessionId,
+        running_session_count: this.runningSessionCount(),
+        loaded_session_count: this.visibleLoadedSessionCount(),
+        max_loaded_sessions: MAX_LOADED_SESSIONS,
+      },
+    };
+  }
+
+  private async renameSession(payload: Record<string, unknown>): Promise<CoreFrame> {
+    const sessionId = stringOrNull(payload.session_id);
+    const name = stringOrNull(payload.name)?.trim();
+    if (!sessionId) {
+      throw new Error("'session_id' is required");
+    }
+    if (!name) {
+      throw new Error("'name' is required");
+    }
+    const record = this.loaded.get(sessionId);
+    const target = record ?? await this.catalogRecord();
+    const frame = await target.core.sendCommand("session_rename", { session_id: sessionId, name }, SESSION_COMMAND_TIMEOUT_MS);
+    this.emitSessionRuntimeStatus(sessionId);
+    return {
+      ...frame,
+      payload: {
+        ...framePayload(frame),
+        session_id: sessionId,
+        name,
         current_session_id: this.currentSessionId,
         running_session_count: this.runningSessionCount(),
         loaded_session_count: this.visibleLoadedSessionCount(),

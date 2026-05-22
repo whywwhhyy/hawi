@@ -426,6 +426,42 @@ class TestSessionManager:
         finally:
             sm2.detach()
 
+    def test_rename_current_session_updates_manifest(self, stub_setup) -> None:
+        sm, agent, _ = stub_setup
+        sid = sm.new_session(name="old name")
+        agent.context.add_user_message("hello")
+        sm.save_now()
+
+        sm.rename_session(sid, "new name")
+
+        manifest = json.loads(
+            layout.manifest_path(layout.session_dir(sm._root, sid)).read_text()
+        )
+        assert manifest["name"] == "new name"
+        assert manifest["last_checkpoint_event"] == "session_rename"
+        assert sm.list_sessions()[0].name == "new name"
+
+    def test_rename_unloaded_session_updates_manifest(self, session_root: Path) -> None:
+        agent = _StubAgent()
+        runner = _StubAgentRunner()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session(name="old name")
+            agent.context.add_user_message("hello")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        sm2 = SessionManager(root=session_root)
+        sm2.rename_session(sid, "new name")
+
+        manifest = json.loads(
+            layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
+        )
+        assert manifest["name"] == "new name"
+        assert sm2.list_sessions()[0].name == "new name"
+
     def test_manifest_includes_gui_launch_profile(self, session_root: Path) -> None:
         profile = {
             "version": 1,

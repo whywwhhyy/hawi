@@ -287,6 +287,26 @@ describe("SessionEngineManager", () => {
     );
   });
 
+  it("renames a loaded session through its owning core", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const core = new FakeCore({
+      session_rename: ackFrame("session_rename", { session_id: "session-target", name: "Renamed" }),
+    });
+    const record = fakeRecord("session-target", 1, core);
+    internals.currentSessionId = record.sessionId;
+    internals.loaded.set(record.sessionId, record);
+
+    const frame = await manager.sendCommand("session_rename", { session_id: record.sessionId, name: " Renamed " });
+
+    expect(core.commands).toContainEqual({
+      type: "session_rename",
+      payload: { session_id: "session-target", name: "Renamed" },
+    });
+    expect((frame.payload as Record<string, unknown>).name).toBe("Renamed");
+    expect((frame.payload as Record<string, unknown>).current_session_id).toBe(record.sessionId);
+  });
+
   it("uses persisted session profiles when listing loaded sessions", async () => {
     const persistedProfile = profileFromConfig({ ...baseConfig, modelName: "kimi" });
     const catalog = new FakeCore({

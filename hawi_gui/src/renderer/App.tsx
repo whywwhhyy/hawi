@@ -226,7 +226,9 @@ function shouldPreserveArrowKey(event: KeyboardEvent): boolean {
 
 function shouldPreserveEnterKey(event: KeyboardEvent): boolean {
   const target = event.target;
-  return target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
+  return target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLInputElement ||
+    (target instanceof HTMLElement && target.isContentEditable);
 }
 
 function clickActiveButton(scope: HTMLElement): boolean {
@@ -249,8 +251,8 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
         return scope.querySelector<HTMLElement>(".model.active:not(:disabled)")
           ?? scope.querySelector<HTMLElement>(".model:not(:disabled)");
       case "sessionDialog":
-        return scope.querySelector<HTMLElement>(".session-option.current .session-select:not(:disabled)")
-          ?? scope.querySelector<HTMLElement>(".session-select:not(:disabled)");
+        return scope.querySelector<HTMLElement>(".session-option.current .session-title-button:not(:disabled)")
+          ?? scope.querySelector<HTMLElement>(".session-title-button:not(:disabled)");
       case "debugMenu":
       case "queueTaskEdit":
       case "queuePopover":
@@ -923,6 +925,26 @@ export default function App() {
     }
   }
 
+  async function renameSession(sessionId: string, name: string) {
+    const nextName = name.trim();
+    if (!sessionId || !nextName) {
+      return;
+    }
+    setSessionBusy(true);
+    try {
+      const frame = await sendCommand("session_rename", { session_id: sessionId, name: nextName }, null);
+      if (!frame) return;
+      setSessions((items) => items.map((item) => (
+        item.session_id === sessionId
+          ? { ...item, name: nextName, updated_at: new Date().toISOString() }
+          : item
+      )));
+      await refreshSessions();
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
   async function newSession() {
     setSessionBusy(true);
     try {
@@ -1551,6 +1573,7 @@ export default function App() {
               onToggle={openSessionDialog}
               onSelect={loadSession}
               onDelete={deleteSession}
+              onRename={renameSession}
               onNew={newSession}
               onFork={forkSession}
             />
@@ -1948,6 +1971,7 @@ function SessionStatusCell({
   onToggle,
   onSelect,
   onDelete,
+  onRename,
   onNew,
   onFork
 }: {
@@ -1961,9 +1985,14 @@ function SessionStatusCell({
   onToggle: () => void;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
+  onRename: (sessionId: string, name: string) => Promise<void> | void;
   onNew: () => void;
   onFork: (sessionId?: string) => void;
 }) {
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const editInputRef = useRef<HTMLInputElement | null>(null);
+  const editingSessionIdRef = useRef<string | null>(null);
   const sortedSessions = sortSessionsByCreatedAt(sessions);
   const canForkCurrent = Boolean(currentSessionId) && messageCount > 0;
   const currentSession = currentSessionId
@@ -1976,6 +2005,37 @@ function SessionStatusCell({
       : "-";
   const sessionRuntimeLabel = `${runningCount} Running / ${loadedCount} Active`;
   const currentSessionLabel = `Current: ${currentSessionName}`;
+
+  useEffect(() => {
+    if (!editingSessionId) return;
+    const input = editInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [editingSessionId]);
+
+  function startEditingSession(session: SessionMetaPayload) {
+    editingSessionIdRef.current = session.session_id;
+    setEditingSessionId(session.session_id);
+    setEditDraft(sessionDisplayName(session));
+  }
+
+  function cancelEditingSession() {
+    editingSessionIdRef.current = null;
+    setEditingSessionId(null);
+  }
+
+  async function commitEditingSession(session: SessionMetaPayload) {
+    if (editingSessionIdRef.current !== session.session_id) return;
+    const nextName = editDraft.trim();
+    const displayedName = sessionDisplayName(session).trim();
+    editingSessionIdRef.current = null;
+    setEditingSessionId(null);
+    if (!nextName || nextName === session.name.trim() || nextName === displayedName) {
+      return;
+    }
+    await onRename(session.session_id, nextName);
+  }
 
   return (
     <div className={`session-status ${open ? "active" : ""}`}>
@@ -2042,27 +2102,65 @@ function SessionStatusCell({
               const isRunning = session.load_state === "running";
               const isLocked = session.locked === true && !isCurrent && !isLoadedHere;
               const canShowDelete = !isRunning && (!isLocked || isLoadedHere);
+              const isEditing = editingSessionId === session.session_id;
               return (
                 <div
                   key={session.session_id}
                   className={`session-option ${isCurrent ? "current" : ""} ${isLocked ? "locked" : ""} ${isLoadedHere ? "loaded" : ""}`}
                 >
-                  <button
-                    type="button"
-                    className="session-select"
-                    title={isLocked ? "Session 正被其他 Hawi engine 使用，可 Fork 后继续" : "切换 Session"}
-                    disabled={busy || isLocked}
-                    onClick={() => onSelect(session.session_id)}
-                  >
+                  <div className="session-select-row">
                     <small className="session-date">
                       {formatSessionTimestamp(session.created_at || session.updated_at)}
                     </small>
-                    <span className="session-title">
-                      <SessionLoadIndicator state={session.load_state ?? "unloaded"} />
-                      {isLocked && <Lock size={12} />}
-                      {sessionDisplayName(session)}
-                    </span>
-                  </button>
+                    <div className="session-title-row">
+                      <button
+                        type="button"
+                        className="session-edit"
+                        title="重命名 Session"
+                        aria-label={`重命名 Session ${shortSessionId(session.session_id)}`}
+                        disabled={busy}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          startEditingSession(session);
+                        }}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      {isEditing ? (
+                        <input
+                          ref={editInputRef}
+                          className="session-name-input"
+                          value={editDraft}
+                          disabled={busy}
+                          onChange={(event) => setEditDraft(event.target.value)}
+                          onBlur={() => void commitEditingSession(session)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelEditingSession();
+                              return;
+                            }
+                            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                              event.preventDefault();
+                              void commitEditingSession(session);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="session-title-button"
+                          title={isLocked ? "Session 正被其他 Hawi engine 使用，可 Fork 后继续" : "切换 Session"}
+                          disabled={busy || isLocked}
+                          onClick={() => onSelect(session.session_id)}
+                        >
+                          <SessionLoadIndicator state={session.load_state ?? "unloaded"} />
+                          {isLocked && <Lock size={12} />}
+                          <span className="session-name-text">{sessionDisplayName(session)}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   {(!isCurrent || canShowDelete) && (
                     <div className="session-actions">
                       {!isCurrent && (
@@ -4303,7 +4401,6 @@ function ModelProviderConfigPreviewPanel({
   const lines = modelProviderConfigPreviewLines(config);
   return (
     <aside className="model-provider-config-preview" aria-label={`${provider} 配置预览`}>
-      <div className="model-provider-config-title">Loaded config</div>
       {lines.map((line, index) => (
         <div className="model-provider-config-line" key={`${line}-${index}`} title={line}>
           {line}

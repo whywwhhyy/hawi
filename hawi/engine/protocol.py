@@ -58,6 +58,7 @@ COMMAND_TYPES = {
     "session_load",
     "session_switch",
     "session_delete",
+    "session_rename",
     "session_save_now",
     "session_history",
     "session_export_markdown",

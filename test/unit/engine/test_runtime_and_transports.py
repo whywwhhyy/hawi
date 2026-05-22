@@ -340,6 +340,9 @@ class DummySessionManager:
         self.deleted.append(session_id)
         self.histories.pop(session_id, None)
 
+    def rename_session(self, session_id: str, name: str) -> None:
+        self.renamed_session = (session_id, name)
+
 
 class SimpleTool(AgentTool):
     @property
@@ -676,6 +679,30 @@ async def test_session_delete_removes_non_current_session() -> None:
     assert payload["command"] == "session_delete"
     assert payload["session_id"] == "saved-session"
     assert sm.deleted == ["saved-session"]
+
+
+@pytest.mark.asyncio
+async def test_session_rename_updates_session_manager() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    sm = DummySessionManager()
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_rename","id":"rename",'
+            '"payload":{"session_id":"saved-session","name":"  Renamed  "}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_rename"
+    assert payload["session_id"] == "saved-session"
+    assert payload["name"] == "Renamed"
+    assert sm.renamed_session == ("saved-session", "Renamed")
 
 
 @pytest.mark.asyncio

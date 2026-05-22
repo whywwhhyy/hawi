@@ -325,6 +325,47 @@ class SessionManager:
             )
         return sorted(out, key=lambda m: _parse_iso_timestamp(m.created_at), reverse=True)
 
+    def rename_session(self, session_id: str, name: str) -> None:
+        """Rename a session without changing its stable id or directory."""
+        next_name = name.strip()
+        if not session_id:
+            raise ValueError("session_id must be a non-empty string")
+        if not next_name:
+            raise ValueError("name must be a non-empty string")
+
+        with self._lock:
+            self._writer.wait_idle(timeout=10.0)
+            session_dir = layout.session_dir(self._root, session_id)
+            manifest_path = layout.manifest_path(session_dir)
+            if session_id == self._session_id:
+                self._session_name = next_name
+                if session_dir.exists() and manifest_path.exists():
+                    self._ensure_current_session_lock()
+                    self._patch_manifest(
+                        session_dir,
+                        {
+                            "session_id": session_id,
+                            "name": next_name,
+                            "last_checkpoint_event": "session_rename",
+                        },
+                    )
+                return
+
+            if not session_dir.exists() or not manifest_path.exists():
+                raise FileNotFoundError(f"session not found: {session_id}")
+            lock = self._acquire_session_lock(session_id)
+            try:
+                self._patch_manifest(
+                    session_dir,
+                    {
+                        "session_id": session_id,
+                        "name": next_name,
+                        "last_checkpoint_event": "session_rename",
+                    },
+                )
+            finally:
+                lock.release()
+
     def load_session(self, session_id: str) -> None:
         """Load a session's on-disk state into the attached agent."""
         if self._agent is None:

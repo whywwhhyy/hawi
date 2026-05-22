@@ -625,7 +625,7 @@ button:disabled {
   color: var(--color-text-strong);
 }
 
-.session-select {
+.session-select-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto;
@@ -633,9 +633,7 @@ button:disabled {
   gap: 4px;
   min-height: 50px;
   min-width: 0;
-  padding: 7px 10px;
-  border: 0;
-  background: transparent;
+  padding: 7px 88px 7px 10px;
   color: inherit;
   text-align: left;
 }
@@ -645,14 +643,74 @@ button:disabled {
   background: var(--color-primary-tint);
 }
 
-.session-title {
+.session-title-row {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
+  width: 100%;
+}
+
+.session-title-button {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.session-title-button:disabled {
+  cursor: default;
+}
+
+.session-name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-edit {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: #64777a;
+}
+
+.session-edit:hover:not(:disabled) {
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+}
+
+.session-edit:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.session-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text-strong);
+  font: inherit;
 }
 
 .session-load-dot {
@@ -677,12 +735,12 @@ button:disabled {
   animation: status-spin 0.9s linear infinite;
 }
 
-.session-title svg {
+.session-title-button svg {
   flex: 0 0 auto;
   color: #8b7665;
 }
 
-.session-title svg.session-load-spinner {
+.session-title-button svg.session-load-spinner {
   color: var(--color-primary);
 }
 
@@ -3252,14 +3310,6 @@ button:disabled {
   padding-left: 12px;
   border-left: 1px solid var(--color-border-subtle);
   color: #617078;
-}
-
-.model-provider-config-title {
-  margin-bottom: 5px;
-  color: #4f5d63;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.2;
 }
 
 .model-provider-config-line {
