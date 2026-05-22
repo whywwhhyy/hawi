@@ -1056,6 +1056,7 @@ def test_runtime_applies_extra_tool_parameters_to_agent() -> None:
 
     assert schema["properties"]["tool_call_purpose"]["type"] == "string"
     assert schema["properties"]["tool_call_purpose"]["description"] == "Describe the call"
+    assert schema["properties"]["tool_call_purpose"]["default"] is None
     assert schema["properties"]["priority"]["type"] == "integer"
     assert schema["required"] == ["value", "tool_call_purpose", "priority"]
     assert "Injected framework parameters" in description

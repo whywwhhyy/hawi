@@ -116,6 +116,7 @@ class PreparedToolArguments:
     tool_arguments: dict[str, Any]
     injected_arguments: dict[str, Any] = field(default_factory=dict)
     short_circuit_result: ToolResult | None = None
+    output_prefix: str | None = None
 
 
 ToolCallRequestStatus = Literal[
@@ -125,6 +126,12 @@ ToolCallRequestStatus = Literal[
     "failed",
     "cancelled",
 ]
+
+
+TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose"
+MISSING_TOOL_CALL_PURPOSE_OUTPUT_PREFIX = (
+    "Error: tool_call_purpose 字段必填；未指定会导致用户误解，并影响自动审核 agent 的判断准确度。"
+)
 
 
 @dataclass
@@ -651,11 +658,29 @@ class ToolExecutor:
                 for injection in injections
             },
         }
-        required = [injection.name for injection in injections if injection.required]
+        validation_arguments = dict(arguments)
+        missing_default_none_injections: set[str] = set()
+        output_prefixes: list[str] = []
+        required: list[str] = []
+        for injection in injections:
+            if not injection.required:
+                continue
+            schema = injection.schema_copy()
+            missing_or_none = (
+                injection.name not in validation_arguments
+                or validation_arguments.get(injection.name) is None
+            )
+            if missing_or_none and schema.get("default", object()) is None:
+                missing_default_none_injections.add(injection.name)
+                validation_arguments.pop(injection.name, None)
+                if injection.name == TOOL_CALL_PURPOSE_PARAMETER:
+                    output_prefixes.append(MISSING_TOOL_CALL_PURPOSE_OUTPUT_PREFIX)
+                continue
+            required.append(injection.name)
         if required:
             injected_schema["required"] = required
 
-        is_valid, errors = validate_parameters(arguments, injected_schema)
+        is_valid, errors = validate_parameters(validation_arguments, injected_schema)
         if not is_valid:
             return PreparedToolArguments(
                 tool_arguments=tool_arguments,
@@ -672,10 +697,13 @@ class ToolExecutor:
         for injection in injections:
             if injection.name in tool_arguments:
                 injected_arguments[injection.name] = tool_arguments.pop(injection.name)
+            elif injection.name in missing_default_none_injections:
+                injected_arguments[injection.name] = None
 
         prepared = PreparedToolArguments(
             tool_arguments=tool_arguments,
             injected_arguments=injected_arguments,
+            output_prefix="\n".join(output_prefixes) if output_prefixes else None,
         )
         if not run_injection_handlers:
             return prepared
@@ -715,6 +743,26 @@ class ToolExecutor:
                 break
 
         return prepared
+
+    @staticmethod
+    def _prepend_tool_result_output(result: ToolResult, prefix: str | None) -> ToolResult:
+        if not prefix:
+            return result
+        output_str = (
+            result.output
+            if isinstance(result.output, str)
+            else str(result.output)
+            if result.output is not None
+            else ""
+        )
+        output = prefix if not output_str else f"{prefix}\n{output_str}"
+        return ToolResult(
+            success=result.success,
+            output=output,
+            error=result.error,
+            cache_point=result.cache_point,
+            cache_point_source=result.cache_point_source,
+        )
 
     def inject_tool_runtime_context(
         self,
@@ -956,6 +1004,7 @@ class ToolExecutor:
 
         tool = self._plugin_manager.get_tool(tool_name)
         audit_pending = False
+        result_output_prefix: str | None = None
 
         before_ctx = HookContext(
             run_id=run_id,
@@ -1060,6 +1109,7 @@ class ToolExecutor:
                     iteration=iteration,
                     run_injection_handlers=run_injection_handlers,
                 )
+                result_output_prefix = prepared.output_prefix
                 if prepared.short_circuit_result is not None:
                     result = prepared.short_circuit_result
                 elif getattr(tool, "audit", False) and audit_action == "queue":
@@ -1111,6 +1161,7 @@ class ToolExecutor:
                     )
 
         duration_ms = (time.time() - start_time) * 1000
+        result = self._prepend_tool_result_output(result, result_output_prefix)
         result = self._enforce_tool_result_size(
             result,
             tool_name=tool_name,
@@ -1651,7 +1702,7 @@ class ToolExecutor:
             tool_arguments = self.inject_tool_runtime_context(
                 tool, prepared.tool_arguments
             )
-            return await self._execute_agent_tool(
+            result = await self._execute_agent_tool(
                 tool,
                 tool_name,
                 tool_call_id,
@@ -1660,6 +1711,7 @@ class ToolExecutor:
                 iteration=iteration,
                 event_bus=None,
             )
+            return self._prepend_tool_result_output(result, prepared.output_prefix)
         else:
             self._record_permission_audit(
                 tool_name=tool_name,
@@ -1715,7 +1767,7 @@ class ToolExecutor:
         tool_arguments = self.inject_tool_runtime_context(
             tool, prepared.tool_arguments
         )
-        return await self._execute_agent_tool(
+        result = await self._execute_agent_tool(
             tool,
             tool_name,
             tool_call_id,
@@ -1724,6 +1776,7 @@ class ToolExecutor:
             iteration=iteration,
             event_bus=None,
         )
+        return self._prepend_tool_result_output(result, prepared.output_prefix)
 
     @staticmethod
     def _normalize_review_decision(raw: Any) -> RuntimeReviewDecision:

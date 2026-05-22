@@ -219,6 +219,68 @@ async def test_missing_required_injected_parameter_fails_before_tool(agent: Hawi
     assert tool.calls == []
 
 
+async def test_missing_tool_call_purpose_executes_tool_with_output_warning(agent: HawiAgent):
+    tool = StrictEchoTool()
+    agent.plugins.add_tool(tool)
+    agent.plugins.add_tool_parameter_injection(
+        ToolParameterInjection(
+            name="tool_call_purpose",
+            schema={
+                "type": "string",
+                "description": "Explain the tool call purpose.",
+                "default": None,
+            },
+            required=True,
+        )
+    )
+
+    record = await agent._execute_tool(
+        {
+            "type": "tool_call",
+            "id": "tc-purpose",
+            "name": "strict_echo",
+            "arguments": {"text": "hello"},
+        },
+        _ExecutionState(run_id="run-purpose", iteration=1),
+    )
+
+    assert record.result.success is True
+    assert record.result.output.startswith("Error: tool_call_purpose 字段必填")
+    assert record.result.output.endswith("hello")
+    assert record.result.error == ""
+    assert tool.calls == ["hello"]
+
+
+async def test_null_tool_call_purpose_executes_tool_with_output_warning(agent: HawiAgent):
+    tool = StrictEchoTool()
+    agent.plugins.add_tool(tool)
+    agent.plugins.add_tool_parameter_injection(
+        ToolParameterInjection(
+            name="tool_call_purpose",
+            schema={
+                "type": "string",
+                "description": "Explain the tool call purpose.",
+                "default": None,
+            },
+            required=True,
+        )
+    )
+
+    record = await agent._execute_tool(
+        {
+            "type": "tool_call",
+            "id": "tc-purpose-null",
+            "name": "strict_echo",
+            "arguments": {"text": "hello", "tool_call_purpose": None},
+        },
+        _ExecutionState(run_id="run-purpose", iteration=1),
+    )
+
+    assert record.result.success is True
+    assert record.result.output.startswith("Error: tool_call_purpose 字段必填")
+    assert tool.calls == ["hello"]
+
+
 async def test_injected_parameter_handler_failure_returns_tool_result(agent: HawiAgent):
     tool = StrictEchoTool()
 

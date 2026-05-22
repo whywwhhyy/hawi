@@ -1807,10 +1807,13 @@ class CoreRuntime:
 
     @staticmethod
     def _extra_tool_parameter_json_schema(parameter: ExtraToolParameter) -> dict[str, Any]:
-        return {
+        schema = {
             **parameter.schema,
             "description": parameter.description,
         }
+        if parameter.name == "tool_call_purpose":
+            schema["default"] = None
+        return schema
 
     async def _stop_runner(
         self,
