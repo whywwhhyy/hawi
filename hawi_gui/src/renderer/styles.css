@@ -3205,6 +3205,17 @@ button:disabled {
   padding: 10px;
 }
 
+.model-provider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.model-provider-main {
+  min-width: 0;
+}
+
 .model-provider h3 {
   margin: 0;
   font-size: 13px;
@@ -3233,6 +3244,33 @@ button:disabled {
   justify-content: flex-start;
   width: 100%;
   margin: 3px 0;
+}
+
+.model-provider-config-preview {
+  min-width: 0;
+  height: 100%;
+  padding-left: 12px;
+  border-left: 1px solid var(--color-border-subtle);
+  color: #617078;
+}
+
+.model-provider-config-title {
+  margin-bottom: 5px;
+  color: #4f5d63;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.model-provider-config-line {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: #6b7a80;
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model.active {

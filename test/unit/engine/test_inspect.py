@@ -38,6 +38,13 @@ providers:
     properties:
       base_url: http://localhost:1234/v1
       api_key: test
+  - name: test
+    adapter: OpenAIModel
+    model_ids:
+      - other-model
+    properties:
+      base_url: http://localhost:1234/v1
+      api_key: another-test
 """,
         encoding="utf-8",
     )
@@ -56,5 +63,10 @@ providers:
     )
     payload = json.loads(result.stdout)
 
-    assert payload["models"] == ["test/fake-model"]
+    assert payload["models"] == ["test/fake-model", "test/other-model"]
+    provider_config = payload["model_provider_configs"]["test"]
+    assert provider_config["adapter"] == "OpenAIModel"
+    assert provider_config["model_count"] == 2
+    assert provider_config["properties"]["base_url"] == "http://localhost:1234/v1"
+    assert provider_config["properties"]["api_key"] == "**** | ano...test"
     assert payload["plugin_catalog"]

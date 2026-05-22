@@ -74,7 +74,7 @@ class MiniMaxModel(DelegateModel):
         self,
         *,
         model_id: str = "MiniMax-M2.5",
-        api_key: str,
+        api_key: str | None = None,
         base_url: str | None = None,
         api: Literal["auto", "openai", "anthropic"] = "auto",
         **params: Any,

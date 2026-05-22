@@ -11,7 +11,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
@@ -1689,6 +1689,7 @@ export default function App() {
       {modelDialogOpen && (
         <ModelDialog
           models={metadata.inspect.models}
+          providerConfigs={metadata.inspect.model_provider_configs ?? {}}
           current={config.modelName}
           onClose={() => setModelDialogOpen(false)}
           onSelect={selectModel}
@@ -4214,7 +4215,21 @@ function autoCompactThresholdTokens(
   return Math.max(1, Math.round(maxContextTokens * (percent / 100)));
 }
 
-function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models: string[]; current: string; onClose: () => void; onSelect: (model: string) => void; onRefresh: (provider: string) => Promise<void> }) {
+function ModelDialog({
+  models,
+  providerConfigs,
+  current,
+  onClose,
+  onSelect,
+  onRefresh
+}: {
+  models: string[];
+  providerConfigs: Record<string, ModelProviderConfigPreview>;
+  current: string;
+  onClose: () => void;
+  onSelect: (model: string) => void;
+  onRefresh: (provider: string) => Promise<void>;
+}) {
   const [filter, setFilter] = useState("");
   const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -4249,27 +4264,76 @@ function ModelDialog({ models, current, onClose, onSelect, onRefresh }: { models
       <div className="model-grid">
         {grouped.map(([provider, entries]) => (
           <section className="model-provider" key={provider}>
-            <header className="model-provider-header">
-              <h3>{provider}</h3>
-              <button
-                className="icon-button model-refresh"
-                title={`刷新 ${provider} 模型列表`}
-                disabled={Boolean(refreshingProvider)}
-                onClick={() => void refresh(provider)}
-              >
-                <RotateCcw size={15} className={refreshingProvider === provider ? "spin" : ""} />
-              </button>
-            </header>
-            {entries.map((model) => (
-              <button className={model === current ? "model active" : "model"} key={model} onClick={() => onSelect(model)}>
-                {model.split("/").slice(1).join("/")}
-              </button>
-            ))}
+            <div className="model-provider-main">
+              <header className="model-provider-header">
+                <h3>{provider}</h3>
+                <button
+                  className="icon-button model-refresh"
+                  title={`刷新 ${provider} 模型列表`}
+                  disabled={Boolean(refreshingProvider)}
+                  onClick={() => void refresh(provider)}
+                >
+                  <RotateCcw size={15} className={refreshingProvider === provider ? "spin" : ""} />
+                </button>
+              </header>
+              {entries.map((model) => (
+                <button className={model === current ? "model active" : "model"} key={model} onClick={() => onSelect(model)}>
+                  {model.split("/").slice(1).join("/")}
+                </button>
+              ))}
+            </div>
+            <ModelProviderConfigPreviewPanel
+              provider={provider}
+              config={providerConfigs[provider]}
+            />
           </section>
         ))}
       </div>
     </Modal>
   );
+}
+
+function ModelProviderConfigPreviewPanel({
+  provider,
+  config
+}: {
+  provider: string;
+  config?: ModelProviderConfigPreview;
+}) {
+  const lines = modelProviderConfigPreviewLines(config);
+  return (
+    <aside className="model-provider-config-preview" aria-label={`${provider} 配置预览`}>
+      <div className="model-provider-config-title">Loaded config</div>
+      {lines.map((line, index) => (
+        <div className="model-provider-config-line" key={`${line}-${index}`} title={line}>
+          {line}
+        </div>
+      ))}
+    </aside>
+  );
+}
+
+export function modelProviderConfigPreviewLines(config?: ModelProviderConfigPreview): string[] {
+  if (!config) return ["config: not loaded"];
+  const lines = [
+    `adapter: ${formatProviderConfigValue(config.adapter)}`,
+    `models: ${formatProviderConfigValue(config.model_count)}`,
+  ];
+  for (const [key, value] of Object.entries(config.properties ?? {})) {
+    lines.push(`${key}: ${formatProviderConfigValue(value)}`);
+  }
+  return lines;
+}
+
+function formatProviderConfigValue(value: unknown): string {
+  if (value == null) return "null";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function formatDialogError(error: unknown): string {

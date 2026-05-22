@@ -144,8 +144,15 @@ export interface PluginPermissionDeclared {
 export interface InspectPayload {
   version: typeof VERSION;
   models: string[];
+  model_provider_configs?: Record<string, ModelProviderConfigPreview>;
   plugin_catalog: PluginCatalogItem[];
   default_system_prompt: string;
+}
+
+export interface ModelProviderConfigPreview {
+  adapter: string;
+  model_count: number;
+  properties: Record<string, unknown>;
 }
 
 export interface JsonSchemaObject {

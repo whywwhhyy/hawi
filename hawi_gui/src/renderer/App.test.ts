@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, modelProviderConfigPreviewLines, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -112,6 +112,36 @@ describe("renderUsageStatusText", () => {
       cacheReadTokens: 1400,
       cacheWriteTokens: 200
     })).toBe("Usage Total 15.4K · Input 12K · Output 1.8K · Cache Write 200 · Cache Read 1.4K");
+  });
+});
+
+describe("modelProviderConfigPreviewLines", () => {
+  it("renders loaded provider config lines", () => {
+    expect(modelProviderConfigPreviewLines({
+      adapter: "OpenAIModel",
+      model_count: 2,
+      properties: {
+        base_url: "http://localhost:1234/v1",
+        api_key: "sk-...abcd"
+      }
+    })).toEqual([
+      "adapter: OpenAIModel",
+      "models: 2",
+      "base_url: http://localhost:1234/v1",
+      "api_key: sk-...abcd"
+    ]);
+  });
+
+  it("renders summarized provider config without block labels", () => {
+    expect(modelProviderConfigPreviewLines({
+      adapter: "OpenAIModel, AnthropicModel",
+      model_count: 4,
+      properties: { base_url: "http://localhost:1234/v1 | https://example.test" }
+    })).toEqual([
+      "adapter: OpenAIModel, AnthropicModel",
+      "models: 4",
+      "base_url: http://localhost:1234/v1 | https://example.test"
+    ]);
   });
 });
 

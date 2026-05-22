@@ -23,6 +23,7 @@ from hawi.models import (
     ReasoningPart,
     TokenEstimate,
 )
+from hawi.models._auth import normalize_optional_api_key, sdk_api_key
 from hawi.models.usage import normalize_anthropic_usage
 from hawi.errors import (
     NetworkError,
@@ -296,7 +297,8 @@ class AnthropicModel(Model):
             **params: 其他参数，如 temperature, max_output_tokens 等
         """
         self._model_id = model_id
-        self.api_key = api_key
+        self.api_key = normalize_optional_api_key(api_key)
+        self._api_key_explicit = api_key is not None
         self.base_url = base_url
         self.timeout = timeout
         self.max_retries = max_retries
@@ -319,9 +321,9 @@ class AnthropicModel(Model):
         self._client: Anthropic | None = None
         self._async_client: AsyncAnthropic | None = None
 
-        # Clear env vars that may interfere with API calls when api_key is provided
-        # Anthropic SDK reads ANTHROPIC_AUTH_TOKEN which can cause wrong API endpoint
-        if api_key:
+        # Clear env vars that may interfere when a configured/custom endpoint
+        # should not inherit Anthropic SDK auth or base URL from the process.
+        if self.api_key or self._api_key_explicit or self.base_url:
             import os
             os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
             os.environ.pop("ANTHROPIC_BASE_URL", None)
@@ -372,8 +374,13 @@ class AnthropicModel(Model):
                 "timeout": self.timeout,
                 "max_retries": self.max_retries,
             }
-            if self.api_key:
-                client_args["api_key"] = self.api_key
+            api_key = sdk_api_key(
+                self.api_key,
+                base_url=self.base_url,
+                explicit_api_key=self._api_key_explicit,
+            )
+            if api_key is not None:
+                client_args["api_key"] = api_key
             if self.base_url:
                 client_args["base_url"] = self.base_url
             self._client = Anthropic(**client_args)
@@ -387,8 +394,13 @@ class AnthropicModel(Model):
                 "timeout": self.timeout,
                 "max_retries": self.max_retries,
             }
-            if self.api_key:
-                client_args["api_key"] = self.api_key
+            api_key = sdk_api_key(
+                self.api_key,
+                base_url=self.base_url,
+                explicit_api_key=self._api_key_explicit,
+            )
+            if api_key is not None:
+                client_args["api_key"] = api_key
             if self.base_url:
                 client_args["base_url"] = self.base_url
             self._async_client = AsyncAnthropic(**client_args)
