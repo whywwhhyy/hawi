@@ -1107,6 +1107,13 @@ button:disabled {
   align-items: start;
 }
 
+.queue-message.with-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 8px;
+  align-items: start;
+}
+
 .queue-task.editing {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -1142,10 +1149,20 @@ button:disabled {
   margin-top: 4px;
 }
 
+.queue-message.with-actions p {
+  grid-column: 1;
+  margin-top: 4px;
+}
+
 .queue-task-actions {
   grid-row: 1 / span 2;
   grid-column: 2;
   justify-content: flex-end;
+}
+
+.queue-message-actions {
+  grid-row: 1 / span 2;
+  grid-column: 2;
 }
 
 .queue-task.editing .queue-task-actions {

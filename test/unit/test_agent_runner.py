@@ -177,6 +177,32 @@ class TestMessageQueueManager:
         qm = MessageQueueManager()
         assert qm.remove_message("nonexistent") is False
 
+    def test_promote_normal_to_high_prio(self):
+        qm = MessageQueueManager()
+        msg = qm.enqueue_normal("promote me", {"source": "test"})
+
+        assert qm.promote_normal_to_high_prio(msg.id) is True
+
+        lengths = qm.get_queue_lengths()
+        assert lengths["normal"] == 0
+        assert lengths["high_prio"] == 1
+        promoted = qm.dequeue_high_prio()
+        assert promoted is msg
+        assert promoted.content == "promote me"
+        assert promoted.queue_type == QueueType.HIGH_PRIO
+        assert promoted.metadata["source"] == "test"
+        assert promoted.metadata["source_queue"] == "normal"
+        assert promoted.metadata["promoted_to"] == "high_prio"
+
+    def test_sent_message_cannot_be_removed_or_promoted(self):
+        qm = MessageQueueManager()
+        msg = qm.enqueue_normal("already sent")
+
+        assert qm.dequeue_normal() is msg
+
+        assert qm.remove_message(msg.id) is False
+        assert qm.promote_normal_to_high_prio(msg.id) is False
+
     def test_remove_messages_by_filter(self):
         qm = MessageQueueManager()
         msg1 = qm.enqueue_normal("keep")

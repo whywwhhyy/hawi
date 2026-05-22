@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
@@ -1221,13 +1221,44 @@ export default function App() {
     }
   }
 
-  async function removeQueueTask(messageId: string) {
-    if (!messageId || queueTaskBusy) return;
+  function queueMessageEditorContent(message: QueueMessageState) {
+    return (message.content ?? message.contentPreview).trim();
+  }
+
+  function appendWithdrawnQueueMessageToInput(message: QueueMessageState) {
+    const content = queueMessageEditorContent(message);
+    if (!content) return;
+    const currentText = inputRef.current?.value ?? input;
+    const nextInput = currentText ? `${currentText}\n${content}` : content;
+    setInput(nextInput);
+    resetInputHistoryNavigation(nextInput);
+    focusInputAtEnd();
+  }
+
+  async function removeQueuedMessage(message: QueueMessageState) {
+    if (!message.id || queueTaskBusy) return;
     setQueueTaskBusy(true);
     try {
-      const frame = await sendCommand("queue_task_remove", { message_id: messageId });
+      const frame = await sendCommand("queue_message_remove", { message_id: message.id });
       if (!frame) return;
-      if (editingQueueTaskId === messageId) {
+      if (editingQueueTaskId === message.id) {
+        setEditingQueueTaskId(null);
+        setQueueTaskEditDraft("");
+      }
+      appendWithdrawnQueueMessageToInput(message);
+      await refreshRuntimeStatus();
+    } finally {
+      setQueueTaskBusy(false);
+    }
+  }
+
+  async function promoteQueueTask(message: QueueMessageState) {
+    if (!message.id || queueTaskBusy) return;
+    setQueueTaskBusy(true);
+    try {
+      const frame = await sendCommand("queue_message_promote", { message_id: message.id });
+      if (!frame) return;
+      if (editingQueueTaskId === message.id) {
         setEditingQueueTaskId(null);
         setQueueTaskEditDraft("");
       }
@@ -1242,7 +1273,7 @@ export default function App() {
     if (!message.id || !content || queueTaskBusy) return;
     setQueueTaskBusy(true);
     try {
-      const frame = await sendCommand("queue_task_remove", { message_id: message.id });
+      const frame = await sendCommand("queue_message_remove", { message_id: message.id });
       if (!frame) return;
       if (editingQueueTaskId === message.id) {
         setEditingQueueTaskId(null);
@@ -1615,7 +1646,9 @@ export default function App() {
               }}
               onEditDraftChange={setQueueTaskEditDraft}
               onTaskUpdate={updateQueueTask}
-              onTaskRemove={removeQueueTask}
+              onQueuedMessageRemove={removeQueuedMessage}
+              onTaskRemove={removeQueuedMessage}
+              onTaskPromote={promoteQueueTask}
               onTaskPullBack={pullBackQueueTask}
               onTaskMove={moveQueueTask}
               onTaskClear={clearNormalQueue}
@@ -1758,7 +1791,9 @@ function QueueStatusCell({
   onEditCancel,
   onEditDraftChange,
   onTaskUpdate,
+  onQueuedMessageRemove,
   onTaskRemove,
+  onTaskPromote,
   onTaskPullBack,
   onTaskMove,
   onTaskClear
@@ -1782,7 +1817,9 @@ function QueueStatusCell({
   onEditCancel: () => void;
   onEditDraftChange: (value: string) => void;
   onTaskUpdate: (messageId: string, content: string) => void;
-  onTaskRemove: (messageId: string) => void;
+  onQueuedMessageRemove: (message: QueueMessageState) => void;
+  onTaskRemove: (message: QueueMessageState) => void;
+  onTaskPromote: (message: QueueMessageState) => void;
   onTaskPullBack: (message: QueueMessageState) => void;
   onTaskMove: (messageId: string, direction: -1 | 1) => void;
   onTaskClear: () => void;
@@ -1825,7 +1862,9 @@ function QueueStatusCell({
           onEditCancel={onEditCancel}
           onEditDraftChange={onEditDraftChange}
           onTaskUpdate={onTaskUpdate}
+          onQueuedMessageRemove={onQueuedMessageRemove}
           onTaskRemove={onTaskRemove}
+          onTaskPromote={onTaskPromote}
           onTaskPullBack={onTaskPullBack}
           onTaskMove={onTaskMove}
           onTaskClear={onTaskClear}
@@ -2229,7 +2268,9 @@ function QueuePopover({
   onEditCancel,
   onEditDraftChange,
   onTaskUpdate,
+  onQueuedMessageRemove,
   onTaskRemove,
+  onTaskPromote,
   onTaskPullBack,
   onTaskMove,
   onTaskClear
@@ -2251,7 +2292,9 @@ function QueuePopover({
   onEditCancel: () => void;
   onEditDraftChange: (value: string) => void;
   onTaskUpdate: (messageId: string, content: string) => void;
-  onTaskRemove: (messageId: string) => void;
+  onQueuedMessageRemove: (message: QueueMessageState) => void;
+  onTaskRemove: (message: QueueMessageState) => void;
+  onTaskPromote: (message: QueueMessageState) => void;
   onTaskPullBack: (message: QueueMessageState) => void;
   onTaskMove: (messageId: string, direction: -1 | 1) => void;
   onTaskClear: () => void;
@@ -2275,6 +2318,8 @@ function QueuePopover({
         kind="high_prio"
         length={Math.max(queueLengths.high_prio, queueMessages.high_prio.length)}
         messages={queueMessages.high_prio}
+        busy={taskBusy}
+        onRemove={onQueuedMessageRemove}
       />
       <QueueTaskGroup
         length={normalCount}
@@ -2294,6 +2339,7 @@ function QueuePopover({
         onEditDraftChange={onEditDraftChange}
         onUpdate={onTaskUpdate}
         onRemove={onTaskRemove}
+        onPromote={onTaskPromote}
         onPullBack={onTaskPullBack}
         onMove={onTaskMove}
         onClear={onTaskClear}
@@ -2305,11 +2351,15 @@ function QueuePopover({
 function QueueMessageGroup({
   kind,
   length,
-  messages
+  messages,
+  busy = false,
+  onRemove
 }: {
   kind: QueueKind;
   length: number;
   messages: QueueMessageState[];
+  busy?: boolean;
+  onRemove?: (message: QueueMessageState) => void;
 }) {
   const displayCount = kind === "high_prio" ? (length > 0 ? 1 : 0) : length;
   const mergeNote = kind === "high_prio" && messages.length > 1
@@ -2327,7 +2377,12 @@ function QueueMessageGroup({
       ) : (
         <div className="queue-message-list">
           {messages.map((message) => (
-            <QueueMessageItem message={message} key={`${kind}-${message.id}`} />
+            <QueueMessageItem
+              message={message}
+              key={`${kind}-${message.id}`}
+              busy={busy}
+              onRemove={onRemove}
+            />
           ))}
         </div>
       )}
@@ -2353,6 +2408,7 @@ function QueueTaskGroup({
   onEditDraftChange,
   onUpdate,
   onRemove,
+  onPromote,
   onPullBack,
   onMove,
   onClear
@@ -2373,7 +2429,8 @@ function QueueTaskGroup({
   onEditCancel: () => void;
   onEditDraftChange: (value: string) => void;
   onUpdate: (messageId: string, content: string) => void;
-  onRemove: (messageId: string) => void;
+  onRemove: (message: QueueMessageState) => void;
+  onPromote: (message: QueueMessageState) => void;
   onPullBack: (message: QueueMessageState) => void;
   onMove: (messageId: string, direction: -1 | 1) => void;
   onClear: () => void;
@@ -2440,6 +2497,7 @@ function QueueTaskGroup({
               onEditDraftChange={onEditDraftChange}
               onUpdate={onUpdate}
               onRemove={onRemove}
+              onPromote={onPromote}
               onPullBack={onPullBack}
               onMove={onMove}
             />
@@ -2450,15 +2508,38 @@ function QueueTaskGroup({
   );
 }
 
-function QueueMessageItem({ message }: { message: QueueMessageState }) {
+function QueueMessageItem({
+  message,
+  busy = false,
+  onRemove
+}: {
+  message: QueueMessageState;
+  busy?: boolean;
+  onRemove?: (message: QueueMessageState) => void;
+}) {
   const timestamp = formatQueueTimestamp(message.createdAt);
+  const canRemove = Boolean(onRemove) && message.metadata?.withdrawable !== false;
   return (
-    <article className="queue-message">
+    <article className={`queue-message ${onRemove ? "with-actions" : ""}`}>
       <div className="queue-message-meta">
         <span>{message.id}</span>
         {timestamp && <time>{timestamp}</time>}
       </div>
       <p>{message.contentPreview || "空消息"}</p>
+      {onRemove && (
+        <div className="queue-task-actions queue-message-actions">
+          <button
+            type="button"
+            title={canRemove ? "撤回插队消息" : "已发送，无法撤回"}
+            disabled={busy || !canRemove}
+            onClick={() => {
+              if (canRemove) onRemove(message);
+            }}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      )}
     </article>
   );
 }
@@ -2475,6 +2556,7 @@ function QueueTaskItem({
   onEditDraftChange,
   onUpdate,
   onRemove,
+  onPromote,
   onPullBack,
   onMove
 }: {
@@ -2488,7 +2570,8 @@ function QueueTaskItem({
   onEditCancel: () => void;
   onEditDraftChange: (value: string) => void;
   onUpdate: (messageId: string, content: string) => void;
-  onRemove: (messageId: string) => void;
+  onRemove: (message: QueueMessageState) => void;
+  onPromote: (message: QueueMessageState) => void;
   onPullBack: (message: QueueMessageState) => void;
   onMove: (messageId: string, direction: -1 | 1) => void;
 }) {
@@ -2550,10 +2633,13 @@ function QueueTaskItem({
         <button type="button" title="编辑" disabled={busy} onClick={() => onEditStart(message)}>
           <Pencil size={13} />
         </button>
+        <button type="button" title="升级为插队消息" disabled={busy} onClick={() => onPromote(message)}>
+          <ChevronsUp size={13} />
+        </button>
         <button type="button" title="拉回编辑" disabled={busy} onClick={() => onPullBack(message)}>
           <RotateCcw size={13} />
         </button>
-        <button type="button" title="删除" disabled={busy} onClick={() => onRemove(message.id)}>
+        <button type="button" title="撤回到输入框" disabled={busy} onClick={() => onRemove(message)}>
           <Trash2 size={13} />
         </button>
       </div>

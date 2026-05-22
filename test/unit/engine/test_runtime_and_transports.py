@@ -16,6 +16,7 @@ from hawi.engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi.engine.transports import QueuedJsonClient
 from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext
+from hawi.agent.runner.queue import MessageQueueManager
 from hawi.models import model_registry
 from hawi.plugin import HookContext
 from hawi.session import SessionContextBranchResult, SessionManager
@@ -113,6 +114,7 @@ class DummyAgentRunner:
 
     def __init__(self) -> None:
         self._executor = DummyExecutor()
+        self._queue_manager = MessageQueueManager()
         self.agent = DummyAgent()
         self.enqueued: list[tuple[Any, str, dict[str, Any]]] = []
         self.resumed = False
@@ -126,10 +128,11 @@ class DummyAgentRunner:
         return self._executor.is_idle
 
     def get_queue_lengths(self) -> dict[str, int]:
-        return {"normal": 0, "high_prio": 0, "urgent": 0}
+        return self._queue_manager.get_queue_lengths()
 
     def has_pending_immediate_work(self) -> bool:
-        return False
+        lengths = self.get_queue_lengths()
+        return lengths["urgent"] > 0 or lengths["high_prio"] > 0
 
     def resume(self) -> None:
         self.resumed = True
@@ -138,19 +141,7 @@ class DummyAgentRunner:
         return {"paused": False, "resumable": False}
 
     def get_queue_messages(self) -> dict[str, list[dict[str, Any]]]:
-        return {
-            "normal": [
-                {
-                    "id": "msg-1",
-                    "queue": "normal",
-                    "content_preview": "queued",
-                    "created_at": 123.0,
-                    "metadata": {},
-                }
-            ],
-            "high_prio": [],
-            "urgent": [],
-        }
+        return self._queue_manager.get_queue_messages()
 
     def enqueue(self, content: Any, queue: str, metadata: dict[str, Any]) -> str:
         self.enqueued.append((content, queue, metadata))
@@ -447,6 +438,88 @@ async def test_enqueue_command_returns_message_id() -> None:
     assert client.sent[-1]["type"] == "ack"
     assert client.sent[-1]["payload"]["message_id"] == "msg-123"
     assert runner.enqueued == [("hi", "high_prio", {"queue_kind": "high_prio"})]
+
+
+@pytest.mark.asyncio
+async def test_queue_message_remove_withdraws_still_queued_message() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    msg = runner._queue_manager.enqueue_high_prio("interrupt note")
+    runtime._runner = runner  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "queue_message_remove",
+                "id": "remove",
+                "payload": {"message_id": msg.id},
+            }
+        ),
+    )
+
+    assert client.sent[-1]["type"] == "ack"
+    assert client.sent[-1]["payload"]["command"] == "queue_message_remove"
+    assert client.sent[-1]["payload"]["message_id"] == msg.id
+    assert runner._queue_manager.get_queue_lengths()["high_prio"] == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_message_promote_moves_normal_message_to_high_priority() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    msg = runner._queue_manager.enqueue_normal("queue task")
+    runtime._runner = runner  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "queue_message_promote",
+                "id": "promote",
+                "payload": {"message_id": msg.id},
+            }
+        ),
+    )
+
+    assert client.sent[-1]["type"] == "ack"
+    assert client.sent[-1]["payload"]["command"] == "queue_message_promote"
+    assert client.sent[-1]["payload"]["message_id"] == msg.id
+    assert runner._queue_manager.get_queue_lengths() == {
+        "normal": 0,
+        "high_prio": 1,
+        "urgent": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_queue_message_remove_fails_after_message_was_dequeued() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    msg = runner._queue_manager.enqueue_normal("already sent")
+    assert runner._queue_manager.dequeue_normal() is msg
+    runtime._runner = runner  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "queue_message_remove",
+                "id": "remove-sent",
+                "payload": {"message_id": msg.id},
+            }
+        ),
+    )
+
+    assert client.sent[-1]["type"] == "error"
+    assert client.sent[-1]["payload"]["code"] == "command_failed"
+    assert "already sent" in client.sent[-1]["payload"]["message"]
 
 
 @pytest.mark.asyncio

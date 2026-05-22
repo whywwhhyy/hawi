@@ -275,6 +275,7 @@ class AgentRuntime:
                         if pending.preferred_merge_mode is not None
                         else None
                     ),
+                    "withdrawable": False,
                 },
             }
             for pending in pending_inputs

@@ -376,6 +376,10 @@ class CoreRuntime:
                 await self._handle_queue_task_remove(client, command)
             elif command.type == "queue_task_reorder":
                 await self._handle_queue_task_reorder(client, command)
+            elif command.type == "queue_message_remove":
+                await self._handle_queue_message_remove(client, command)
+            elif command.type == "queue_message_promote":
+                await self._handle_queue_message_promote(client, command)
             elif command.type == "clear_context":
                 await self._handle_clear_context(client, command)
             elif command.type == "compact_context":
@@ -765,6 +769,48 @@ class CoreRuntime:
                 "queue_task_reorder",
                 request_id=command.id,
                 payload={"message_ids": new_order},
+            )
+        )
+
+    async def _handle_queue_message_remove(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        message_id = command.payload.get("message_id")
+        if not isinstance(message_id, str):
+            raise ValueError("'queue_message_remove.payload.message_id' must be a string")
+        ok = runner._queue_manager.remove_message(message_id)
+        if not ok:
+            raise ValueError(f"Message {message_id!r} not found or already sent")
+        await client.send(
+            make_ack(
+                "queue_message_remove",
+                request_id=command.id,
+                payload={"message_id": message_id},
+            )
+        )
+
+    async def _handle_queue_message_promote(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        message_id = command.payload.get("message_id")
+        if not isinstance(message_id, str):
+            raise ValueError("'queue_message_promote.payload.message_id' must be a string")
+        ok = runner._queue_manager.promote_normal_to_high_prio(message_id)
+        if not ok:
+            raise ValueError(
+                f"Message {message_id!r} not found, already sent, or cannot be promoted"
+            )
+        await client.send(
+            make_ack(
+                "queue_message_promote",
+                request_id=command.id,
+                payload={"message_id": message_id, "queue": "high_prio"},
             )
         )
 

@@ -39,6 +39,8 @@ export type CoreCommandType =
   | "queue_task_update"
   | "queue_task_remove"
   | "queue_task_reorder"
+  | "queue_message_remove"
+  | "queue_message_promote"
   | "set_system_prompt"
   | "switch_model"
   | "refresh_models"

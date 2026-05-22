@@ -66,6 +66,8 @@ COMMAND_TYPES = {
     "queue_task_update",
     "queue_task_remove",
     "queue_task_reorder",
+    "queue_message_remove",
+    "queue_message_promote",
     "blob.upload_init",
     "blob.upload_chunk",
     "blob.upload_finalize",

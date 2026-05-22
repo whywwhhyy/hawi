@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+import threading
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -72,6 +73,7 @@ class MessageQueueManager:
     """Manages the three-tier message queue system."""
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._normal_queue: list[QueuedMessage] = []
         self._high_prio_queue: list[QueuedMessage] = []
         self._pending_urgent: QueuedMessage | None = None
@@ -89,7 +91,8 @@ class MessageQueueManager:
             event_bus=event_bus,
             metadata=metadata,
         )
-        self._normal_queue.append(msg)
+        with self._lock:
+            self._normal_queue.append(msg)
         return msg
 
     def enqueue_high_prio(
@@ -105,7 +108,8 @@ class MessageQueueManager:
             event_bus=event_bus,
             metadata=metadata,
         )
-        self._high_prio_queue.append(msg)
+        with self._lock:
+            self._high_prio_queue.append(msg)
         return msg
 
     def enqueue_urgent(
@@ -121,69 +125,81 @@ class MessageQueueManager:
             event_bus=event_bus,
             metadata=metadata,
         )
-        self._pending_urgent = msg
+        with self._lock:
+            self._pending_urgent = msg
         return msg
 
     def dequeue_urgent(self) -> QueuedMessage | None:
-        msg = self._pending_urgent
-        self._pending_urgent = None
-        return msg
+        with self._lock:
+            msg = self._pending_urgent
+            self._pending_urgent = None
+            return msg
 
     def dequeue_high_prio(self) -> QueuedMessage | None:
-        if self._high_prio_queue:
-            return self._high_prio_queue.pop(0)
-        return None
+        with self._lock:
+            if self._high_prio_queue:
+                return self._high_prio_queue.pop(0)
+            return None
 
     def dequeue_all_high_prio(self) -> list[QueuedMessage]:
-        messages = self._high_prio_queue
-        self._high_prio_queue = []
-        return messages
+        with self._lock:
+            messages = self._high_prio_queue
+            self._high_prio_queue = []
+            return messages
 
     def peek_high_prio(self) -> QueuedMessage | None:
-        if self._high_prio_queue:
-            return self._high_prio_queue[0]
-        return None
+        with self._lock:
+            if self._high_prio_queue:
+                return self._high_prio_queue[0]
+            return None
 
     def dequeue_normal(self) -> QueuedMessage | None:
-        if self._normal_queue:
-            return self._normal_queue.pop(0)
-        return None
+        with self._lock:
+            if self._normal_queue:
+                return self._normal_queue.pop(0)
+            return None
 
     def insert_front_normal(self, msg: QueuedMessage) -> None:
-        self._normal_queue.insert(0, msg)
+        with self._lock:
+            self._normal_queue.insert(0, msg)
 
     def has_urgent(self) -> bool:
-        return self._pending_urgent is not None
+        with self._lock:
+            return self._pending_urgent is not None
 
     def has_high_prio(self) -> bool:
-        return len(self._high_prio_queue) > 0
+        with self._lock:
+            return len(self._high_prio_queue) > 0
 
     def has_normal(self) -> bool:
-        return len(self._normal_queue) > 0
+        with self._lock:
+            return len(self._normal_queue) > 0
 
     def get_queue_lengths(self) -> dict[str, int]:
-        return {
-            "urgent": 1 if self._pending_urgent else 0,
-            "high_prio": len(self._high_prio_queue),
-            "normal": len(self._normal_queue),
-        }
+        with self._lock:
+            return {
+                "urgent": 1 if self._pending_urgent else 0,
+                "high_prio": len(self._high_prio_queue),
+                "normal": len(self._normal_queue),
+            }
 
     def get_queue_messages(self) -> dict[str, list[QueueMessageSnapshot]]:
-        return {
-            "urgent": (
-                [self._message_snapshot(self._pending_urgent)]
-                if self._pending_urgent
-                else []
-            ),
-            "high_prio": [
-                self._message_snapshot(msg)
-                for msg in self._high_prio_queue
-            ],
-            "normal": [
-                self._message_snapshot(msg)
-                for msg in self._normal_queue
-            ],
-        }
+        with self._lock:
+            return {
+                "urgent": (
+                    [self._message_snapshot(self._pending_urgent)]
+                    if self._pending_urgent
+                    else []
+                ),
+                "high_prio": [
+                    self._message_snapshot(msg)
+                    for msg in self._high_prio_queue
+                ],
+                "normal": [
+                    self._message_snapshot(msg)
+                    for msg in self._normal_queue
+                ],
+            }
 
     def update_message(
         self,
@@ -205,19 +221,20 @@ class MessageQueueManager:
         Returns:
             True if message was found and updated
         """
-        if self._pending_urgent and self._pending_urgent.id == message_id:
-            return False  # urgent messages are transient, don't update
-        for msg in self._high_prio_queue:
-            if msg.id == message_id:
-                return False  # high_prio are steer, don't update
-        for msg in self._normal_queue:
-            if msg.id == message_id:
-                if content is not None:
-                    msg.content = content
-                if metadata is not None:
-                    msg.metadata = metadata
-                return True
-        return False
+        with self._lock:
+            if self._pending_urgent and self._pending_urgent.id == message_id:
+                return False  # urgent messages are transient, don't update
+            for msg in self._high_prio_queue:
+                if msg.id == message_id:
+                    return False  # high_prio are steer, don't update
+            for msg in self._normal_queue:
+                if msg.id == message_id:
+                    if content is not None:
+                        msg.content = content
+                    if metadata is not None:
+                        msg.metadata = metadata
+                    return True
+            return False
 
     def reorder_queue(
         self,
@@ -240,37 +257,38 @@ class MessageQueueManager:
         Raises:
             ValueError: If message_ids don't match existing queue contents
         """
-        if queue_type == QueueType.NORMAL:
-            current = self._normal_queue
-        elif queue_type == QueueType.HIGH_PRIO:
-            current = self._high_prio_queue
-        else:
-            raise ValueError(f"Reordering {queue_type.name} is not supported")
+        with self._lock:
+            if queue_type == QueueType.NORMAL:
+                current = self._normal_queue
+            elif queue_type == QueueType.HIGH_PRIO:
+                current = self._high_prio_queue
+            else:
+                raise ValueError(f"Reordering {queue_type.name} is not supported")
 
-        if len(message_ids) != len(current):
-            raise ValueError(
-                f"Expected {len(current)} message IDs, got {len(message_ids)}"
-            )
+            if len(message_ids) != len(current):
+                raise ValueError(
+                    f"Expected {len(current)} message IDs, got {len(message_ids)}"
+                )
 
-        current_ids = {m.id for m in current}
-        given_ids = set(message_ids)
-        if current_ids != given_ids:
-            missing = current_ids - given_ids
-            unknown = given_ids - current_ids
-            parts = []
-            if missing:
-                parts.append(f"missing: {sorted(missing)}")
-            if unknown:
-                parts.append(f"unknown: {sorted(unknown)}")
-            raise ValueError(f"Message ID mismatch: {'; '.join(parts)}")
+            current_ids = {m.id for m in current}
+            given_ids = set(message_ids)
+            if current_ids != given_ids:
+                missing = current_ids - given_ids
+                unknown = given_ids - current_ids
+                parts = []
+                if missing:
+                    parts.append(f"missing: {sorted(missing)}")
+                if unknown:
+                    parts.append(f"unknown: {sorted(unknown)}")
+                raise ValueError(f"Message ID mismatch: {'; '.join(parts)}")
 
-        # Build a lookup and reorder
-        lookup = {m.id: m for m in current}
-        current.clear()
-        for mid in message_ids:
-            current.append(lookup[mid])
+            # Build a lookup and reorder
+            lookup = {m.id: m for m in current}
+            current.clear()
+            for mid in message_ids:
+                current.append(lookup[mid])
 
-        return list(message_ids)
+            return list(message_ids)
 
     def move_message(
         self,
@@ -293,41 +311,58 @@ class MessageQueueManager:
         Returns:
             True if move succeeded
         """
-        # Find the message in normal queue (only normal supports moves)
-        target_msg = None
-        for msg in self._normal_queue:
-            if msg.id == message_id:
-                target_msg = msg
-                break
-        if target_msg is None:
+        with self._lock:
+            # Find the message in normal queue (only normal supports moves)
+            target_msg = None
+            for msg in self._normal_queue:
+                if msg.id == message_id:
+                    target_msg = msg
+                    break
+            if target_msg is None:
+                return False
+
+            # Remove from current position
+            self._normal_queue.remove(target_msg)
+
+            if index is not None:
+                # Clamp to valid range
+                index = max(0, min(index, len(self._normal_queue)))
+                self._normal_queue.insert(index, target_msg)
+            elif before_id is not None:
+                for i, msg in enumerate(self._normal_queue):
+                    if msg.id == before_id:
+                        self._normal_queue.insert(i, target_msg)
+                        break
+                else:
+                    # before_id not found, append
+                    self._normal_queue.append(target_msg)
+            elif after_id is not None:
+                for i, msg in enumerate(self._normal_queue):
+                    if msg.id == after_id:
+                        self._normal_queue.insert(i + 1, target_msg)
+                        break
+                else:
+                    self._normal_queue.append(target_msg)
+            else:
+                raise ValueError("One of before_id, after_id, or index is required")
+
+            return True
+
+    def promote_normal_to_high_prio(self, message_id: str) -> bool:
+        """Atomically move a still-queued normal message to high priority."""
+        with self._lock:
+            for index, msg in enumerate(self._normal_queue):
+                if msg.id != message_id:
+                    continue
+                self._normal_queue.pop(index)
+                msg.queue_type = QueueType.HIGH_PRIO
+                metadata = dict(msg.metadata)
+                metadata["source_queue"] = "normal"
+                metadata["promoted_to"] = "high_prio"
+                msg.metadata = metadata
+                self._high_prio_queue.append(msg)
+                return True
             return False
-
-        # Remove from current position
-        self._normal_queue.remove(target_msg)
-
-        if index is not None:
-            # Clamp to valid range
-            index = max(0, min(index, len(self._normal_queue)))
-            self._normal_queue.insert(index, target_msg)
-        elif before_id is not None:
-            for i, msg in enumerate(self._normal_queue):
-                if msg.id == before_id:
-                    self._normal_queue.insert(i, target_msg)
-                    break
-            else:
-                # before_id not found, append
-                self._normal_queue.append(target_msg)
-        elif after_id is not None:
-            for i, msg in enumerate(self._normal_queue):
-                if msg.id == after_id:
-                    self._normal_queue.insert(i + 1, target_msg)
-                    break
-            else:
-                self._normal_queue.append(target_msg)
-        else:
-            raise ValueError("One of before_id, after_id, or index is required")
-
-        return True
 
     @staticmethod
     def _message_snapshot(msg: QueuedMessage) -> QueueMessageSnapshot:
@@ -354,61 +389,65 @@ class MessageQueueManager:
         return snapshot
 
     def remove_message(self, message_id: str) -> bool:
-        if self._pending_urgent and self._pending_urgent.id == message_id:
-            self._pending_urgent = None
-            return True
-        for i, msg in enumerate(self._high_prio_queue):
-            if msg.id == message_id:
-                self._high_prio_queue.pop(i)
+        with self._lock:
+            if self._pending_urgent and self._pending_urgent.id == message_id:
+                self._pending_urgent = None
                 return True
-        for i, msg in enumerate(self._normal_queue):
-            if msg.id == message_id:
-                self._normal_queue.pop(i)
-                return True
-        return False
+            for i, msg in enumerate(self._high_prio_queue):
+                if msg.id == message_id:
+                    self._high_prio_queue.pop(i)
+                    return True
+            for i, msg in enumerate(self._normal_queue):
+                if msg.id == message_id:
+                    self._normal_queue.pop(i)
+                    return True
+            return False
 
     def remove_messages(self, filter_fn: Callable[[QueuedMessage], bool]) -> list[str]:
-        removed: list[str] = []
-        if self._pending_urgent and filter_fn(self._pending_urgent):
-            removed.append(self._pending_urgent.id)
-            self._pending_urgent = None
-        high_prio_remaining = []
-        for msg in self._high_prio_queue:
-            if filter_fn(msg):
-                removed.append(msg.id)
-            else:
-                high_prio_remaining.append(msg)
-        self._high_prio_queue = high_prio_remaining
-        normal_remaining = []
-        for msg in self._normal_queue:
-            if filter_fn(msg):
-                removed.append(msg.id)
-            else:
-                normal_remaining.append(msg)
-        self._normal_queue = normal_remaining
-        return removed
+        with self._lock:
+            removed: list[str] = []
+            if self._pending_urgent and filter_fn(self._pending_urgent):
+                removed.append(self._pending_urgent.id)
+                self._pending_urgent = None
+            high_prio_remaining = []
+            for msg in self._high_prio_queue:
+                if filter_fn(msg):
+                    removed.append(msg.id)
+                else:
+                    high_prio_remaining.append(msg)
+            self._high_prio_queue = high_prio_remaining
+            normal_remaining = []
+            for msg in self._normal_queue:
+                if filter_fn(msg):
+                    removed.append(msg.id)
+                else:
+                    normal_remaining.append(msg)
+            self._normal_queue = normal_remaining
+            return removed
 
     def clear_queue(self, queue_type: QueueType) -> int:
-        if queue_type == QueueType.URGENT:
-            if self._pending_urgent:
-                self._pending_urgent = None
-                return 1
-            return 0
-        elif queue_type == QueueType.HIGH_PRIO:
-            count = len(self._high_prio_queue)
-            self._high_prio_queue = []
-            return count
-        else:
-            count = len(self._normal_queue)
-            self._normal_queue = []
-            return count
+        with self._lock:
+            if queue_type == QueueType.URGENT:
+                if self._pending_urgent:
+                    self._pending_urgent = None
+                    return 1
+                return 0
+            elif queue_type == QueueType.HIGH_PRIO:
+                count = len(self._high_prio_queue)
+                self._high_prio_queue = []
+                return count
+            else:
+                count = len(self._normal_queue)
+                self._normal_queue = []
+                return count
 
     def clear_all_queues(self) -> dict[str, int]:
-        return {
-            "urgent": self.clear_queue(QueueType.URGENT),
-            "high_prio": self.clear_queue(QueueType.HIGH_PRIO),
-            "normal": self.clear_queue(QueueType.NORMAL),
-        }
+        with self._lock:
+            return {
+                "urgent": self.clear_queue(QueueType.URGENT),
+                "high_prio": self.clear_queue(QueueType.HIGH_PRIO),
+                "normal": self.clear_queue(QueueType.NORMAL),
+            }
 
     def snapshot(self) -> dict[str, Any]:
         """Return a JSON-friendly snapshot of all queues for session persistence.
@@ -416,41 +455,44 @@ class MessageQueueManager:
         ``event_bus`` references on ``QueuedMessage`` are stripped — callers must
         re-attach a live bus via :py:meth:`rebind_event_bus` after load.
         """
-        return {
-            "version": 1,
-            "urgent": (
-                self._queued_to_dict(self._pending_urgent)
-                if self._pending_urgent is not None
-                else None
-            ),
-            "high_prio": [self._queued_to_dict(m) for m in self._high_prio_queue],
-            "normal": [self._queued_to_dict(m) for m in self._normal_queue],
-        }
+        with self._lock:
+            return {
+                "version": 1,
+                "urgent": (
+                    self._queued_to_dict(self._pending_urgent)
+                    if self._pending_urgent is not None
+                    else None
+                ),
+                "high_prio": [self._queued_to_dict(m) for m in self._high_prio_queue],
+                "normal": [self._queued_to_dict(m) for m in self._normal_queue],
+            }
 
     def load_snapshot(self, data: dict[str, Any]) -> None:
         """Replace queue contents from a snapshot produced by :py:meth:`snapshot`."""
         version = data.get("version", 1)
         if version != 1:
             raise ValueError(f"Unsupported queue snapshot version: {version}")
-        urgent = data.get("urgent")
-        self._pending_urgent = (
-            self._queued_from_dict(urgent) if urgent is not None else None
-        )
-        self._high_prio_queue = [
-            self._queued_from_dict(d) for d in data.get("high_prio", [])
-        ]
-        self._normal_queue = [
-            self._queued_from_dict(d) for d in data.get("normal", [])
-        ]
+        with self._lock:
+            urgent = data.get("urgent")
+            self._pending_urgent = (
+                self._queued_from_dict(urgent) if urgent is not None else None
+            )
+            self._high_prio_queue = [
+                self._queued_from_dict(d) for d in data.get("high_prio", [])
+            ]
+            self._normal_queue = [
+                self._queued_from_dict(d) for d in data.get("normal", [])
+            ]
 
     def rebind_event_bus(self, event_bus: EventBus | None) -> None:
         """Re-attach a live ``EventBus`` to every restored queued message."""
-        if self._pending_urgent is not None:
-            self._pending_urgent.event_bus = event_bus
-        for msg in self._high_prio_queue:
-            msg.event_bus = event_bus
-        for msg in self._normal_queue:
-            msg.event_bus = event_bus
+        with self._lock:
+            if self._pending_urgent is not None:
+                self._pending_urgent.event_bus = event_bus
+            for msg in self._high_prio_queue:
+                msg.event_bus = event_bus
+            for msg in self._normal_queue:
+                msg.event_bus = event_bus
 
     @staticmethod
     def _queued_to_dict(msg: QueuedMessage) -> dict[str, Any]:
