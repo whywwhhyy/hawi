@@ -135,6 +135,14 @@ export interface ContextUsageState {
   source?: "estimate" | "provider_usage";
 }
 
+export interface ModelUsageState {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
 export interface ContextCompressionState {
   active: boolean;
   nodeId?: string;
@@ -250,6 +258,7 @@ export interface AppState {
   queueMessages: Record<QueueKind, QueueMessageState[]>;
   control: RuntimeControlState;
   metadataLines: string[];
+  modelUsage?: ModelUsageState;
   contextUsage?: ContextUsageState;
   contextCompression?: ContextCompressionState;
   contextAutoCompact?: ContextAutoCompactState;
@@ -279,6 +288,7 @@ export function createInitialState(): AppState {
     queueMessages: { normal: [], high_prio: [], urgent: [] },
     control: { paused: false, resumable: false, pause_reason: null, paused_at: null, last_error_message: null },
     metadataLines: [],
+    modelUsage: undefined,
     contextUsage: undefined,
     contextCompression: undefined,
     contextAutoCompact: undefined,
@@ -308,6 +318,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         toolNodeByCallId: {},
         activeRunId: undefined,
         metadataLines: [],
+        modelUsage: undefined,
         contextUsage: undefined,
         contextCompression: undefined,
         contextAutoCompact: undefined,
@@ -340,7 +351,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         toolNodeByCallId: {},
         activeRunId: undefined,
         metadataLines: [],
-        contextUsage,
+        modelUsage: replayState.modelUsage,
+        contextUsage: contextUsage ?? replayState.contextUsage,
         contextCompression: undefined,
         contextAutoCompact: parseStatusAutoCompact(payload.auto_compact),
         debugLines: [],
@@ -616,6 +628,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     case "model.metadata": {
       const nextState = {
         ...state,
+        modelUsage: addModelUsage(state.modelUsage, parseModelUsage(payload)),
         contextUsage: parseContextUsage(payload) ?? state.contextUsage
       };
       return addMeta(nextState, formatModelMetadata(payload));
@@ -1169,7 +1182,8 @@ function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
 }
 
 function isSessionHistoryReplayOnlyEvent(eventType: string): boolean {
-  return eventType === "plugin.event"
+  return eventType === "model.metadata"
+    || eventType === "plugin.event"
     || eventType === "agent.tool_parameter_injected"
     || eventType === "plugin.status"
     || eventType === "plugin.tool_progress"
@@ -1369,6 +1383,65 @@ function parseContextUsage(payload: Record<string, unknown>): ContextUsageState 
     maxContextTokens,
     ratio: ratio === undefined ? undefined : clamp(ratio, 0, 1),
     source: contextUsageSource(payload.context_source) ?? "provider_usage"
+  };
+}
+
+function parseModelUsage(payload: Record<string, unknown>): ModelUsageState | undefined {
+  const nestedUsage = isRecord(payload.usage) ? payload.usage : {};
+  const readNumber = (key: string) => optionalNumber(payload[key]) ?? optionalNumber(nestedUsage[key]);
+  const rawInputTokens = readNumber("input_tokens");
+  const outputTokens = readNumber("output_tokens");
+  const totalTokens = readNumber("total_tokens");
+  const cacheReadTokens = readNumber("cache_read_tokens");
+  const cacheWriteTokens = readNumber("cache_write_tokens");
+  const hasUsage = [
+    rawInputTokens,
+    outputTokens,
+    totalTokens,
+    cacheReadTokens,
+    cacheWriteTokens
+  ].some((value) => value !== undefined);
+  if (!hasUsage) return undefined;
+
+  const input = rawInputTokens ?? 0;
+  const output = outputTokens ?? 0;
+  const cacheRead = cacheReadTokens ?? 0;
+  const cacheWrite = cacheWriteTokens ?? 0;
+  const total = totalTokens ?? input + output + cacheRead + cacheWrite;
+  return {
+    totalTokens: total,
+    inputTokens: nonCachedInputTokens(input, output, totalTokens, cacheRead, cacheWrite),
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite
+  };
+}
+
+function nonCachedInputTokens(
+  inputTokens: number,
+  outputTokens: number,
+  explicitTotalTokens: number | undefined,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+): number {
+  if (explicitTotalTokens !== undefined && explicitTotalTokens <= inputTokens + outputTokens) {
+    return Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens);
+  }
+  return inputTokens;
+}
+
+function addModelUsage(
+  current: ModelUsageState | undefined,
+  incoming: ModelUsageState | undefined,
+): ModelUsageState | undefined {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  return {
+    totalTokens: current.totalTokens + incoming.totalTokens,
+    inputTokens: current.inputTokens + incoming.inputTokens,
+    outputTokens: current.outputTokens + incoming.outputTokens,
+    cacheReadTokens: current.cacheReadTokens + incoming.cacheReadTokens,
+    cacheWriteTokens: current.cacheWriteTokens + incoming.cacheWriteTokens
   };
 }
 

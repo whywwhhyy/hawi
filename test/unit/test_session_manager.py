@@ -33,6 +33,7 @@ from hawi.events import (
     AgentToolRuntimeContextInjectedEvent,
     EventBus,
     ModelErrorEvent,
+    ModelMetadataEvent,
     ModelRetryEvent,
     AgentRunnerInterruptEvent,
     PluginEvent,
@@ -1150,6 +1151,53 @@ class TestSessionManager:
                 layout.manifest_path(layout.session_dir(session_root, sid)).read_text()
             )
             assert layout.COMPONENT_MESSAGE_HISTORY in manifest["components_present"]
+        finally:
+            sm.detach()
+
+    def test_model_metadata_appends_replayable_usage_history(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        runner = _StubAgentRunner()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
+        try:
+            sid = sm.new_session()
+            agent.event_bus.publish(
+                ModelMetadataEvent.create(
+                    request_id="req-usage",
+                    usage={
+                        "input_tokens": 12,
+                        "output_tokens": 3,
+                        "total_tokens": 15,
+                        "cache_read_tokens": 4,
+                        "cache_write_tokens": 1,
+                    },
+                    latency_ms=42,
+                    context_tokens=15,
+                    max_context_tokens=100,
+                    context_ratio=0.15,
+                    context_source="provider_usage",
+                )
+            )
+            sm._writer.wait_idle(timeout=2.0)
+
+            entries = sm.read_message_history(sid)
+            assert [entry["role"] for entry in entries] == ["event"]
+            assert entries[0]["metadata"]["event_type"] == "model.metadata"
+            assert entries[0]["metadata"]["replay"] is True
+            payload = entries[0]["metadata"]["event_payload"]
+            assert payload["request_id"] == "req-usage"
+            assert payload["input_tokens"] == 12
+            assert payload["output_tokens"] == 3
+            assert payload["total_tokens"] == 15
+            assert payload["cache_read_tokens"] == 4
+            assert payload["cache_write_tokens"] == 1
+            assert payload["latency_ms"] == 42
+            assert payload["context_tokens"] == 15
+            assert payload["max_context_tokens"] == 100
+            assert payload["context_ratio"] == 0.15
         finally:
             sm.detach()
 

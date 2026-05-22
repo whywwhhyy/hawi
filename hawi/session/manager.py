@@ -80,6 +80,7 @@ EVENT_ROUTING: dict[str, tuple[str, ...]] = {
     "agent.interrupt": (layout.COMPONENT_RUNTIME,),
     "agent.compact_start": (layout.COMPONENT_RUNTIME,),
     "agent.compact_stop": (layout.COMPONENT_CONTEXT,),
+    "model.metadata": (),
     "model.retry": (layout.COMPONENT_RUNTIME,),
     "model.error": (layout.COMPONENT_RUNTIME,),
     "runner.enqueue": (layout.COMPONENT_QUEUES,),

@@ -32,6 +32,10 @@ REPLAYABLE_SUBAGENT_EVENT_TYPES = {
     "subagent.closed",
 }
 
+REPLAYABLE_MODEL_EVENT_TYPES = {
+    "model.metadata",
+}
+
 
 def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
     """Build a stable message-history record from a user-visible event."""
@@ -41,6 +45,8 @@ def message_history_entry_from_event(event: Event) -> dict[str, Any] | None:
         return _replayable_plugin_event_entry(event)
     if event.type in REPLAYABLE_SUBAGENT_EVENT_TYPES:
         return _replayable_subagent_event_entry(event)
+    if event.type in REPLAYABLE_MODEL_EVENT_TYPES:
+        return _replayable_model_event_entry(event)
     if event.type == "model.retry":
         return _model_retry_entry(event)
     if event.type in {"model.error", "agent.error"}:
@@ -240,6 +246,22 @@ def _replayable_subagent_event_entry(event: Event) -> dict[str, Any] | None:
     )
 
 
+def _replayable_model_event_entry(event: Event) -> dict[str, Any] | None:
+    try:
+        data = event.model_dump(mode="json")
+    except Exception:
+        logger.exception("failed to serialize replayable model history event")
+        return None
+    payload = _model_metadata_payload(data)
+    return _replayable_event_entry(
+        event.type,
+        timestamp=data.get("timestamp"),
+        run_id=payload.get("run_id") or payload.get("request_id"),
+        content=_event_content(payload),
+        payload=payload,
+    )
+
+
 def _replayable_event_entry(
     event_type: str,
     *,
@@ -262,6 +284,70 @@ def _replayable_event_entry(
             "replay": True,
         },
     }
+
+
+def _model_metadata_payload(data: dict[str, Any]) -> dict[str, Any]:
+    usage = data.get("usage")
+    usage_payload = dict(usage) if isinstance(usage, dict) else {}
+    return {
+        "run_id": data.get("run_id") or "",
+        "request_id": data.get("request_id") or "",
+        "usage": usage_payload,
+        "input_tokens": _int_or_zero(usage_payload.get("input_tokens")),
+        "output_tokens": _int_or_zero(usage_payload.get("output_tokens")),
+        "total_tokens": _usage_total(usage_payload),
+        "cache_write_tokens": _int_or_none(usage_payload.get("cache_write_tokens")),
+        "cache_read_tokens": _int_or_none(usage_payload.get("cache_read_tokens")),
+        "cache_miss_tokens": _int_or_none(usage_payload.get("cache_miss_tokens")),
+        "reasoning_tokens": _int_or_none(usage_payload.get("reasoning_tokens")),
+        "input_audio_tokens": _int_or_none(usage_payload.get("input_audio_tokens")),
+        "output_audio_tokens": _int_or_none(usage_payload.get("output_audio_tokens")),
+        "accepted_prediction_tokens": _int_or_none(
+            usage_payload.get("accepted_prediction_tokens")
+        ),
+        "rejected_prediction_tokens": _int_or_none(
+            usage_payload.get("rejected_prediction_tokens")
+        ),
+        "latency_ms": data.get("latency_ms"),
+        "started_at": data.get("started_at"),
+        "first_token_at": data.get("first_token_at"),
+        "completed_at": data.get("completed_at"),
+        "ttft_ms": data.get("ttft_ms"),
+        "decode_ms": data.get("decode_ms"),
+        "prefill_tokens": data.get("prefill_tokens"),
+        "decode_tokens": data.get("decode_tokens"),
+        "prefill_tokens_per_second": data.get("prefill_tokens_per_second"),
+        "decode_tokens_per_second": data.get("decode_tokens_per_second"),
+        "context_tokens": data.get("context_tokens"),
+        "max_context_tokens": data.get("max_context_tokens"),
+        "context_ratio": data.get("context_ratio"),
+        "context_source": data.get("context_source"),
+    }
+
+
+def _usage_total(usage: dict[str, Any]) -> int:
+    total = _int_or_none(usage.get("total_tokens"))
+    if total is not None:
+        return total
+    return (
+        _int_or_zero(usage.get("input_tokens"))
+        + _int_or_zero(usage.get("output_tokens"))
+        + _int_or_zero(usage.get("cache_write_tokens"))
+        + _int_or_zero(usage.get("cache_read_tokens"))
+    )
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_zero(value: Any) -> int:
+    return _int_or_none(value) or 0
 
 
 def _agent_event_payload(event_type: str, data: dict[str, Any]) -> dict[str, Any]:

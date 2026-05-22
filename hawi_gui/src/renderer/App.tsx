@@ -15,7 +15,7 @@ import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, Markdow
 import { VERSION } from "../shared/protocol";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
+import { createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -101,6 +101,15 @@ export function renderQueueStatusText(
 }
 
 export const renderPriorityStatusText = renderQueueStatusText;
+
+export function renderUsageStatusText(usage?: ModelUsageState): string {
+  const total = formatUsageTokenCount(usage?.totalTokens ?? 0);
+  const input = formatUsageTokenCount(usage?.inputTokens ?? 0);
+  const output = formatUsageTokenCount(usage?.outputTokens ?? 0);
+  const cacheRead = formatUsageTokenCount(usage?.cacheReadTokens ?? 0);
+  const cacheWrite = formatUsageTokenCount(usage?.cacheWriteTokens ?? 0);
+  return `Usage Total ${total} · Input ${input} · Output ${output} · Cache Write ${cacheWrite} · Cache Read ${cacheRead}`;
+}
 
 export function shouldInitializeSessionState(metadata: GuiMetadata | null): boolean {
   return Boolean(metadata?.coreRunning);
@@ -1529,64 +1538,69 @@ export default function App() {
           overflowOpen={debugMenuOpen}
           onOverflowOpenChange={setDebugMenuOpen}
         />
-        <div className="status-strip">
-          <SessionStatusCell
-            messageCount={state.sessionMessageCount}
-            runningCount={sessionStats.running}
-            loadedCount={sessionStats.loaded}
-            sessions={sessions}
-            currentSessionId={currentSessionId}
-            open={sessionDialogOpen}
-            busy={sessionBusy}
-            onToggle={openSessionDialog}
-            onSelect={loadSession}
-            onDelete={deleteSession}
-            onNew={newSession}
-            onFork={forkSession}
-          />
-          <ContextUsageCell
-            usage={state.contextUsage}
-            autoCompact={state.contextAutoCompact}
-            compression={state.contextCompression}
-            busy={contextCompactBusy}
-            disabled={!coreRunning}
-            open={contextPopoverOpen}
-            settingsBusy={contextSettingsBusy}
-            canManualCompact={canCompactContextManually}
-            onToggle={() => setContextPopoverOpen((value) => !value)}
-            onConfirm={compactContextManually}
-            onThresholdChange={setAutoCompactThreshold}
-          />
-          <QueueStatusCell
-            queueLengths={state.queueLengths}
-            queueMessages={state.queueMessages}
-            control={state.control}
-            open={queuePopoverOpen}
-            onToggle={() => setQueuePopoverOpen((value) => !value)}
-            taskDraft={queueTaskDraft}
-            taskDraftRef={(element) => {
-              queueTaskDraftRef.current = element;
-            }}
-            taskBusy={queueTaskBusy}
-            editingTaskId={editingQueueTaskId}
-            editDraft={queueTaskEditDraft}
-            onTaskDraftChange={setQueueTaskDraft}
-            onTaskAdd={addQueueTask}
-            onTaskCompositionStart={startQueueTaskComposition}
-            onTaskCompositionEnd={endQueueTaskComposition}
-            isTaskComposing={() => queueTaskComposingRef.current}
-            onEditStart={startEditingQueueTask}
-            onEditCancel={() => {
-              setEditingQueueTaskId(null);
-              setQueueTaskEditDraft("");
-            }}
-            onEditDraftChange={setQueueTaskEditDraft}
-            onTaskUpdate={updateQueueTask}
-            onTaskRemove={removeQueueTask}
-            onTaskPullBack={pullBackQueueTask}
-            onTaskMove={moveQueueTask}
-            onTaskClear={clearNormalQueue}
-          />
+        <div className="status-row">
+          <div className="status-strip">
+            <SessionStatusCell
+              messageCount={state.sessionMessageCount}
+              runningCount={sessionStats.running}
+              loadedCount={sessionStats.loaded}
+              sessions={sessions}
+              currentSessionId={currentSessionId}
+              open={sessionDialogOpen}
+              busy={sessionBusy}
+              onToggle={openSessionDialog}
+              onSelect={loadSession}
+              onDelete={deleteSession}
+              onNew={newSession}
+              onFork={forkSession}
+            />
+            <ContextUsageCell
+              usage={state.contextUsage}
+              autoCompact={state.contextAutoCompact}
+              compression={state.contextCompression}
+              busy={contextCompactBusy}
+              disabled={!coreRunning}
+              open={contextPopoverOpen}
+              settingsBusy={contextSettingsBusy}
+              canManualCompact={canCompactContextManually}
+              onToggle={() => setContextPopoverOpen((value) => !value)}
+              onConfirm={compactContextManually}
+              onThresholdChange={setAutoCompactThreshold}
+            />
+            <QueueStatusCell
+              queueLengths={state.queueLengths}
+              queueMessages={state.queueMessages}
+              control={state.control}
+              open={queuePopoverOpen}
+              onToggle={() => setQueuePopoverOpen((value) => !value)}
+              taskDraft={queueTaskDraft}
+              taskDraftRef={(element) => {
+                queueTaskDraftRef.current = element;
+              }}
+              taskBusy={queueTaskBusy}
+              editingTaskId={editingQueueTaskId}
+              editDraft={queueTaskEditDraft}
+              onTaskDraftChange={setQueueTaskDraft}
+              onTaskAdd={addQueueTask}
+              onTaskCompositionStart={startQueueTaskComposition}
+              onTaskCompositionEnd={endQueueTaskComposition}
+              isTaskComposing={() => queueTaskComposingRef.current}
+              onEditStart={startEditingQueueTask}
+              onEditCancel={() => {
+                setEditingQueueTaskId(null);
+                setQueueTaskEditDraft("");
+              }}
+              onEditDraftChange={setQueueTaskEditDraft}
+              onTaskUpdate={updateQueueTask}
+              onTaskRemove={removeQueueTask}
+              onTaskPullBack={pullBackQueueTask}
+              onTaskMove={moveQueueTask}
+              onTaskClear={clearNormalQueue}
+            />
+          </div>
+          <div className="usage-status-strip">
+            <UsageStatusCell usage={state.modelUsage} />
+          </div>
         </div>
       </header>
 
@@ -1797,6 +1811,39 @@ function QueueStatusCell({
   );
 }
 
+function UsageStatusCell({ usage }: { usage?: ModelUsageState }) {
+  const total = formatUsageTokenCount(usage?.totalTokens ?? 0);
+  const input = formatUsageTokenCount(usage?.inputTokens ?? 0);
+  const output = formatUsageTokenCount(usage?.outputTokens ?? 0);
+  const cacheRead = formatUsageTokenCount(usage?.cacheReadTokens ?? 0);
+  const cacheWrite = formatUsageTokenCount(usage?.cacheWriteTokens ?? 0);
+  const label = renderUsageStatusText(usage);
+
+  return (
+    <div className="usage-status" title={label} aria-label={label}>
+      <span className="status-cell-label">Usage</span>
+      <span className="usage-status-widget" aria-hidden="true">
+        <span className="usage-status-column">
+          <span>Total</span>
+          <strong>{total}</strong>
+        </span>
+        <span className="usage-status-column">
+          <span>Input</span>
+          <strong>{input}</strong>
+          <span>Output</span>
+          <strong>{output}</strong>
+        </span>
+        <span className="usage-status-column">
+          <span>Cache Write</span>
+          <strong>{cacheWrite}</strong>
+          <span>Cache Read</span>
+          <strong>{cacheRead}</strong>
+        </span>
+      </span>
+    </div>
+  );
+}
+
 function ContextUsageCell({
   usage,
   autoCompact,
@@ -1830,6 +1877,7 @@ function ContextUsageCell({
   const usageLabel = `${usage?.source === "estimate" ? "~" : ""}${used}/${max}`;
   const thresholdPercent = autoCompact ? autoCompactThresholdPercent(autoCompact, usage) : undefined;
   const thresholdTitle = thresholdPercent === undefined ? "" : ` · 自动压缩 ${thresholdPercent}%`;
+  const meterLabel = thresholdPercent === undefined ? percent : `${percent} / auto ${thresholdPercent}%`;
   const inactive = disabled;
   const title = compressing
     ? `Context compressing ${usageLabel}${thresholdTitle} · 点击查看上下文设置`
@@ -1867,11 +1915,8 @@ function ContextUsageCell({
                     style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
                   />
                 )}
-                <strong className="context-meter-label">{percent}</strong>
+                <strong className="context-meter-label">{meterLabel}</strong>
               </span>
-              {thresholdPercent !== undefined && (
-                <span className="context-threshold-line">auto {thresholdPercent}%</span>
-              )}
             </>
           )}
         </span>
@@ -4811,6 +4856,19 @@ function compactNumber(value: number): string {
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (Math.abs(value) >= 1000) return `${Math.round(value / 1000)}K`;
   return `${(value / 1000).toFixed(1)}K`;
+}
+
+function formatUsageTokenCount(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  const absolute = Math.abs(value);
+  if (absolute >= 1_000_000) return `${trimFixedOne(value / 1_000_000)}M`;
+  if (absolute >= 1000) return `${trimFixedOne(value / 1000)}K`;
+  return `${Math.round(value)}`;
+}
+
+function trimFixedOne(value: number): string {
+  const fixed = value.toFixed(1);
+  return fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed;
 }
 
 function formatQueueTimestamp(value?: number): string | null {

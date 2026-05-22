@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -96,6 +96,22 @@ describe("renderPriorityStatusText", () => {
         normal: [{ id: "steer-plain", queue: "normal", contentPreview: "plain" }]
       }
     )).toBe("Message Insert 0 · Queue 1");
+  });
+});
+
+describe("renderUsageStatusText", () => {
+  it("renders an empty usage summary", () => {
+    expect(renderUsageStatusText()).toBe("Usage Total 0 · Input 0 · Output 0 · Cache Write 0 · Cache Read 0");
+  });
+
+  it("renders total, input/output, and cache write/read counters", () => {
+    expect(renderUsageStatusText({
+      totalTokens: 15400,
+      inputTokens: 12000,
+      outputTokens: 1800,
+      cacheReadTokens: 1400,
+      cacheWriteTokens: 200
+    })).toBe("Usage Total 15.4K · Input 12K · Output 1.8K · Cache Write 200 · Cache Read 1.4K");
   });
 });
 

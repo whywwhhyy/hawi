@@ -521,6 +521,9 @@ describe("core event reducer", () => {
   it("clears stale context usage when loading a session without usage", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("model.metadata", {
+      input_tokens: 4,
+      output_tokens: 2,
+      total_tokens: 6,
       context_tokens: 900,
       max_context_tokens: 1000,
       context_ratio: 0.9,
@@ -530,6 +533,7 @@ describe("core event reducer", () => {
     state = reduceCoreEvent(state, frame("gui.load_session_history", { message_history: [] }));
 
     expect(state.contextUsage).toBeUndefined();
+    expect(state.modelUsage).toBeUndefined();
   });
 
   it("counts one assistant message across thinking and answer deltas", () => {
@@ -1183,6 +1187,13 @@ describe("core event reducer", () => {
     expect(state.metadataLines[0]).toContain("prefill≈1067 tok/s");
     expect(state.metadataLines[0]).toContain("decode≈43 tok/s");
     expect(state.metadataLines[0]).not.toContain("estimated");
+    expect(state.modelUsage).toEqual({
+      totalTokens: 7,
+      inputTokens: 2,
+      outputTokens: 3,
+      cacheReadTokens: 1,
+      cacheWriteTokens: 0
+    });
     expect(state.contextUsage).toEqual({ usedTokens: 128, maxContextTokens: 1024, ratio: 0.125, source: "provider_usage" });
     expect(state.contextAutoCompact).toEqual({
       enabled: true,
@@ -1209,7 +1220,77 @@ describe("core event reducer", () => {
 
     expect(state.metadataLines[0]).toContain("provider_usage=missing");
     expect(state.metadataLines[0]).toContain("ctx≈64/1000 (6%) estimated");
+    expect(state.modelUsage).toBeUndefined();
     expect(state.contextUsage).toEqual({ usedTokens: 64, maxContextTokens: 1000, ratio: 0.064, source: "estimate" });
+  });
+
+  it("aggregates model usage and reports input tokens excluding cached tokens", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      input_tokens: 12,
+      output_tokens: 3,
+      total_tokens: 15,
+      cache_read_tokens: 4,
+      cache_write_tokens: 1
+    }));
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      input_tokens: 6,
+      output_tokens: 2,
+      total_tokens: 10,
+      cache_read_tokens: 1,
+      cache_write_tokens: 1
+    }));
+
+    expect(state.modelUsage).toEqual({
+      totalTokens: 25,
+      inputTokens: 13,
+      outputTokens: 5,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 2
+    });
+  });
+
+  it("replays persisted model metadata into model usage state", () => {
+    const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
+      message_history: [
+        {
+          run_id: "req-usage",
+          role: "event",
+          content: [{ type: "text", text: "event" }],
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "model.metadata",
+            event_payload: {
+              request_id: "req-usage",
+              input_tokens: 9,
+              output_tokens: 2,
+              total_tokens: 11,
+              cache_read_tokens: 3,
+              cache_write_tokens: 0,
+              context_tokens: 11,
+              max_context_tokens: 100,
+              context_ratio: 0.11,
+              context_source: "provider_usage"
+            }
+          }
+        }
+      ]
+    }));
+
+    expect(state.nodes).toHaveLength(0);
+    expect(state.modelUsage).toEqual({
+      totalTokens: 11,
+      inputTokens: 6,
+      outputTokens: 2,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 0
+    });
+    expect(state.contextUsage).toEqual({
+      usedTokens: 11,
+      maxContextTokens: 100,
+      ratio: 0.11,
+      source: "provider_usage"
+    });
   });
 
   it("keeps provider context usage over periodic estimated status", () => {
