@@ -102,6 +102,10 @@ export function renderQueueStatusText(
 
 export const renderPriorityStatusText = renderQueueStatusText;
 
+export function canStopRunnerState(runnerState: string): boolean {
+  return runnerState === "RUNNING" || runnerState === "INTERRUPTING";
+}
+
 export function renderUsageStatusText(usage?: ModelUsageState): string {
   const total = formatUsageTokenCount(usage?.totalTokens ?? 0);
   const input = formatUsageTokenCount(usage?.inputTokens ?? 0);
@@ -434,6 +438,7 @@ export default function App() {
   const hasSubagents = subagentList.length > 0;
   const hasRightSidebar = hasArtifacts || hasSubagents;
   const observedSubagent = subagentObserverId ? state.subagents[subagentObserverId] : undefined;
+  const canStopConversation = canStopRunnerState(state.runnerState);
   const showDebug = config?.showDebug ?? true;
   const visibleChatNodes = useMemo(
     () => state.nodes.filter((node) => showDebug || node.kind !== "debug"),
@@ -512,7 +517,13 @@ export default function App() {
 
       if (event.key === "Escape") {
         const target = resolveEscapeDismissTarget(keyboardState);
-        if (!target) return;
+        if (!target) {
+          if (!canStopConversation) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void sendCommand("stop", { reason: "user" });
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         switch (target) {
@@ -579,7 +590,8 @@ export default function App() {
     debugMenuOpen,
     queuePopoverOpen,
     editingQueueTaskId,
-    sessionDialogOpen
+    sessionDialogOpen,
+    canStopConversation
   ]);
 
   useBrowserLayoutEffect(() => {
@@ -1734,7 +1746,7 @@ export default function App() {
         ) : (
           <button
             className="danger-button"
-            disabled={state.runnerState !== "RUNNING" && state.runnerState !== "INTERRUPTING"}
+            disabled={!canStopConversation}
             onClick={() => sendCommand("stop", { reason: "user" })}
           >
             <Square size={16} /> 停止

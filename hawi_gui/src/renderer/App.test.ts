@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, modelProviderConfigPreviewLines, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, modelProviderConfigPreviewLines, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -261,6 +261,15 @@ describe("resolveEscapeDismissTarget", () => {
       queuePopoverOpen: true,
       editingQueueTaskId: "task-1"
     })).toBe("queueTaskEdit");
+  });
+});
+
+describe("canStopRunnerState", () => {
+  it("allows escape-stop only while the runner is active", () => {
+    expect(canStopRunnerState("RUNNING")).toBe(true);
+    expect(canStopRunnerState("INTERRUPTING")).toBe(true);
+    expect(canStopRunnerState("IDLE")).toBe(false);
+    expect(canStopRunnerState("READY")).toBe(false);
   });
 });
 
