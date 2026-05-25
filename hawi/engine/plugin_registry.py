@@ -152,7 +152,10 @@ def _create_environ_prompt_plugin(config: dict[str, Any]) -> Any:
     from hawi.builtin_plugins.environ_prompt_plugin import EnvironPromptPlugin
 
     config_path = str(config.get("config_path") or "").strip() or None
-    return EnvironPromptPlugin(config_path=config_path)
+    return EnvironPromptPlugin(
+        config_path=config_path,
+        config_overrides=EnvironPromptPlugin.gui_config_overrides(config),
+    )
 
 
 PLUGIN_REGISTRY: dict[str, PluginDescriptor] = {

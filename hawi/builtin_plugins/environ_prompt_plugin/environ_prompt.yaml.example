@@ -10,6 +10,15 @@ system_prompt:
   enabled: true
   # 是否注入 session 级环境信息（启动日期、OS、时区、硬件等）
   include_session_info: true
+  # session 级环境信息细分开关
+  session_info:
+    include_started_at: true
+    include_operating_system: true
+    include_platform: true
+    include_architecture: true
+    include_timezone: true
+    include_cpu_count: true
+    include_hostname: true
   # 是否自动加载 AGENTS.md / CLAUDE.md 风格的项目 steering 文件
   include_project_steering: true
   # 项目 steering 文件作用域：

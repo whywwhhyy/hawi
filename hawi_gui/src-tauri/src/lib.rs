@@ -700,14 +700,14 @@ fn resolve_engine_launcher(
             });
         }
     }
-    if let Some(command) = resolve_bundled_engine_command(resources_path) {
-        return Ok(EngineLauncher {
-            command,
-            args_prefix: Vec::new(),
-            source: EngineLauncherSource::Bundled,
-        });
-    }
     if packaged {
+        if let Some(command) = resolve_bundled_engine_command(resources_path) {
+            return Ok(EngineLauncher {
+                command,
+                args_prefix: Vec::new(),
+                source: EngineLauncherSource::Bundled,
+            });
+        }
         return Err(
             "Bundled hawi-engine executable was not found in the application resources."
                 .to_string(),

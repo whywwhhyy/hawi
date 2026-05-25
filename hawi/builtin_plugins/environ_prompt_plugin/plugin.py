@@ -62,6 +62,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "system_prompt": {
         "enabled": True,
         "include_session_info": True,
+        "session_info": {
+            "include_started_at": True,
+            "include_operating_system": True,
+            "include_platform": True,
+            "include_architecture": True,
+            "include_timezone": True,
+            "include_cpu_count": True,
+            "include_hostname": True,
+        },
         "include_project_steering": True,
         "project_steering": {
             "filenames": ["AGENTS.md", "CLAUDE.md"],
@@ -96,6 +105,41 @@ CONFIG_DIRS = [
 ]
 DEFAULT_PROJECT_STEERING_FILENAMES = ["AGENTS.md", "CLAUDE.md"]
 DEFAULT_PROJECT_ROOT_MARKERS = [".git", ".hawi"]
+GUI_CONFIG_FIELD_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "enabled": (("enabled",),),
+    "include_project_rules": (("system_prompt", "include_project_steering"),),
+    "include_workspace_status": (
+        ("user_prompt", "include_cwd"),
+        ("user_prompt", "include_modified_files"),
+    ),
+    "include_runtime_environment": (("system_prompt", "include_session_info"),),
+}
+LEGACY_GUI_CONFIG_FIELD_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "system_prompt_enabled": (("system_prompt", "enabled"),),
+    "include_session_info": (("system_prompt", "include_session_info"),),
+    "include_session_started": (
+        ("system_prompt", "session_info", "include_started_at"),
+    ),
+    "include_operating_system": (
+        ("system_prompt", "session_info", "include_operating_system"),
+    ),
+    "include_platform": (("system_prompt", "session_info", "include_platform"),),
+    "include_architecture": (
+        ("system_prompt", "session_info", "include_architecture"),
+    ),
+    "include_timezone": (("system_prompt", "session_info", "include_timezone"),),
+    "include_cpu_cores": (("system_prompt", "session_info", "include_cpu_count"),),
+    "include_hostname": (("system_prompt", "session_info", "include_hostname"),),
+    "include_project_steering": (("system_prompt", "include_project_steering"),),
+    "user_prompt_enabled": (("user_prompt", "enabled"),),
+    "include_cwd": (("user_prompt", "include_cwd"),),
+    "include_modified_files": (("user_prompt", "include_modified_files"),),
+}
+GUI_CATEGORY_FIELDS = {
+    "include_project_rules",
+    "include_workspace_status",
+    "include_runtime_environment",
+}
 
 
 # ===================================================================
@@ -131,8 +175,15 @@ class EnvironPromptPlugin(HawiPlugin):
     description = "向系统和用户提示词注入会话、项目和环境上下文。"
     dependencies = ()
 
-    def __init__(self, config_path: str | None = None) -> None:
-        self._config = self._load_config(config_path=config_path)
+    def __init__(
+        self,
+        config_path: str | None = None,
+        config_overrides: dict[str, Any] | None = None,
+    ) -> None:
+        config = self._load_config(config_path=config_path)
+        if config_overrides:
+            config = deep_merge(config, config_overrides)
+        self._config = config
         self._last_prompt_ts: float = 0.0
         """Timestamp (seconds since epoch) of the last user-prompt injection.
 
@@ -191,6 +242,11 @@ class EnvironPromptPlugin(HawiPlugin):
         return {
             "type": "object",
             "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "title": "启用环境提示",
+                    "default": True,
+                },
                 "config_path": {
                     "type": "string",
                     "title": "Config Path",
@@ -201,13 +257,49 @@ class EnvironPromptPlugin(HawiPlugin):
                         ".hawi and ~/.hawi before falling back to built-in "
                         "defaults.",
                 },
+                "include_project_rules": {
+                    "type": "boolean",
+                    "title": "项目规则",
+                    "default": True,
+                    "description": "注入 AGENTS.md / CLAUDE.md 等项目规则文件。",
+                },
+                "include_workspace_status": {
+                    "type": "boolean",
+                    "title": "工作区状态",
+                    "default": True,
+                    "description": "每轮用户消息前注入当前工作目录和近期文件变更。",
+                },
+                "include_runtime_environment": {
+                    "type": "boolean",
+                    "title": "运行环境",
+                    "default": True,
+                    "description": "注入 OS、平台、架构、时区、CPU 和主机名等运行信息。",
+                },
             },
             "additionalProperties": False,
         }
 
     @classmethod
     def gui_default_config(cls) -> dict[str, Any]:
-        return {"config_path": ""}
+        return {
+            "config_path": "",
+            **{field: True for field in GUI_CONFIG_FIELD_PATHS},
+        }
+
+    @staticmethod
+    def gui_config_overrides(config: dict[str, Any] | None) -> dict[str, Any]:
+        """Translate flat GUI category toggles into nested plugin config."""
+        overrides: dict[str, Any] = {}
+        if not isinstance(config, dict):
+            return overrides
+        _apply_gui_config_field_paths(overrides, config, GUI_CONFIG_FIELD_PATHS)
+        if not any(field in config for field in GUI_CATEGORY_FIELDS):
+            _apply_gui_config_field_paths(
+                overrides,
+                config,
+                LEGACY_GUI_CONFIG_FIELD_PATHS,
+            )
+        return overrides
 
     # ------------------------------------------------------------------
     # Clone support
@@ -270,7 +362,9 @@ class EnvironPromptPlugin(HawiPlugin):
 
         # -- session-level information ---------------------------------
         if cfg.get("include_session_info", True):
-            dynamic_parts.append(_format_session_info())
+            session_info = _format_session_info(cfg.get("session_info"))
+            if session_info:
+                dynamic_parts.append(session_info)
 
         parts = stable_parts + dynamic_parts
 
@@ -394,33 +488,76 @@ def _find_last_user_insert_index(messages: list[dict[str, Any]]) -> int:
     return len(messages)
 
 
+def _apply_gui_config_field_paths(
+    overrides: dict[str, Any],
+    config: dict[str, Any],
+    field_paths: dict[str, tuple[tuple[str, ...], ...]],
+) -> None:
+    """Apply GUI-facing boolean fields to one or more nested config paths."""
+    for field, paths in field_paths.items():
+        if field not in config:
+            continue
+        value = config[field]
+        if not isinstance(value, bool):
+            continue
+        for path in paths:
+            _set_nested_config_value(overrides, path, value)
+
+
+def _set_nested_config_value(
+    target: dict[str, Any],
+    path: tuple[str, ...],
+    value: Any,
+) -> None:
+    """Set a nested config value, creating intermediate dictionaries."""
+    current = target
+    for key in path[:-1]:
+        next_value = current.get(key)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[key] = next_value
+        current = next_value
+    current[path[-1]] = value
+
+
 # ------------------------------------------------------------------
 # Fact helpers
 # ------------------------------------------------------------------
 
 
-def _format_session_info() -> str:
+def _format_session_info(raw_cfg: Any = None) -> str | None:
     """Return session-level environment facts."""
+    cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
+
+    def enabled(key: str) -> bool:
+        return bool(cfg.get(key, True))
+
     now = datetime.datetime.now(datetime.timezone.utc).astimezone()
     tz_name = now.strftime("%Z")
     tz_offset = now.strftime("%z")
 
-    lines: list[str] = [
-        f"Session started: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Operating system: {platform.system()}",
-        f"Platform: {platform.platform(terse=True)}",
-        f"Architecture: {platform.machine()}",
-        f"Timezone: {tz_name} (UTC{tz_offset})",
-    ]
+    lines: list[str] = []
+    if enabled("include_started_at"):
+        lines.append(f"Session started: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    if enabled("include_operating_system"):
+        lines.append(f"Operating system: {platform.system()}")
+    if enabled("include_platform"):
+        lines.append(f"Platform: {platform.platform(terse=True)}")
+    if enabled("include_architecture"):
+        lines.append(f"Architecture: {platform.machine()}")
+    if enabled("include_timezone"):
+        lines.append(f"Timezone: {tz_name} (UTC{tz_offset})")
 
     cpu = os.cpu_count()
-    if cpu is not None:
+    if enabled("include_cpu_count") and cpu is not None:
         lines.append(f"CPU cores: {cpu}")
 
     node = platform.node()
-    if node:
+    if enabled("include_hostname") and node:
         lines.append(f"Hostname: {node}")
 
+    if not lines:
+        return None
     return "Session environment:\n" + "\n".join(f"  {line}" for line in lines)
 
 

@@ -131,11 +131,11 @@ export function resolveEngineLauncher(
     return { command: override, argsPrefix: [], source: "bundled" };
   }
 
-  const bundledCommand = resolveBundledEngineCommand(options.resourcesPath);
-  if (bundledCommand) {
-    return { command: bundledCommand, argsPrefix: [], source: "bundled" };
-  }
   if (options.isPackaged) {
+    const bundledCommand = resolveBundledEngineCommand(options.resourcesPath);
+    if (bundledCommand) {
+      return { command: bundledCommand, argsPrefix: [], source: "bundled" };
+    }
     throw new Error("Bundled hawi-engine executable was not found in the application resources.");
   }
 

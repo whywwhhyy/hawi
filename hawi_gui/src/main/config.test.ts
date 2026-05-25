@@ -8,6 +8,7 @@ import {
   isUsablePackagedWorkspaceCwd,
   preserveProviderOrder,
   resolveBundledEngineCommand,
+  resolveEngineLauncher,
   resolveWorkspaceRoot,
   type EngineLauncher,
 } from "./config";
@@ -44,6 +45,29 @@ describe("engine launch helpers", () => {
       fs.writeFileSync(enginePath, "");
 
       expect(resolveBundledEngineCommand(temp)).toBe(enginePath);
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the source engine in dev even when stale bundled output exists", () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "hawi-engine-dir-"));
+    try {
+      const executable = process.platform === "win32" ? "hawi-engine.exe" : "hawi-engine";
+      const enginePath = path.join(temp, "bin", "hawi-engine", executable);
+      fs.mkdirSync(path.dirname(enginePath), { recursive: true });
+      fs.writeFileSync(enginePath, "");
+
+      expect(resolveEngineLauncher("/repo/hawi", { isPackaged: false, resourcesPath: temp }, "uv")).toEqual({
+        command: "uv",
+        argsPrefix: ["run", "--project", "/repo/hawi", "python", "-m", "hawi.engine"],
+        source: "uv",
+      });
+      expect(resolveEngineLauncher("/repo/hawi", { isPackaged: true, resourcesPath: temp }, "uv")).toEqual({
+        command: enginePath,
+        argsPrefix: [],
+        source: "bundled",
+      });
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });
     }
