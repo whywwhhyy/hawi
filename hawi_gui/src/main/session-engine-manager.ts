@@ -11,6 +11,7 @@ import type {
 import { VERSION } from "../shared/protocol";
 import { sanitizeConfig, type EngineLauncher } from "./config";
 import { CoreCommandError, CoreProcess, DEFAULT_COMMAND_TIMEOUT_MS, type EmitToRenderer } from "./core-process";
+import { toolCallPurposeEngineArgs } from "./tool-parameters";
 
 export const MAX_LOADED_SESSIONS = 5;
 const SESSION_COMMAND_TIMEOUT_MS = 30_000;
@@ -589,12 +590,11 @@ export class SessionEngineManager {
     if (first) {
       return first;
     }
-    await this.startInitial(this.requireDefaultConfig(), this.requireMetadata(), this.refreshedProviders);
-    const record = this.currentRecord();
-    if (!record) {
-      throw new Error("No engine available for session catalog");
-    }
-    return record;
+    const sessionId = `catalog-${generateSessionId()}`;
+    return this.startRecord(sessionId, profileFromConfig(this.requireDefaultConfig()), {
+      suppressEvents: true,
+      workspaceRoot: this.currentWorkspaceRoot(),
+    });
   }
 
   private currentRecord(): EngineRecord | null {
@@ -711,6 +711,7 @@ export function profileFromConfig(config: PersistedConfig): SessionLaunchProfile
     systemPrompt: config.systemPrompt,
     selectedPlugins: [...config.selectedPlugins],
     pluginConfigs: clonePluginConfigs(config.pluginConfigs),
+    toolCallPurposeEnabled: config.toolCallPurposeEnabled,
     engineArgs: stableEngineArgs(config),
   } satisfies SessionLaunchProfile;
   return profile;
@@ -728,6 +729,7 @@ export function configFromProfile(
       systemPrompt: profile.systemPrompt || defaultConfig.systemPrompt,
       selectedPlugins: [...profile.selectedPlugins],
       pluginConfigs: clonePluginConfigs(profile.pluginConfigs),
+      toolCallPurposeEnabled: profile.toolCallPurposeEnabled !== false,
       showDebug: defaultConfig.showDebug,
     },
     metadata,
@@ -749,6 +751,7 @@ export function launchProfileFromUnknown(value: unknown): SessionLaunchProfile |
     systemPrompt,
     selectedPlugins: stringList(value.selectedPlugins),
     pluginConfigs: pluginConfigRecord(value.pluginConfigs),
+    toolCallPurposeEnabled: value.toolCallPurposeEnabled !== false,
     engineArgs: Array.isArray(value.engineArgs) ? value.engineArgs.filter((item): item is string => typeof item === "string") : undefined,
   };
 }
@@ -763,10 +766,7 @@ function stableEngineArgs(config: PersistedConfig): string[] {
     config.systemPrompt,
     "--plugins",
     config.selectedPlugins.join(","),
-    "--extra-tool-parameter",
-    "tool_call_purpose",
-    "str",
-    "【必填】用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。未指定时工具仍会执行，但结果会附加错误提示，说明这会导致用户误解并影响自动审核 agent 的判断准确度。",
+    ...toolCallPurposeEngineArgs(config.toolCallPurposeEnabled),
   ];
 }
 

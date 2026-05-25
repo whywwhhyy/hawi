@@ -1,6 +1,7 @@
 # Hawi GUI
 
-Electron GUI for Hawi core-cli.
+Desktop GUI for Hawi core-cli. Tauri is the default desktop shell; Electron is
+still available for compatibility builds.
 
 ## Prerequisites
 
@@ -15,17 +16,24 @@ npm run build
 npm start
 ```
 
+`npm start` and `npm run dev` launch Tauri by default. Use
+`npm start -- --shell electron` or `npm run dev -- --shell electron` to launch
+the Electron shell instead.
+
 ## Scripts
 
 | Script                                         | Description                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------ |
 | `npm run build`                                | Type check + Vite build                                                  |
 | `npm run build:core`                           | Build the bundled `hawi-engine` executable for the current platform      |
-| `npm run package`                              | Build an unpacked, double-clickable desktop app for the current platform |
-| `npm run dist`                                 | Build the current platform installer/distributable                       |
-| `npm run dist:mac` / `dist:win` / `dist:linux` | Build platform-specific Electron distributables                          |
+| `npm run package`                              | Build the current platform desktop app with Tauri                        |
+| `npm run package:electron`                     | Build an unpacked Electron desktop app                                   |
+| `npm run dist` / `npm run dist:tauri`          | Build the current platform Tauri installer/distributable                 |
+| `npm run dist:electron`                        | Build the current platform Electron installer/distributable              |
+| `npm run dist:mac:electron` / `dist:win:electron` / `dist:linux:electron` | Build platform-specific Electron distributables |
 | `./pack.sh` / `./pack.ps1`                     | Sync dependencies and build the current platform distributable           |
-| `npm start` / `npm run dev`                    | Build and launch Electron                                                |
+| `npm start` / `npm run dev`                    | Launch Tauri by default; pass `--shell electron` for Electron            |
+| `npm run start:electron` / `npm run dev:electron` | Launch the Electron shell directly                                    |
 | `npm test`                                     | Run unit tests                                                           |
 | `npm run test:coverage`                        | Run tests with coverage report                                           |
 | `npm run lint`                                 | ESLint check                                                             |
@@ -62,19 +70,28 @@ uv sync
 npm run dist
 ```
 
+Electron packaging remains available:
+
+```bash
+npm run dist:electron
+```
+
 Or use the wrapper scripts from any working directory:
 
 ```bash
 ./hawi_gui/pack.sh
+./hawi_gui/pack.sh --shell electron
 ```
 
 ```powershell
 .\hawi_gui\pack.ps1
+.\hawi_gui\pack.ps1 --shell electron
 ```
 
-Build output is written to `hawi_gui/release/`. Electron Builder creates the
-native target for the machine running the command, such as `.dmg` on macOS,
-`.exe` on Windows, and `.AppImage` on Linux.
+Tauri build output is written under `hawi_gui/src-tauri/target/release/bundle/`.
+Electron build output is written to `hawi_gui/release/`. Both create native
+targets for the machine running the command, such as `.dmg` on macOS, `.exe` on
+Windows, and `.AppImage` on Linux.
 
 When a packaged GUI is launched from a terminal, the engine workspace is the
 terminal's current directory, so project-local data is written to `.hawi/` under

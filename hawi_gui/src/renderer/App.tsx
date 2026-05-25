@@ -417,7 +417,7 @@ export default function App() {
   const previousArtifactCountRef = useRef(0);
   const subagentPanelSessionRef = useRef<string | null>(null);
   const previousSubagentCountRef = useRef(0);
-  const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0;
+  const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0 || Boolean(currentSessionId);
   const fallbackState = useMemo(createInitialState, []);
   const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
   const artifactList = useMemo(
@@ -668,6 +668,7 @@ export default function App() {
 
   const selectedModel = config?.modelName || "-";
   const systemPromptLocked = state.nodes.some(isConversationNode);
+  const toolCallPurposeLocked = Boolean(currentSessionId);
   const contextRunnerBusy = state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING";
   const canCompactContextManually = coreRunning && !contextRunnerBusy && state.contextCompression?.active !== true;
 
@@ -804,7 +805,7 @@ export default function App() {
     payload: Record<string, unknown>,
     targetSessionId: string | null = currentSessionIdRef.current
   ): Promise<CoreFrame | null> {
-    if (!coreRunning) {
+    if (!(configRef.current ?? config)?.modelName) {
       setModelDialogOpen(true);
       return null;
     }
@@ -986,6 +987,27 @@ export default function App() {
     }
   }
 
+  async function ensureActiveSession(): Promise<string | null> {
+    if (currentSessionIdRef.current) {
+      return currentSessionIdRef.current;
+    }
+    const profile = configRef.current ? launchProfileFromConfig(configRef.current) : undefined;
+    const frame = await sendCommand("session_new", profile ? { gui_launch_profile: profile } : {}, null);
+    const sessionId = optionalPayloadString(framePayload(frame)?.session_id);
+    if (!sessionId) {
+      return null;
+    }
+    setCurrentSessionId(sessionId);
+    dispatch({
+      version: VERSION,
+      type: "gui.load_session_history",
+      payload: { message_history: [] }
+    }, sessionId);
+    followTailRef.current = true;
+    void refreshSessions().then((refreshed) => syncConfigFromSession(sessionId, refreshed));
+    return sessionId;
+  }
+
   async function forkSession(sessionId?: string, messageIndex?: number, contextMessageId?: string) {
     const sourceSessionId = sessionId || currentSessionId;
     if (!sourceSessionId) return;
@@ -1031,6 +1053,7 @@ export default function App() {
 
   async function saveGlobalAndSet(nextConfig: PersistedConfig) {
     const saved = await window.hawi.saveConfig(nextConfig);
+    configRef.current = saved;
     setConfig(saved);
     setMetadata((current) => current ? { ...current, config: saved } : current);
     return saved;
@@ -1141,9 +1164,17 @@ export default function App() {
       resetInputHistoryNavigation();
       return;
     }
+    const sessionId = await ensureActiveSession();
+    if (!sessionId) {
+      return;
+    }
     setInput("");
     resetInputHistoryNavigation();
-    const frame = await sendCommand("enqueue", { content: text, queue: "high_prio", metadata: { intent: "user_send", source: "gui_main_input" } });
+    const frame = await sendCommand(
+      "enqueue",
+      { content: text, queue: "high_prio", metadata: { intent: "user_send", source: "gui_main_input" } },
+      sessionId
+    );
     if (frame) {
       rememberInputHistory(text);
     }
@@ -1399,6 +1430,11 @@ export default function App() {
   }
 
   function applySystemPrompt(nextConfig: PersistedConfig) {
+    if (!currentSessionIdRef.current) {
+      configRef.current = nextConfig;
+      void saveGlobalAndSet(nextConfig);
+      return;
+    }
     pendingSystemPromptConfigRef.current = nextConfig;
     if (applyingSystemPromptRef.current) return;
     applyingSystemPromptRef.current = true;
@@ -1425,11 +1461,10 @@ export default function App() {
     setModelDialogOpen(false);
     setConfig(nextConfig);
     try {
-      if (coreRunning) {
+      if (currentSessionIdRef.current) {
         await sendCommand("switch_model", { model_name: modelName });
       } else {
         await saveGlobalAndSet(nextConfig);
-        await restartWith(nextConfig);
       }
     } catch (error) {
       dispatch(errorFrame(error));
@@ -1452,6 +1487,13 @@ export default function App() {
 
   async function applyPlugins(selectedPlugins: string[], pluginConfigs: Record<string, Record<string, unknown>>) {
     if (!config) return;
+    if (!currentSessionIdRef.current) {
+      const nextConfig = { ...(configRef.current ?? config), selectedPlugins, pluginConfigs: normalizePluginConfigs(pluginConfigs) };
+      const savedConfig = await saveGlobalAndSet(nextConfig);
+      configRef.current = savedConfig;
+      setPluginDialogOpen(false);
+      return;
+    }
     const frame = await sendCommand("apply_plugins", { selected_plugins: selectedPlugins, plugin_configs: pluginConfigs });
     if (!frame) return;
     const payload = framePayload(frame);
@@ -1490,6 +1532,18 @@ export default function App() {
     const baseConfig = configRef.current ?? config;
     if (!baseConfig) return;
     const next = { ...baseConfig, showDebug: enabled };
+    setConfig(next);
+    void saveGlobalAndSet(next);
+  }
+
+  function updateToolCallPurposeEnabled(enabled: boolean) {
+    if (toolCallPurposeLocked) {
+      return;
+    }
+    const baseConfig = configRef.current ?? config;
+    if (!baseConfig) return;
+    const next = { ...baseConfig, toolCallPurposeEnabled: enabled };
+    configRef.current = next;
     setConfig(next);
     void saveGlobalAndSet(next);
   }
@@ -1573,6 +1627,34 @@ export default function App() {
           onClick={() => updateShowDebug(!showDebug)}
         >
           <Activity size={toolbarIconSize(placement)} /> Debug
+        </button>
+      )
+    },
+    {
+      id: "tool-call-purpose",
+      render: (placement) => placement === "overflow" ? (
+        <label
+          className="menu-item"
+          title={toolCallPurposeLocked ? "仅新 Session 可修改" : "新 Session 工具调用要求填写目的"}
+        >
+          <input
+            type="checkbox"
+            checked={config.toolCallPurposeEnabled}
+            disabled={toolCallPurposeLocked}
+            onChange={(event) => updateToolCallPurposeEnabled(event.target.checked)}
+          />
+          Purpose 参数
+        </label>
+      ) : (
+        <button
+          type="button"
+          className={toolbarItemClass(placement, config.toolCallPurposeEnabled)}
+          title={toolCallPurposeLocked ? "仅新 Session 可修改" : "新 Session 工具调用要求填写目的"}
+          aria-pressed={config.toolCallPurposeEnabled}
+          disabled={toolCallPurposeLocked}
+          onClick={() => updateToolCallPurposeEnabled(!config.toolCallPurposeEnabled)}
+        >
+          <Wrench size={toolbarIconSize(placement)} /> Purpose
         </button>
       )
     },
@@ -4880,6 +4962,7 @@ function normalizeLaunchProfile(value: unknown): SessionLaunchProfile | null {
       ? value.selectedPlugins.filter((item): item is string => typeof item === "string")
       : [],
     pluginConfigs: normalizePluginConfigs(value.pluginConfigs),
+    toolCallPurposeEnabled: value.toolCallPurposeEnabled !== false,
     engineArgs: Array.isArray(value.engineArgs)
       ? value.engineArgs.filter((item): item is string => typeof item === "string")
       : undefined
@@ -4905,7 +4988,8 @@ function configFromLaunchProfile(
     modelName: profile.modelName,
     systemPrompt: profile.systemPrompt,
     selectedPlugins: [...profile.selectedPlugins],
-    pluginConfigs: normalizePluginConfigs(profile.pluginConfigs)
+    pluginConfigs: normalizePluginConfigs(profile.pluginConfigs),
+    toolCallPurposeEnabled: profile.toolCallPurposeEnabled !== false
   };
 }
 
@@ -4915,7 +4999,8 @@ function launchProfileFromConfig(config: PersistedConfig): SessionLaunchProfile 
     modelName: config.modelName,
     systemPrompt: config.systemPrompt,
     selectedPlugins: [...config.selectedPlugins],
-    pluginConfigs: normalizePluginConfigs(config.pluginConfigs)
+    pluginConfigs: normalizePluginConfigs(config.pluginConfigs),
+    toolCallPurposeEnabled: config.toolCallPurposeEnabled
   };
 }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import math
 import os
@@ -86,6 +87,7 @@ class ExtraToolParameter:
     type_name: str
     description: str
     schema: dict[str, Any]
+    required: bool = True
 
 
 def parse_extra_tool_parameter(raw: Sequence[str]) -> ExtraToolParameter:
@@ -113,9 +115,68 @@ def parse_extra_tool_parameter(raw: Sequence[str]) -> ExtraToolParameter:
     )
 
 
-def parse_extra_tool_parameters(raw_values: Sequence[Sequence[str]]) -> list[ExtraToolParameter]:
-    """Parse stacked ``--extra-tool-parameter`` values and reject duplicates."""
-    parameters = [parse_extra_tool_parameter(value) for value in raw_values]
+def parse_extra_tool_parameter_json(raw: str) -> ExtraToolParameter:
+    """Parse one JSON ``--extra-tool-parameter-json`` directive."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("--extra-tool-parameter-json must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("--extra-tool-parameter-json must be a JSON object")
+
+    name = parsed.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("--extra-tool-parameter-json.name must be a non-empty string")
+    name = name.strip()
+    if not _EXTRA_PARAMETER_NAME_RE.match(name):
+        raise ValueError(
+            "--extra-tool-parameter-json.name must start with a letter or "
+            "underscore and contain only letters, numbers, and underscores"
+        )
+
+    schema_raw = parsed.get("schema")
+    type_raw = parsed.get("type", parsed.get("type_name"))
+    if isinstance(schema_raw, dict):
+        schema = dict(schema_raw)
+        type_name = str(schema.get("type") or type_raw or "object").lower()
+    elif isinstance(type_raw, str) and type_raw.strip():
+        type_name = type_raw.strip().lower()
+        schema = _extra_tool_parameter_schema(type_name)
+    else:
+        raise ValueError(
+            "--extra-tool-parameter-json must include either schema or type"
+        )
+
+    description_raw = parsed.get("description", schema.get("description"))
+    if not isinstance(description_raw, str) or not description_raw.strip():
+        raise ValueError(
+            "--extra-tool-parameter-json.description must be a non-empty string"
+        )
+    description = description_raw.strip()
+    schema.setdefault("description", description)
+
+    required = parsed.get("required", True)
+    if not isinstance(required, bool):
+        raise ValueError("--extra-tool-parameter-json.required must be a boolean")
+
+    return ExtraToolParameter(
+        name=name,
+        type_name=type_name,
+        description=description,
+        schema=schema,
+        required=required,
+    )
+
+
+def parse_extra_tool_parameters(
+    raw_values: Sequence[Sequence[str]],
+    raw_json_values: Sequence[str] = (),
+) -> list[ExtraToolParameter]:
+    """Parse stacked extra tool parameter directives and reject duplicates."""
+    parameters = [
+        *[parse_extra_tool_parameter(value) for value in raw_values],
+        *[parse_extra_tool_parameter_json(value) for value in raw_json_values],
+    ]
     seen: set[str] = set()
     duplicates: set[str] = set()
     for parameter in parameters:
@@ -1844,7 +1905,7 @@ class CoreRuntime:
                 ToolParameterInjection(
                     name=parameter.name,
                     schema=self._extra_tool_parameter_json_schema(parameter),
-                    required=True,
+                    required=parameter.required,
                 )
             )
         if self._extra_tool_parameters:
@@ -1855,8 +1916,8 @@ class CoreRuntime:
     def _extra_tool_parameter_json_schema(parameter: ExtraToolParameter) -> dict[str, Any]:
         schema = {
             **parameter.schema,
-            "description": parameter.description,
         }
+        schema.setdefault("description", parameter.description)
         if parameter.name == "tool_call_purpose":
             schema["default"] = None
         return schema

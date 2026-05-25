@@ -155,6 +155,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--extra-tool-parameter-json",
+        action="append",
+        default=[],
+        metavar="JSON",
+        help=(
+            "Framework-level tool parameter directive as JSON. Expected fields: "
+            "name, schema or type, description, and optional required. May be "
+            "passed more than once."
+        ),
+    )
+    parser.add_argument(
         "--plugin-config",
         default=None,
         help="JSON/YAML/TOML file containing plugin config object keyed by plugin name",
@@ -293,7 +304,10 @@ async def async_main(args: argparse.Namespace) -> None:
 
     selected_plugins = parse_plugins(args.plugins)
     plugin_configs = load_plugin_config(args.plugin_config)
-    extra_tool_parameters = parse_extra_tool_parameters(args.extra_tool_parameter)
+    extra_tool_parameters = parse_extra_tool_parameters(
+        args.extra_tool_parameter,
+        args.extra_tool_parameter_json,
+    )
 
     blob_store = None
     if not args.blob_disabled:

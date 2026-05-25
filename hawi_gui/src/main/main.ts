@@ -88,9 +88,6 @@ app.whenReady().then(async () => {
   engineManager.configure(inspectPayload, config, refreshedProviders);
   registerIpc();
   createWindow();
-  if (config.modelName) {
-    await engineManager.startInitial(config, inspectPayload, refreshedProviders);
-  }
 });
 
 app.on("window-all-closed", () => {

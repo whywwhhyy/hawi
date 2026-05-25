@@ -5,6 +5,7 @@ import path from "node:path";
 import type { CoreCommand, CoreCommandType, CoreFrame, InspectPayload, PersistedConfig, SessionLaunchProfile } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { buildEngineEnv, buildEngineRunArgs, type EngineLauncher } from "./config";
+import { toolCallPurposeEngineArgs } from "./tool-parameters";
 import { TLVDecoder, TYPE_JSON_FRAME, encodeJsonFrame } from "./tlv";
 
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 800;
@@ -96,10 +97,7 @@ export class CoreProcess {
         pluginConfigPath,
         ...launchProfileArgs,
         ...initialSessionArgs,
-        "--extra-tool-parameter",
-        "tool_call_purpose",
-        "str",
-        "【必填】用一句话说明本次工具调用的目的；允许与其他调用重复，会显示在工具标题旁边。未指定时工具仍会执行，但结果会附加错误提示，说明这会导致用户误解并影响自动审核 agent 的判断准确度。",
+        ...toolCallPurposeEngineArgs(nextConfig.toolCallPurposeEnabled),
         "--log-file",
         this.backendLogPath,
       ],

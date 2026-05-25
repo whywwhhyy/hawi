@@ -290,6 +290,7 @@ export function defaultConfig(metadata: InspectPayload): PersistedConfig {
     systemPrompt: metadata.default_system_prompt,
     selectedPlugins: defaultPlugins,
     pluginConfigs: {},
+    toolCallPurposeEnabled: true,
     showDebug: true,
   };
 }
@@ -314,6 +315,7 @@ export function sanitizeConfig(raw: PersistedConfig, metadata: InspectPayload | 
       typeof raw.systemPrompt === "string" && raw.systemPrompt.trim() ? raw.systemPrompt : (metadata?.default_system_prompt ?? ""),
     selectedPlugins,
     pluginConfigs,
+    toolCallPurposeEnabled: raw.toolCallPurposeEnabled !== false,
     showDebug: Boolean(raw.showDebug),
   };
 }

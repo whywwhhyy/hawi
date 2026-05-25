@@ -11,7 +11,13 @@ import pytest
 
 import hawi.engine.builtin_gateways as builtin_gateways
 from hawi.engine.protocol import VERSION, make_ack, make_frame
-from hawi.engine.runtime import CoreRuntime, load_model_configs, parse_extra_tool_parameter, parse_extra_tool_parameters
+from hawi.engine.runtime import (
+    CoreRuntime,
+    load_model_configs,
+    parse_extra_tool_parameter,
+    parse_extra_tool_parameter_json,
+    parse_extra_tool_parameters,
+)
 from hawi.engine.tlv import TYPE_JSON_FRAME, encode_frame, read_frame
 from hawi.engine.transports import QueuedJsonClient
 from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
@@ -1082,6 +1088,21 @@ def test_parse_extra_tool_parameter_allows_colons_in_description() -> None:
     assert parameter.description == "Reason: use the fast path"
 
 
+def test_parse_extra_tool_parameter_json() -> None:
+    parameter = parse_extra_tool_parameter_json(
+        '{"name":"tool_call_purpose","schema":{"type":"string","default":null},'
+        '"description":"Describe the call","required":true}'
+    )
+
+    assert parameter.name == "tool_call_purpose"
+    assert parameter.required is True
+    assert parameter.schema == {
+        "type": "string",
+        "default": None,
+        "description": "Describe the call",
+    }
+
+
 def test_parser_accepts_space_separated_extra_tool_parameters() -> None:
     from hawi.engine.__main__ import build_parser
 
@@ -1107,9 +1128,34 @@ def test_parser_accepts_space_separated_extra_tool_parameters() -> None:
     assert args.max_context_tokens == 64_000
 
 
+def test_parser_accepts_json_extra_tool_parameters() -> None:
+    from hawi.engine.__main__ import build_parser
+
+    directive = (
+        '{"name":"tool_call_purpose","schema":{"type":"string","default":null},'
+        '"description":"Describe the call"}'
+    )
+    args = build_parser().parse_args([
+        "--model",
+        "test/model",
+        "--extra-tool-parameter-json",
+        directive,
+    ])
+
+    assert args.extra_tool_parameter_json == [directive]
+
+
 def test_parse_extra_tool_parameters_rejects_duplicates() -> None:
     with pytest.raises(ValueError, match="Duplicate"):
         parse_extra_tool_parameters([["note", "str", "first"], ["note", "int", "second"]])
+
+
+def test_parse_extra_tool_parameters_rejects_json_duplicates() -> None:
+    with pytest.raises(ValueError, match="Duplicate"):
+        parse_extra_tool_parameters(
+            [["note", "str", "first"]],
+            ['{"name":"note","type":"str","description":"second"}'],
+        )
 
 
 def test_runtime_applies_extra_tool_parameters_to_agent() -> None:

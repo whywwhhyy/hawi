@@ -221,6 +221,8 @@ hawi_gui/dist/
 hawi_gui/dist-electron/
 hawi_gui/coverage/
 hawi_gui/.vite/
+hawi_gui/src-tauri/gen/
+hawi_gui/src-tauri/target/
 
 # Agents
 .claude/

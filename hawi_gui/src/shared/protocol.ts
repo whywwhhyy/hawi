@@ -175,6 +175,7 @@ export interface PersistedConfig {
   systemPrompt: string;
   selectedPlugins: string[];
   pluginConfigs: Record<string, Record<string, unknown>>;
+  toolCallPurposeEnabled: boolean;
   showDebug: boolean;
 }
 
@@ -184,6 +185,7 @@ export interface SessionLaunchProfile {
   systemPrompt: string;
   selectedPlugins: string[];
   pluginConfigs: Record<string, Record<string, unknown>>;
+  toolCallPurposeEnabled: boolean;
   engineArgs?: string[];
 }
 

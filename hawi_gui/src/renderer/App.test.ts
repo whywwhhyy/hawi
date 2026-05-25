@@ -27,6 +27,7 @@ function makeMetadata(coreRunning: boolean): GuiMetadata {
       systemPrompt: "你是Hawi，一个通用agent",
       selectedPlugins: [],
       pluginConfigs: {},
+      toolCallPurposeEnabled: true,
       showDebug: true
     },
     coreRunning
