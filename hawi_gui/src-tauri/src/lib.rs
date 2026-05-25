@@ -2007,14 +2007,7 @@ impl SessionEngineManager {
     }
 
     fn read_session_catalog(&mut self) -> Result<Vec<Value>, String> {
-        let catalog_id = self.catalog_record()?;
-        let frame = {
-            let record = self.loaded.get_mut(&catalog_id).expect("catalog record");
-            record
-                .core
-                .send_command("session_list", json!({}), SESSION_COMMAND_TIMEOUT_MS)
-        }
-        .map_err(|error| error.message)?;
+        let frame = self.readonly_command("session_list", json!({}))?;
         Ok(frame_payload(&frame)
             .get("sessions")
             .and_then(Value::as_array)
@@ -2834,7 +2827,7 @@ fn normalize_load_state(value: Option<&Value>) -> Option<&'static str> {
 fn command_timeout(command_type: &str) -> u64 {
     match command_type {
         "compact_context" => COMPACT_COMMAND_TIMEOUT_MS,
-        "session_export_markdown" | "session_history" | "session_search" => {
+        "session_export_markdown" | "session_history" | "session_list" | "session_search" => {
             SESSION_COMMAND_TIMEOUT_MS
         }
         _ => DEFAULT_COMMAND_TIMEOUT_MS,

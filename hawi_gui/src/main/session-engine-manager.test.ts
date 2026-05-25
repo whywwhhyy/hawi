@@ -50,6 +50,7 @@ interface ManagerInternals {
   loaded: Map<string, FakeRecord>;
   currentSessionId: string | null;
   defaultConfig: PersistedConfig | null;
+  readonlyCore: FakeCore | null;
   handleEngineEmit(record: FakeRecord, channel: string, payload: unknown): void;
   emitSessionRuntimeStatus(sessionId: string): void;
   discardCurrentEmptySession(): Promise<void>;
@@ -338,8 +339,8 @@ describe("SessionEngineManager", () => {
     });
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;
+    internals.readonlyCore = catalog;
     internals.currentSessionId = "session-catalog";
-    internals.loaded.set("session-catalog", fakeRecord("session-catalog", 1, catalog));
     internals.loaded.set("session-saved", fakeRecord("session-saved", 2, new FakeCore(), persistedProfile));
 
     const frame = await internals.sessionListFrame();
@@ -397,8 +398,8 @@ describe("SessionEngineManager", () => {
     });
     const manager = makeManager(events);
     const internals = manager as unknown as ManagerInternals;
+    internals.readonlyCore = catalog;
     internals.currentSessionId = "session-catalog";
-    internals.loaded.set("session-catalog", fakeRecord("session-catalog", 1, catalog));
 
     let launchedWorkspaceRoot: string | null = null;
     internals.startRecord = (sessionId, launchProfile, options) => {
@@ -515,6 +516,7 @@ function makeManager(events: Array<{ channel: string; payload: unknown }>): Sess
     launcher,
   );
   manager.configure(inspect, baseConfig);
+  (manager as unknown as ManagerInternals).readonlyCore = new FakeCore();
   return manager;
 }
 

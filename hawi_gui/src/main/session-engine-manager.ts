@@ -575,8 +575,7 @@ export class SessionEngineManager {
   }
 
   private async readSessionCatalog(): Promise<SessionMetaPayload[]> {
-    const record = await this.catalogRecord();
-    const frame = await record.core.sendCommand("session_list", {}, SESSION_COMMAND_TIMEOUT_MS);
+    const frame = await this.readonlyCommand("session_list", {});
     const payload = framePayload(frame);
     return Array.isArray(payload.sessions)
       ? payload.sessions.map(normalizeSessionMeta).filter((item): item is SessionMetaPayload => item !== null)
@@ -912,7 +911,7 @@ function commandTimeout(type: CoreCommandType): number {
   if (type === "compact_context") {
     return COMPACT_COMMAND_TIMEOUT_MS;
   }
-  if (type === "session_export_markdown" || type === "session_history" || type === "session_search") {
+  if (type === "session_export_markdown" || type === "session_history" || type === "session_list" || type === "session_search") {
     return SESSION_COMMAND_TIMEOUT_MS;
   }
   return DEFAULT_COMMAND_TIMEOUT_MS;
