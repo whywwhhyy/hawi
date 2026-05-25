@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -10,12 +10,12 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
+import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -91,6 +91,29 @@ const userMessageTypeLabels = {
   urgent: "紧急消息",
   resume: "Resume"
 } as const;
+
+interface HistorySearchResult {
+  sessionId: string;
+  sessionName: string;
+  sessionCreatedAt: string;
+  sessionUpdatedAt: string;
+  messageIndex: number;
+  contextMessageId?: string;
+  contextMessageIndex?: number;
+  runId?: string;
+  role: string;
+  timestamp?: number | string;
+  text: string;
+  snippet: string;
+  lastCwd?: string | null;
+}
+
+interface HistoryLocateTarget {
+  sessionId: string;
+  messageIndex?: number;
+  contextMessageId?: string;
+  contextMessageIndex?: number;
+}
 
 export function renderQueueStatusText(
   queueLengths: Record<QueueKind, number>,
@@ -383,7 +406,21 @@ export default function App() {
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
+  const [historySearchOpen, setHistorySearchOpen] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
+  const [historySearchCaseSensitive, setHistorySearchCaseSensitive] = useState(false);
+  const [historySearchWholeWord, setHistorySearchWholeWord] = useState(false);
+  const [historySearchResults, setHistorySearchResults] = useState<HistorySearchResult[]>([]);
+  const [historySearchBusy, setHistorySearchBusy] = useState(false);
+  const [historySearchError, setHistorySearchError] = useState<string | null>(null);
+  const [selectedHistoryResult, setSelectedHistoryResult] = useState<HistorySearchResult | null>(null);
+  const [historyPreviewNodes, setHistoryPreviewNodes] = useState<ChatNode[]>([]);
+  const [historyPreviewBusy, setHistoryPreviewBusy] = useState(false);
+  const [historyPreviewSession, setHistoryPreviewSession] = useState<SessionMetaPayload | null>(null);
+  const [historyPreviewLocateTarget, setHistoryPreviewLocateTarget] = useState<HistoryLocateTarget | null>(null);
+  const [mainLocateTarget, setMainLocateTarget] = useState<HistoryLocateTarget | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const historyPreviewRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const queueTaskDraftRef = useRef<HTMLTextAreaElement | null>(null);
@@ -817,6 +854,18 @@ export default function App() {
     }
   }
 
+  async function sendReadOnlyCommand(
+    type: CoreCommandType,
+    payload: Record<string, unknown>,
+  ): Promise<CoreFrame | null> {
+    try {
+      return await window.hawi.sendCommand(type, payload, null);
+    } catch (error) {
+      dispatch(errorFrame(error));
+      return null;
+    }
+  }
+
   async function initializeSessionState() {
     const listFrame = await sendCommand("session_list", {}, null);
     updateSessionsFromFrame(listFrame);
@@ -825,6 +874,79 @@ export default function App() {
   }
 
   initializeSessionStateRef.current = initializeSessionState;
+
+  useEffect(() => {
+    if (!historySearchOpen) {
+      return;
+    }
+    const query = historySearchQuery.trim();
+    if (!query) {
+      setHistorySearchResults([]);
+      setSelectedHistoryResult(null);
+      setHistoryPreviewNodes([]);
+      setHistoryPreviewSession(null);
+      setHistoryPreviewLocateTarget(null);
+      setHistorySearchBusy(false);
+      setHistorySearchError(null);
+      return;
+    }
+    let cancelled = false;
+    setHistorySearchBusy(true);
+    const timer = window.setTimeout(() => {
+      void sendReadOnlyCommand("session_search", {
+        query,
+        limit: 100,
+        case_sensitive: historySearchCaseSensitive,
+        whole_word: historySearchWholeWord
+      }).then((frame) => {
+        if (cancelled) return;
+        const payload = framePayload(frame);
+        const results = normalizeHistorySearchResults(payload?.results);
+        setHistorySearchResults(results);
+        setHistorySearchError(null);
+        const selectedKey = selectedHistoryResult ? historySearchResultKey(selectedHistoryResult) : null;
+        const nextSelection = selectedKey
+          ? results.find((item) => historySearchResultKey(item) === selectedKey) ?? results[0]
+          : results[0];
+        if (nextSelection) {
+          void selectHistorySearchResult(nextSelection);
+        } else {
+          setSelectedHistoryResult(null);
+          setHistoryPreviewNodes([]);
+          setHistoryPreviewSession(null);
+          setHistoryPreviewLocateTarget(null);
+        }
+      }).catch((error) => {
+        if (!cancelled) {
+          setHistorySearchError(formatDialogError(error));
+        }
+      }).finally(() => {
+        if (!cancelled) {
+          setHistorySearchBusy(false);
+        }
+      });
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [historySearchCaseSensitive, historySearchOpen, historySearchQuery, historySearchWholeWord]);
+
+  useEffect(() => {
+    if (!historyPreviewLocateTarget) return;
+    const frame = window.requestAnimationFrame(() => {
+      scrollToHistoryTarget(historyPreviewRef.current, historyPreviewLocateTarget);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [historyPreviewLocateTarget, historyPreviewNodes]);
+
+  useEffect(() => {
+    if (!mainLocateTarget || mainLocateTarget.sessionId !== currentSessionId) return;
+    const frame = window.requestAnimationFrame(() => {
+      scrollToHistoryTarget(chatRef.current, mainLocateTarget);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mainLocateTarget, currentSessionId, state.nodes]);
 
   async function refreshSessions(): Promise<SessionMetaPayload[]> {
     const frame = await sendCommand("session_list", {}, null);
@@ -1043,6 +1165,51 @@ export default function App() {
     }
   }
   forkSessionRef.current = forkSession;
+
+  async function selectHistorySearchResult(result: HistorySearchResult) {
+    setSelectedHistoryResult(result);
+    setHistoryPreviewBusy(true);
+    setHistoryPreviewLocateTarget(historyResultToLocateTarget(result));
+    const sessionMeta = sessions.find((session) => session.session_id === result.sessionId) ?? {
+      session_id: result.sessionId,
+      name: result.sessionName || result.sessionId,
+      created_at: result.sessionCreatedAt,
+      updated_at: result.sessionUpdatedAt,
+      last_checkpoint_event: null,
+      components_present: [],
+      last_cwd: result.lastCwd ?? null,
+    };
+    setHistoryPreviewSession(sessionMeta);
+    try {
+      const frame = await sendReadOnlyCommand("session_history", {
+        session_id: result.sessionId,
+        read_only: true,
+      });
+      const payload = framePayload(frame);
+      if (!Array.isArray(payload?.message_history)) {
+        return;
+      }
+      setHistoryPreviewNodes(chatNodesFromMessageHistory(payload.message_history));
+    } finally {
+      setHistoryPreviewBusy(false);
+    }
+  }
+
+  async function openHistorySearchResult(result: HistorySearchResult | null = selectedHistoryResult) {
+    if (!result) return;
+    setSessionBusy(true);
+    try {
+      const frame = await sendCommand("session_switch", { session_id: result.sessionId });
+      applySessionHistoryFromFrame(frame);
+      const refreshed = await refreshSessions();
+      syncConfigFromSession(result.sessionId, refreshed);
+      setMainLocateTarget(historyResultToLocateTarget(result));
+      setHistorySearchOpen(false);
+      setSessionDialogOpen(false);
+    } finally {
+      setSessionBusy(false);
+    }
+  }
 
   const forkMessage = useCallback((node: ChatNode) => {
     const sessionId = currentSessionIdRef.current;
@@ -1695,12 +1862,14 @@ export default function App() {
               currentSessionId={currentSessionId}
               open={sessionDialogOpen}
               busy={sessionBusy}
+              searchOpen={historySearchOpen}
               onToggle={openSessionDialog}
               onSelect={loadSession}
               onDelete={deleteSession}
               onRename={renameSession}
               onNew={newSession}
               onFork={forkSession}
+              onSearch={() => setHistorySearchOpen(true)}
             />
             <ContextUsageCell
               usage={state.contextUsage}
@@ -1776,6 +1945,9 @@ export default function App() {
           ref={chatRef}
           nodes={visibleChatNodes}
           processing={state.processing}
+          highlightHistoryIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.messageIndex : undefined}
+          highlightContextMessageId={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageId : undefined}
+          highlightContextMessageIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageIndex : undefined}
           onForkMessage={forkMessage}
           onScroll={updateFollowTail}
           onWheel={handleChatWheel}
@@ -1853,6 +2025,28 @@ export default function App() {
           pluginConfigs={config.pluginConfigs}
           onClose={() => setPluginDialogOpen(false)}
           onApply={applyPlugins}
+        />
+      )}
+      {historySearchOpen && (
+        <HistorySearchModal
+          query={historySearchQuery}
+          caseSensitive={historySearchCaseSensitive}
+          wholeWord={historySearchWholeWord}
+          results={historySearchResults}
+          busy={historySearchBusy}
+          error={historySearchError}
+          selected={selectedHistoryResult}
+          previewNodes={historyPreviewNodes}
+          previewBusy={historyPreviewBusy}
+          previewSession={historyPreviewSession}
+          previewRef={historyPreviewRef}
+          locateTarget={historyPreviewLocateTarget}
+          onQueryChange={setHistorySearchQuery}
+          onCaseSensitiveChange={setHistorySearchCaseSensitive}
+          onWholeWordChange={setHistorySearchWholeWord}
+          onSelect={(result) => void selectHistorySearchResult(result)}
+          onOpenSession={(result) => void openHistorySearchResult(result)}
+          onClose={() => setHistorySearchOpen(false)}
         />
       )}
       {observedSubagent && (
@@ -2101,12 +2295,14 @@ function SessionStatusCell({
   currentSessionId,
   open,
   busy,
+  searchOpen,
   onToggle,
   onSelect,
   onDelete,
   onRename,
   onNew,
-  onFork
+  onFork,
+  onSearch
 }: {
   messageCount: number;
   runningCount: number;
@@ -2115,12 +2311,14 @@ function SessionStatusCell({
   currentSessionId: string | null;
   open: boolean;
   busy: boolean;
+  searchOpen: boolean;
   onToggle: () => void;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onRename: (sessionId: string, name: string) => Promise<void> | void;
   onNew: () => void;
   onFork: (sessionId?: string) => void;
+  onSearch: () => void;
 }) {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -2193,6 +2391,19 @@ function SessionStatusCell({
             <strong>{currentSessionName}</strong>
           </span>
         </span>
+      </button>
+      <button
+        type="button"
+        className={`mini-button icon-only ${searchOpen ? "active" : ""}`.trim()}
+        title="搜索聊天记录"
+        aria-label="搜索聊天记录"
+        aria-pressed={searchOpen}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSearch();
+        }}
+      >
+        <Search size={15} />
       </button>
       <button
         type="button"
@@ -2342,6 +2553,217 @@ function SessionLoadIndicator({ state }: { state: SessionLoadState }) {
       aria-label={sessionLoadStateLabel(state)}
     />
   );
+}
+
+function HistorySearchModal({
+  query,
+  caseSensitive,
+  wholeWord,
+  results,
+  busy,
+  error,
+  selected,
+  previewNodes,
+  previewBusy,
+  previewSession,
+  previewRef,
+  locateTarget,
+  onQueryChange,
+  onCaseSensitiveChange,
+  onWholeWordChange,
+  onSelect,
+  onOpenSession,
+  onClose,
+}: {
+  query: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  results: HistorySearchResult[];
+  busy: boolean;
+  error: string | null;
+  selected: HistorySearchResult | null;
+  previewNodes: ChatNode[];
+  previewBusy: boolean;
+  previewSession: SessionMetaPayload | null;
+  previewRef: Ref<HTMLDivElement>;
+  locateTarget: HistoryLocateTarget | null;
+  onQueryChange: (value: string) => void;
+  onCaseSensitiveChange: (value: boolean) => void;
+  onWholeWordChange: (value: boolean) => void;
+  onSelect: (result: HistorySearchResult) => void;
+  onOpenSession: (result: HistorySearchResult | null) => void;
+  onClose: () => void;
+}) {
+  const selectedKey = selected ? historySearchResultKey(selected) : null;
+  const previewTitle = previewSession ? sessionDisplayName(previewSession) : "未选择";
+  const resultCount = busy ? "搜索中" : `${results.length}`;
+
+  return (
+    <Modal title="聊天记录搜索" className="history-search-modal" onClose={onClose}>
+      <div className="history-search-layout">
+        <section className="history-preview-pane">
+          <header className="history-preview-header">
+            <div className="history-preview-title">
+              <strong>{previewTitle}</strong>
+              <span>{selected ? formatHistoryResultTimestamp(selected) : ""}</span>
+            </div>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!selected}
+              onClick={() => onOpenSession(selected)}
+            >
+              <Play size={15} /> 打开会话
+            </button>
+          </header>
+          <div className="history-preview-body">
+            {previewBusy && (
+              <div className="history-preview-loading">
+                <LoaderCircle className="inline-spinner" size={16} /> 加载中
+              </div>
+            )}
+            <ChatTranscript
+              ref={previewRef}
+              nodes={previewNodes}
+              allowFork={false}
+              emptyLabel={query.trim() ? "无预览" : "输入关键词"}
+              highlightHistoryIndex={locateTarget?.messageIndex}
+              highlightContextMessageId={locateTarget?.contextMessageId}
+              highlightContextMessageIndex={locateTarget?.contextMessageIndex}
+            />
+          </div>
+        </section>
+        <aside className="history-results-pane">
+          <div className="history-search-controls">
+            <label className="history-search-input">
+              <Search size={16} />
+              <input
+                autoFocus
+                value={query}
+                placeholder="搜索聊天记录"
+                onChange={(event) => onQueryChange(event.target.value)}
+              />
+            </label>
+            <div className="history-search-options">
+              <label className="history-search-option">
+                <input
+                  type="checkbox"
+                  checked={caseSensitive}
+                  onChange={(event) => onCaseSensitiveChange(event.target.checked)}
+                />
+                <span>大小写敏感</span>
+              </label>
+              <label className="history-search-option">
+                <input
+                  type="checkbox"
+                  checked={wholeWord}
+                  onChange={(event) => onWholeWordChange(event.target.checked)}
+                />
+                <span>完整词语</span>
+              </label>
+            </div>
+          </div>
+          <div className="history-results-head">
+            <span>Results</span>
+            <strong>{resultCount}</strong>
+          </div>
+          {error && <div className="history-search-error" role="alert">{error}</div>}
+          <div className="history-result-list">
+            {results.length === 0 ? (
+              <div className="session-empty">{query.trim() ? "No results" : "No query"}</div>
+            ) : results.map((result) => {
+              const key = historySearchResultKey(result);
+              return (
+                <button
+                  type="button"
+                  className={`history-result ${key === selectedKey ? "selected" : ""}`}
+                  key={key}
+                  onClick={() => onSelect(result)}
+                >
+                  <span className="history-result-title">
+                    <strong>{result.sessionName || shortSessionId(result.sessionId)}</strong>
+                    <small>{formatHistoryResultTimestamp(result)}</small>
+                  </span>
+                  <span className="history-result-role">{historyRoleLabel(result.role)}</span>
+                  <span className="history-result-snippet">
+                    <HighlightedText
+                      text={result.snippet || result.text}
+                      query={query}
+                      caseSensitive={caseSensitive}
+                      wholeWord={wholeWord}
+                    />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
+    </Modal>
+  );
+}
+
+function HighlightedText({
+  text,
+  query,
+  caseSensitive,
+  wholeWord
+}: {
+  text: string;
+  query: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}) {
+  const ranges = historyTextMatchRanges(text, query, { caseSensitive, wholeWord });
+  if (ranges.length === 0) return <>{text}</>;
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    if (start > cursor) {
+      parts.push(text.slice(cursor, start));
+    }
+    parts.push(<mark key={`${start}-${end}`}>{text.slice(start, end)}</mark>);
+    cursor = end;
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return <>{parts}</>;
+}
+
+function historyTextMatchRanges(
+  text: string,
+  query: string,
+  options: { caseSensitive: boolean; wholeWord: boolean }
+): Array<[number, number]> {
+  const needle = query.trim();
+  if (!needle) return [];
+  const haystack = options.caseSensitive ? text : text.toLowerCase();
+  const target = options.caseSensitive ? needle : needle.toLowerCase();
+  const ranges: Array<[number, number]> = [];
+  let cursor = 0;
+  while (cursor <= haystack.length) {
+    const index = haystack.indexOf(target, cursor);
+    if (index < 0) break;
+    const end = index + target.length;
+    if (!options.wholeWord || hasNonEnglishLetterBoundaries(text, index, end)) {
+      ranges.push([index, end]);
+    }
+    cursor = index + Math.max(1, target.length);
+  }
+  return ranges;
+}
+
+function hasNonEnglishLetterBoundaries(text: string, start: number, end: number): boolean {
+  const left = start > 0 ? text[start - 1] : "";
+  const right = end < text.length ? text[end] : "";
+  return !isEnglishLetter(left) && !isEnglishLetter(right);
+}
+
+function isEnglishLetter(value: string): boolean {
+  if (value.length !== 1) return false;
+  const code = value.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
 function QueuePopover({
@@ -2747,6 +3169,9 @@ interface ChatTranscriptProps {
   onForkMessage?: (node: ChatNode) => void;
   allowFork?: boolean;
   emptyLabel?: string;
+  highlightHistoryIndex?: number;
+  highlightContextMessageId?: string;
+  highlightContextMessageIndex?: number;
   onScroll?: () => void;
   onWheel?: (event: WheelEvent<HTMLElement>) => void;
   onTouchStart?: () => void;
@@ -2759,6 +3184,9 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   onForkMessage,
   allowFork = true,
   emptyLabel,
+  highlightHistoryIndex,
+  highlightContextMessageId,
+  highlightContextMessageIndex,
   onScroll,
   onWheel,
   onTouchStart,
@@ -2776,14 +3204,29 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
       {nodes.length === 0 && !processing && emptyLabel && (
         <div className="preview-empty">{emptyLabel}</div>
       )}
-      {nodes.map((node) => (
-        <ChatBubble
-          node={node}
-          key={node.id}
-          allowFork={allowFork}
-          onForkMessage={onForkMessage}
-        />
-      ))}
+      {nodes.map((node) => {
+        const highlighted = isHighlightedChatNode(
+          node,
+          highlightHistoryIndex,
+          highlightContextMessageId,
+          highlightContextMessageIndex,
+        );
+        return (
+          <div
+            className={`chat-node-frame ${highlighted ? "history-highlight" : ""}`.trim()}
+            data-history-index={typeof node.historyIndex === "number" ? node.historyIndex : undefined}
+            data-context-message-id={node.contextMessageId}
+            data-context-message-index={typeof node.contextMessageIndex === "number" ? node.contextMessageIndex : undefined}
+            key={node.id}
+          >
+            <ChatBubble
+              node={node}
+              allowFork={allowFork}
+              onForkMessage={onForkMessage}
+            />
+          </div>
+        );
+      })}
       {processing && <ProcessingLine processing={processing} />}
     </main>
   );
@@ -4847,6 +5290,121 @@ function framePayload(frame: CoreFrame | null): Record<string, unknown> | null {
     return null;
   }
   return frame.payload as Record<string, unknown>;
+}
+
+function normalizeHistorySearchResults(value: unknown): HistorySearchResult[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => {
+      const sessionId = optionalPayloadString(item.session_id) ?? "";
+      const messageIndex = optionalPayloadNumber(item.message_index);
+      return {
+        sessionId,
+        sessionName: optionalPayloadString(item.session_name) ?? sessionId,
+        sessionCreatedAt: optionalPayloadString(item.session_created_at) ?? "",
+        sessionUpdatedAt: optionalPayloadString(item.session_updated_at) ?? "",
+        messageIndex: messageIndex ?? -1,
+        contextMessageId: optionalPayloadString(item.context_message_id) ?? undefined,
+        contextMessageIndex: optionalPayloadNumber(item.context_message_index),
+        runId: optionalPayloadString(item.run_id) ?? undefined,
+        role: optionalPayloadString(item.role) ?? "message",
+        timestamp: typeof item.timestamp === "number" || typeof item.timestamp === "string" ? item.timestamp : undefined,
+        text: typeof item.text === "string" ? item.text : "",
+        snippet: typeof item.snippet === "string" ? item.snippet : "",
+        lastCwd: optionalPayloadString(item.last_cwd)
+      };
+    })
+    .filter((item) => item.sessionId && item.messageIndex >= 0);
+}
+
+function historySearchResultKey(result: HistorySearchResult): string {
+  return [
+    result.sessionId,
+    result.messageIndex,
+    result.contextMessageId ?? "",
+    result.contextMessageIndex ?? "",
+  ].join(":");
+}
+
+function historyResultToLocateTarget(result: HistorySearchResult): HistoryLocateTarget {
+  return {
+    sessionId: result.sessionId,
+    messageIndex: result.messageIndex,
+    contextMessageId: result.contextMessageId,
+    contextMessageIndex: result.contextMessageIndex,
+  };
+}
+
+function scrollToHistoryTarget(container: HTMLElement | null, target: HistoryLocateTarget): void {
+  if (!container) return;
+  const selectors = [
+    typeof target.messageIndex === "number" ? `[data-history-index="${target.messageIndex}"]` : "",
+    target.contextMessageId ? `[data-context-message-id="${cssAttrEscape(target.contextMessageId)}"]` : "",
+    typeof target.contextMessageIndex === "number" ? `[data-context-message-index="${target.contextMessageIndex}"]` : "",
+  ].filter(Boolean);
+  for (const selector of selectors) {
+    const element = container.querySelector<HTMLElement>(selector);
+    if (element) {
+      element.scrollIntoView({ block: "center" });
+      return;
+    }
+  }
+}
+
+function isHighlightedChatNode(
+  node: ChatNode,
+  historyIndex?: number,
+  contextMessageId?: string,
+  contextMessageIndex?: number,
+): boolean {
+  if (typeof historyIndex === "number" && node.historyIndex === historyIndex) {
+    return true;
+  }
+  if (contextMessageId && node.contextMessageId === contextMessageId) {
+    return true;
+  }
+  return typeof contextMessageIndex === "number" && node.contextMessageIndex === contextMessageIndex;
+}
+
+function cssAttrEscape(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+}
+
+function formatHistoryResultTimestamp(result: HistorySearchResult): string {
+  const fromTimestamp = dateFromHistoryTimestamp(result.timestamp);
+  if (fromTimestamp) {
+    return fromTimestamp.toLocaleString([], {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+  return formatSessionTimestamp(result.sessionUpdatedAt || result.sessionCreatedAt);
+}
+
+function dateFromHistoryTimestamp(value: string | number | undefined): Date | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const millis = value < 10_000_000_000 ? value * 1000 : value;
+    const date = new Date(millis);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+}
+
+function historyRoleLabel(role: string): string {
+  if (role === "assistant") return "Hawi";
+  if (role === "user") return "User";
+  if (role === "tool") return "Tool";
+  if (role === "system") return "System";
+  if (role === "error") return "Error";
+  if (role === "event") return "Event";
+  return role || "Message";
 }
 
 function normalizeMarkdownExportPayload(value: unknown): MarkdownExportPayload | null {

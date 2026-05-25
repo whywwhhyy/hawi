@@ -47,6 +47,7 @@ export class SessionEngineManager {
   private defaultConfig: PersistedConfig | null = null;
   private refreshedProviders = new Set<string>();
   private enforcingLimit = false;
+  private readonlyCore: CoreProcess | null = null;
 
   constructor(
     private readonly emitToRenderer: EmitToRenderer,
@@ -90,6 +91,9 @@ export class SessionEngineManager {
   async stopAll(reason: string): Promise<void> {
     const records = [...this.loaded.values()];
     await Promise.all(records.map((record) => this.stopRecord(record, reason)));
+    const readonlyCore = this.readonlyCore;
+    this.readonlyCore = null;
+    await readonlyCore?.stop(reason);
   }
 
   async restartCurrent(config: PersistedConfig): Promise<void> {
@@ -137,6 +141,9 @@ export class SessionEngineManager {
       case "session_rename":
         return this.renameSession(payload);
       default:
+        if (isReadOnlyCommand(type, payload)) {
+          return this.readonlyCommand(type, payload);
+        }
         return this.routeCommand(type, payload, targetSessionId);
     }
   }
@@ -597,6 +604,52 @@ export class SessionEngineManager {
     });
   }
 
+  private async readonlyCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame> {
+    const core = this.ensureReadonlyCore();
+    const nextPayload = { ...payload };
+    delete nextPayload.read_only;
+    return core.sendCommand(type, nextPayload, commandTimeout(type));
+  }
+
+  private ensureReadonlyCore(): CoreProcess {
+    if (this.readonlyCore?.isRunning()) {
+      return this.readonlyCore;
+    }
+    const core = new CoreProcess(
+      (channel, payload) => this.handleReadonlyEmit(channel, payload),
+      this.repoRoot,
+      this.currentWorkspaceRoot(),
+      this.readonlyLogPath(),
+      this.engineLauncher,
+    );
+    core.startReadonly();
+    this.readonlyCore = core;
+    return core;
+  }
+
+  private handleReadonlyEmit(channel: string, payload: unknown): void {
+    if (channel === "core:stderr") {
+      this.emitToRenderer("core:stderr", `[readonly] ${String(payload)}`);
+      return;
+    }
+    if (channel === "core:spawn" && isRecord(payload)) {
+      this.emitToRenderer("core:spawn", { ...payload, mode: "readonly" });
+      return;
+    }
+    if (channel === "core:exit" && isRecord(payload)) {
+      this.readonlyCore = null;
+      this.emitToRenderer("core:exit", { ...payload, mode: "readonly" });
+      return;
+    }
+    if (channel === "core:event" && isCoreFrame(payload)) {
+      if (payload.type === "error") {
+        this.emitToRenderer("core:event", payload);
+      }
+      return;
+    }
+    this.emitToRenderer(channel, payload);
+  }
+
   private currentRecord(): EngineRecord | null {
     return this.currentSessionId ? (this.loaded.get(this.currentSessionId) ?? null) : null;
   }
@@ -682,6 +735,15 @@ export class SessionEngineManager {
       workspaceRoot,
       ".hawi",
       `${parsed.name}-${safeFilename(sessionId)}${parsed.ext || ".log"}`,
+    );
+  }
+
+  private readonlyLogPath(): string {
+    const parsed = path.parse(this.backendLogPath);
+    return path.join(
+      this.currentWorkspaceRoot(),
+      ".hawi",
+      `${parsed.name}-readonly${parsed.ext || ".log"}`,
     );
   }
 
@@ -850,10 +912,14 @@ function commandTimeout(type: CoreCommandType): number {
   if (type === "compact_context") {
     return COMPACT_COMMAND_TIMEOUT_MS;
   }
-  if (type === "session_export_markdown" || type === "session_history") {
+  if (type === "session_export_markdown" || type === "session_history" || type === "session_search") {
     return SESSION_COMMAND_TIMEOUT_MS;
   }
   return DEFAULT_COMMAND_TIMEOUT_MS;
+}
+
+function isReadOnlyCommand(type: CoreCommandType, payload: Record<string, unknown>): boolean {
+  return type === "session_search" || (type === "session_history" && payload.read_only === true);
 }
 
 function isMissingSessionError(error: unknown): boolean {

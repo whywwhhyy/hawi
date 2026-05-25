@@ -61,6 +61,7 @@ COMMAND_TYPES = {
     "session_rename",
     "session_save_now",
     "session_history",
+    "session_search",
     "session_export_markdown",
     "queue_task_add",
     "queue_task_update",

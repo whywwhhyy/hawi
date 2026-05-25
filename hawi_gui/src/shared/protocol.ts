@@ -59,6 +59,7 @@ export type CoreCommandType =
   | "session_rename"
   | "session_save_now"
   | "session_history"
+  | "session_search"
   | "session_export_markdown";
 
 export interface SessionMetaPayload {

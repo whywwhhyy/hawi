@@ -142,6 +142,56 @@ export class CoreProcess {
     this.start(nextConfig, metadata, refreshedProviders);
   }
 
+  startReadonly(): void {
+    this.stop("readonly-start-replace-existing");
+    mkdirSync(path.dirname(this.backendLogPath), { recursive: true });
+    writeFileSync(this.backendLogPath, "", "utf-8");
+    const args = buildEngineRunArgs(
+      this.repoRoot,
+      [
+        "--readonly",
+        "--transport",
+        "stdio",
+        "--log-file",
+        this.backendLogPath,
+      ],
+      this.engineLauncher,
+    );
+    const child = spawn(this.engineLauncher.command, args, {
+      cwd: this.workspaceRoot,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: buildEngineEnv(this.repoRoot, process.env, this.engineLauncher),
+    });
+    this.child = child;
+    this.decoder = new TLVDecoder();
+    child.stdout.on("data", (chunk: Buffer) => this.handleStdout(chunk));
+    child.stderr.setEncoding("utf-8");
+    child.stderr.on("data", (chunk: string) => {
+      this.emitToRenderer("core:stderr", chunk);
+    });
+    child.on("exit", (code, signal) => {
+      const wasCurrent = this.child === child;
+      if (wasCurrent) {
+        this.child = null;
+        const error = new Error(`hawi-engine readonly exited (${code ?? "null"} ${signal ?? ""})`);
+        for (const pending of this.pending.values()) {
+          pending.reject(error);
+        }
+        this.pending.clear();
+      }
+      this.emitToRenderer("core:exit", { code, signal });
+      this.resolveStopWaiters();
+    });
+    this.emitToRenderer("core:spawn", {
+      command: this.engineLauncher.command,
+      args: this.engineLauncher.source === "uv" ? args.slice(1) : args,
+      cwd: this.workspaceRoot,
+      engineSource: this.engineLauncher.source,
+      logFile: this.backendLogPath,
+      mode: "readonly",
+    });
+  }
+
   stop(reason: string): Promise<void> {
     const child = this.child;
     if (!child) {

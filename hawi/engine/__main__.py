@@ -84,6 +84,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print GUI metadata JSON and exit",
     )
+    parser.add_argument(
+        "--readonly",
+        action="store_true",
+        help="Run a read-only session browser/search engine without loading a model.",
+    )
+    parser.add_argument(
+        "--session-root",
+        default=None,
+        help="Session root for --readonly. Defaults to ~/.hawi/sessions.",
+    )
     discover_gateways()
     parser.add_argument(
         "--gateway",
@@ -277,12 +287,30 @@ async def async_main(args: argparse.Namespace) -> None:
             print(f"Hawi config directory already exists: {result.config_dir}")
         return
 
+    if args.inspect:
+        load_model_configs(args.models_config, include_user=not args.no_user_models)
+        refresh_model_providers(args.refresh_provider)
+        print(json_dumps(build_inspect_payload()))
+        return
+
+    if args.readonly:
+        from .readonly import ReadOnlyRuntime
+
+        runtime = ReadOnlyRuntime(
+            session_root=args.session_root,
+            token=token_from_arg_or_env(args.token),
+        )
+        await runtime.start()
+        gateway_name = args.transport if args.transport else args.gateway
+        gateway = GATEWAY_REGISTRY.get(gateway_name)
+        if gateway is None:
+            raise RuntimeError(f"Unsupported gateway: {gateway_name}")
+        await gateway.serve(runtime, args)
+        return
+
     loaded = load_model_configs(args.models_config, include_user=not args.no_user_models)
     refresh_model_providers(args.refresh_provider)
     available = model_registry.list_models()
-    if args.inspect:
-        print(json_dumps(build_inspect_payload()))
-        return
 
     if not args.model:
         raise RuntimeError("--model is required unless --inspect is used")

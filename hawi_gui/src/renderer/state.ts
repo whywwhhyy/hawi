@@ -44,6 +44,7 @@ export interface ChatNode {
   complete?: boolean;
   contextMessageId?: string;
   contextMessageIndex?: number;
+  historyIndex?: number;
   canFork?: boolean;
   streamStartedAt?: number;
   streamFinishedAt?: number;
@@ -933,7 +934,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
     const baseId = `${record.runId}-${index}`;
     if (record.role === "event") {
       const replayFrame = sessionHistoryEventFrame(record, index);
-      if (replayFrame && applyHistoryChatEvent(nodes, replayFrame)) {
+      if (replayFrame && applyHistoryChatEvent(nodes, replayFrame, index)) {
         return;
       }
       if (replayFrame && isSessionHistoryReplayOnlyEvent(replayFrame.type)) {
@@ -944,6 +945,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         const node: ChatNode = {
           id: nodeId("compact-history", baseId),
           kind: "compact",
+          historyIndex: index,
           content: "Compressing context...",
           complete: false
         };
@@ -965,6 +967,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         nodes.push({
           id: nodeId("compact-history", baseId),
           kind: "compact",
+          historyIndex: index,
           content,
           complete: true
         });
@@ -973,6 +976,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
       nodes.push({
         id: nodeId("event-history", baseId),
         kind: "system",
+        historyIndex: index,
         content: historyContentText(record.content)
       });
       return;
@@ -981,6 +985,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
       nodes.push({
         id: nodeId(`${record.role}-history`, baseId),
         kind: record.role,
+        historyIndex: index,
         content: historyContentText(record.content)
       });
       return;
@@ -990,6 +995,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
       nodes.push({
         id: userMessageNodeId(optionalString(record.metadata?.message_id) ?? `history-${baseId}`),
         kind: "user",
+        historyIndex: index,
         queue,
         displayMessageType: normalizeDisplayMessageType(
           record.metadata?.display_message_type,
@@ -1009,6 +1015,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         nodes.push({
           id: nodeId("thinking-history", baseId),
           kind: "thinking",
+          historyIndex: index,
           content: reasoning,
           contextMessageId: record.contextMessageId,
           contextMessageIndex: record.contextMessageIndex,
@@ -1019,6 +1026,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         nodes.push({
           id: nodeId("agent-history", baseId),
           kind: "agent",
+          historyIndex: index,
           content: answer,
           contextMessageId: record.contextMessageId,
           contextMessageIndex: record.contextMessageIndex,
@@ -1044,6 +1052,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         const node: ChatNode = {
           id: nodeId("tool-history", `${baseId}-${toolIndex}`),
           kind: "tool",
+          historyIndex: index,
           content: "",
           tool: {
             runId: record.runId,
@@ -1086,6 +1095,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
     nodes.push({
       id: nodeId("tool-history", baseId),
       kind: "tool",
+      historyIndex: index,
       content: "",
       tool: {
         runId: record.runId,
@@ -1138,10 +1148,10 @@ function sessionHistoryEventFrame(record: SessionHistoryRecord, index: number): 
   };
 }
 
-function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
+function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame, historyIndex: number): boolean {
   const payload = (frame.payload ?? {}) as Record<string, unknown>;
   if (frame.type === "agent.system_prompt") {
-    mergeHistorySystemPromptInjection(nodes, frame, frameworkInjectionFromFrame(frame, payload, "system_prompt"));
+    mergeHistorySystemPromptInjection(nodes, frame, frameworkInjectionFromFrame(frame, payload, "system_prompt"), historyIndex);
     return true;
   }
   if (frame.type === "agent.context_injected") {
@@ -1164,17 +1174,17 @@ function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame): boolean {
         }
       }
     }
-    nodes.push(historyFrameworkNode(frame, injection, nodes.length));
+    nodes.push(historyFrameworkNode(frame, injection, nodes.length, historyIndex));
     return true;
   }
   if (frame.type === "agent.tool_runtime_context_injected") {
-    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected"), nodes.length));
+    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected"), nodes.length, historyIndex));
     return true;
   }
   if (frame.type === "plugin.message") {
     const injection = pluginMessageFrameworkInjectionFromFrame(frame, payload);
     if (injection) {
-      nodes.push(historyFrameworkNode(frame, injection, nodes.length));
+      nodes.push(historyFrameworkNode(frame, injection, nodes.length, historyIndex));
     }
     return true;
   }
@@ -1196,10 +1206,11 @@ function isSessionHistoryReplayOnlyEvent(eventType: string): boolean {
     || eventType === "subagent.closed";
 }
 
-function historyFrameworkNode(frame: CoreFrame, injection: FrameworkInjectionState, index: number): ChatNode {
+function historyFrameworkNode(frame: CoreFrame, injection: FrameworkInjectionState, index: number, historyIndex?: number): ChatNode {
   return {
     id: nodeId("framework-history", `${frame.id ?? injection.id}-${index}`),
     kind: "framework",
+    historyIndex,
     content: injection.content,
     framework: injection
   };
@@ -2093,12 +2104,13 @@ function mergeHistorySystemPromptInjection(
   nodes: ChatNode[],
   frame: CoreFrame,
   injection: FrameworkInjectionState,
+  historyIndex?: number,
 ): void {
   const targetIndex = findSystemPromptNodeIndex(nodes, injection.runId);
   if (isSystemPromptInjectedSegment(injection)) {
     if (targetIndex < 0) {
       nodes.push({
-        ...historyFrameworkNode(frame, systemPromptParentFromChild(injection), nodes.length),
+        ...historyFrameworkNode(frame, systemPromptParentFromChild(injection), nodes.length, historyIndex),
         injections: [injection]
       });
       return;
@@ -2111,7 +2123,7 @@ function mergeHistorySystemPromptInjection(
     return;
   }
   if (targetIndex < 0) {
-    nodes.push(historyFrameworkNode(frame, injection, nodes.length));
+    nodes.push(historyFrameworkNode(frame, injection, nodes.length, historyIndex));
     return;
   }
   const target = nodes[targetIndex];

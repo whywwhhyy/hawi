@@ -40,6 +40,22 @@ def test_parse_session_history_command() -> None:
     assert command.id == "history-1"
 
 
+def test_parse_session_search_command() -> None:
+    command = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "session_search",
+                "id": "search-1",
+                "payload": {"query": "needle"},
+            }
+        )
+    )
+
+    assert command.type == "session_search"
+    assert command.payload["query"] == "needle"
+
+
 def test_parse_session_fork_command() -> None:
     command = parse_frame(
         json.dumps(

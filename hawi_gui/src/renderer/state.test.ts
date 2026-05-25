@@ -258,7 +258,8 @@ describe("core event reducer", () => {
     expect(state.nodes[0]).toMatchObject({
       canFork: true,
       contextMessageId: "ctxmsg-history-user",
-      contextMessageIndex: 0
+      contextMessageIndex: 0,
+      historyIndex: 0
     });
     expect(state.nodes[1]).toMatchObject({ content: "thinking", complete: true });
     expect(state.nodes[2]).toMatchObject({
@@ -266,7 +267,8 @@ describe("core event reducer", () => {
       complete: true,
       canFork: true,
       contextMessageId: "ctxmsg-history-assistant",
-      contextMessageIndex: 1
+      contextMessageIndex: 1,
+      historyIndex: 1
     });
     expect(state.nodes[3].content).toContain("模型重试 1/10");
     expect(state.nodes[4].content).toBe("Anthropic authentication failed");

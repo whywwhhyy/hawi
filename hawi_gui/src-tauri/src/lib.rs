@@ -274,6 +274,78 @@ impl CoreProcess {
         }))
     }
 
+    fn start_readonly(&mut self) -> Result<Value, String> {
+        self.stop("readonly-start-replace-existing");
+        if let Some(parent) = self.backend_log_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create log directory: {error}"))?;
+        }
+        fs::write(&self.backend_log_path, "")
+            .map_err(|error| format!("failed to clear backend log: {error}"))?;
+
+        let args = build_engine_run_args(
+            &self.repo_root,
+            vec![
+                "--readonly".to_string(),
+                "--transport".to_string(),
+                "stdio".to_string(),
+                "--log-file".to_string(),
+                self.backend_log_path.to_string_lossy().into_owned(),
+            ],
+            &self.engine_launcher,
+        );
+        let mut command = Command::new(&self.engine_launcher.command);
+        command
+            .args(&args)
+            .current_dir(&self.workspace_root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .envs(build_engine_env(&self.repo_root, &self.engine_launcher));
+        let mut child = command.spawn().map_err(|error| {
+            format!("failed to spawn {}: {error}", self.engine_launcher.command)
+        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("hawi-engine stdout was not piped")?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or("hawi-engine stderr was not piped")?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or("hawi-engine stdin was not piped")?;
+        let child = Arc::new(Mutex::new(child));
+        let stdin = Arc::new(Mutex::new(stdin));
+
+        self.child = Some(child.clone());
+        self.stdin = Some(stdin);
+        self.pending.lock().expect("pending lock").clear();
+
+        spawn_stdout_reader(stdout, self.pending.clone(), self.emit.clone());
+        spawn_stderr_reader(stderr, self.emit.clone());
+        spawn_exit_watcher(child, self.pending.clone(), self.emit.clone());
+
+        let public_args = if self.engine_launcher.source == EngineLauncherSource::Uv {
+            args.iter().skip(1).cloned().collect::<Vec<_>>()
+        } else {
+            args.clone()
+        };
+        Ok(json!({
+            "command": self.engine_launcher.command,
+            "args": public_args,
+            "cwd": self.workspace_root,
+            "engineSource": match self.engine_launcher.source {
+                EngineLauncherSource::Bundled => "bundled",
+                EngineLauncherSource::Uv => "uv",
+            },
+            "logFile": self.backend_log_path,
+            "mode": "readonly",
+        }))
+    }
+
     fn stop(&mut self, reason: &str) {
         let shutdown_id = self.next_id();
         if let Some(stdin) = self.stdin.as_ref().cloned() {
@@ -1080,6 +1152,7 @@ struct SessionEngineManager {
     default_config: Option<Value>,
     refreshed_providers: HashSet<String>,
     enforcing_limit: bool,
+    readonly_core: Option<CoreProcess>,
     repo_root: PathBuf,
     workspace_root: PathBuf,
     backend_log_path: PathBuf,
@@ -1112,6 +1185,7 @@ impl SessionEngineManager {
             default_config: None,
             refreshed_providers: HashSet::new(),
             enforcing_limit: false,
+            readonly_core: None,
             repo_root,
             workspace_root,
             backend_log_path,
@@ -1151,6 +1225,9 @@ impl SessionEngineManager {
         let session_ids = self.loaded.keys().cloned().collect::<Vec<_>>();
         for session_id in session_ids {
             self.stop_record_by_id(&session_id, reason);
+        }
+        if let Some(mut core) = self.readonly_core.take() {
+            core.stop(reason);
         }
     }
 
@@ -1221,6 +1298,9 @@ impl SessionEngineManager {
             "session_switch" | "session_load" => self.switch_session(payload),
             "session_delete" => self.delete_session(payload),
             "session_rename" => self.rename_session(payload),
+            _ if is_readonly_command(command_type, &payload) => {
+                self.readonly_command(command_type, payload)
+            }
             _ => self.route_command(command_type, payload, target_session_id),
         }
     }
@@ -1976,6 +2056,49 @@ impl SessionEngineManager {
         Ok(session_id)
     }
 
+    fn readonly_command(&mut self, command_type: &str, payload: Value) -> Result<Value, String> {
+        let mut next_payload = object_or_empty(payload);
+        next_payload.remove("read_only");
+        let core = self.ensure_readonly_core()?;
+        core.send_command(
+            command_type,
+            Value::Object(next_payload),
+            command_timeout(command_type),
+        )
+        .map_err(|error| error.message)
+    }
+
+    fn ensure_readonly_core(&mut self) -> Result<&mut CoreProcess, String> {
+        if self
+            .readonly_core
+            .as_ref()
+            .is_some_and(|core| core.is_running())
+        {
+            return self
+                .readonly_core
+                .as_mut()
+                .ok_or_else(|| "readonly engine disappeared".to_string());
+        }
+
+        let app = self.app.clone();
+        let emit: CoreEmit = Arc::new(move |channel, payload| {
+            emit_readonly_engine_event(&app, channel, payload);
+        });
+        let mut core = CoreProcess::new(
+            emit,
+            self.repo_root.clone(),
+            self.current_workspace_root(),
+            self.readonly_log_path(),
+            self.engine_launcher.clone(),
+        );
+        let spawn_payload = core.start_readonly()?;
+        emit_readonly_engine_event(&self.app, "core:spawn".to_string(), spawn_payload);
+        self.readonly_core = Some(core);
+        self.readonly_core
+            .as_mut()
+            .ok_or_else(|| "readonly engine disappeared".to_string())
+    }
+
     fn enforce_loaded_limit(&mut self) {
         if self.enforcing_limit {
             return;
@@ -2079,6 +2202,22 @@ impl SessionEngineManager {
         workspace_root
             .join(".hawi")
             .join(format!("{}-{}.{}", stem, safe_filename(session_id), ext))
+    }
+
+    fn readonly_log_path(&self) -> PathBuf {
+        let stem = self
+            .backend_log_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("hawi-engine");
+        let ext = self
+            .backend_log_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("log");
+        self.current_workspace_root()
+            .join(".hawi")
+            .join(format!("{stem}-readonly.{ext}"))
     }
 
     fn require_metadata(&self) -> Result<&Value, String> {
@@ -2654,6 +2793,35 @@ fn is_running_agent_state(value: &str) -> bool {
     value == "RUNNING" || value == "INTERRUPTING"
 }
 
+fn emit_readonly_engine_event(app: &AppHandle, channel: String, payload: Value) {
+    match channel.as_str() {
+        "core:stderr" => {
+            let _ = app.emit(
+                "core:stderr",
+                format!("[readonly] {}", payload.as_str().unwrap_or("")),
+            );
+        }
+        "core:spawn" => {
+            let mut next = object_or_empty(payload);
+            next.insert("mode".to_string(), Value::String("readonly".to_string()));
+            let _ = app.emit("core:spawn", next);
+        }
+        "core:exit" => {
+            let mut next = object_or_empty(payload);
+            next.insert("mode".to_string(), Value::String("readonly".to_string()));
+            let _ = app.emit("core:exit", next);
+        }
+        "core:event" => {
+            if frame_type(&payload) == Some("error") {
+                let _ = app.emit("core:event", payload);
+            }
+        }
+        _ => {
+            let _ = app.emit(&channel, payload);
+        }
+    }
+}
+
 fn normalize_load_state(value: Option<&Value>) -> Option<&'static str> {
     match value.and_then(Value::as_str) {
         Some("loaded") => Some("loaded"),
@@ -2666,9 +2834,20 @@ fn normalize_load_state(value: Option<&Value>) -> Option<&'static str> {
 fn command_timeout(command_type: &str) -> u64 {
     match command_type {
         "compact_context" => COMPACT_COMMAND_TIMEOUT_MS,
-        "session_export_markdown" | "session_history" => SESSION_COMMAND_TIMEOUT_MS,
+        "session_export_markdown" | "session_history" | "session_search" => {
+            SESSION_COMMAND_TIMEOUT_MS
+        }
         _ => DEFAULT_COMMAND_TIMEOUT_MS,
     }
+}
+
+fn is_readonly_command(command_type: &str, payload: &Value) -> bool {
+    command_type == "session_search"
+        || (command_type == "session_history"
+            && payload
+                .get("read_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false))
 }
 
 fn is_missing_session_error(error: &CoreCommandError) -> bool {
