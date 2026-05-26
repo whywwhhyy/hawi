@@ -53,6 +53,7 @@ filterwarnings = [
 
 [project.scripts]
 hawi-engine = "hawi.engine.__main__:main"
+tlv2json = "hawi.engine.tlv2json:main"
 tlv2ndjson = "hawi.engine.tlv2ndjson:main"
 
 [project.entry-points."hawi.engine.gateways"]

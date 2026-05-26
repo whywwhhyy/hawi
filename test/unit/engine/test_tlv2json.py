@@ -1,4 +1,4 @@
-"""Tests for the tlv2ndjson debug CLI."""
+"""Tests for the tlv2json debug CLI."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from hawi.engine.tlv import TYPE_JSON_FRAME, encode_frame
-from hawi.engine.tlv2ndjson import translate_stream
+from hawi.engine.tlv2json import translate_stream
 
 
 def _make_stream(frames: list[dict]) -> bytes:
@@ -55,7 +55,7 @@ async def test_translate_stream_reports_oversized_to_stderr(capsys):
 
     captured = capsys.readouterr()
     assert sink.getvalue() == ""
-    assert "tlv2ndjson:" in captured.err
+    assert "tlv2json:" in captured.err
     assert "exceeds max_size" in captured.err
 
 
@@ -69,12 +69,24 @@ async def test_translate_stream_reports_truncated_frame_to_stderr(capsys):
 
     captured = capsys.readouterr()
     assert sink.getvalue() == ""
-    assert "tlv2ndjson:" in captured.err
+    assert "tlv2json:" in captured.err
     assert "mid-body" in captured.err
 
 
 def test_cli_entry_point_exists():
-    """`tlv2ndjson` should be installed as a console script."""
+    """`tlv2json` should be installed as a console script."""
+    result = subprocess.run(
+        [sys.executable, "-m", "hawi.engine.tlv2json", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0
+    assert "tlv2json" in result.stdout.lower()
+
+
+def test_legacy_cli_module_still_exists():
+    """`tlv2ndjson` remains importable as a compatibility alias."""
     result = subprocess.run(
         [sys.executable, "-m", "hawi.engine.tlv2ndjson", "--help"],
         capture_output=True,
