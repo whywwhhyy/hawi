@@ -148,6 +148,14 @@ function registerIpc(): void {
     return selectWorkingDirectory();
   });
 
+  ipcMain.handle("gui:set-minimum-content-size", (event, size: Partial<LayoutSize>) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    if (window) {
+      applyMinimumContentSize(window, size);
+    }
+    return { ok: true };
+  });
+
   ipcMain.handle("gui:refresh-provider-models", async (_event, provider: string): Promise<GuiMetadata> => {
     return refreshProviderModels(provider);
   });
@@ -162,6 +170,13 @@ function applyMinimumContentSize(window: BrowserWindow, contentSize?: Partial<La
     height: bounds.height - contentBounds.height,
   });
   window.setMinimumSize(minWindowSize.width, minWindowSize.height);
+  const currentSize = window.getSize();
+  if (currentSize[0] < minWindowSize.width || currentSize[1] < minWindowSize.height) {
+    window.setSize(
+      Math.max(currentSize[0], minWindowSize.width),
+      Math.max(currentSize[1], minWindowSize.height),
+    );
+  }
 }
 
 async function refreshProviderModels(provider: string): Promise<GuiMetadata> {

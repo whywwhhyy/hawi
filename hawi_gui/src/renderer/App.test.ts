@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, modelProviderConfigPreviewLines, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -214,9 +214,26 @@ describe("session runtime display helpers", () => {
   });
 });
 
+describe("project status helpers", () => {
+  it("uses the directory basename as the project name", () => {
+    expect(projectNameFromPath("/Users/hayden/Projects/Python/Hawi")).toBe("Hawi");
+    expect(projectNameFromPath("C:\\Users\\hayden\\Project")).toBe("Project");
+    expect(projectNameFromPath(null)).toBe("-");
+  });
+
+  it("shortens long paths from the middle", () => {
+    const path = "/Users/hayden/Projects/Python/Hawi/hawi_gui/src/renderer/App.tsx";
+    const shortened = middleEllipsizePath(path, 40);
+    expect(shortened).toContain("…");
+    expect(shortened.startsWith("/Users/hayden")).toBe(true);
+    expect(shortened.endsWith("/renderer/App.tsx")).toBe(true);
+  });
+});
+
 describe("resolveEscapeDismissTarget", () => {
   const closed = {
     contextPopoverOpen: false,
+    projectPopoverOpen: false,
     pluginDialogOpen: false,
     modelDialogOpen: false,
     subagentObserverOpen: false,
@@ -249,6 +266,11 @@ describe("resolveEscapeDismissTarget", () => {
       ...closed,
       pluginDialogOpen: true
     })).toBe("pluginDialog");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      projectPopoverOpen: true,
+      contextPopoverOpen: true
+    })).toBe("projectPopover");
     expect(resolveEscapeDismissTarget({
       ...closed,
       contextPopoverOpen: true,

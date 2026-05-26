@@ -10,9 +10,10 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, FolderOpen, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
+import { MIN_CONTENT_SIZE, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
@@ -150,6 +151,7 @@ interface SessionRuntimeStats {
 
 type EscapeDismissTarget =
   | "subagentObserver"
+  | "projectPopover"
   | "contextPopover"
   | "pluginDialog"
   | "modelDialog"
@@ -160,6 +162,7 @@ type EscapeDismissTarget =
 
 interface EscapeDismissState {
   contextPopoverOpen: boolean;
+  projectPopoverOpen: boolean;
   pluginDialogOpen: boolean;
   modelDialogOpen: boolean;
   subagentObserverOpen: boolean;
@@ -174,6 +177,7 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
+  if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) {
     return state.editingQueueTaskId ? "queueTaskEdit" : "queuePopover";
@@ -187,6 +191,7 @@ function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTar
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
+  if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) return "queuePopover";
   if (state.sessionDialogOpen) return "sessionDialog";
@@ -197,6 +202,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
   switch (target) {
     case "contextPopover":
       return ".context-popover";
+    case "projectPopover":
+      return ".project-popover";
     case "subagentObserver":
       return ".subagent-modal";
     case "pluginDialog":
@@ -271,6 +278,7 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
   const confirm = (() => {
     switch (target) {
       case "contextPopover":
+      case "projectPopover":
         return scope.querySelector<HTMLElement>(".primary-button:not(:disabled)");
       case "pluginDialog":
         return scope.querySelector<HTMLElement>(".modal-actions .primary-button:not(:disabled)");
@@ -378,6 +386,82 @@ function normalQueueCount(
   return Math.max(queueLengths.normal, queueMessages?.normal.length ?? 0);
 }
 
+function measureMinimumContentSize(
+  appShell: HTMLElement,
+  statusStrip: HTMLElement,
+  compactUsageMeasure: HTMLElement
+): LayoutSize {
+  return normalizeMinimumContentSize({
+    width: Math.max(
+      measureInlineGroupWidth(statusStrip),
+      measureInlineGroupWidth(compactUsageMeasure)
+    ) + horizontalChromeWidth(appShell),
+    height: MIN_CONTENT_SIZE.height
+  });
+}
+
+function shouldUseStandaloneUsageRow(
+  statusRow: HTMLElement,
+  statusStrip: HTMLElement,
+  inlineUsageMeasure: HTMLElement
+): boolean {
+  const requiredInlineWidth = measureInlineGroupWidth(statusStrip)
+    + measureInlineGroupWidth(inlineUsageMeasure)
+    + flexColumnGap(statusRow);
+  return requiredInlineWidth > contentBoxWidth(statusRow) + 0.5;
+}
+
+function measureInlineGroupWidth(element: HTMLElement): number {
+  const children = visibleElementChildren(element);
+  if (children.length === 0) {
+    return elementWidth(element);
+  }
+  const gap = flexColumnGap(element);
+  const childrenWidth = children.reduce((sum, child) => sum + elementWidth(child), 0);
+  return Math.ceil(Math.max(
+    elementWidth(element),
+    childrenWidth + gap * Math.max(0, children.length - 1) + horizontalChromeWidth(element)
+  ));
+}
+
+function visibleElementChildren(element: HTMLElement): HTMLElement[] {
+  return Array.from(element.children).filter((child): child is HTMLElement => {
+    if (!(child instanceof HTMLElement)) return false;
+    const style = getComputedStyle(child);
+    return style.display !== "none" && style.visibility !== "collapse";
+  });
+}
+
+function elementWidth(element: HTMLElement): number {
+  const width = element.getBoundingClientRect().width;
+  return Number.isFinite(width) ? width : 0;
+}
+
+function contentBoxWidth(element: HTMLElement): number {
+  const width = element.clientWidth || elementWidth(element);
+  const style = getComputedStyle(element);
+  return Math.max(0, width - cssPixelValue(style.paddingLeft) - cssPixelValue(style.paddingRight));
+}
+
+function flexColumnGap(element: HTMLElement): number {
+  const style = getComputedStyle(element);
+  return cssPixelValue(style.columnGap) || cssPixelValue(style.gap);
+}
+
+function horizontalChromeWidth(element: HTMLElement): number {
+  const style = getComputedStyle(element);
+  return cssPixelValue(style.paddingLeft)
+    + cssPixelValue(style.paddingRight)
+    + cssPixelValue(style.borderLeftWidth)
+    + cssPixelValue(style.borderRightWidth);
+}
+
+function cssPixelValue(value: string): number {
+  if (!value || value === "normal") return 0;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export default function App() {
   const [metadata, setMetadata] = useState<GuiMetadata | null>(null);
   const [config, setConfig] = useState<PersistedConfig | null>(null);
@@ -385,6 +469,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [pluginDialogOpen, setPluginDialogOpen] = useState(false);
+  const [projectPopoverOpen, setProjectPopoverOpen] = useState(false);
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [queuePopoverOpen, setQueuePopoverOpen] = useState(false);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
@@ -406,6 +491,7 @@ export default function App() {
   const [contextCompactBusy, setContextCompactBusy] = useState(false);
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  const [usageStandaloneRow, setUsageStandaloneRow] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
@@ -420,6 +506,13 @@ export default function App() {
   const [historyPreviewSession, setHistoryPreviewSession] = useState<SessionMetaPayload | null>(null);
   const [historyPreviewLocateTarget, setHistoryPreviewLocateTarget] = useState<HistoryLocateTarget | null>(null);
   const [mainLocateTarget, setMainLocateTarget] = useState<HistoryLocateTarget | null>(null);
+  const appShellRef = useRef<HTMLDivElement | null>(null);
+  const statusRowRef = useRef<HTMLDivElement | null>(null);
+  const statusStripRef = useRef<HTMLDivElement | null>(null);
+  const usageInlineMeasureRef = useRef<HTMLDivElement | null>(null);
+  const usageCompactMeasureRef = useRef<HTMLDivElement | null>(null);
+  const minimumContentSizeRef = useRef<LayoutSize | null>(null);
+  const usageStandaloneRowRef = useRef(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const historyPreviewRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -486,6 +579,34 @@ export default function App() {
     () => transcriptTailKey(visibleChatNodes, state.processing),
     [state.processing, visibleChatNodes]
   );
+  const syncMinimumContentSize = useCallback(() => {
+    const appShell = appShellRef.current;
+    const statusRow = statusRowRef.current;
+    const statusStrip = statusStripRef.current;
+    const inlineUsageMeasure = usageInlineMeasureRef.current;
+    const compactUsageMeasure = usageCompactMeasureRef.current;
+    if (
+      !appShell
+      || !statusRow
+      || !statusStrip
+      || !inlineUsageMeasure
+      || !compactUsageMeasure
+      || typeof window === "undefined"
+      || typeof window.hawi?.setMinimumContentSize !== "function"
+    ) return;
+    const nextUsageStandalone = shouldUseStandaloneUsageRow(statusRow, statusStrip, inlineUsageMeasure);
+    if (usageStandaloneRowRef.current !== nextUsageStandalone) {
+      usageStandaloneRowRef.current = nextUsageStandalone;
+      setUsageStandaloneRow(nextUsageStandalone);
+    }
+    const nextSize = measureMinimumContentSize(appShell, statusStrip, compactUsageMeasure);
+    const previousSize = minimumContentSizeRef.current;
+    if (previousSize?.width === nextSize.width && previousSize.height === nextSize.height) return;
+    minimumContentSizeRef.current = nextSize;
+    void window.hawi.setMinimumContentSize(nextSize).catch((error) => {
+      console.warn("failed to update minimum content size", error);
+    });
+  }, []);
 
   useEffect(() => {
     window.hawi.getMetadata().then((meta) => {
@@ -519,6 +640,64 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useBrowserLayoutEffect(() => {
+    syncMinimumContentSize();
+  });
+
+  useBrowserLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    const appShell = appShellRef.current;
+    const statusRow = statusRowRef.current;
+    if (!appShell || !statusRow) return;
+    let animationFrame: number | null = null;
+    const scheduleSync = () => {
+      if (typeof window.requestAnimationFrame !== "function") {
+        syncMinimumContentSize();
+        return;
+      }
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        syncMinimumContentSize();
+      });
+    };
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(scheduleSync);
+    if (observer) {
+      observer.observe(appShell);
+      observer.observe(statusRow);
+      if (statusStripRef.current) {
+        observer.observe(statusStripRef.current);
+      }
+      if (usageInlineMeasureRef.current) {
+        observer.observe(usageInlineMeasureRef.current);
+      }
+      if (usageCompactMeasureRef.current) {
+        observer.observe(usageCompactMeasureRef.current);
+      }
+      for (const child of Array.from(statusRow.children)) {
+        if (child instanceof HTMLElement) {
+          observer.observe(child);
+          for (const grandchild of Array.from(child.children)) {
+            if (grandchild instanceof HTMLElement) {
+              observer.observe(grandchild);
+            }
+          }
+        }
+      }
+    }
+    window.addEventListener("resize", scheduleSync);
+    scheduleSync();
+    return () => {
+      window.removeEventListener("resize", scheduleSync);
+      observer?.disconnect();
+      if (animationFrame !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(animationFrame);
+      }
+    };
+  }, [syncMinimumContentSize]);
+
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
     resetInputHistoryNavigation();
@@ -544,6 +723,7 @@ export default function App() {
       if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
       const keyboardState = {
         contextPopoverOpen,
+        projectPopoverOpen,
         pluginDialogOpen,
         modelDialogOpen,
         subagentObserverOpen: subagentObserverId !== null,
@@ -570,6 +750,9 @@ export default function App() {
             break;
           case "contextPopover":
             setContextPopoverOpen(false);
+            break;
+          case "projectPopover":
+            setProjectPopoverOpen(false);
             break;
           case "pluginDialog":
             setPluginDialogOpen(false);
@@ -622,6 +805,7 @@ export default function App() {
     };
   }, [
     contextPopoverOpen,
+    projectPopoverOpen,
     pluginDialogOpen,
     modelDialogOpen,
     subagentObserverId,
@@ -1706,6 +1890,8 @@ export default function App() {
       const frame = await sendCommand("change_cwd", { cwd: selected.path }, null);
       const payload = framePayload(frame);
       const sessionId = optionalPayloadString(payload?.session_id);
+      const nextCwd = optionalPayloadString(payload?.last_cwd) ?? selected.path;
+      setMetadata((current) => current ? { ...current, currentWorkspaceRoot: nextCwd } : current);
       if (sessionId && payload?.workspace_switched === true) {
         setCurrentSessionId(sessionId);
         dispatch({
@@ -1755,26 +1941,10 @@ export default function App() {
     return `tool-button ${active ? "active" : ""}`.trim();
   };
   const toolbarIconSize = (placement: OverflowToolbarPlacement) => placement === "overflow" ? 15 : 17;
-  const currentWorkingDirectory = sessions.find((session) => session.session_id === currentSessionId)?.last_cwd ?? null;
+  const currentProjectPath = sessions.find((session) => session.session_id === currentSessionId)?.last_cwd
+    ?? metadata.currentWorkspaceRoot
+    ?? null;
   const toolbarItems: OverflowToolbarItem[] = [
-    {
-      id: "working-directory",
-      render: (placement, closeOverflow) => (
-        <button
-          type="button"
-          className={toolbarItemClass(placement)}
-          title={currentWorkingDirectory ? `切换工作目录：${currentWorkingDirectory}` : "切换工作目录"}
-          disabled={cwdBusy}
-          onClick={() => {
-            closeOverflow();
-            void changeWorkingDirectory();
-          }}
-        >
-          {cwdBusy ? <LoaderCircle className="inline-spinner" size={toolbarIconSize(placement)} /> : <FolderOpen size={toolbarIconSize(placement)} />}
-          {placement === "overflow" ? "切换工作目录" : "切换目录"}
-        </button>
-      )
-    },
     {
       id: "plugins",
       render: (placement, closeOverflow) => (
@@ -1893,7 +2063,7 @@ export default function App() {
   ];
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" ref={appShellRef}>
       <header className="topbar">
         <OverflowToolbar
           className="top-action-toolbar"
@@ -1902,8 +2072,18 @@ export default function App() {
           overflowOpen={debugMenuOpen}
           onOverflowOpenChange={setDebugMenuOpen}
         />
-        <div className="status-row">
-          <div className="status-strip">
+        <div className="status-row" ref={statusRowRef}>
+          <div className="status-strip" ref={statusStripRef}>
+            <ProjectStatusCell
+              projectPath={currentProjectPath}
+              open={projectPopoverOpen}
+              busy={cwdBusy}
+              onToggle={() => setProjectPopoverOpen((value) => !value)}
+              onSwitch={() => {
+                setProjectPopoverOpen(false);
+                void changeWorkingDirectory();
+              }}
+            />
             <SessionStatusCell
               messageCount={state.sessionMessageCount}
               runningCount={sessionStats.running}
@@ -1967,8 +2147,14 @@ export default function App() {
               onTaskClear={clearNormalQueue}
             />
           </div>
-          <div className="usage-status-strip">
+          <div className={`usage-status-strip ${usageStandaloneRow ? "standalone" : ""}`.trim()}>
+            <UsageStatusCell usage={state.modelUsage} compact={usageStandaloneRow} />
+          </div>
+          <div className="usage-status-strip usage-status-measure" ref={usageInlineMeasureRef} aria-hidden="true">
             <UsageStatusCell usage={state.modelUsage} />
+          </div>
+          <div className="usage-status-strip usage-status-measure" ref={usageCompactMeasureRef} aria-hidden="true">
+            <UsageStatusCell usage={state.modelUsage} compact />
           </div>
         </div>
       </header>
@@ -2212,7 +2398,7 @@ function QueueStatusCell({
   );
 }
 
-function UsageStatusCell({ usage }: { usage?: ModelUsageState }) {
+function UsageStatusCell({ usage, compact = false }: { usage?: ModelUsageState; compact?: boolean }) {
   const total = formatUsageTokenCount(usage?.totalTokens ?? 0);
   const input = formatUsageTokenCount(usage?.inputTokens ?? 0);
   const output = formatUsageTokenCount(usage?.outputTokens ?? 0);
@@ -2221,7 +2407,7 @@ function UsageStatusCell({ usage }: { usage?: ModelUsageState }) {
   const label = renderUsageStatusText(usage);
 
   return (
-    <div className="usage-status" title={label} aria-label={label}>
+    <div className={`usage-status ${compact ? "compact" : ""}`.trim()} title={label} aria-label={label}>
       <span className="status-cell-label">Usage</span>
       <span className="usage-status-widget" aria-hidden="true">
         <span className="usage-status-column">
@@ -2278,7 +2464,7 @@ function ContextUsageCell({
   const usageLabel = `${usage?.source === "estimate" ? "~" : ""}${used}/${max}`;
   const thresholdPercent = autoCompact ? autoCompactThresholdPercent(autoCompact, usage) : undefined;
   const thresholdTitle = thresholdPercent === undefined ? "" : ` · 自动压缩 ${thresholdPercent}%`;
-  const meterLabel = thresholdPercent === undefined ? percent : `${percent} / auto ${thresholdPercent}%`;
+  const meterLabel = thresholdPercent === undefined ? percent : `${percent}/${thresholdPercent}%`;
   const inactive = disabled;
   const title = compressing
     ? `Context compressing ${usageLabel}${thresholdTitle} · 点击查看上下文设置`
@@ -2303,7 +2489,7 @@ function ContextUsageCell({
           {compressing ? (
             <>
               <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />
-              <span>Compressing</span>
+              <span>Compress</span>
             </>
           ) : (
             <>
@@ -2332,6 +2518,61 @@ function ContextUsageCell({
           onConfirm={onConfirm}
           onThresholdChange={onThresholdChange}
         />
+      )}
+    </div>
+  );
+}
+
+function ProjectStatusCell({
+  projectPath,
+  open,
+  busy,
+  onToggle,
+  onSwitch
+}: {
+  projectPath: string | null;
+  open: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onSwitch: () => void;
+}) {
+  const projectName = projectNameFromPath(projectPath);
+  const fullPath = projectPath?.trim() || "-";
+  const pathLabel = middleEllipsizePath(fullPath, 58);
+  return (
+    <div className={`project-status ${open ? "active" : ""}`}>
+      <button
+        type="button"
+        className="project-trigger"
+        title={`Project\n${projectName}\n${fullPath}`}
+        onClick={onToggle}
+        aria-label={`Project ${projectName}. ${fullPath}`}
+      >
+        <span className="status-cell-label">Project</span>
+        <span className="project-status-widget" aria-hidden="true">
+          <strong className="project-name-line">{projectName}</strong>
+          <span className="project-path-line">{pathLabel}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="project-popover">
+          <header>
+            <span>Project</span>
+            <strong>{projectName}</strong>
+          </header>
+          <div className="project-popover-body">
+            <div className="project-full-path">{fullPath}</div>
+            <button
+              type="button"
+              className="primary-button project-switch-button"
+              disabled={busy}
+              onClick={onSwitch}
+            >
+              {busy ? <LoaderCircle className="inline-spinner" size={16} /> : <ArrowLeftRight size={16} />}
+              切换路径
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -5642,6 +5883,24 @@ function sessionDisplayName(session: SessionMetaPayload): string {
     return shortSessionId(session.session_id);
   }
   return session.name;
+}
+
+export function projectNameFromPath(value: string | null | undefined): string {
+  const path = value?.trim();
+  if (!path) return "-";
+  const normalized = path.replace(/[\\/]+$/, "");
+  if (!normalized) return path;
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) ?? normalized;
+}
+
+export function middleEllipsizePath(value: string | null | undefined, maxLength = 58): string {
+  const text = value?.trim() || "-";
+  if (text.length <= maxLength) return text;
+  const budget = Math.max(8, maxLength - 1);
+  const headLength = Math.ceil(budget / 2);
+  const tailLength = Math.floor(budget / 2);
+  return `${text.slice(0, headLength)}…${text.slice(text.length - tailLength)}`;
 }
 
 export function formatSessionTimestamp(value: string, now = Date.now()): string {

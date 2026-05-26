@@ -34,6 +34,7 @@ interface EngineRecord {
 
 export interface ManagerSnapshot {
   currentSessionId: string | null;
+  currentWorkspaceRoot: string;
   runningSessionCount: number;
   loadedSessionCount: number;
   maxLoadedSessions: number;
@@ -66,6 +67,7 @@ export class SessionEngineManager {
   snapshot(): ManagerSnapshot {
     return {
       currentSessionId: this.currentSessionId,
+      currentWorkspaceRoot: this.currentWorkspaceRoot(),
       runningSessionCount: this.runningSessionCount(),
       loadedSessionCount: this.visibleLoadedSessionCount(),
       maxLoadedSessions: MAX_LOADED_SESSIONS,

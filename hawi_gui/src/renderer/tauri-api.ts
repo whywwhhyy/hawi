@@ -9,6 +9,7 @@ import type {
   SaveMarkdownExportResult,
   SelectWorkingDirectoryResult,
 } from "../shared/protocol";
+import type { LayoutSize } from "../shared/layout";
 
 declare global {
   interface Window {
@@ -42,6 +43,9 @@ if (isTauriRuntime() && !window.hawi) {
     },
     selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
       return invoke("select_working_directory");
+    },
+    setMinimumContentSize(size: Partial<LayoutSize>): Promise<{ ok: boolean }> {
+      return invoke("set_minimum_content_size", { size });
     },
     onCoreEvent(callback: (frame: CoreFrame) => void): () => void {
       let active = true;

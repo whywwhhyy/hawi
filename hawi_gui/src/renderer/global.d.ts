@@ -1,4 +1,5 @@
 import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
+import type { LayoutSize } from "../shared/layout";
 
 declare global {
   interface Window {
@@ -10,6 +11,7 @@ declare global {
       sendCommand(type: CoreCommandType, payload: Record<string, unknown>, sessionId?: string | null): Promise<CoreFrame>;
       saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult>;
       selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult>;
+      setMinimumContentSize(size: Partial<LayoutSize>): Promise<{ ok: boolean }>;
       onCoreEvent(callback: (frame: CoreFrame) => void): () => void;
       onCoreLog(callback: (message: string) => void): () => void;
     };

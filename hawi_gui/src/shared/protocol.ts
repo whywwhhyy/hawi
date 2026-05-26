@@ -196,6 +196,7 @@ export interface GuiMetadata {
   config: PersistedConfig;
   coreRunning: boolean;
   currentSessionId?: string | null;
+  currentWorkspaceRoot?: string | null;
   runningSessionCount?: number;
   loadedSessionCount?: number;
   maxLoadedSessions?: number;

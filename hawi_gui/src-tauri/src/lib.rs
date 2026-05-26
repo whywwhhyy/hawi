@@ -16,6 +16,8 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+const MIN_CONTENT_WIDTH: f64 = 640.0;
+const MIN_CONTENT_HEIGHT: f64 = 660.0;
 const VERSION: &str = "hawi.core.v1";
 const TYPE_JSON_FRAME: u8 = 0x01;
 const DEFAULT_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
@@ -1214,6 +1216,7 @@ impl SessionEngineManager {
     fn snapshot(&self) -> Value {
         json!({
             "currentSessionId": self.current_session_id,
+            "currentWorkspaceRoot": self.current_workspace_root(),
             "runningSessionCount": self.running_session_count(),
             "loadedSessionCount": self.visible_loaded_session_count(),
             "maxLoadedSessions": MAX_LOADED_SESSIONS,
@@ -2540,6 +2543,25 @@ async fn select_working_directory(
 }
 
 #[tauri::command]
+fn set_minimum_content_size(app: AppHandle, size: Value) -> Result<Value, String> {
+    let width = normalize_minimum_content_dimension(
+        size.get("width").and_then(Value::as_f64),
+        MIN_CONTENT_WIDTH,
+    );
+    let height = normalize_minimum_content_dimension(
+        size.get("height").and_then(Value::as_f64),
+        MIN_CONTENT_HEIGHT,
+    );
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is not available".to_string())?;
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(width, height)))
+        .map_err(|error| error.to_string())?;
+    Ok(json!({ "ok": true }))
+}
+
+#[tauri::command]
 fn save_markdown_export(app: AppHandle, payload: Value) -> Result<Value, String> {
     let markdown = payload
         .get("markdown")
@@ -2666,6 +2688,7 @@ pub fn run() {
             refresh_provider_models,
             send_command,
             select_working_directory,
+            set_minimum_content_size,
             save_markdown_export
         ])
         .run(tauri::generate_context!())
@@ -3038,6 +3061,13 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn normalize_minimum_content_dimension(value: Option<f64>, fallback: f64) -> f64 {
+    value
+        .filter(|dimension| dimension.is_finite())
+        .map(|dimension| dimension.max(fallback).ceil())
+        .unwrap_or(fallback)
 }
 
 fn parse_arg_value(name: &str) -> Option<String> {

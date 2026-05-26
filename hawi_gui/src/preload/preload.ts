@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
+import type { LayoutSize } from "../shared/layout";
 
 const api = {
   getMetadata(): Promise<GuiMetadata> {
@@ -22,6 +23,9 @@ const api = {
   },
   selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
     return ipcRenderer.invoke("gui:select-working-directory");
+  },
+  setMinimumContentSize(size: Partial<LayoutSize>): Promise<{ ok: boolean }> {
+    return ipcRenderer.invoke("gui:set-minimum-content-size", size);
   },
   onCoreEvent(callback: (frame: CoreFrame) => void): () => void {
     const listener = (_event: Electron.IpcRendererEvent, frame: CoreFrame) => callback(frame);
