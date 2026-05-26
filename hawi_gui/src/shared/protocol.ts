@@ -44,6 +44,7 @@ export type CoreCommandType =
   | "set_system_prompt"
   | "switch_model"
   | "refresh_models"
+  | "change_cwd"
   | "apply_plugins"
   | "plugin_action"
   | "get_status"
@@ -217,6 +218,11 @@ export interface SaveMarkdownExportResult {
   canceled: boolean;
   markdownPath?: string;
   referenceDir?: string;
+}
+
+export interface SelectWorkingDirectoryResult {
+  canceled: boolean;
+  path?: string;
 }
 
 export function makeCommand<TPayload extends Record<string, unknown>>(

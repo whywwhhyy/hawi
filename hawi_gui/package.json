@@ -91,6 +91,7 @@
         "dmg",
         "zip"
       ],
+      "icon": "src-tauri/icons/icon.icns",
       "category": "public.app-category.productivity",
       "identity": "-",
       "hardenedRuntime": false,
@@ -102,6 +103,7 @@
         "nsis",
         "portable"
       ],
+      "icon": "src-tauri/icons/icon.ico",
       "signExts": [
         "!.exe",
         "!.dll",
@@ -112,6 +114,7 @@
       "target": [
         "AppImage"
       ],
+      "icon": "src-tauri/icons/icon.png",
       "category": "Utility"
     }
   }

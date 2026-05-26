@@ -9,6 +9,7 @@ import type {
   MarkdownExportPayload,
   PersistedConfig,
   SaveMarkdownExportResult,
+  SelectWorkingDirectoryResult,
 } from "../shared/protocol";
 import { MIN_CONTENT_SIZE, minimumWindowSizeForContent, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import {
@@ -143,6 +144,10 @@ function registerIpc(): void {
     return saveMarkdownExport(payload);
   });
 
+  ipcMain.handle("gui:select-working-directory", async (): Promise<SelectWorkingDirectoryResult> => {
+    return selectWorkingDirectory();
+  });
+
   ipcMain.handle("gui:refresh-provider-models", async (_event, provider: string): Promise<GuiMetadata> => {
     return refreshProviderModels(provider);
   });
@@ -249,6 +254,23 @@ async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveM
     canceled: false,
     markdownPath,
     referenceDir,
+  };
+}
+
+async function selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
+  const defaultPath = engineManager?.getCurrentWorkspaceRoot() ?? env?.workspaceRoot;
+  const options = {
+    title: "切换工作目录",
+    defaultPath,
+    properties: ["openDirectory", "createDirectory"] as Electron.OpenDialogOptions["properties"],
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) {
+    return { canceled: true };
+  }
+  return {
+    canceled: false,
+    path: path.resolve(result.filePaths[0]),
   };
 }
 

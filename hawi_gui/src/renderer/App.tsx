@@ -10,7 +10,7 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, FolderOpen, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
 import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
@@ -402,6 +402,7 @@ export default function App() {
     maxLoaded: 5
   });
   const [sessionBusy, setSessionBusy] = useState(false);
+  const [cwdBusy, setCwdBusy] = useState(false);
   const [contextCompactBusy, setContextCompactBusy] = useState(false);
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
@@ -1695,6 +1696,36 @@ export default function App() {
     }
   }
 
+  async function changeWorkingDirectory() {
+    setCwdBusy(true);
+    try {
+      const selected = await window.hawi.selectWorkingDirectory();
+      if (selected.canceled || !selected.path) {
+        return;
+      }
+      const frame = await sendCommand("change_cwd", { cwd: selected.path }, null);
+      const payload = framePayload(frame);
+      const sessionId = optionalPayloadString(payload?.session_id);
+      if (sessionId && payload?.workspace_switched === true) {
+        setCurrentSessionId(sessionId);
+        dispatch({
+          version: VERSION,
+          type: "gui.load_session_history",
+          payload: { message_history: [] }
+        }, sessionId);
+        followTailRef.current = true;
+      }
+      const refreshed = await refreshSessions();
+      if (sessionId && payload?.workspace_switched === true) {
+        syncConfigFromSession(sessionId, refreshed);
+      }
+    } catch (error) {
+      dispatch(errorFrame(error));
+    } finally {
+      setCwdBusy(false);
+    }
+  }
+
   function updateShowDebug(enabled: boolean) {
     const baseConfig = configRef.current ?? config;
     if (!baseConfig) return;
@@ -1724,7 +1755,26 @@ export default function App() {
     return `tool-button ${active ? "active" : ""}`.trim();
   };
   const toolbarIconSize = (placement: OverflowToolbarPlacement) => placement === "overflow" ? 15 : 17;
+  const currentWorkingDirectory = sessions.find((session) => session.session_id === currentSessionId)?.last_cwd ?? null;
   const toolbarItems: OverflowToolbarItem[] = [
+    {
+      id: "working-directory",
+      render: (placement, closeOverflow) => (
+        <button
+          type="button"
+          className={toolbarItemClass(placement)}
+          title={currentWorkingDirectory ? `切换工作目录：${currentWorkingDirectory}` : "切换工作目录"}
+          disabled={cwdBusy}
+          onClick={() => {
+            closeOverflow();
+            void changeWorkingDirectory();
+          }}
+        >
+          {cwdBusy ? <LoaderCircle className="inline-spinner" size={toolbarIconSize(placement)} /> : <FolderOpen size={toolbarIconSize(placement)} />}
+          {placement === "overflow" ? "切换工作目录" : "切换目录"}
+        </button>
+      )
+    },
     {
       id: "plugins",
       render: (placement, closeOverflow) => (

@@ -7,6 +7,7 @@ import type {
   MarkdownExportPayload,
   PersistedConfig,
   SaveMarkdownExportResult,
+  SelectWorkingDirectoryResult,
 } from "../shared/protocol";
 
 declare global {
@@ -38,6 +39,9 @@ if (isTauriRuntime() && !window.hawi) {
     },
     saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {
       return invoke("save_markdown_export", { payload });
+    },
+    selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
+      return invoke("select_working_directory");
     },
     onCoreEvent(callback: (frame: CoreFrame) => void): () => void {
       let active = true;

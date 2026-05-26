@@ -1,4 +1,4 @@
-import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
 
 declare global {
   interface Window {
@@ -9,6 +9,7 @@ declare global {
       refreshProviderModels(provider: string): Promise<GuiMetadata>;
       sendCommand(type: CoreCommandType, payload: Record<string, unknown>, sessionId?: string | null): Promise<CoreFrame>;
       saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult>;
+      selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult>;
       onCoreEvent(callback: (frame: CoreFrame) => void): () => void;
       onCoreLog(callback: (message: string) => void): () => void;
     };

@@ -172,6 +172,7 @@ button:disabled {
 .usage-status-strip {
   flex: 0 0 auto;
   margin-left: auto;
+  width: max-content;
 }
 
 .priority-status,
@@ -273,6 +274,7 @@ button:disabled {
 
 .usage-status {
   min-width: 248px;
+  width: max-content;
   justify-content: flex-start;
   padding: 0 10px;
   gap: 8px;
@@ -281,9 +283,10 @@ button:disabled {
 
 .usage-status-widget {
   display: grid;
-  grid-template-columns: minmax(58px, auto) minmax(62px, auto) minmax(78px, auto);
+  grid-template-columns: max-content max-content max-content;
   column-gap: 8px;
   min-width: 192px;
+  width: max-content;
   color: #69777d;
   font-size: 10px;
   line-height: 1.1;
@@ -301,22 +304,22 @@ button:disabled {
 }
 
 .usage-status-column > span {
-  max-width: 100%;
-  overflow: hidden;
+  max-width: none;
+  overflow: visible;
   text-align: center;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
 .usage-status-column > strong {
-  max-width: 100%;
+  max-width: none;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--color-primary);
   font-size: 11px;
   line-height: 1.1;
   text-align: center;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 

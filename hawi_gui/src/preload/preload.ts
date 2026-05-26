@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
 
 const api = {
   getMetadata(): Promise<GuiMetadata> {
@@ -19,6 +19,9 @@ const api = {
   },
   saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {
     return ipcRenderer.invoke("gui:save-markdown-export", payload);
+  },
+  selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
+    return ipcRenderer.invoke("gui:select-working-directory");
   },
   onCoreEvent(callback: (frame: CoreFrame) => void): () => void {
     const listener = (_event: Electron.IpcRendererEvent, frame: CoreFrame) => callback(frame);

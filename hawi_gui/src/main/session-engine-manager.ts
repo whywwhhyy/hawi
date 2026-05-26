@@ -52,7 +52,7 @@ export class SessionEngineManager {
   constructor(
     private readonly emitToRenderer: EmitToRenderer,
     private readonly repoRoot: string,
-    private readonly workspaceRoot: string,
+    private workspaceRoot: string,
     private readonly backendLogPath: string,
     private readonly engineLauncher: EngineLauncher,
   ) {}
@@ -94,6 +94,10 @@ export class SessionEngineManager {
     const readonlyCore = this.readonlyCore;
     this.readonlyCore = null;
     await readonlyCore?.stop(reason);
+  }
+
+  getCurrentWorkspaceRoot(): string {
+    return this.currentWorkspaceRoot();
   }
 
   async restartCurrent(config: PersistedConfig): Promise<void> {
@@ -140,6 +144,8 @@ export class SessionEngineManager {
         return this.deleteSession(payload);
       case "session_rename":
         return this.renameSession(payload);
+      case "change_cwd":
+        return this.changeWorkspace(payload);
       default:
         if (isReadOnlyCommand(type, payload)) {
           return this.readonlyCommand(type, payload);
@@ -221,6 +227,52 @@ export class SessionEngineManager {
     this.emitSessionRuntimeStatus(sessionId);
     void this.enforceLoadedLimit();
     return ackFrame("session_new", { session_id: sessionId, name });
+  }
+
+  private async changeWorkspace(payload: Record<string, unknown>): Promise<CoreFrame> {
+    const target = normalizeWorkspaceRoot(payload.cwd ?? payload.path);
+    if (!target) {
+      throw new Error("'cwd' is required");
+    }
+    const previousWorkspaceRoot = this.currentWorkspaceRoot();
+    if (sameWorkspaceRoot(previousWorkspaceRoot, target)) {
+      return ackFrame("change_cwd", {
+        session_id: this.currentSessionId,
+        workspace_switched: false,
+        previous_cwd: previousWorkspaceRoot,
+        last_cwd: target,
+      });
+    }
+
+    await this.saveCurrentSession();
+    await this.discardCurrentEmptySession();
+    const readonlyCore = this.readonlyCore;
+    this.readonlyCore = null;
+    await readonlyCore?.stop("change-cwd");
+
+    this.workspaceRoot = target;
+    const sessionId = generateSessionId();
+    const profile = profileFromConfig(this.requireDefaultConfig());
+    this.currentSessionId = sessionId;
+    this.startRecord(sessionId, profile, {
+      initialSessionId: sessionId,
+      initialSessionName: sessionId,
+      workspaceRoot: target,
+    });
+    this.emitSessionRuntimeStatus(sessionId);
+    this.emitWorkspaceChanged(
+      sessionId,
+      previousWorkspaceRoot,
+      target,
+      `已切换工作目录：${previousWorkspaceRoot} -> ${target}`,
+    );
+    void this.enforceLoadedLimit();
+    return ackFrame("change_cwd", {
+      session_id: sessionId,
+      workspace_switched: true,
+      previous_cwd: previousWorkspaceRoot,
+      last_cwd: target,
+    });
   }
 
   private async forkSession(payload: Record<string, unknown>): Promise<CoreFrame> {
@@ -715,7 +767,7 @@ export class SessionEngineManager {
     return this.currentRecord()?.workspaceRoot ?? this.workspaceRoot;
   }
 
-  private emitWorkspaceChanged(sessionId: string, previousWorkspaceRoot: string, nextWorkspaceRoot: string): void {
+  private emitWorkspaceChanged(sessionId: string, previousWorkspaceRoot: string, nextWorkspaceRoot: string, message?: string): void {
     this.emitToRenderer("core:event", {
       version: VERSION,
       type: "gui.workspace_changed",
@@ -723,7 +775,7 @@ export class SessionEngineManager {
         session_id: sessionId,
         previous_cwd: previousWorkspaceRoot,
         last_cwd: nextWorkspaceRoot,
-        message: `已根据 Session 记录切换工作目录：${previousWorkspaceRoot} -> ${nextWorkspaceRoot}`,
+        message: message ?? `已根据 Session 记录切换工作目录：${previousWorkspaceRoot} -> ${nextWorkspaceRoot}`,
       },
     });
   }

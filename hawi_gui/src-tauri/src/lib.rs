@@ -1298,6 +1298,7 @@ impl SessionEngineManager {
             "session_switch" | "session_load" => self.switch_session(payload),
             "session_delete" => self.delete_session(payload),
             "session_rename" => self.rename_session(payload),
+            "change_cwd" => self.change_workspace(payload),
             _ if is_readonly_command(command_type, &payload) => {
                 self.readonly_command(command_type, payload)
             }
@@ -1461,6 +1462,70 @@ impl SessionEngineManager {
         Ok(ack_frame(
             "session_new",
             json!({ "session_id": session_id, "name": name }),
+        ))
+    }
+
+    fn change_workspace(&mut self, payload: Value) -> Result<Value, String> {
+        let target = payload
+            .get("cwd")
+            .or_else(|| payload.get("path"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "'cwd' is required".to_string())
+            .and_then(|value| normalize_path(PathBuf::from(value.trim())))?;
+        let previous_workspace_root = self.current_workspace_root();
+        if same_workspace_root(&previous_workspace_root, &target) {
+            return Ok(ack_frame(
+                "change_cwd",
+                json!({
+                    "session_id": self.current_session_id.clone(),
+                    "workspace_switched": false,
+                    "previous_cwd": previous_workspace_root,
+                    "last_cwd": target,
+                }),
+            ));
+        }
+
+        self.save_current_session();
+        self.discard_current_empty_session();
+        if let Some(mut core) = self.readonly_core.take() {
+            core.stop("change-cwd");
+        }
+
+        self.workspace_root = target.clone();
+        let session_id = generate_session_id();
+        let profile = profile_from_config(self.require_default_config()?);
+        self.current_session_id = Some(session_id.clone());
+        self.start_record(
+            &session_id,
+            profile,
+            StartRecordOptions {
+                initial_session_id: Some(session_id.clone()),
+                initial_session_name: Some(session_id.clone()),
+                workspace_root: Some(target.clone()),
+                ..StartRecordOptions::default()
+            },
+        )?;
+        self.emit_session_runtime_status(&session_id, None);
+        self.emit_workspace_changed_with_message(
+            &session_id,
+            &previous_workspace_root,
+            &target,
+            format!(
+                "已切换工作目录：{} -> {}",
+                previous_workspace_root.display(),
+                target.display()
+            ),
+        );
+        self.enforce_loaded_limit();
+        Ok(ack_frame(
+            "change_cwd",
+            json!({
+                "session_id": session_id,
+                "workspace_switched": true,
+                "previous_cwd": previous_workspace_root,
+                "last_cwd": target,
+            }),
         ))
     }
 
@@ -2162,6 +2227,25 @@ impl SessionEngineManager {
     }
 
     fn emit_workspace_changed(&self, session_id: &str, previous: &Path, next: &Path) {
+        self.emit_workspace_changed_with_message(
+            session_id,
+            previous,
+            next,
+            format!(
+                "已根据 Session 记录切换工作目录：{} -> {}",
+                previous.display(),
+                next.display()
+            ),
+        );
+    }
+
+    fn emit_workspace_changed_with_message(
+        &self,
+        session_id: &str,
+        previous: &Path,
+        next: &Path,
+        message: String,
+    ) {
         let _ = self.app.emit(
             "core:event",
             json!({
@@ -2171,11 +2255,7 @@ impl SessionEngineManager {
                     "session_id": session_id,
                     "previous_cwd": previous,
                     "last_cwd": next,
-                    "message": format!(
-                        "已根据 Session 记录切换工作目录：{} -> {}",
-                        previous.display(),
-                        next.display()
-                    ),
+                    "message": message,
                 },
             }),
         );
@@ -2429,6 +2509,31 @@ fn refresh_provider_models(provider: String, state: State<'_, GuiState>) -> Resu
 }
 
 #[tauri::command]
+fn select_working_directory(app: AppHandle, state: State<'_, GuiState>) -> Result<Value, String> {
+    let current_workspace = state
+        .manager
+        .lock()
+        .map_err(|_| "manager lock poisoned".to_string())?
+        .current_workspace_root();
+    let folder = app
+        .dialog()
+        .file()
+        .set_title("切换工作目录")
+        .set_directory(&current_workspace)
+        .blocking_pick_folder();
+    let Some(folder) = folder else {
+        return Ok(json!({ "canceled": true }));
+    };
+    let path = folder
+        .into_path()
+        .map_err(|error| format!("failed to resolve selected path: {error}"))?;
+    Ok(json!({
+        "canceled": false,
+        "path": path.to_string_lossy(),
+    }))
+}
+
+#[tauri::command]
 fn save_markdown_export(app: AppHandle, payload: Value) -> Result<Value, String> {
     let markdown = payload
         .get("markdown")
@@ -2554,6 +2659,7 @@ pub fn run() {
             restart_core,
             refresh_provider_models,
             send_command,
+            select_working_directory,
             save_markdown_export
         ])
         .run(tauri::generate_context!())

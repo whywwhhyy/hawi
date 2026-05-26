@@ -429,6 +429,46 @@ describe("SessionEngineManager", () => {
     });
   });
 
+  it("switches working directory by starting a fresh current session", async () => {
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const manager = makeManager(events);
+    const internals = manager as unknown as ManagerInternals;
+    const current = fakeRecord("session-current", 1);
+    current.hasVisibleMessages = true;
+    internals.currentSessionId = current.sessionId;
+    internals.loaded.set(current.sessionId, current);
+    const readonlyCore = internals.readonlyCore;
+
+    let launchedWorkspaceRoot: string | null = null;
+    internals.startRecord = (sessionId, launchProfile, options) => {
+      launchedWorkspaceRoot = typeof options.workspaceRoot === "string" ? options.workspaceRoot : null;
+      const record = fakeRecord(sessionId, 2, new FakeCore(), launchProfile);
+      record.workspaceRoot = launchedWorkspaceRoot ?? "/workspace";
+      internals.loaded.set(sessionId, record);
+      return record;
+    };
+
+    const frame = await manager.sendCommand("change_cwd", { cwd: "/next/workspace" });
+
+    expect(current.core.commands.some((command) => command.type === "session_save_now")).toBe(true);
+    expect(readonlyCore?.running).toBe(false);
+    expect(launchedWorkspaceRoot).toBe("/next/workspace");
+    expect(frame.payload).toMatchObject({
+      command: "change_cwd",
+      workspace_switched: true,
+      previous_cwd: "/workspace",
+      last_cwd: "/next/workspace",
+    });
+    expect(internals.currentSessionId).toBe((frame.payload as Record<string, unknown>).session_id);
+    const notice = events.find((event) => event.channel === "core:event" && (event.payload as CoreFrame).type === "gui.workspace_changed")
+      ?.payload as CoreFrame | undefined;
+    expect(notice?.payload).toMatchObject({
+      previous_cwd: "/workspace",
+      last_cwd: "/next/workspace",
+      message: "已切换工作目录：/workspace -> /next/workspace",
+    });
+  });
+
   it("uses recently applied plugins as the fallback profile for new sessions", async () => {
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;
