@@ -161,6 +161,17 @@ const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLa
 const markdownCodeCopyTimers = new WeakMap<HTMLButtonElement, number>();
 let mermaidRenderSequence = 0;
 let mermaidModulePromise: Promise<typeof import("mermaid")> | null = null;
+let mermaidRenderQueue: Promise<void> = Promise.resolve();
+const MERMAID_RENDER_TIMEOUT_MS = 10_000;
+const MERMAID_RENDER_RETRY_DELAYS_MS = [80, 320, 1200];
+export const MERMAID_RENDER_CONFIG = {
+  startOnLoad: false,
+  securityLevel: "strict",
+  theme: "default",
+  flowchart: {
+    htmlLabels: false,
+  },
+} as const;
 
 const queueLabels: Record<QueueKind, string> = {
   normal: "稍后任务",
@@ -5233,9 +5244,39 @@ function MarkdownView({ html, className = "" }: { html: string; className?: stri
     const root = rootRef.current;
     if (!root) return;
     let cancelled = false;
-    void renderMermaidDiagrams(root, () => cancelled);
+    const frameIds: number[] = [];
+    const timeoutIds: number[] = [];
+
+    const run = () => {
+      if (cancelled) return;
+      void renderMermaidDiagrams(root, () => cancelled).finally(() => {
+        if (!cancelled && hasPendingMermaidDiagrams(root)) {
+          schedule(240);
+        }
+      });
+    };
+
+    const schedule = (delayMs: number) => {
+      if (delayMs <= 0) {
+        frameIds.push(window.requestAnimationFrame(run));
+        return;
+      }
+      timeoutIds.push(window.setTimeout(run, delayMs));
+    };
+
+    schedule(0);
+    for (const delayMs of MERMAID_RENDER_RETRY_DELAYS_MS) {
+      schedule(delayMs);
+    }
+
     return () => {
       cancelled = true;
+      for (const frameId of frameIds) {
+        window.cancelAnimationFrame(frameId);
+      }
+      for (const timeoutId of timeoutIds) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [html]);
 
@@ -7637,9 +7678,8 @@ async function renderMermaidDiagrams(
   root: HTMLElement,
   isCancelled: () => boolean,
 ): Promise<void> {
-  const containers = Array.from(
-    root.querySelectorAll<HTMLElement>(".mermaid-preview-shell[data-mermaid-source]")
-  ).filter((container) => container.dataset.mermaidRendered !== "true");
+  const containers = pendingMermaidContainers(root)
+    .filter((container) => container.dataset.mermaidRendering !== "true");
   if (containers.length === 0 || typeof window === "undefined") return;
 
   let mermaid: Awaited<ReturnType<typeof loadMermaid>>;
@@ -7654,20 +7694,69 @@ async function renderMermaidDiagrams(
   for (const container of containers) {
     if (isCancelled()) return;
     const source = container.dataset.mermaidSource ?? "";
+    container.dataset.mermaidRendering = "true";
     try {
       const definition = decodeURIComponent(source);
       const renderId = `hawi-mermaid-${++mermaidRenderSequence}`;
-      const rendered = await mermaid.render(renderId, definition);
+      const rendered = await enqueueMermaidRender(mermaid, renderId, definition);
       if (isCancelled()) return;
-      container.innerHTML = sanitizeRenderedHtml(rendered.svg);
+      container.innerHTML = sanitizeRenderedMermaidHtml(rendered.svg);
       container.dataset.mermaidRendered = "true";
       delete container.dataset.mermaidSource;
     } catch (error) {
       container.dataset.mermaidRendered = "true";
       container.classList.add("mermaid-preview-error");
       container.textContent = mermaidErrorMessage(error);
+    } finally {
+      delete container.dataset.mermaidRendering;
     }
   }
+}
+
+function pendingMermaidContainers(root: HTMLElement): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(".mermaid-preview-shell[data-mermaid-source]")
+  ).filter((container) => container.dataset.mermaidRendered !== "true");
+}
+
+function hasPendingMermaidDiagrams(root: HTMLElement): boolean {
+  return pendingMermaidContainers(root)
+    .some((container) => container.dataset.mermaidRendering !== "true");
+}
+
+async function enqueueMermaidRender(
+  mermaid: Awaited<ReturnType<typeof loadMermaid>>,
+  renderId: string,
+  definition: string,
+): Promise<{ svg: string; bindFunctions?: (element: Element) => void }> {
+  const task = mermaidRenderQueue.then(() => (
+    withTimeout(
+      mermaid.render(renderId, definition),
+      MERMAID_RENDER_TIMEOUT_MS,
+      "Mermaid render timed out",
+    )
+  ));
+  mermaidRenderQueue = task.then(
+    () => undefined,
+    () => undefined,
+  );
+  return task;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function loadMermaid() {
@@ -7676,11 +7765,7 @@ async function loadMermaid() {
   }
   const module = await mermaidModulePromise;
   const mermaid = module.default;
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-    theme: "default",
-  });
+  mermaid.initialize(MERMAID_RENDER_CONFIG);
   return mermaid;
 }
 
@@ -7703,12 +7788,51 @@ function renderSvgFence(value: string): string {
 }
 
 function sanitizeRenderedHtml(value: string): string {
+  return sanitizeRenderedHtmlWithOptions(value, {
+    allowStyleAttributes: false,
+    allowStyleElements: false,
+  });
+}
+
+export function sanitizeRenderedMermaidHtml(value: string): string {
+  return value;
+}
+
+function sanitizeRenderedHtmlWithOptions(
+  value: string,
+  options: {
+    allowStyleAttributes: boolean;
+    allowStyleElements: boolean;
+  },
+): string {
+  const blockedTags = options.allowStyleElements
+    ? "script|iframe|object|embed|link|meta|base|form|input|textarea|select|option|foreignObject"
+    : "script|style|iframe|object|embed|link|meta|base|form|input|textarea|select|option|foreignObject";
+  const blockedTagsPattern = new RegExp(`<(${blockedTags})\\b[\\s\\S]*?<\\/\\1>`, "gi");
+  const blockedSelfClosingPattern = new RegExp(`<(${blockedTags})\\b[^>]*\\/?>`, "gi");
+
   return value
-    .replace(/<(script|style|iframe|object|embed|link|meta|base|form|input|textarea|select|option|foreignObject)\b[\s\S]*?<\/\1>/gi, "")
-    .replace(/<(script|style|iframe|object|embed|link|meta|base|form|input|textarea|select|option|foreignObject)\b[^>]*\/?>/gi, "")
+    .replace(blockedTagsPattern, "")
+    .replace(blockedSelfClosingPattern, "")
+    .replace(
+      /<style\b[^>]*>([\s\S]*?)<\/style>/gi,
+      (_match: string, css: string) => {
+        if (!options.allowStyleElements) return "";
+        const sanitized = sanitizeCssText(css);
+        return sanitized ? `<style>${sanitized}</style>` : "";
+      }
+    )
     .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     .replace(/\s+srcdoc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-    .replace(/\s+style\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(
+      /\s+style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,
+      (match: string, rawValue: string) => {
+        if (!options.allowStyleAttributes) return "";
+        const sanitized = sanitizeCssText(unquoteHtmlAttribute(rawValue));
+        if (!sanitized) return "";
+        return ` style="${escapeHtmlAttributeValue(sanitized)}"`;
+      }
+    )
     .replace(
       /\s+(href|src|xlink:href|formaction)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,
       (match: string, name: string, rawValue: string) => {
@@ -7717,6 +7841,18 @@ function sanitizeRenderedHtml(value: string): string {
         return ` ${name}=${rawValue}`;
       }
     );
+}
+
+function sanitizeCssText(value: string): string {
+  return decodeHtmlAttributeEntities(value)
+    .replace(/<\/?style\b[^>]*>/gi, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/@import\b[^;{}]*(?:;|$)/gi, "")
+    .replace(/url\s*\([^)]*\)/gi, "")
+    .replace(/expression\s*\([^)]*\)/gi, "")
+    .replace(/(?:javascript|vbscript|data)\s*:/gi, "")
+    .replace(/(^|[;{]\s*)(?:-moz-binding|behavior)\s*:[^;{}]*/gi, "$1")
+    .trim();
 }
 
 function unquoteHtmlAttribute(value: string): string {

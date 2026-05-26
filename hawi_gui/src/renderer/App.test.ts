@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -504,6 +504,30 @@ describe("renderMarkdown", () => {
     expect(html).toContain("Rendering diagram...");
     expect(html).toContain("class=\"code-copy-button\"");
     expect(html).toContain("language-mermaid");
+  });
+
+  it("configures mermaid flowcharts to avoid foreignObject labels", () => {
+    expect(MERMAID_RENDER_CONFIG.flowchart.htmlLabels).toBe(false);
+  });
+
+  it("passes mermaid svg output through without local sanitizing", () => {
+    const html = sanitizeRenderedMermaidHtml(`
+      <svg>
+        <style>
+          @import url("https://example.test/bad.css");
+          .node rect { fill: #4CAF50; color: #fff; }
+          .bad { background: url("https://example.test/bad.png"); }
+        </style>
+        <foreignObject><div>Label</div></foreignObject>
+        <rect onclick="alert(1)" style="fill: #4CAF50; background: url(https://example.test/bad.png)" />
+      </svg>
+    `);
+
+    expect(html).toContain("<style>");
+    expect(html).toContain("<foreignObject>");
+    expect(html).toContain("onclick");
+    expect(html).toContain("@import");
+    expect(html).toContain("url(");
   });
 
   it("sanitizes svg fenced previews without hiding the source code block", () => {

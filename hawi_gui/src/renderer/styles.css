@@ -226,9 +226,9 @@ button:disabled {
   cursor: default;
 }
 
-.status-cell:hover > .status-cell-trigger:not(:disabled),
-.status-cell.active > .status-cell-trigger,
-.status-cell-trigger:focus-visible {
+.status-cell:has(> .status-cell-trigger:not(:disabled)):hover,
+.status-cell:focus-within,
+.status-cell.active {
   background: var(--color-primary-tint);
 }
 
