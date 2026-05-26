@@ -6,8 +6,10 @@ import type {
   CoreCommandType,
   GuiMetadata,
   InspectPayload,
+  JsonlExportPayload,
   MarkdownExportPayload,
   PersistedConfig,
+  SaveJsonlExportResult,
   SaveMarkdownExportResult,
   SelectWorkingDirectoryResult,
 } from "../shared/protocol";
@@ -144,6 +146,10 @@ function registerIpc(): void {
     return saveMarkdownExport(payload);
   });
 
+  ipcMain.handle("gui:save-jsonl-export", async (_event, payload: JsonlExportPayload): Promise<SaveJsonlExportResult> => {
+    return saveJsonlExport(payload);
+  });
+
   ipcMain.handle("gui:select-working-directory", async (): Promise<SelectWorkingDirectoryResult> => {
     return selectWorkingDirectory();
   });
@@ -272,6 +278,33 @@ async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveM
   };
 }
 
+async function saveJsonlExport(payload: JsonlExportPayload): Promise<SaveJsonlExportResult> {
+  if (!payload || !Array.isArray(payload.records)) {
+    throw new Error("invalid JSONL export payload");
+  }
+  const suggested = safeJsonlFilename(payload.suggested_filename);
+  const options = {
+    title: "导出 JSONL",
+    defaultPath: suggested,
+    filters: [{ name: "JSON Lines", extensions: ["jsonl"] }],
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return { canceled: true };
+  }
+
+  const jsonlPath = ensureJsonlExtension(result.filePath);
+  const parsed = path.parse(jsonlPath);
+  const contents = payload.records.map((record) => JSON.stringify(record)).join("\n");
+  mkdirSync(parsed.dir, { recursive: true });
+  writeFileSync(jsonlPath, contents ? `${contents}\n` : "", "utf8");
+
+  return {
+    canceled: false,
+    jsonlPath,
+  };
+}
+
 async function selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
   const defaultPath = engineManager?.getCurrentWorkspaceRoot() ?? env?.workspaceRoot;
   const options = {
@@ -293,9 +326,19 @@ function ensureMarkdownExtension(filePath: string): string {
   return path.extname(filePath) ? filePath : `${filePath}.md`;
 }
 
+function ensureJsonlExtension(filePath: string): string {
+  return path.extname(filePath) ? filePath : `${filePath}.jsonl`;
+}
+
 function safeMarkdownFilename(value: string | undefined): string {
   const base = value && value.trim() ? path.basename(value.trim()) : "hawi-export.md";
   const filename = base.toLowerCase().endsWith(".md") ? base : `${base}.md`;
+  return filenameWithTimestamp(filename);
+}
+
+function safeJsonlFilename(value: string | undefined): string {
+  const base = value && value.trim() ? path.basename(value.trim()) : "hawi-export.jsonl";
+  const filename = base.toLowerCase().endsWith(".jsonl") ? base : `${base}.jsonl`;
   return filenameWithTimestamp(filename);
 }
 

@@ -393,18 +393,23 @@ export class SessionEngineManager {
       throw new Error("Cannot delete a running session.");
     }
     const wasCurrent = sessionId === this.currentSessionId;
-    const nextCurrent = wasCurrent ? this.nextCurrentSessionIdAfterDelete(sessionId) : this.currentSessionId;
+    if (wasCurrent) {
+      this.currentSessionId = null;
+    }
     if (loaded) {
       await this.stopRecord(loaded, "delete-session");
     }
-    if (wasCurrent) {
-      this.currentSessionId = nextCurrent;
-      if (nextCurrent) {
-        this.emitSessionRuntimeStatus(nextCurrent);
+    const reusableCatalog = this.currentRecord() ?? [...this.loaded.values()][0] ?? null;
+    const catalog = await this.catalogRecord();
+    const stopCatalogAfterDelete = !reusableCatalog && catalog.suppressEvents && !catalog.hasVisibleMessages;
+    let frame: CoreFrame;
+    try {
+      frame = await catalog.core.sendCommand("session_delete", { session_id: sessionId }, SESSION_COMMAND_TIMEOUT_MS);
+    } finally {
+      if (stopCatalogAfterDelete) {
+        await this.stopRecord(catalog, "delete-session-catalog");
       }
     }
-    const catalog = await this.catalogRecord();
-    const frame = await catalog.core.sendCommand("session_delete", { session_id: sessionId }, SESSION_COMMAND_TIMEOUT_MS);
     return {
       ...frame,
       payload: {
@@ -705,14 +710,6 @@ export class SessionEngineManager {
 
   private currentRecord(): EngineRecord | null {
     return this.currentSessionId ? (this.loaded.get(this.currentSessionId) ?? null) : null;
-  }
-
-  private nextCurrentSessionIdAfterDelete(deletedSessionId: string): string | null {
-    return (
-      [...this.loaded.values()]
-        .filter((record) => record.sessionId !== deletedSessionId && record.hasVisibleMessages)
-        .sort((a, b) => b.loadedAt - a.loadedAt)[0]?.sessionId ?? null
-    );
   }
 
   private async enforceLoadedLimit(): Promise<void> {

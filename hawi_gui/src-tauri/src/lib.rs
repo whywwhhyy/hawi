@@ -1729,30 +1729,35 @@ impl SessionEngineManager {
             return Err("Cannot delete a running session.".to_string());
         }
         let was_current = self.current_session_id.as_deref() == Some(&session_id);
-        let next_current = if was_current {
-            self.next_current_session_id_after_delete(&session_id)
-        } else {
-            self.current_session_id.clone()
-        };
+        if was_current {
+            self.current_session_id = None;
+        }
         if self.loaded.contains_key(&session_id) {
             self.stop_record_by_id(&session_id, "delete-session");
         }
-        if was_current {
-            self.current_session_id = next_current.clone();
-            if let Some(next_current) = &next_current {
-                self.emit_session_runtime_status(next_current, None);
-            }
-        }
+        let reusable_catalog = self
+            .current_session_id
+            .as_ref()
+            .is_some_and(|current| self.loaded.contains_key(current))
+            || !self.loaded.is_empty();
         let catalog_id = self.catalog_record()?;
-        let frame = {
+        let stop_catalog_after_delete = !reusable_catalog
+            && self
+                .loaded
+                .get(&catalog_id)
+                .is_some_and(|record| record.suppress_events && !record.has_visible_messages);
+        let frame_result = {
             let catalog = self.loaded.get_mut(&catalog_id).expect("catalog record");
             catalog.core.send_command(
                 "session_delete",
                 json!({ "session_id": session_id }),
                 SESSION_COMMAND_TIMEOUT_MS,
             )
+        };
+        if stop_catalog_after_delete {
+            self.stop_record_by_id(&catalog_id, "delete-session-catalog");
         }
-        .map_err(|error| error.message)?;
+        let frame = frame_result.map_err(|error| error.message)?;
         Ok(frame_with_payload(
             frame,
             json!({
@@ -2317,14 +2322,6 @@ impl SessionEngineManager {
         self.default_config = Some(config);
         Ok(())
     }
-
-    fn next_current_session_id_after_delete(&self, deleted_session_id: &str) -> Option<String> {
-        self.loaded
-            .values()
-            .filter(|record| record.session_id != deleted_session_id && record.has_visible_messages)
-            .max_by_key(|record| record.loaded_at)
-            .map(|record| record.session_id.clone())
-    }
 }
 
 impl Drop for SessionEngineManager {
@@ -2649,6 +2646,51 @@ fn save_markdown_export(app: AppHandle, payload: Value) -> Result<Value, String>
     }))
 }
 
+#[tauri::command]
+fn save_jsonl_export(app: AppHandle, payload: Value) -> Result<Value, String> {
+    let records = payload
+        .get("records")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "invalid JSONL export payload".to_string())?;
+    let suggested = safe_jsonl_filename(payload.get("suggested_filename").and_then(Value::as_str));
+    let file_path = app
+        .dialog()
+        .file()
+        .set_title("导出 JSONL")
+        .set_file_name(&suggested)
+        .add_filter("JSON Lines", &["jsonl"])
+        .blocking_save_file();
+    let Some(file_path) = file_path else {
+        return Ok(json!({ "canceled": true }));
+    };
+    let jsonl_path = file_path
+        .into_path()
+        .map_err(|error| format!("failed to resolve selected path: {error}"))?;
+    let jsonl_path = ensure_jsonl_extension(jsonl_path);
+    let parsed_dir = jsonl_path
+        .parent()
+        .ok_or_else(|| "selected export path has no parent directory".to_string())?
+        .to_path_buf();
+    let mut contents = String::new();
+    for record in records {
+        contents.push_str(
+            &serde_json::to_string(record)
+                .map_err(|error| format!("failed to serialize JSONL export: {error}"))?,
+        );
+        contents.push('\n');
+    }
+
+    fs::create_dir_all(&parsed_dir)
+        .map_err(|error| format!("failed to create export directory: {error}"))?;
+    fs::write(&jsonl_path, contents)
+        .map_err(|error| format!("failed to write JSONL export: {error}"))?;
+
+    Ok(json!({
+        "canceled": false,
+        "jsonlPath": jsonl_path,
+    }))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -2701,7 +2743,8 @@ pub fn run() {
             send_command,
             select_working_directory,
             set_minimum_content_size,
-            save_markdown_export
+            save_markdown_export,
+            save_jsonl_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
@@ -3139,6 +3182,16 @@ fn ensure_markdown_extension(path: PathBuf) -> PathBuf {
     }
 }
 
+fn ensure_jsonl_extension(path: PathBuf) -> PathBuf {
+    if path.extension().is_some() {
+        path
+    } else {
+        let mut path = path;
+        path.set_extension("jsonl");
+        path
+    }
+}
+
 fn safe_markdown_filename(value: Option<&str>) -> String {
     let base = value
         .map(str::trim)
@@ -3149,6 +3202,20 @@ fn safe_markdown_filename(value: Option<&str>) -> String {
         base.to_string()
     } else {
         format!("{base}.md")
+    };
+    filename_with_timestamp(&filename)
+}
+
+fn safe_jsonl_filename(value: Option<&str>) -> String {
+    let base = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| Path::new(value).file_name().and_then(|name| name.to_str()))
+        .unwrap_or("hawi-export.jsonl");
+    let filename = if base.to_ascii_lowercase().ends_with(".jsonl") {
+        base.to_string()
+    } else {
+        format!("{base}.jsonl")
     };
     filename_with_timestamp(&filename)
 }

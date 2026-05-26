@@ -11,7 +11,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, Image as ImageIcon, LoaderCircle, Lock, Paperclip, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { BlobSource, ContentPart, CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, MediaSource, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
+import type { BlobSource, ContentPart, CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, JsonlExportPayload, MarkdownExportPayload, MediaSource, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { MIN_CONTENT_SIZE, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
@@ -299,6 +299,7 @@ type EscapeDismissTarget =
   | "contextPopover"
   | "pluginDialog"
   | "modelDialog"
+  | "exportMenu"
   | "debugMenu"
   | "queueTaskEdit"
   | "queuePopover"
@@ -310,6 +311,7 @@ interface EscapeDismissState {
   pluginDialogOpen: boolean;
   modelDialogOpen: boolean;
   subagentObserverOpen: boolean;
+  exportMenuOpen: boolean;
   debugMenuOpen: boolean;
   queuePopoverOpen: boolean;
   editingQueueTaskId: string | null;
@@ -321,6 +323,7 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
+  if (state.exportMenuOpen) return "exportMenu";
   if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) {
@@ -335,6 +338,7 @@ function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTar
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
   if (state.debugMenuOpen) return "debugMenu";
+  if (state.exportMenuOpen) return "exportMenu";
   if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) return "queuePopover";
@@ -354,6 +358,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
       return ".plugin-modal";
     case "modelDialog":
       return ".model-modal";
+    case "exportMenu":
+      return ".overflow-toolbar-list .export-menu-popover";
     case "debugMenu":
       return ".menu-popover";
     case "queueTaskEdit":
@@ -432,6 +438,8 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
       case "sessionDialog":
         return scope.querySelector<HTMLElement>(".session-option.current .session-title-button:not(:disabled)")
           ?? scope.querySelector<HTMLElement>(".session-title-button:not(:disabled)");
+      case "exportMenu":
+        return scope.querySelector<HTMLElement>(".menu-item:not(:disabled)");
       case "debugMenu":
       case "queueTaskEdit":
       case "queuePopover":
@@ -644,6 +652,7 @@ export default function App() {
   const [contextCompactBusy, setContextCompactBusy] = useState(false);
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
@@ -861,6 +870,24 @@ export default function App() {
     blobPreviewUrlsRef.current = blobPreviewUrls;
   }, [blobPreviewUrls]);
 
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".export-menu-anchor")) return;
+      setExportMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [exportMenuOpen]);
+
+  useEffect(() => {
+    if (currentSessionId && state.sessionMessageCount > 0) return;
+    setExportMenuOpen(false);
+  }, [currentSessionId, state.sessionMessageCount]);
+
   useEffect(() => () => {
     for (const pending of pendingBlobPreviewFetchesRef.current.values()) {
       window.clearTimeout(pending.timeoutId);
@@ -895,6 +922,7 @@ export default function App() {
         pluginDialogOpen,
         modelDialogOpen,
         subagentObserverOpen: subagentObserverId !== null,
+        exportMenuOpen,
         debugMenuOpen,
         queuePopoverOpen,
         editingQueueTaskId,
@@ -927,6 +955,9 @@ export default function App() {
             break;
           case "modelDialog":
             setModelDialogOpen(false);
+            break;
+          case "exportMenu":
+            setExportMenuOpen(false);
             break;
           case "debugMenu":
             setDebugMenuOpen(false);
@@ -977,6 +1008,7 @@ export default function App() {
     pluginDialogOpen,
     modelDialogOpen,
     subagentObserverId,
+    exportMenuOpen,
     debugMenuOpen,
     queuePopoverOpen,
     editingQueueTaskId,
@@ -1115,8 +1147,9 @@ export default function App() {
     if (!payload) return;
     const sessionId = optionalPayloadString(payload.session_id);
     const loadState = normalizeSessionLoadState(payload.load_state);
+    const hasCurrentSessionId = hasPayloadKey(payload, "current_session_id");
     const currentId = optionalPayloadString(payload.current_session_id);
-    if (currentId) {
+    if (hasCurrentSessionId) {
       setCurrentSessionId(currentId);
     }
     setSessionStats((current) => ({
@@ -1343,9 +1376,12 @@ export default function App() {
       loaded: optionalPayloadNumber(payload.loaded_session_count) ?? nextSessions.filter((item) => item.load_state === "loaded" || item.load_state === "running").length,
       maxLoaded: optionalPayloadNumber(payload.max_loaded_sessions) ?? current.maxLoaded
     }));
+    const hasCurrentSessionId = hasPayloadKey(payload, "current_session_id");
     const nextCurrent = optionalPayloadString(payload.current_session_id);
-    if (nextCurrent) {
+    if (hasCurrentSessionId) {
       setCurrentSessionId(nextCurrent);
+    }
+    if (nextCurrent) {
       syncConfigFromSession(nextCurrent, nextSessions);
     }
     return nextSessions;
@@ -1427,13 +1463,19 @@ export default function App() {
       const frame = await sendCommand("session_delete", { session_id: sessionId }, null);
       if (!frame) return;
       setSessions((items) => items.filter((item) => item.session_id !== sessionId));
-      const nextCurrent = optionalPayloadString(framePayload(frame)?.current_session_id);
-      if (nextCurrent) {
+      const payload = framePayload(frame);
+      const hasCurrentSessionId = hasPayloadKey(payload, "current_session_id");
+      const nextCurrent = optionalPayloadString(payload?.current_session_id);
+      if (hasCurrentSessionId) {
+        currentSessionIdRef.current = nextCurrent;
         setCurrentSessionId(nextCurrent);
       }
       const refreshed = await refreshSessions();
       if (nextCurrent) {
         syncConfigFromSession(nextCurrent, refreshed);
+      } else if (hasCurrentSessionId) {
+        setMainLocateTarget(null);
+        followTailRef.current = true;
       }
     } finally {
       setSessionBusy(false);
@@ -2400,18 +2442,38 @@ export default function App() {
     setPluginDialogOpen(false);
   }
 
-  async function exportCurrentSession() {
+  async function exportCurrentSession(format: "markdown" | "jsonl") {
     if (!currentSessionId || exportBusy) return;
+    setExportMenuOpen(false);
     setExportBusy(true);
     try {
-      const frame = await sendCommand("session_export_markdown", { session_id: currentSessionId });
-      const exportPayload = normalizeMarkdownExportPayload(frame?.payload?.export);
-      if (!exportPayload) {
-        throw new Error("导出结果为空");
+      if (format === "markdown") {
+        const frame = await sendCommand("session_export_markdown", { session_id: currentSessionId });
+        const exportPayload = normalizeMarkdownExportPayload(frame?.payload?.export);
+        if (!exportPayload) {
+          throw new Error("导出结果为空");
+        }
+        const saved = await window.hawi.saveMarkdownExport(exportPayload);
+        if (!saved.canceled && saved.markdownPath) {
+          dispatch(metaFrame(`Markdown 已导出：${saved.markdownPath}`));
+        }
+        return;
       }
-      const saved = await window.hawi.saveMarkdownExport(exportPayload);
-      if (!saved.canceled && saved.markdownPath) {
-        dispatch(metaFrame(`Markdown 已导出：${saved.markdownPath}`));
+
+      const savedFrame = await sendCommand("session_save_now", { session_id: currentSessionId }, currentSessionId);
+      if (!savedFrame) return;
+      const frame = await sendCommand("session_history", { session_id: currentSessionId }, currentSessionId);
+      const payload = framePayload(frame);
+      if (!Array.isArray(payload?.message_history)) {
+        throw new Error("JSONL 导出结果为空");
+      }
+      const exportPayload: JsonlExportPayload = {
+        suggested_filename: `hawi-session-${currentSessionId}.jsonl`,
+        records: payload.message_history
+      };
+      const saved = await window.hawi.saveJsonlExport(exportPayload);
+      if (!saved.canceled && saved.jsonlPath) {
+        dispatch(metaFrame(`JSONL 已导出：${saved.jsonlPath}`));
       }
     } catch (error) {
       dispatch(errorFrame(error));
@@ -2484,6 +2546,7 @@ export default function App() {
   const currentProjectPath = sessions.find((session) => session.session_id === currentSessionId)?.last_cwd
     ?? metadata.currentWorkspaceRoot
     ?? null;
+  const exportDisabled = !currentSessionId || state.sessionMessageCount === 0 || exportBusy;
   const toolbarItems: OverflowToolbarItem[] = [
     {
       id: "plugins",
@@ -2518,20 +2581,70 @@ export default function App() {
       )
     },
     {
-      id: "export-markdown",
-      render: (placement, closeOverflow) => (
-        <button
-          type="button"
-          className={toolbarItemClass(placement)}
-          title="导出当前 Session Markdown"
-          disabled={!currentSessionId || state.sessionMessageCount === 0 || exportBusy}
-          onClick={() => {
-            closeOverflow();
-            void exportCurrentSession();
-          }}
-        >
-          <FileText size={toolbarIconSize(placement)} /> {exportBusy ? "导出中" : "导出 Markdown"}
-        </button>
+      id: "export",
+      render: (placement, closeOverflow) => placement === "overflow" ? (
+        <>
+          <button
+            type="button"
+            className="menu-item"
+            disabled={exportDisabled}
+            onClick={() => {
+              closeOverflow();
+              void exportCurrentSession("jsonl");
+            }}
+          >
+            <FileText size={toolbarIconSize(placement)} /> 导出 JSONL
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            disabled={exportDisabled}
+            onClick={() => {
+              closeOverflow();
+              void exportCurrentSession("markdown");
+            }}
+          >
+            <FileText size={toolbarIconSize(placement)} /> 导出 Markdown
+          </button>
+        </>
+      ) : (
+        <div className="export-menu-anchor">
+          <button
+            type="button"
+            className={toolbarItemClass(placement, exportMenuOpen)}
+            title="导出当前 Session"
+            aria-haspopup="menu"
+            aria-expanded={exportMenuOpen}
+            disabled={exportDisabled}
+            onClick={() => {
+              closeOverflow();
+              setDebugMenuOpen(false);
+              setExportMenuOpen((open) => !open);
+            }}
+          >
+            <FileText size={toolbarIconSize(placement)} /> {exportBusy ? "导出中" : "导出"} <ChevronDown size={14} />
+          </button>
+          {exportMenuOpen && (
+            <div className="menu-popover export-menu-popover" role="menu">
+              <button
+                type="button"
+                className="menu-item"
+                disabled={exportBusy}
+                onClick={() => void exportCurrentSession("jsonl")}
+              >
+                <FileText size={15} /> JSONL
+              </button>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={exportBusy}
+                onClick={() => void exportCurrentSession("markdown")}
+              >
+                <FileText size={15} /> Markdown
+              </button>
+            </div>
+          )}
+        </div>
       )
     },
     {
@@ -3201,7 +3314,7 @@ function SessionStatusCell({
     ? sessionDisplayName(currentSession)
     : currentSessionId
       ? shortSessionId(currentSessionId)
-      : "-";
+      : "New Session";
   const sessionRuntimeLabel = `${runningCount} Running / ${loadedCount} Active`;
   const currentSessionLabel = `Current: ${currentSessionName}`;
 
@@ -6558,6 +6671,10 @@ function framePayload(frame: CoreFrame | null): Record<string, unknown> | null {
   return frame.payload as Record<string, unknown>;
 }
 
+function hasPayloadKey(payload: Record<string, unknown> | null, key: string): boolean {
+  return Boolean(payload && Object.prototype.hasOwnProperty.call(payload, key));
+}
+
 function normalizeHistorySearchResults(value: unknown): HistorySearchResult[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -6769,7 +6886,7 @@ function mimeTypeFromFilename(filename: string): string | undefined {
 }
 
 function fileExtension(filename: string): string {
-  const match = /\.([^.\/\\]+)$/.exec(filename.toLowerCase());
+  const match = /\.([^./\\]+)$/.exec(filename.toLowerCase());
   return match?.[1] ?? "";
 }
 

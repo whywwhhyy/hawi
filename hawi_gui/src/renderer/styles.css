@@ -126,8 +126,19 @@ button:disabled {
   position: relative;
 }
 
+.export-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
 .overflow-toolbar-menu {
   right: 0;
+}
+
+.export-menu-popover {
+  left: 0;
+  right: auto;
+  min-width: 176px;
 }
 
 .overflow-toolbar-menu-item {

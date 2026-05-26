@@ -266,7 +266,7 @@ describe("SessionEngineManager", () => {
     expect(internals.loaded.has("session-3")).toBe(false);
   });
 
-  it("closes a loaded current session before deleting it and selects another loaded session", async () => {
+  it("closes a loaded current session before deleting it and returns to an empty new session", async () => {
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;
     const current = fakeRecord("session-current", 1);
@@ -282,8 +282,33 @@ describe("SessionEngineManager", () => {
     expect(current.core.stoppedReason).toBe("delete-session");
     expect(next.core.commands.some((command) => command.type === "session_delete")).toBe(true);
     expect(internals.loaded.has(current.sessionId)).toBe(false);
-    expect(internals.currentSessionId).toBe(next.sessionId);
-    expect((frame.payload as Record<string, unknown>).current_session_id).toBe(next.sessionId);
+    expect(internals.currentSessionId).toBeNull();
+    expect((frame.payload as Record<string, unknown>).current_session_id).toBeNull();
+  });
+
+  it("stops the temporary catalog engine after deleting the only current session", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const current = fakeRecord("session-current", 1);
+    current.hasVisibleMessages = true;
+    internals.currentSessionId = current.sessionId;
+    internals.loaded.set(current.sessionId, current);
+    const catalogCore = new FakeCore();
+    internals.startRecord = (sessionId, launchProfile, options) => {
+      const record = fakeRecord(sessionId, 2, catalogCore, launchProfile);
+      record.suppressEvents = Boolean(options.suppressEvents);
+      internals.loaded.set(sessionId, record);
+      return record;
+    };
+
+    const frame = await manager.sendCommand("session_delete", { session_id: current.sessionId });
+
+    expect(current.core.stoppedReason).toBe("delete-session");
+    expect(catalogCore.commands.some((command) => command.type === "session_delete")).toBe(true);
+    expect(catalogCore.stoppedReason).toBe("delete-session-catalog");
+    expect(internals.currentSessionId).toBeNull();
+    expect(internals.loaded.size).toBe(0);
+    expect((frame.payload as Record<string, unknown>).current_session_id).toBeNull();
   });
 
   it("rejects direct deletion of running loaded sessions", async () => {

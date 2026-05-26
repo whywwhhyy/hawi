@@ -4,8 +4,10 @@ import type {
   CoreCommandType,
   CoreFrame,
   GuiMetadata,
+  JsonlExportPayload,
   MarkdownExportPayload,
   PersistedConfig,
+  SaveJsonlExportResult,
   SaveMarkdownExportResult,
   SelectWorkingDirectoryResult,
 } from "../shared/protocol";
@@ -40,6 +42,9 @@ if (isTauriRuntime() && !window.hawi) {
     },
     saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {
       return invoke("save_markdown_export", { payload });
+    },
+    saveJsonlExport(payload: JsonlExportPayload): Promise<SaveJsonlExportResult> {
+      return invoke("save_jsonl_export", { payload });
     },
     selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
       return invoke("select_working_directory");

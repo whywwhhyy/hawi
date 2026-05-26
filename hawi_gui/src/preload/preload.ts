@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CoreCommandType, CoreFrame, GuiMetadata, MarkdownExportPayload, PersistedConfig, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, JsonlExportPayload, MarkdownExportPayload, PersistedConfig, SaveJsonlExportResult, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
 import type { LayoutSize } from "../shared/layout";
 
 const api = {
@@ -20,6 +20,9 @@ const api = {
   },
   saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {
     return ipcRenderer.invoke("gui:save-markdown-export", payload);
+  },
+  saveJsonlExport(payload: JsonlExportPayload): Promise<SaveJsonlExportResult> {
+    return ipcRenderer.invoke("gui:save-jsonl-export", payload);
   },
   selectWorkingDirectory(): Promise<SelectWorkingDirectoryResult> {
     return ipcRenderer.invoke("gui:select-working-directory");

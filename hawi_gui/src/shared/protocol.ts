@@ -293,6 +293,16 @@ export interface SaveMarkdownExportResult {
   referenceDir?: string;
 }
 
+export interface JsonlExportPayload {
+  suggested_filename: string;
+  records: unknown[];
+}
+
+export interface SaveJsonlExportResult {
+  canceled: boolean;
+  jsonlPath?: string;
+}
+
 export interface SelectWorkingDirectoryResult {
   canceled: boolean;
   path?: string;
