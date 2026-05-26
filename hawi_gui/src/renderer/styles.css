@@ -812,11 +812,14 @@ button:disabled {
   border-radius: var(--radius);
   background: transparent;
   color: #64777a;
+  opacity: 0.78;
 }
 
+.session-edit:focus-visible,
 .session-edit:hover:not(:disabled) {
   background: var(--color-primary-tint);
   color: var(--color-primary-dark);
+  opacity: 1;
 }
 
 .session-edit:disabled {

@@ -439,7 +439,42 @@ class TestSessionManager:
         )
         assert manifest["name"] == "new name"
         assert manifest["last_checkpoint_event"] == "session_rename"
+        assert manifest["title_auto_generated"] is False
+        assert isinstance(manifest["title_user_edited_at"], str)
         assert sm.list_sessions()[0].name == "new name"
+
+    def test_auto_title_current_session_updates_default_name(self, stub_setup) -> None:
+        sm, agent, _ = stub_setup
+        sid = sm.new_session()
+        agent.context.add_user_message("hello")
+        sm.save_now()
+
+        assert sm.session_needs_auto_title(sid) is True
+        assert sm.auto_title_session(sid, "Useful Title") is True
+
+        manifest = json.loads(
+            layout.manifest_path(layout.session_dir(sm._root, sid)).read_text()
+        )
+        assert manifest["name"] == "Useful Title"
+        assert manifest["last_checkpoint_event"] == "session_auto_title"
+        assert manifest["title_auto_generated"] is True
+        assert isinstance(manifest["title_generated_at"], str)
+        assert sm.session_needs_auto_title(sid) is False
+        assert sm.list_sessions()[0].name == "Useful Title"
+
+    def test_auto_title_does_not_override_manual_name(self, stub_setup) -> None:
+        sm, agent, _ = stub_setup
+        sid = sm.new_session(name="manual name")
+        agent.context.add_user_message("hello")
+        sm.save_now()
+
+        assert sm.session_needs_auto_title(sid) is False
+        assert sm.auto_title_session(sid, "Generated") is False
+
+        manifest = json.loads(
+            layout.manifest_path(layout.session_dir(sm._root, sid)).read_text()
+        )
+        assert manifest["name"] == "manual name"
 
     def test_rename_unloaded_session_updates_manifest(self, session_root: Path) -> None:
         agent = _StubAgent()

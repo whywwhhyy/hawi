@@ -53,6 +53,23 @@ DEFAULT_SYSTEM_PROMPT = "你是Hawi，一个通用agent"
 
 DEFAULT_RESUME_PROMPT = "继续"
 
+AUTO_SESSION_TITLE_MAX_CHARS = 48
+AUTO_SESSION_TITLE_MAX_TRANSCRIPT_CHARS = 4_000
+AUTO_SESSION_TITLE_TIMEOUT_SECONDS = 20.0
+AUTO_SESSION_TITLE_SYSTEM_PROMPT = (
+    "你是 Hawi 的会话标题生成器。根据用户与助手的对话生成一个简洁标题。"
+    "只输出标题本身，不要引号、编号、前缀或句号；使用对话的主要语言；"
+    "不超过 18 个中文字符或 8 个英文单词；避免“新会话”“问题讨论”等泛泛标题。"
+)
+AUTO_SESSION_TITLE_USER_PROMPT = (
+    "请为下面这段 Hawi 会话生成一个适合显示在侧边栏的短标题：\n\n"
+    "{transcript}"
+)
+_TITLE_PREFIX_RE = re.compile(
+    r"^(?:#+\s*)?(?:标题|title)\s*[:：-]\s*",
+    re.IGNORECASE,
+)
+
 _EXTRA_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 SERVER_CAPS: frozenset[str] = frozenset({
@@ -282,6 +299,8 @@ class CoreRuntime:
         self._broadcast_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
             maxsize=broadcast_queue_size
         )
+        self._auto_title_tasks: set[asyncio.Task[None]] = set()
+        self._auto_title_pending_sessions: set[str] = set()
         self._shutdown_requested = asyncio.Event()
         self._started = False
 
@@ -337,6 +356,14 @@ class CoreRuntime:
         if self._status_task and not self._status_task.done():
             self._status_task.cancel()
             await asyncio.gather(self._status_task, return_exceptions=True)
+
+        auto_title_tasks = list(self._auto_title_tasks)
+        for task in auto_title_tasks:
+            task.cancel()
+        if auto_title_tasks:
+            await asyncio.gather(*auto_title_tasks, return_exceptions=True)
+        self._auto_title_tasks.clear()
+        self._auto_title_pending_sessions.clear()
 
         await self._stop_runner(self._runner, self._runner_task, self._plugins)
         self._runner = None
@@ -1988,6 +2015,254 @@ class CoreRuntime:
     def _on_hawi_event(self, event: Event) -> None:
         for frame in self._mapper.map(event):
             self.emit(frame)
+        if event.type == "agent.run_stop":
+            self._schedule_session_auto_title()
+
+    def _schedule_session_auto_title(self) -> None:
+        loop = self._loop
+        if loop is None or self._shutdown_requested.is_set():
+            return
+        loop.call_soon_threadsafe(self._start_session_auto_title_task)
+
+    def _start_session_auto_title_task(self) -> None:
+        if self._shutdown_requested.is_set():
+            return
+        sm = self._session_manager
+        runner = self._runner
+        if sm is None or runner is None:
+            return
+        session_id = sm.current_session_id
+        if not session_id or session_id in self._auto_title_pending_sessions:
+            return
+        try:
+            if not sm.session_needs_auto_title(session_id):
+                return
+        except Exception:
+            logger.debug("failed to inspect session title state", exc_info=True)
+            return
+
+        context = getattr(runner.agent, "context", None)
+        title_input = self._auto_title_input(getattr(context, "messages", None))
+        if title_input is None:
+            return
+        transcript, fallback_source = title_input
+        model = getattr(runner.agent, "model", None)
+        self._auto_title_pending_sessions.add(session_id)
+        task = asyncio.create_task(
+            self._generate_and_apply_session_title(
+                session_id,
+                transcript,
+                fallback_source,
+                model,
+            ),
+            name=f"session-auto-title-{session_id}",
+        )
+        self._auto_title_tasks.add(task)
+        task.add_done_callback(
+            lambda done, sid=session_id: self._auto_title_task_done(sid, done)
+        )
+
+    def _auto_title_task_done(
+        self,
+        session_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        self._auto_title_pending_sessions.discard(session_id)
+        self._auto_title_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            logger.exception("session auto-title task failed for %s", session_id)
+
+    async def _generate_and_apply_session_title(
+        self,
+        session_id: str,
+        transcript: str,
+        fallback_source: str,
+        model: Any,
+    ) -> None:
+        sm = self._session_manager
+        if sm is None:
+            return
+        try:
+            if not sm.session_needs_auto_title(session_id):
+                return
+        except Exception:
+            logger.debug("failed to re-check session title state", exc_info=True)
+            return
+
+        title = ""
+        if callable(getattr(model, "ainvoke", None)):
+            try:
+                raw_title = await asyncio.wait_for(
+                    self._generate_session_title_with_model(model, transcript),
+                    timeout=AUTO_SESSION_TITLE_TIMEOUT_SECONDS,
+                )
+                title = self._clean_generated_session_title(raw_title)
+            except Exception:
+                logger.debug("model-generated session title failed", exc_info=True)
+
+        if not title:
+            title = self._fallback_session_title(fallback_source)
+        if not title:
+            return
+
+        try:
+            applied = sm.auto_title_session(session_id, title)
+        except Exception:
+            logger.debug("failed to persist session auto title", exc_info=True)
+            return
+        if not applied:
+            return
+
+        self.emit(
+            make_frame(
+                "session.title_updated",
+                {
+                    "session_id": session_id,
+                    "name": title,
+                    "auto_generated": True,
+                    "current_session_id": sm.current_session_id,
+                },
+            )
+        )
+
+    async def _generate_session_title_with_model(
+        self,
+        model: Any,
+        transcript: str,
+    ) -> str:
+        try:
+            return await self._collect_session_title_text(
+                model,
+                transcript,
+                streaming=False,
+            )
+        except NotImplementedError:
+            return await self._collect_session_title_text(
+                model,
+                transcript,
+                streaming=True,
+            )
+
+    async def _collect_session_title_text(
+        self,
+        model: Any,
+        transcript: str,
+        *,
+        streaming: bool,
+    ) -> str:
+        chunks: list[str] = []
+        async for delta in model.ainvoke(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": AUTO_SESSION_TITLE_USER_PROMPT.format(
+                                transcript=transcript
+                            ),
+                        }
+                    ],
+                    "name": None,
+                    "metadata": None,
+                }
+            ],
+            streaming=streaming,
+            system=[{"type": "text", "text": AUTO_SESSION_TITLE_SYSTEM_PROMPT}],
+            tools=None,
+            max_output_tokens=64,
+        ):
+            if isinstance(delta, Event):
+                continue
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                chunks.append(str(delta.get("delta", "")))
+        return "".join(chunks)
+
+    @classmethod
+    def _auto_title_input(cls, messages: Any) -> tuple[str, str] | None:
+        if not isinstance(messages, list):
+            return None
+        lines: list[str] = []
+        first_user_text = ""
+        seen_user = False
+        for message in messages:
+            if len(lines) >= 8:
+                break
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role not in {"user", "assistant"}:
+                continue
+            text = cls._message_plain_text(message)
+            if text is None:
+                continue
+            text = cls._compact_title_text(text, max_chars=1_000)
+            if not text:
+                continue
+            if role == "user":
+                seen_user = True
+                if not first_user_text:
+                    first_user_text = text
+            label = "用户" if role == "user" else "助手"
+            lines.append(f"{label}: {text}")
+        if not seen_user or not lines:
+            return None
+        transcript = "\n".join(lines)
+        if len(transcript) > AUTO_SESSION_TITLE_MAX_TRANSCRIPT_CHARS:
+            transcript = transcript[:AUTO_SESSION_TITLE_MAX_TRANSCRIPT_CHARS].rstrip()
+        return transcript, first_user_text or transcript
+
+    @classmethod
+    def _clean_generated_session_title(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        text = lines[0]
+        text = text.strip("` \t")
+        text = re.sub(r"^[-*•\d.\s]+", "", text).strip()
+        while True:
+            updated = _TITLE_PREFIX_RE.sub("", text).strip()
+            if updated == text:
+                break
+            text = updated
+        text = text.strip("\"'“”‘’「」『』《》<>[]() ")
+        text = cls._compact_title_text(
+            text,
+            max_chars=AUTO_SESSION_TITLE_MAX_CHARS,
+        )
+        text = text.rstrip(" .。!！?？,，;；:：")
+        if text.lower() in {"untitled", "new session", "session", "chat"}:
+            return ""
+        if text in {"新会话", "问题讨论", "会话总结", "聊天记录"}:
+            return ""
+        return text
+
+    @classmethod
+    def _fallback_session_title(cls, source: str) -> str:
+        title = cls._compact_title_text(
+            source,
+            max_chars=AUTO_SESSION_TITLE_MAX_CHARS,
+        )
+        return title.rstrip(" .。!！?？,，;；:：")
+
+    @staticmethod
+    def _compact_title_text(text: str, *, max_chars: int) -> str:
+        compact = re.sub(r"\s+", " ", text).strip()
+        if len(compact) <= max_chars:
+            return compact
+        truncated = compact[:max_chars].rstrip()
+        if " " in truncated and " " in compact[max_chars : max_chars + 16]:
+            truncated = truncated.rsplit(" ", 1)[0].rstrip()
+        return truncated
 
     def _require_runner(self) -> AgentRunner:
         if self._runner is None:

@@ -102,6 +102,7 @@ EVENT_TYPES = {
     "agent.compact_start",
     "agent.compact_stop",
     "agent.interrupt",
+    "session.title_updated",
     "runner.interrupt",
     "runner.paused",
     "runner.resumed",

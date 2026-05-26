@@ -86,6 +86,8 @@ class DummyExecutor:
 class DummyAgent:
     def __init__(self) -> None:
         self.context = self
+        self.messages: list[Any] = []
+        self.model: Any = None
         self.model_name = ""
         self._auto_compact = AutoCompactConfig(
             max_context_tokens=1000,
@@ -181,6 +183,7 @@ class DummySessionManager:
     def __init__(self) -> None:
         self.loaded: str | None = None
         self.deleted: list[str] = []
+        self.needs_auto_title = True
         self.histories = {
             "current-session": [
                 {
@@ -339,6 +342,27 @@ class DummySessionManager:
 
     def rename_session(self, session_id: str, name: str) -> None:
         self.renamed_session = (session_id, name)
+
+    def session_needs_auto_title(self, session_id: str | None = None) -> bool:
+        self.auto_title_checked_session = session_id or self.current_session_id
+        return self.needs_auto_title
+
+    def auto_title_session(self, session_id: str, title: str) -> bool:
+        if not self.needs_auto_title:
+            return False
+        self.auto_titled_session = (session_id, title)
+        self.needs_auto_title = False
+        return True
+
+
+class TitleModel:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[dict[str, Any]] = []
+
+    async def ainvoke(self, **kwargs: Any):
+        self.calls.append(kwargs)
+        yield {"type": "text_delta", "delta": self.text}
 
 
 class SimpleTool(AgentTool):
@@ -574,6 +598,28 @@ async def test_compact_context_command_rejects_busy_runner() -> None:
     assert client.sent[-1]["type"] == "error"
     assert client.sent[-1]["payload"]["code"] == "busy"
     assert runner.agent.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_auto_session_title_uses_model_and_updates_session_manager() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    runner = DummyAgentRunner()
+    sm = DummySessionManager()
+    model = TitleModel("标题：修复会话标题")
+    runner.agent.model = model
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime._generate_and_apply_session_title(
+        "current-session",
+        "用户: 我想给 Hawi session 增加自动总结标题\n助手: 可以在 run_stop 后生成标题",
+        "我想给 Hawi session 增加自动总结标题",
+        model,
+    )
+
+    assert sm.auto_title_checked_session == "current-session"
+    assert sm.auto_titled_session == ("current-session", "修复会话标题")
+    assert model.calls[0]["max_output_tokens"] == 64
 
 
 @pytest.mark.asyncio

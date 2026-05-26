@@ -347,6 +347,8 @@ class SessionManager:
                             "session_id": session_id,
                             "name": next_name,
                             "last_checkpoint_event": "session_rename",
+                            "title_auto_generated": False,
+                            "title_user_edited_at": datetime.now().isoformat(),
                         },
                     )
                 return
@@ -361,10 +363,92 @@ class SessionManager:
                         "session_id": session_id,
                         "name": next_name,
                         "last_checkpoint_event": "session_rename",
+                        "title_auto_generated": False,
+                        "title_user_edited_at": datetime.now().isoformat(),
                     },
                 )
             finally:
                 lock.release()
+
+    def session_needs_auto_title(self, session_id: str | None = None) -> bool:
+        """Return whether a session still has its default generated name."""
+        sid = session_id or self._session_id
+        if sid is None:
+            return False
+        with self._lock:
+            manifest = self._read_manifest(sid)
+            current_name = manifest.get("name")
+            if not isinstance(current_name, str) and sid == self._session_id:
+                current_name = self._session_name
+            return self._session_title_can_auto_update(
+                sid,
+                current_name,
+                manifest,
+            )
+
+    def auto_title_session(self, session_id: str, title: str) -> bool:
+        """Persist a model-generated title if the user has not named the session.
+
+        Returns True when the title was applied. Manual names and previously
+        auto-generated titles are left untouched so background title generation
+        cannot surprise the user after the first successful update.
+        """
+        next_name = title.strip()
+        if not session_id:
+            raise ValueError("session_id must be a non-empty string")
+        if not next_name:
+            raise ValueError("title must be a non-empty string")
+
+        with self._lock:
+            self._writer.wait_idle(timeout=10.0)
+            session_dir = layout.session_dir(self._root, session_id)
+            manifest_path = layout.manifest_path(session_dir)
+            manifest = self._read_manifest(session_id)
+            current_name = manifest.get("name")
+            if not isinstance(current_name, str) and session_id == self._session_id:
+                current_name = self._session_name
+            if not self._session_title_can_auto_update(
+                session_id,
+                current_name,
+                manifest,
+            ):
+                return False
+
+            timestamp = datetime.now().isoformat()
+            if session_id == self._session_id:
+                if not session_dir.exists() or not manifest_path.exists():
+                    return False
+                self._session_name = next_name
+                self._ensure_current_session_lock()
+                self._patch_manifest(
+                    session_dir,
+                    {
+                        "session_id": session_id,
+                        "name": next_name,
+                        "last_checkpoint_event": "session_auto_title",
+                        "title_auto_generated": True,
+                        "title_generated_at": timestamp,
+                    },
+                )
+                return True
+
+            if not session_dir.exists() or not manifest_path.exists():
+                return False
+            lock = self._acquire_session_lock(session_id)
+            try:
+                self._patch_manifest(
+                    session_dir,
+                    {
+                        "session_id": session_id,
+                        "name": next_name,
+                        "last_checkpoint_event": "session_auto_title",
+                        "title_auto_generated": True,
+                        "title_generated_at": timestamp,
+                    },
+                )
+            finally:
+                lock.release()
+        return True
 
     def load_session(self, session_id: str) -> None:
         """Load a session's on-disk state into the attached agent."""
@@ -1378,6 +1462,21 @@ class SessionManager:
         return [
             getattr(p, "plugin_name", p.__class__.__name__) for p in self._iter_plugins()
         ]
+
+    @staticmethod
+    def _session_title_can_auto_update(
+        session_id: str,
+        current_name: Any,
+        manifest: dict[str, Any],
+    ) -> bool:
+        if manifest.get("title_auto_generated") is True:
+            return False
+        if manifest.get("title_user_edited_at"):
+            return False
+        if not isinstance(current_name, str):
+            return True
+        name = current_name.strip()
+        return not name or name == session_id
 
     def _read_context_snapshot(self, session_id: str) -> dict[str, Any]:
         ctx_path = layout.context_path(layout.session_dir(self._root, session_id))

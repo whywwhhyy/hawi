@@ -1114,6 +1114,10 @@ export default function App() {
       applySessionRuntimeStatus(frame);
       return;
     }
+    if (frame.type === "session.title_updated") {
+      applySessionTitleUpdated(frame);
+      return;
+    }
     const sessionId = frameSessionId(frame) ?? currentSessionIdRef.current;
     dispatchSessionState({ sessionId, frame });
   }
@@ -1166,6 +1170,45 @@ export default function App() {
     }, {
       createIfMissing: payload.has_visible_messages === true
     }));
+  }
+
+  function applySessionTitleUpdated(frame: CoreFrame) {
+    const payload = framePayload(frame);
+    if (!payload) return;
+    const sessionId = optionalPayloadString(payload.session_id);
+    const name = optionalPayloadString(payload.name);
+    if (!sessionId || !name) return;
+    const updatedAt = new Date().toISOString();
+    setSessions((items) => {
+      const existing = items.find((item) => item.session_id === sessionId);
+      if (!existing) {
+        const isCurrent = sessionId === currentSessionIdRef.current;
+        return sortSessionsByCreatedAt([
+          {
+            session_id: sessionId,
+            name,
+            created_at: updatedAt,
+            updated_at: updatedAt,
+            last_checkpoint_event: "session_auto_title",
+            components_present: [],
+            locked: false,
+            lock_owner: null,
+            load_state: isCurrent ? "loaded" : undefined,
+          },
+          ...items,
+        ]);
+      }
+      return items.map((item) => (
+        item.session_id === sessionId
+          ? {
+              ...item,
+              name,
+              updated_at: updatedAt,
+              last_checkpoint_event: "session_auto_title",
+            }
+          : item
+      ));
+    });
   }
 
   function updateFollowTail() {
@@ -3433,19 +3476,6 @@ function SessionStatusCell({
                       {formatSessionTimestamp(session.created_at || session.updated_at)}
                     </small>
                     <div className="session-title-row">
-                      <button
-                        type="button"
-                        className="session-edit"
-                        title="重命名 Session"
-                        aria-label={`重命名 Session ${shortSessionId(session.session_id)}`}
-                        disabled={busy}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          startEditingSession(session);
-                        }}
-                      >
-                        <Pencil size={12} />
-                      </button>
                       {isEditing ? (
                         <input
                           ref={editInputRef}
@@ -3477,6 +3507,21 @@ function SessionStatusCell({
                           <SessionLoadIndicator state={session.load_state ?? "unloaded"} />
                           {isLocked && <Lock size={12} />}
                           <span className="session-name-text">{sessionDisplayName(session)}</span>
+                        </button>
+                      )}
+                      {!isEditing && (
+                        <button
+                          type="button"
+                          className="session-edit"
+                          title="重命名 Session"
+                          aria-label={`重命名 Session ${shortSessionId(session.session_id)}`}
+                          disabled={busy}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            startEditingSession(session);
+                          }}
+                        >
+                          <Pencil size={12} />
                         </button>
                       )}
                     </div>
