@@ -3310,13 +3310,27 @@ button:disabled {
   background: var(--color-surface-muted);
 }
 
-.attachment-chip img {
+.attachment-thumbnail {
   grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   height: 44px;
   border-radius: 6px;
-  object-fit: cover;
   background: var(--color-surface);
+  color: var(--color-text-subtle);
+}
+
+.attachment-chip img.attachment-thumbnail {
+  object-fit: cover;
+}
+
+.attachment-thumbnail-file,
+.attachment-thumbnail-document,
+.attachment-thumbnail-audio,
+.attachment-thumbnail-video {
+  border: 1px solid var(--color-border-subtle);
 }
 
 .attachment-chip figcaption {

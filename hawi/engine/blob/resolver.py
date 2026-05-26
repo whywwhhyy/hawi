@@ -29,8 +29,9 @@ async def resolve_blob_references_for_model(
     """Return a request copy with blob/data_uri media lowered for model adapters.
 
     Agent context and UI events keep compact ``hawi-blob://`` references. This
-    resolver runs only at the model boundary, where adapters currently expect
-    URL/data/base64 fields.
+    resolver runs only at the model boundary. Images are lowered to provider
+    data URLs; other file-like parts are conservatively downgraded to text
+    placeholders unless a later capability layer opts into richer handling.
     """
     messages: list[Message] = []
     changed = False
@@ -117,6 +118,11 @@ async def _resolve_media_part(
     blob_id = _blob_id_from_source(source)
     data_uri = source.get("data_uri")
 
+    if part_type != "image":
+        info = await store.info(blob_id) if blob_id else None
+        mime = _mime_for(part_type, source, info, data_uri=data_uri if isinstance(data_uri, str) else None)
+        return _media_placeholder_part(part, part_type, source, mime)
+
     if blob_id:
         info = await store.info(blob_id)
         data = await _read_blob(store, blob_id)
@@ -136,38 +142,56 @@ async def _resolve_media_part(
     else:
         return cast(ContentPart, deepcopy(part)), False
 
-    if part_type == "audio":
-        resolved = deepcopy(part)
-        resolved_source = _provider_source(source)
-        resolved_source["data"] = b64
-        resolved_source["url"] = data_uri
-        resolved_source["mime_type"] = mime
-        resolved_source.setdefault("format", _format_from_mime(mime, "wav"))
-        resolved["source"] = resolved_source
-        return cast(ContentPart, resolved), True
-
     resolved_source = _provider_source(source)
     resolved_source["url"] = data_uri
     resolved_source["mime_type"] = mime
-    if part_type == "video":
-        resolved_source["data"] = b64
-        resolved_source.setdefault("format", _format_from_mime(mime, "mp4"))
-
-    if part_type == "file":
-        title = part.get("title") or source.get("filename") or "File"
-        return cast(
-            ContentPart,
-            {
-                "type": "document",
-                "source": resolved_source,
-                "title": title,
-                "context": part.get("context"),
-            },
-        ), True
-
     resolved = deepcopy(part)
     resolved["source"] = resolved_source
     return cast(ContentPart, resolved), True
+
+
+def _media_placeholder_part(
+    part: Mapping[str, Any],
+    part_type: str,
+    source: Mapping[str, Any],
+    mime: str,
+) -> tuple[ContentPart, bool]:
+    return {"type": "text", "text": _media_placeholder_text(part, part_type, source, mime)}, True
+
+
+def _media_placeholder_text(
+    part: Mapping[str, Any],
+    part_type: str,
+    source: Mapping[str, Any],
+    mime: str,
+) -> str:
+    filename = _media_filename(part, source)
+    label = {
+        "document": "document",
+        "audio": "audio",
+        "video": "video",
+        "file": "file",
+    }.get(part_type, "attachment")
+    details = []
+    if filename:
+        details.append(filename)
+    if mime:
+        details.append(mime)
+    if not details:
+        return f"[{label} attachment]"
+    return f"[{label} attachment: {'; '.join(details)}]"
+
+
+def _media_filename(part: Mapping[str, Any], source: Mapping[str, Any]) -> str | None:
+    for value in (
+        source.get("filename"),
+        part.get("title"),
+        source.get("path"),
+        source.get("file_id"),
+    ):
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 async def _read_blob(store: BlobStore, blob_id: str) -> bytes:
@@ -222,15 +246,3 @@ def _base64_from_data_uri(data_uri: str) -> str:
     if "," not in data_uri:
         return data_uri
     return data_uri.split(",", 1)[1]
-
-
-def _format_from_mime(mime: str, default: str) -> str:
-    if "/" not in mime:
-        return default
-    suffix = mime.split("/", 1)[1].split(";", 1)[0].lower()
-    return {
-        "mpeg": "mp3",
-        "x-wav": "wav",
-        "quicktime": "mov",
-        "3gpp": "three_gp",
-    }.get(suffix, suffix or default)

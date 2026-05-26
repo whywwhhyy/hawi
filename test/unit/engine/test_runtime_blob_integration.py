@@ -206,3 +206,38 @@ async def test_blob_resolver_lowers_blob_source_without_mutating_request(
     assert resolved_source["filename"] == "screen.png"
     assert "blob_id" not in resolved_source
     MessageRequest(messages=resolved.messages)
+
+
+async def test_blob_resolver_downgrades_non_image_file_to_placeholder(
+    blob_store: BlobStore,
+) -> None:
+    blob_id = await _store_blob(blob_store, b"%PDF-1.7", mime="application/pdf")
+    request = MessageRequest(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "please inspect"},
+                    {
+                        "type": "file",
+                        "source": blob_source(
+                            blob_id,
+                            mime_type="application/pdf",
+                            filename="paper.pdf",
+                        ),
+                    },
+                ],
+                "name": None,
+                "metadata": None,
+            }
+        ]
+    )
+
+    resolved = await resolve_blob_references_for_model(request, blob_store)
+
+    assert request.messages[0]["content"][1]["source"]["blob_id"] == blob_id
+    assert resolved.messages[0]["content"] == [
+        {"type": "text", "text": "please inspect"},
+        {"type": "text", "text": "[file attachment: paper.pdf; application/pdf]"},
+    ]
+    MessageRequest(messages=resolved.messages)

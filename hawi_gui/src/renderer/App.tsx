@@ -79,8 +79,8 @@ const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
 const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
 const BLOB_CHUNK_SIZE = 256 * 1024;
-const MAX_IMAGE_ATTACHMENTS = 8;
-const MAX_IMAGE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const BLOB_PREVIEW_FETCH_TIMEOUT_MS = 20_000;
 const STATUS_OVERLAY_SELECTOR = [
   ".context-popover",
@@ -89,6 +89,74 @@ const STATUS_OVERLAY_SELECTOR = [
   ".queue-popover",
   ".menu-popover"
 ].join(",");
+const imageAttachmentExtensions = new Set(["avif", "bmp", "gif", "jpg", "jpeg", "png", "svg", "webp"]);
+const audioAttachmentExtensions = new Set(["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
+const videoAttachmentExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ogv", "webm"]);
+const documentAttachmentExtensions = new Set([
+  "csv",
+  "doc",
+  "docx",
+  "html",
+  "json",
+  "md",
+  "pdf",
+  "ppt",
+  "pptx",
+  "rtf",
+  "toml",
+  "tsv",
+  "txt",
+  "xls",
+  "xlsx",
+  "xml",
+  "yaml",
+  "yml",
+]);
+const documentAttachmentMimeTypes = new Set([
+  "application/json",
+  "application/msword",
+  "application/pdf",
+  "application/rtf",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/xml",
+]);
+const extensionMimeTypes: Record<string, string> = {
+  aac: "audio/aac",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  csv: "text/csv",
+  flac: "audio/flac",
+  gif: "image/gif",
+  html: "text/html",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  json: "application/json",
+  m4a: "audio/mp4",
+  m4v: "video/mp4",
+  md: "text/markdown",
+  mov: "video/quicktime",
+  mp3: "audio/mpeg",
+  mp4: "video/mp4",
+  ogg: "audio/ogg",
+  pdf: "application/pdf",
+  png: "image/png",
+  rtf: "application/rtf",
+  svg: "image/svg+xml",
+  toml: "application/toml",
+  tsv: "text/tab-separated-values",
+  txt: "text/plain",
+  wav: "audio/wav",
+  webm: "video/webm",
+  webp: "image/webp",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  zip: "application/zip",
+};
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const markdownCodeCopyTimers = new WeakMap<HTMLButtonElement, number>();
 let mermaidRenderSequence = 0;
@@ -131,14 +199,16 @@ interface HistoryLocateTarget {
 }
 
 type PendingAttachmentStatus = "ready" | "uploading" | "uploaded" | "error";
+type AttachmentPartType = "image" | "document" | "audio" | "video" | "file";
 
-interface PendingImageAttachment {
+interface PendingAttachment {
   id: string;
   file: File;
   previewUrl: string;
   dataUrl?: string;
   filename: string;
   mimeType: string;
+  partType: AttachmentPartType;
   size: number;
   status: PendingAttachmentStatus;
   progress: number;
@@ -547,7 +617,7 @@ export default function App() {
   const [queueTaskBusy, setQueueTaskBusy] = useState(false);
   const [editingQueueTaskId, setEditingQueueTaskId] = useState<string | null>(null);
   const [queueTaskEditDraft, setQueueTaskEditDraft] = useState("");
-  const [inputAttachments, setInputAttachments] = useState<PendingImageAttachment[]>([]);
+  const [inputAttachments, setInputAttachments] = useState<PendingAttachment[]>([]);
   const [inputAttachmentError, setInputAttachmentError] = useState<string | null>(null);
   const [inputUploading, setInputUploading] = useState(false);
   const [inputDropActive, setInputDropActive] = useState(false);
@@ -584,7 +654,7 @@ export default function App() {
   const historyPreviewRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentFileInputRef = useRef<HTMLInputElement | null>(null);
   const queueTaskDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const configRef = useRef<PersistedConfig | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
@@ -610,7 +680,7 @@ export default function App() {
     index: number | null;
     draft: string;
   }>({ sessionKey: UNLOADED_INPUT_HISTORY_KEY, index: null, draft: "" });
-  const inputAttachmentsRef = useRef<PendingImageAttachment[]>([]);
+  const inputAttachmentsRef = useRef<PendingAttachment[]>([]);
   const blobPreviewUrlsRef = useRef<BlobPreviewUrls>({});
   const pendingBlobPreviewFetchesRef = useRef<Map<string, PendingBlobPreviewFetch>>(new Map());
   const fetchingBlobPreviewIdsRef = useRef<Set<string>>(new Set());
@@ -1621,43 +1691,41 @@ export default function App() {
     }
   }
 
-  function addImageAttachments(files: Iterable<File>) {
+  function addAttachments(files: Iterable<File>) {
     const incoming = Array.from(files);
     if (incoming.length === 0) return;
 
     const rejected: string[] = [];
     const accepted = incoming.filter((file) => {
-      if (!isSupportedImageFile(file)) {
-        rejected.push(file.name || "unsupported file");
-        return false;
-      }
-      if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
-        rejected.push(file.name || "large image");
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        rejected.push(file.name || "large file");
         return false;
       }
       return true;
     });
 
     if (accepted.length === 0) {
-      setInputAttachmentError(rejected.length ? "图片格式或大小不支持" : null);
+      setInputAttachmentError(rejected.length ? "附件大小超过限制" : null);
       return;
     }
 
     const previous = inputAttachmentsRef.current;
-    const remaining = MAX_IMAGE_ATTACHMENTS - previous.length;
+    const remaining = MAX_ATTACHMENTS - previous.length;
     if (remaining <= 0) {
-      setInputAttachmentError(`最多添加 ${MAX_IMAGE_ATTACHMENTS} 张图片`);
+      setInputAttachmentError(`最多添加 ${MAX_ATTACHMENTS} 个附件`);
       return;
     }
 
     const nextFiles = accepted.slice(0, remaining);
-    const nextAttachments = nextFiles.map(createPendingImageAttachment);
+    const nextAttachments = nextFiles.map(createPendingAttachment);
     setInputAttachmentsAndRef([...previous, ...nextAttachments]);
     for (const attachment of nextAttachments) {
-      void hydrateAttachmentDataUrl(attachment.id, attachment.file);
+      if (attachment.partType === "image") {
+        void hydrateAttachmentDataUrl(attachment.id, attachment.file);
+      }
     }
     if (accepted.length > remaining || rejected.length > 0) {
-      setInputAttachmentError(`已添加 ${nextFiles.length} 张图片，其余未添加`);
+      setInputAttachmentError(`已添加 ${nextFiles.length} 个附件，其余未添加`);
     } else {
       setInputAttachmentError(null);
     }
@@ -1667,7 +1735,7 @@ export default function App() {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       updateInputAttachment(id, {
-        dataUrl: bytesToDataUrl(bytes, file.type || "image/png"),
+        dataUrl: bytesToDataUrl(bytes, attachmentMimeType(file)),
       });
     } catch {
       // Object URLs remain as a fallback for preview-only failures.
@@ -1789,7 +1857,7 @@ export default function App() {
   }
 
   function setInputAttachmentsAndRef(
-    updater: PendingImageAttachment[] | ((previous: PendingImageAttachment[]) => PendingImageAttachment[]),
+    updater: PendingAttachment[] | ((previous: PendingAttachment[]) => PendingAttachment[]),
   ) {
     setInputAttachments((previous) => {
       const next = typeof updater === "function" ? updater(previous) : updater;
@@ -1799,22 +1867,22 @@ export default function App() {
   }
 
   function handleMainInputPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
-    const files = imageFilesFromFileList(event.clipboardData.files);
+    const files = attachmentFilesFromFileList(event.clipboardData.files);
     if (files.length === 0) return;
     event.preventDefault();
-    addImageAttachments(files);
+    addAttachments(files);
   }
 
   function handleMainInputDrop(event: ReactDragEvent<HTMLTextAreaElement>) {
-    const files = imageFilesFromFileList(event.dataTransfer.files);
+    const files = attachmentFilesFromFileList(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
     setInputDropActive(false);
-    addImageAttachments(files);
+    addAttachments(files);
   }
 
   function handleMainInputDragOver(event: ReactDragEvent<HTMLTextAreaElement>) {
-    if (!hasImageFile(event.dataTransfer)) return;
+    if (!hasAttachmentFile(event.dataTransfer)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
     setInputDropActive(true);
@@ -1826,8 +1894,8 @@ export default function App() {
     setInputDropActive(false);
   }
 
-  function handleImageFileInputChange(event: ReactChangeEvent<HTMLInputElement>) {
-    addImageAttachments(imageFilesFromFileList(event.target.files));
+  function handleAttachmentFileInputChange(event: ReactChangeEvent<HTMLInputElement>) {
+    addAttachments(attachmentFilesFromFileList(event.target.files));
     event.target.value = "";
   }
 
@@ -1845,14 +1913,14 @@ export default function App() {
       parts.push({ type: "text", text });
     }
     for (const attachment of attachments) {
-      const source = await uploadImageAttachment(attachment, sessionId);
-      parts.push({ type: "image", source });
+      const source = await uploadAttachment(attachment, sessionId);
+      parts.push(contentPartFromAttachment(attachment, source));
     }
     return parts;
   }
 
-  async function uploadImageAttachment(
-    attachment: PendingImageAttachment,
+  async function uploadAttachment(
+    attachment: PendingAttachment,
     sessionId: string,
   ): Promise<BlobSource> {
     if (attachment.blobSource) {
@@ -1863,15 +1931,19 @@ export default function App() {
     try {
       const bytes = new Uint8Array(await attachment.file.arrayBuffer());
       const sha256 = await sha256Hex(bytes);
-      const dataUrl = attachment.dataUrl ?? bytesToDataUrl(bytes, attachment.mimeType || "image/png");
-      updateInputAttachment(attachment.id, { dataUrl });
+      const dataUrl = attachment.partType === "image"
+        ? attachment.dataUrl ?? bytesToDataUrl(bytes, attachment.mimeType || "image/png")
+        : undefined;
+      if (dataUrl) {
+        updateInputAttachment(attachment.id, { dataUrl });
+      }
       updateInputAttachment(attachment.id, { progress: 0.08 });
 
       const initFrame = await sendCommand("blob.upload_init", {
         direction: "inbound",
         sha256,
         size: bytes.byteLength,
-        mime: attachment.mimeType || "image/png",
+        mime: attachment.mimeType,
       }, sessionId);
       const blobId = isRecord(initFrame?.payload)
         ? optionalRecordString(initFrame.payload.blob_id)
@@ -1931,7 +2003,7 @@ export default function App() {
     }
   }
 
-  function updateInputAttachment(id: string, patch: Partial<PendingImageAttachment>) {
+  function updateInputAttachment(id: string, patch: Partial<PendingAttachment>) {
     setInputAttachmentsAndRef((previous) => (
       previous.map((attachment) => (
         attachment.id === id ? { ...attachment, ...patch } : attachment
@@ -2680,21 +2752,20 @@ export default function App() {
           )}
           <div className="composer-input-line">
             <input
-              ref={imageFileInputRef}
+              ref={attachmentFileInputRef}
               className="hidden-file-input"
               type="file"
-              accept="image/*"
               multiple
               tabIndex={-1}
-              onChange={handleImageFileInputChange}
+              onChange={handleAttachmentFileInputChange}
             />
             <button
               className="icon-button attachment-button"
               type="button"
-              title="添加图片"
-              aria-label="添加图片"
+              title="添加附件"
+              aria-label="添加附件"
               disabled={inputUploading}
-              onClick={() => imageFileInputRef.current?.click()}
+              onClick={() => attachmentFileInputRef.current?.click()}
             >
               <Paperclip size={17} />
             </button>
@@ -3986,7 +4057,7 @@ function AttachmentStrip({
   busy,
   onRemove
 }: {
-  attachments: PendingImageAttachment[];
+  attachments: PendingAttachment[];
   busy: boolean;
   onRemove: (id: string) => void;
 }) {
@@ -3994,7 +4065,7 @@ function AttachmentStrip({
     <div className="attachment-strip">
       {attachments.map((attachment) => (
         <figure className={`attachment-chip ${attachment.status}`} key={attachment.id}>
-          <img src={attachment.dataUrl ?? attachment.previewUrl} alt={attachment.filename} />
+          <AttachmentThumbnail attachment={attachment} />
           <figcaption>
             <span title={attachment.filename}>{attachment.filename}</span>
             <small>{attachmentStatusText(attachment)}</small>
@@ -4007,8 +4078,8 @@ function AttachmentStrip({
           )}
           <button
             type="button"
-            title="移除图片"
-            aria-label="移除图片"
+            title="移除附件"
+            aria-label="移除附件"
             disabled={busy}
             onClick={() => onRemove(attachment.id)}
           >
@@ -4016,6 +4087,24 @@ function AttachmentStrip({
           </button>
         </figure>
       ))}
+    </div>
+  );
+}
+
+function AttachmentThumbnail({ attachment }: { attachment: PendingAttachment }) {
+  if (attachment.partType === "image") {
+    return (
+      <img
+        className="attachment-thumbnail"
+        src={attachment.dataUrl ?? attachment.previewUrl}
+        alt={attachment.filename}
+      />
+    );
+  }
+
+  return (
+    <div className={`attachment-thumbnail attachment-thumbnail-${attachment.partType}`} title={attachment.mimeType}>
+      <FileText size={20} />
     </div>
   );
 }
@@ -6576,34 +6665,86 @@ function resumePayloadFromContent(content: string | ContentPart[]): Record<strin
   return content.length > 0 ? { message: content } : {};
 }
 
-function createPendingImageAttachment(file: File): PendingImageAttachment {
+function createPendingAttachment(file: File): PendingAttachment {
+  const mimeType = attachmentMimeType(file);
+  const partType = attachmentPartType(file, mimeType);
   return {
-    id: `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
+    id: `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
     file,
     previewUrl: URL.createObjectURL(file),
-    filename: file.name || "image",
-    mimeType: file.type || "image/png",
+    filename: file.name || defaultAttachmentFilename(partType),
+    mimeType,
+    partType,
     size: file.size,
     status: "ready",
     progress: 0,
   };
 }
 
-function isSupportedImageFile(file: File): boolean {
-  if (file.type.startsWith("image/")) return true;
-  return /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file.name);
-}
-
-function imageFilesFromFileList(files: FileList | null): File[] {
+function attachmentFilesFromFileList(files: FileList | null): File[] {
   if (!files) return [];
-  return Array.from(files).filter(isSupportedImageFile);
+  return Array.from(files);
 }
 
-function hasImageFile(dataTransfer: DataTransfer): boolean {
-  if (imageFilesFromFileList(dataTransfer.files).length > 0) return true;
+function hasAttachmentFile(dataTransfer: DataTransfer): boolean {
+  if (attachmentFilesFromFileList(dataTransfer.files).length > 0) return true;
   return Array.from(dataTransfer.items).some((item) => (
-    item.kind === "file" && item.type.startsWith("image/")
+    item.kind === "file"
   ));
+}
+
+function attachmentMimeType(file: File): string {
+  return file.type || mimeTypeFromFilename(file.name) || "application/octet-stream";
+}
+
+function attachmentPartType(file: File, mimeType = attachmentMimeType(file)): AttachmentPartType {
+  const extension = fileExtension(file.name);
+  if (mimeType.startsWith("image/") || imageAttachmentExtensions.has(extension)) {
+    return "image";
+  }
+  if (mimeType.startsWith("audio/") || audioAttachmentExtensions.has(extension)) {
+    return "audio";
+  }
+  if (mimeType.startsWith("video/") || videoAttachmentExtensions.has(extension)) {
+    return "video";
+  }
+  if (
+    mimeType.startsWith("text/")
+    || documentAttachmentMimeTypes.has(mimeType)
+    || documentAttachmentExtensions.has(extension)
+  ) {
+    return "document";
+  }
+  return "file";
+}
+
+function defaultAttachmentFilename(partType: AttachmentPartType): string {
+  return partType === "image" ? "image" : "attachment";
+}
+
+function mimeTypeFromFilename(filename: string): string | undefined {
+  const extension = fileExtension(filename);
+  return extension ? extensionMimeTypes[extension] : undefined;
+}
+
+function fileExtension(filename: string): string {
+  const match = /\.([^.\/\\]+)$/.exec(filename.toLowerCase());
+  return match?.[1] ?? "";
+}
+
+function contentPartFromAttachment(attachment: PendingAttachment, source: BlobSource): ContentPart {
+  if (attachment.partType === "document") {
+    return {
+      type: "document",
+      source,
+      title: attachment.filename,
+      context: null,
+    };
+  }
+  return {
+    type: attachment.partType,
+    source,
+  };
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -6643,7 +6784,7 @@ function revokeObjectUrl(value: string) {
 function normalizeBlobFinalizePayload(
   value: unknown,
   blobId: string,
-  attachment: PendingImageAttachment,
+  attachment: PendingAttachment,
   sha256: string,
 ): BlobFinalizePayload {
   if (!isRecord(value)) {
@@ -6667,7 +6808,7 @@ function normalizeBlobFinalizePayload(
   };
 }
 
-function attachmentStatusText(attachment: PendingImageAttachment): string {
+function attachmentStatusText(attachment: PendingAttachment): string {
   if (attachment.status === "uploading") {
     return `${Math.round(attachment.progress * 100)}%`;
   }
@@ -6677,7 +6818,14 @@ function attachmentStatusText(attachment: PendingImageAttachment): string {
   if (attachment.status === "error") {
     return "失败";
   }
-  return formatByteCount(attachment.size);
+  return `${attachmentTypeLabel(attachment)} - ${formatByteCount(attachment.size)}`;
+}
+
+function attachmentTypeLabel(attachment: PendingAttachment): string {
+  if (attachment.mimeType && attachment.mimeType !== "application/octet-stream") {
+    return attachment.mimeType;
+  }
+  return attachment.partType;
 }
 
 function hasRenderableContentParts(parts?: ContentPart[]): boolean {
@@ -6727,7 +6875,7 @@ function collectBlobPreviewRequestsFromContentParts(
 ) {
   if (!Array.isArray(parts)) return;
   for (const part of parts) {
-    if (part.type === "image" && isRecord(part.source)) {
+    if (isBlobPreviewFetchablePart(part) && isRecord(part.source)) {
       const request = blobPreviewRequestFromSource(part.source as MediaSource, blobPreviewUrls);
       if (request && !requests.has(request.blobId)) {
         requests.set(request.blobId, request);
@@ -6741,6 +6889,10 @@ function collectBlobPreviewRequestsFromContentParts(
       );
     }
   }
+}
+
+function isBlobPreviewFetchablePart(part: ContentPart): boolean {
+  return part.type === "image" || part.type === "audio" || part.type === "video";
 }
 
 function blobPreviewRequestFromSource(
@@ -6764,7 +6916,7 @@ function blobPreviewRequestFromSource(
   }
 
   const size = typeof source.size === "number" ? source.size : undefined;
-  if (size !== undefined && size > MAX_IMAGE_ATTACHMENT_BYTES) {
+  if (size !== undefined && size > MAX_ATTACHMENT_BYTES) {
     return undefined;
   }
   return {
