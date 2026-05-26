@@ -2509,18 +2509,24 @@ fn refresh_provider_models(provider: String, state: State<'_, GuiState>) -> Resu
 }
 
 #[tauri::command]
-fn select_working_directory(app: AppHandle, state: State<'_, GuiState>) -> Result<Value, String> {
+async fn select_working_directory(
+    app: AppHandle,
+    state: State<'_, GuiState>,
+) -> Result<Value, String> {
     let current_workspace = state
         .manager
         .lock()
         .map_err(|_| "manager lock poisoned".to_string())?
         .current_workspace_root();
-    let folder = app
-        .dialog()
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    app.dialog()
         .file()
         .set_title("切换工作目录")
         .set_directory(&current_workspace)
-        .blocking_pick_folder();
+        .pick_folder(move |folder| {
+            let _ = tx.try_send(folder);
+        });
+    let folder = rx.recv().await.flatten();
     let Some(folder) = folder else {
         return Ok(json!({ "canceled": true }));
     };
