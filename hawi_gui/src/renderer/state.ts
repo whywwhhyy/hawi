@@ -3290,7 +3290,7 @@ function formatToolResultText(payload: Record<string, unknown>): string {
     return formatToolValue(payload.part);
   }
 
-  // 提取结构化输出的纯文本内容（如 list_dir 的 ls_output 类型）
+  // 提取结构化输出的纯文本内容（如 list_dir 的 directory/text 类型）
   const rawOutput = payload.output;
   const toolName = optionalString(payload.tool_name);
   const formattedOutput = formatStructuredToolOutput(rawOutput, toolName);
@@ -3318,7 +3318,7 @@ function formatStructuredToolOutput(value: unknown, toolName?: string): string {
   if (!isRecord(value)) {
     return formatToolValue(value);
   }
-  if (value.type === "ls_output") {
+  if (value.type === "ls_output" || value.type === "directory") {
     return String(value.text ?? "");
   }
   if (value.type === "file_unchanged" && isRecord(value.file)) {
@@ -3349,7 +3349,7 @@ function shouldPreserveToolOutputLeadingWhitespace(value: unknown, toolName?: st
   if (!isRecord(value)) {
     return false;
   }
-  return value.type === "ls_output" || value.type === "text";
+  return value.type === "ls_output" || value.type === "directory" || value.type === "text";
 }
 
 function formatToolValue(value: unknown): string {

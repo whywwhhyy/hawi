@@ -4906,7 +4906,9 @@ function renderToolResult(tool: ToolState): ReactNode {
   // list_dir: ls -la 终端风格
   if (toolKind === "list_dir") {
     const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
-    const lsText = resultData?.type === "ls_output" ? String(resultData.text ?? "") : preview;
+    const lsText = resultData?.type === "ls_output" || resultData?.type === "directory"
+      ? String(resultData.text ?? "")
+      : preview;
     const meta = resultData
       ? [
         formatCount(resultData.numEntries, "entry", "entries"),

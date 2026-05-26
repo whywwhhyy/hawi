@@ -374,6 +374,70 @@ class FileSystemPlugin(HawiPlugin):
                 pass
             raise
 
+    def _parse_structure(self, content: str, language: str) -> list[dict]:
+        """Extract lightweight file symbols for structure-only reads."""
+        lines = content.splitlines(keepends=False)
+        symbols: list[dict] = []
+        patterns = [
+            (r"^\s*(async\s+)?def\s+(\w+)\s*\(", "function"),
+            (r"^\s*class\s+(\w+)\s*[\(:]", "class"),
+            (r"^\s*(export\s+)?(async\s+)?function\s+\*?\s*(\w+)\s*\(", "function"),
+            (r"^\s*(export\s+)?class\s+(\w+)", "class"),
+            (r"^\s*(export\s+)?(default\s+)?(async\s+)?\(?\s*(\w+)\s*=\s*(\(|async\s*\()", "function"),
+            (r"^\s*func\s+(\w+)\s*\(", "function"),
+            (r"^\s*type\s+(\w+)\s+struct\s*\{", "struct"),
+            (r"^\s*type\s+(\w+)\s+interface\s*\{", "interface"),
+            (r"^\s*func\s+\([^)]+\)\s+(\w+)\s*\(", "method"),
+            (r"^\s*fn\s+(\w+)\s*\(", "function"),
+            (r"^\s*struct\s+(\w+)\s*[<{]", "struct"),
+            (r"^\s*enum\s+(\w+)\s*[<{]", "enum"),
+            (r"^\s*trait\s+(\w+)\s*[<{]", "trait"),
+            (r"^\s*impl\s+(\w+)", "impl"),
+            (r"^\s*(public|private|protected|static|virtual|override|abstract)?\s*(public|private|protected|static|virtual|override|abstract)?\s*(class|struct|interface)\s+(\w+)", "class"),
+            (r"^\s*(public|private|protected|static|virtual|override|abstract|inline|const)?\s*(public|private|protected|static|virtual|override|abstract|inline|const)?\s*[\w:*<>]+\s+(\w+)\s*\(", "function"),
+            (r"^\s*(def|def self\.)\s+(\w+)", "function"),
+            (r"^\s*class\s+(\w+)", "class"),
+            (r"^\s*module\s+(\w+)", "module"),
+            (r"^\s*function\s+(\w+)\s*\(", "function"),
+            (r"^\s*(abstract\s+)?class\s+(\w+)", "class"),
+            (r"^\s*(public|private|internal|open)?\s*(func|class|struct|enum|protocol)\s+(\w+)", "declaration"),
+            (r"^\s*(fun|class|data class|object|interface|enum class)\s+(\w+)", "declaration"),
+            (r"^\s*(\w+)\s*::", "type_signature"),
+            (r"^\s*def\s+(\w+)", "function"),
+            (r"^\s*defmodule\s+(\w+)", "module"),
+            (r"^\s*(function\s+)?(\w+)\s*\(\)\s*\{", "function"),
+            (r"^\s*function\s+(\w+[\.:]\w+|\w+)", "function"),
+            (r"^#{1,6}\s+(.+)", "section"),
+        ]
+
+        for i, line in enumerate(lines):
+            for pattern, symbol_type in patterns:
+                match = re.search(pattern, line.rstrip())
+                if match is None:
+                    continue
+                name = next(
+                    (group for group in reversed(match.groups()) if group is not None),
+                    f"<{symbol_type}>",
+                )
+                symbols.append(
+                    {
+                        "type": symbol_type,
+                        "name": name,
+                        "start_line": i,
+                        "line": i + 1,
+                    }
+                )
+                break
+
+        for index, symbol in enumerate(symbols):
+            if index + 1 < len(symbols):
+                symbol["end_line"] = symbols[index + 1]["start_line"] - 1
+            else:
+                symbol["end_line"] = len(lines) - 1
+            symbol["line_count"] = symbol["end_line"] - symbol["start_line"] + 1
+
+        return symbols
+
     def _generate_structured_patch(
         self, old_content: str, new_content: str, file_path: str = "file"
     ) -> tuple[list[dict], str]:
@@ -426,6 +490,33 @@ class FileSystemPlugin(HawiPlugin):
         if entry.is_file(follow_symlinks=False):
             return "file"
         return "other"
+
+    def _directory_entry_info(
+        self,
+        entry: os.DirEntry,
+        *,
+        root_path: str,
+        depth: int,
+    ) -> dict:
+        entry_type = self._directory_entry_type(entry)
+        try:
+            stat_result = entry.stat(follow_symlinks=False)
+            size = stat_result.st_size
+            mtime = stat_result.st_mtime
+        except OSError:
+            size = None
+            mtime = None
+
+        abs_path = os.path.abspath(entry.path)
+        return {
+            "name": entry.name,
+            "path": abs_path,
+            "relativePath": os.path.relpath(abs_path, root_path),
+            "type": entry_type,
+            "size": size,
+            "mtime": mtime,
+            "depth": depth,
+        }
 
     def _ls_format_line(self, entry: os.DirEntry) -> str:
         """Format a directory entry as an ``ls -la`` style line."""
@@ -492,7 +583,7 @@ class FileSystemPlugin(HawiPlugin):
             offset: 起始行号（0-based），用于大文件分块读取
             limit: 读取的最大行数
             show_line_numbers: 是否在每行前显示行号（默认 true）
-            mode: 保留参数，仅支持 "content"
+            mode: 读取模式 - "content" 或 "structure"
 
         示例:
             read_file("src/main.py")                                   # 读取整个文件
@@ -513,6 +604,21 @@ class FileSystemPlugin(HawiPlugin):
             )
         except Exception as e:
             return ToolResult(success=False, error=f"Error reading file: {e}")
+
+        if mode == "structure":
+            language = self._detect_language(abs_path)
+            symbols = self._parse_structure(content, language)
+            return ToolResult(
+                success=True,
+                output={
+                    "type": "structure",
+                    "file": abs_path,
+                    "language": language,
+                    "symbols": symbols,
+                    "numSymbols": len(symbols),
+                    "totalLines": len(content.splitlines()),
+                },
+            )
 
         try:
             mtime = os.path.getmtime(abs_path)
@@ -664,10 +770,18 @@ class FileSystemPlugin(HawiPlugin):
             show_line_numbers=True,
         )
 
-        action = "updated" if file_exists else "created"
+        hunks, git_diff = self._generate_structured_patch(
+            original_content or "", content, file_path=abs_path
+        )
         return ToolResult(
             success=True,
-            output=f"File {action}: {abs_path}",
+            output={
+                "type": "update" if file_exists else "create",
+                "file_path": abs_path,
+                "structured_patch": hunks,
+                "original_content": original_content,
+                "git_diff": git_diff,
+            },
         )
 
     @tool(name="edit_file")
@@ -767,10 +881,19 @@ class FileSystemPlugin(HawiPlugin):
             show_line_numbers=True,
         )
 
-        count = matches if replace_all else 1
+        hunks, git_diff = self._generate_structured_patch(
+            original_content, new_content, file_path=abs_path
+        )
         return ToolResult(
             success=True,
-            output=f"File edited: {abs_path} ({count} replacement{'s' if count != 1 else ''})",
+            output={
+                "type": "edit",
+                "file_path": abs_path,
+                "replacements_made": matches if replace_all else 1,
+                "structured_patch": hunks,
+                "original_content": original_content,
+                "git_diff": git_diff,
+            },
         )
 
     @tool(name="list_dir")
@@ -783,7 +906,7 @@ class FileSystemPlugin(HawiPlugin):
         limit: int = 200,
     ) -> ToolResult:
         """
-        列出目录内容，类似 ``ls -la`` 风格纯文本输出。
+        列出目录内容，返回结构化元数据并附带 ``ls -la`` 风格文本。
 
         Args:
             path: 要列出的目录路径，默认为当前工作目录
@@ -800,9 +923,9 @@ class FileSystemPlugin(HawiPlugin):
 
         effective_depth = max(1, max_depth)
         effective_limit = max(0, limit)
+        entries: list[dict] = []
         lines: list[str] = []
         truncated = False
-        total_count = 0
 
         def should_include(name: str) -> bool:
             return include_hidden or not name.startswith(".")
@@ -824,7 +947,7 @@ class FileSystemPlugin(HawiPlugin):
             )
 
         def visit(directory: str, depth: int) -> None:
-            nonlocal truncated, total_count
+            nonlocal truncated
             if truncated:
                 return
 
@@ -832,6 +955,18 @@ class FileSystemPlugin(HawiPlugin):
                 children = sorted_children(directory)
             except OSError as e:
                 lines.append(f"?---------   ?  ?      ?            ? {os.path.basename(directory)}  [{e}]")
+                entries.append(
+                    {
+                        "name": os.path.basename(directory),
+                        "path": directory,
+                        "relativePath": os.path.relpath(directory, root_path),
+                        "type": "error",
+                        "size": None,
+                        "mtime": None,
+                        "depth": depth,
+                        "error": str(e),
+                    }
+                )
                 return
 
             dir_label = os.path.relpath(directory, root_path)
@@ -857,19 +992,19 @@ class FileSystemPlugin(HawiPlugin):
                 lines.append(f"total {total_blocks}")
 
             for entry in children:
-                if total_count >= effective_limit:
+                if len(entries) >= effective_limit:
                     truncated = True
                     return
+                info = self._directory_entry_info(
+                    entry,
+                    root_path=root_path,
+                    depth=depth,
+                )
+                entries.append(info)
                 lines.append(self._ls_format_line(entry))
-                total_count += 1
 
-            if recursive and depth < effective_depth:
-                for entry in children:
-                    if entry.is_dir(follow_symlinks=False) and should_include(entry.name):
-                        if total_count >= effective_limit:
-                            truncated = True
-                            return
-                        visit(entry.path, depth + 1)
+                if recursive and info["type"] == "directory" and depth < effective_depth:
+                    visit(entry.path, depth + 1)
 
         visit(root_path, 1)
 
@@ -880,10 +1015,16 @@ class FileSystemPlugin(HawiPlugin):
         return ToolResult(
             success=True,
             output={
-                "type": "ls_output",
-                "text": output_text,
-                "numEntries": total_count,
+                "type": "directory",
+                "path": root_path,
+                "entries": entries,
+                "numEntries": len(entries),
                 "isTruncated": truncated,
+                "recursive": recursive,
+                "maxDepth": effective_depth,
+                "includeHidden": include_hidden,
+                "limit": effective_limit,
+                "text": output_text,
             },
         )
 

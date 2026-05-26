@@ -1229,6 +1229,29 @@ describe("core event reducer", () => {
     }));
 
     expect(state.nodes[1].tool?.resultPreview).toBe("total 0\n-rw-r--r--  1 hayden  staff  0 May 14 12:00 a.py");
+
+    const directoryOutput = {
+      type: "directory",
+      path: "/tmp",
+      entries: [{ name: "a.py", relativePath: "a.py", type: "file" }],
+      text: "total 0\n-rw-r--r--  1 hayden  staff  0 May 14 12:00 a.py\n",
+      numEntries: 1,
+      isTruncated: false
+    };
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-fs",
+      tool_call_id: "tc-list-directory",
+      tool_name: "list_dir"
+    }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      tool_call_id: "tc-list-directory",
+      tool_name: "list_dir",
+      success: true,
+      output: directoryOutput
+    }));
+
+    expect(state.nodes[2].tool?.resultData).toEqual(directoryOutput);
+    expect(state.nodes[2].tool?.resultPreview).toBe("total 0\n-rw-r--r--  1 hayden  staff  0 May 14 12:00 a.py");
   });
 
   it("loads JSON string tool arguments from session history for specialized renderers", () => {

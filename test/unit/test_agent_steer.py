@@ -77,6 +77,7 @@ class TestHawiAgentSteer:
         assert message["metadata"] == {
             "candidate_tool_call_ids": ["call_1"],
             "merge_mode": None,
+            "withdrawable": False,
         }
 
     def test_pending_input_messages_remain_high_priority_without_tool_candidates(self):
@@ -94,6 +95,7 @@ class TestHawiAgentSteer:
         assert message["metadata"] == {
             "candidate_tool_call_ids": [],
             "merge_mode": None,
+            "withdrawable": False,
         }
 
     @pytest.mark.asyncio
