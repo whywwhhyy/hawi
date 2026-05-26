@@ -9,7 +9,7 @@ export function StatusCell({
   active?: boolean;
 }) {
   return (
-    <div {...props} className={classNames(className, active && "active")}>
+    <div {...props} className={classNames("status-cell", className, active && "active")}>
       {children}
     </div>
   );
@@ -21,6 +21,7 @@ export function StatusCellTrigger({
   contentAriaHidden = true,
   children,
   type = "button",
+  className,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   label: ReactNode;
@@ -28,7 +29,7 @@ export function StatusCellTrigger({
   contentAriaHidden?: boolean;
 }) {
   return (
-    <button {...props} type={type}>
+    <button {...props} type={type} className={classNames("status-cell-trigger", className)}>
       <span className="status-cell-label">{label}</span>
       <span className={contentClassName} aria-hidden={contentAriaHidden}>
         {children}
@@ -42,6 +43,7 @@ export function StatusCellDisplay({
   contentClassName,
   contentAriaHidden = true,
   children,
+  className,
   ...props
 }: HTMLAttributes<HTMLDivElement> & {
   label: ReactNode;
@@ -49,7 +51,7 @@ export function StatusCellDisplay({
   contentAriaHidden?: boolean;
 }) {
   return (
-    <div {...props}>
+    <div {...props} className={classNames("status-cell", "status-cell-display", className)}>
       <span className="status-cell-label">{label}</span>
       <span className={contentClassName} aria-hidden={contentAriaHidden}>
         {children}

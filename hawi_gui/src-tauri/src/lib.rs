@@ -2558,6 +2558,18 @@ fn set_minimum_content_size(app: AppHandle, size: Value) -> Result<Value, String
     window
         .set_min_size(Some(tauri::LogicalSize::new(width, height)))
         .map_err(|error| error.to_string())?;
+    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
+    let current_size = window.outer_size().map_err(|error| error.to_string())?;
+    let current_width = current_size.width as f64 / scale_factor;
+    let current_height = current_size.height as f64 / scale_factor;
+    if current_width < width || current_height < height {
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                current_width.max(width),
+                current_height.max(height),
+            )))
+            .map_err(|error| error.to_string())?;
+    }
     Ok(json!({ "ok": true }))
 }
 

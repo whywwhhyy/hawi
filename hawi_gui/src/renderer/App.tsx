@@ -82,6 +82,13 @@ const BLOB_CHUNK_SIZE = 256 * 1024;
 const MAX_IMAGE_ATTACHMENTS = 8;
 const MAX_IMAGE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const BLOB_PREVIEW_FETCH_TIMEOUT_MS = 20_000;
+const STATUS_OVERLAY_SELECTOR = [
+  ".context-popover",
+  ".project-popover",
+  ".session-popover",
+  ".queue-popover",
+  ".menu-popover"
+].join(",");
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const markdownCodeCopyTimers = new WeakMap<HTMLButtonElement, number>();
 let mermaidRenderSequence = 0;
@@ -481,8 +488,20 @@ function visibleElementChildren(element: HTMLElement): HTMLElement[] {
 }
 
 function elementWidth(element: HTMLElement): number {
-  const width = element.getBoundingClientRect().width;
-  return Number.isFinite(width) ? width : 0;
+  const rectWidth = element.getBoundingClientRect().width;
+  const scrollWidth = containsStatusOverlay(element)
+    ? 0
+    : element.scrollWidth + horizontalBorderWidth(element);
+  const offsetWidth = element.offsetWidth;
+  return Math.max(
+    Number.isFinite(rectWidth) ? rectWidth : 0,
+    Number.isFinite(scrollWidth) ? scrollWidth : 0,
+    Number.isFinite(offsetWidth) ? offsetWidth : 0
+  );
+}
+
+function containsStatusOverlay(element: HTMLElement): boolean {
+  return element.querySelector(STATUS_OVERLAY_SELECTOR) !== null;
 }
 
 function flexColumnGap(element: HTMLElement): number {
@@ -496,6 +515,11 @@ function horizontalChromeWidth(element: HTMLElement): number {
     + cssPixelValue(style.paddingRight)
     + cssPixelValue(style.borderLeftWidth)
     + cssPixelValue(style.borderRightWidth);
+}
+
+function horizontalBorderWidth(element: HTMLElement): number {
+  const style = getComputedStyle(element);
+  return cssPixelValue(style.borderLeftWidth) + cssPixelValue(style.borderRightWidth);
 }
 
 function cssPixelValue(value: string): number {
@@ -2882,12 +2906,14 @@ function QueueStatusCell({
 }
 
 function UsageStatusCell({ usage }: { usage?: ModelUsageState }) {
-  const total = formatUsageTokenCount(usage?.totalTokens ?? 0);
-  const input = formatUsageTokenCount(usage?.inputTokens ?? 0);
-  const output = formatUsageTokenCount(usage?.outputTokens ?? 0);
-  const cacheRead = formatUsageTokenCount(usage?.cacheReadTokens ?? 0);
-  const cacheWrite = formatUsageTokenCount(usage?.cacheWriteTokens ?? 0);
   const label = renderUsageStatusText(usage);
+  const metrics = [
+    ["Total", formatUsageTokenCount(usage?.totalTokens ?? 0)],
+    ["Input", formatUsageTokenCount(usage?.inputTokens ?? 0)],
+    ["Output", formatUsageTokenCount(usage?.outputTokens ?? 0)],
+    ["Cache Write", formatUsageTokenCount(usage?.cacheWriteTokens ?? 0)],
+    ["Cache Read", formatUsageTokenCount(usage?.cacheReadTokens ?? 0)]
+  ] as const;
 
   return (
     <StatusCellDisplay
@@ -2897,22 +2923,12 @@ function UsageStatusCell({ usage }: { usage?: ModelUsageState }) {
       label="Usage"
       contentClassName="usage-status-widget"
     >
-      <span className="usage-status-column">
-        <span>Total</span>
-        <strong>{total}</strong>
-      </span>
-      <span className="usage-status-column">
-        <span>Input</span>
-        <strong>{input}</strong>
-        <span>Output</span>
-        <strong>{output}</strong>
-      </span>
-      <span className="usage-status-column">
-        <span>Cache Write</span>
-        <strong>{cacheWrite}</strong>
-        <span>Cache Read</span>
-        <strong>{cacheRead}</strong>
-      </span>
+      {metrics.map(([metricLabel, value]) => (
+        <span className="usage-status-metric" key={metricLabel}>
+          <span>{metricLabel}</span>
+          <strong>{value}</strong>
+        </span>
+      ))}
     </StatusCellDisplay>
   );
 }
