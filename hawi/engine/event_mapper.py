@@ -249,6 +249,9 @@ class SemanticEventMapper:
 
         if etype == "agent.message_added":
             role = getattr(event, "role", "")
+            content = getattr(event, "content", [])
+            content_list = content if isinstance(content, list) else []
+            preview = self._content_preview(content_list, 240) if content_list else ""
             if role in {"user", "tool"}:
                 self._mark_model_wait_start(getattr(event, "timestamp", None))
             if role == "assistant":
@@ -258,6 +261,8 @@ class SemanticEventMapper:
                         {
                             "run_id": getattr(event, "run_id", self._active_run_id or ""),
                             "role": "assistant",
+                            "content": to_json_safe(content_list),
+                            "content_preview": preview,
                             "context_message_id": getattr(
                                 event,
                                 "context_message_id",
@@ -269,8 +274,9 @@ class SemanticEventMapper:
             if role != "user":
                 return []
             run_id = str(getattr(event, "run_id", self._active_run_id or ""))
-            text = self._extract_text(getattr(event, "content", []))
-            if not text:
+            text = self._extract_text(content_list)
+            visible_content = text or preview
+            if not visible_content and not content_list:
                 return []
             queue = self._queue_for_user_message(event, run_id)
             message_id = self._message_id_for_user_message(event, run_id)
@@ -284,7 +290,9 @@ class SemanticEventMapper:
                     {
                         "run_id": run_id,
                         "message_id": message_id,
-                        "user_content": text,
+                        "user_content": visible_content,
+                        "content": to_json_safe(content_list),
+                        "content_preview": preview or visible_content,
                         "queue": queue,
                         "display_message_type": display_message_type,
                         "context_message_id": getattr(
@@ -699,6 +707,56 @@ class SemanticEventMapper:
                 elif isinstance(part, dict) and part.get("type") == "steer":
                     chunks.append(cls._extract_text(part.get("content", [])))
         return "".join(chunk for chunk in chunks if chunk)
+
+    @classmethod
+    def _content_preview(cls, content: Any, max_chars: int = 160) -> str:
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            chunks: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") in {"text", "steer"}:
+                    text = cls._extract_text([part])
+                    if text:
+                        chunks.append(text)
+                elif part.get("type") in {"image", "document", "audio", "video", "file"}:
+                    chunks.append(cls._media_preview(part))
+            text = "\n".join(chunk for chunk in chunks if chunk)
+        else:
+            text = ""
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3] + "..."
+
+    @staticmethod
+    def _media_preview(part: dict[str, Any]) -> str:
+        part_type = str(part.get("type") or "media")
+        source = part.get("source")
+        source = source if isinstance(source, dict) else {}
+        title = part.get("title")
+        filename = source.get("filename") or title
+        mime_type = source.get("mime_type") or source.get("mimeType") or source.get("format")
+        uri = (
+            source.get("uri")
+            or source.get("url")
+            or source.get("data_uri")
+            or source.get("path")
+            or source.get("file_id")
+            or source.get("blob_id")
+            or ""
+        )
+        if isinstance(uri, str) and uri.startswith("data:"):
+            uri = uri.split(",", 1)[0] + ",..."
+        details = [part_type]
+        if filename:
+            details.append(str(filename))
+        if mime_type:
+            details.append(str(mime_type))
+        if uri:
+            details.append(str(uri))
+        return "[" + ": ".join(details) + "]"
 
     def _queue_for_user_message(self, event: Event, run_id: str) -> str:
         metadata = getattr(event, "metadata", None)

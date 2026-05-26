@@ -36,6 +36,73 @@ describe("core event reducer", () => {
     expect(state.sessionMessageCount).toBe(1);
   });
 
+  it("preserves structured content parts on live user messages", () => {
+    const imagePart = {
+      type: "image",
+      source: {
+        kind: "blob",
+        blob_id: "a".repeat(64),
+        uri: `hawi-blob://${"a".repeat(64)}`,
+        mime_type: "image/png",
+        filename: "screen.png"
+      }
+    };
+
+    const state = reduceCoreEvent(createInitialState(), frame("run.start", {
+      run_id: "run-media",
+      message_id: "msg-media",
+      user_content: "[image: screen.png]",
+      content: [imagePart],
+      queue: "high_prio"
+    }));
+
+    expect(state.nodes[0]).toMatchObject({
+      id: "user-message-msg-media",
+      kind: "user",
+      content: "[image: screen.png]",
+      contentParts: [imagePart]
+    });
+  });
+
+  it("renders committed assistant image content even without text deltas", () => {
+    const imagePart = {
+      type: "image",
+      source: {
+        kind: "blob",
+        blob_id: "b".repeat(64),
+        uri: `hawi-blob://${"b".repeat(64)}`,
+        mime_type: "image/png",
+        filename: "result.png"
+      }
+    };
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-image-answer",
+      message_id: "msg-image-answer",
+      user_content: "draw this",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("run.message_committed", {
+      run_id: "run-image-answer",
+      role: "assistant",
+      context_message_id: "ctxmsg-image-answer",
+      content: [imagePart]
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
+    expect(state.nodes[1]).toMatchObject({
+      kind: "agent",
+      content: "",
+      contentParts: [imagePart],
+      contextMessageId: "ctxmsg-image-answer",
+      contextMessageIndex: 1,
+      complete: true
+    });
+    expect(state.processing).toBeUndefined();
+    expect(state.nextContextMessageIndex).toBe(2);
+  });
+
   it("enables fork controls for live user and assistant messages", () => {
     let state = createInitialState();
 
@@ -279,6 +346,59 @@ describe("core event reducer", () => {
       maxContextTokens: 1000,
       ratio: 0.042,
       source: "provider_usage"
+    });
+  });
+
+  it("preserves structured media parts when replaying session history", () => {
+    const userImage = {
+      type: "image",
+      source: {
+        kind: "blob",
+        blob_id: "c".repeat(64),
+        uri: `hawi-blob://${"c".repeat(64)}`,
+        mime_type: "image/png",
+        filename: "input.png"
+      }
+    };
+    const assistantImage = {
+      type: "image",
+      source: {
+        kind: "blob",
+        blob_id: "d".repeat(64),
+        uri: `hawi-blob://${"d".repeat(64)}`,
+        mime_type: "image/png",
+        filename: "output.png"
+      }
+    };
+
+    const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
+      message_history: [
+        {
+          run_id: "run-media-history",
+          role: "user",
+          content: [{ type: "text", text: "look" }, userImage],
+          context_message_id: "ctxmsg-media-user",
+          context_message_index: 0
+        },
+        {
+          run_id: "run-media-history",
+          role: "assistant",
+          content: [assistantImage],
+          context_message_id: "ctxmsg-media-assistant",
+          context_message_index: 1
+        }
+      ]
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
+    expect(state.nodes[0]).toMatchObject({
+      content: "look",
+      contentParts: [{ type: "text", text: "look" }, userImage]
+    });
+    expect(state.nodes[1]).toMatchObject({
+      content: "",
+      contentParts: [assistantImage],
+      contextMessageId: "ctxmsg-media-assistant"
     });
   });
 
@@ -1145,7 +1265,14 @@ describe("core event reducer", () => {
       queue_messages: {
         urgent: [{ id: "u1", queue: "urgent", content_preview: "stop now", created_at: 100 }],
         high_prio: [{ id: "h1", queue: "high_prio", content_preview: "merge this", created_at: 101 }],
-        normal: [{ id: "n1", queue: "normal", content_preview: "first", content: "first full task", created_at: 102 }]
+        normal: [{
+          id: "n1",
+          queue: "normal",
+          content_preview: "first",
+          content: "first full task",
+          content_parts: [{ type: "text", text: "first full task" }],
+          created_at: 102
+        }]
       },
       auto_compact: {
         enabled: true,
@@ -1182,6 +1309,9 @@ describe("core event reducer", () => {
     expect(state.queueMessages.high_prio[0].contentPreview).toBe("merge this");
     expect(state.queueMessages.normal[0].contentPreview).toBe("first");
     expect(state.queueMessages.normal[0].content).toBe("first full task");
+    expect(state.queueMessages.normal[0].contentParts).toEqual([
+      { type: "text", text: "first full task" }
+    ]);
     expect(state.metadataLines[0]).toContain("cache_read=1");
     expect(state.metadataLines[0]).toContain("reasoning=2");
     expect(state.metadataLines[0]).toContain("ctx=128/1024 (13%)");

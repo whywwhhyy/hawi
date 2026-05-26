@@ -27,6 +27,7 @@ from hawi.utils.workspace import find_git_root
 
 from .blob import BlobStore
 from .blob.commands import dispatch_blob_command
+from .blob.resolver import resolve_blob_references_for_model
 from .event_mapper import SemanticEventMapper
 from .plugin_registry import (
     KNOWN_PLUGINS,
@@ -758,8 +759,8 @@ class CoreRuntime:
     ) -> None:
         runner = self._require_runner()
         content = command.payload.get("content")
-        if not isinstance(content, str):
-            raise ValueError("'queue_task_add.payload.content' must be a string")
+        if not isinstance(content, (str, list)):
+            raise ValueError("'queue_task_add.payload.content' must be a string or content part list")
         msg = runner._queue_manager.enqueue_normal(
             content,
             metadata={"intent": "queue_task", "source": "gui_queue_panel"},
@@ -782,8 +783,8 @@ class CoreRuntime:
         if not isinstance(message_id, str):
             raise ValueError("'queue_task_update.payload.message_id' must be a string")
         content = command.payload.get("content")
-        if content is not None and not isinstance(content, str):
-            raise ValueError("'queue_task_update.payload.content' must be a string when present")
+        if content is not None and not isinstance(content, (str, list)):
+            raise ValueError("'queue_task_update.payload.content' must be a string or content part list when present")
         metadata = command.payload.get("metadata")
         if metadata is not None and not isinstance(metadata, dict):
             raise ValueError("'queue_task_update.payload.metadata' must be an object when present")
@@ -1870,6 +1871,7 @@ class CoreRuntime:
             "CoreRuntime must pass an explicit AutoCompactConfig to HawiAgent",
         )
         plugins = await self._create_plugins(selected_plugins, plugin_configs)
+        blob_store = self._blob_store
         agent = HawiAgent(
             model=model,
             plugins=plugins,
@@ -1877,6 +1879,11 @@ class CoreRuntime:
             max_iterations=None,
             streaming=True,
             auto_compact=auto_compact,
+            model_input_resolver=(
+                (lambda request: resolve_blob_references_for_model(request, blob_store))
+                if blob_store is not None
+                else None
+            ),
         )
         agent.review_broker = self._review_broker
         self._apply_extra_tool_parameters(agent)

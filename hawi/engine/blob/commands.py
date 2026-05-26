@@ -100,8 +100,33 @@ async def _handle_upload_finalize(client, command: CoreCommand, store: BlobStore
             request_id=command.id,
             payload={
                 "blob_id": info.blob_id,
+                "uri": f"hawi-blob://{info.blob_id}",
                 "sha256": info.sha256,
+                "direction": info.direction,
                 "size": info.size,
+                "mime": info.mime,
+                "ref_count": info.ref_count,
+            },
+        )
+    )
+
+
+async def _handle_info(client, command: CoreCommand, store: BlobStore) -> None:
+    blob_id = command.payload.get("blob_id")
+    if not isinstance(blob_id, str):
+        raise ValueError("payload.blob_id must be a string")
+    info = await store.info(blob_id)
+    await client.send(
+        make_ack(
+            "blob.info",
+            request_id=command.id,
+            payload={
+                "blob_id": info.blob_id,
+                "uri": f"hawi-blob://{info.blob_id}",
+                "sha256": info.sha256,
+                "direction": info.direction,
+                "size": info.size,
+                "mime": info.mime,
                 "ref_count": info.ref_count,
             },
         )
@@ -204,6 +229,7 @@ _HANDLERS = {
     "blob.upload_init": _handle_upload_init,
     "blob.upload_chunk": _handle_upload_chunk,
     "blob.upload_finalize": _handle_upload_finalize,
+    "blob.info": _handle_info,
     "blob.has": _handle_has,
     "blob.fetch": _handle_fetch,
     "blob.release": _handle_release,

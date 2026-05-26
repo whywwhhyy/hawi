@@ -263,6 +263,20 @@ class BlobStore:
         row = cur.fetchone()
         return row[0] if row else None
 
+    async def info(self, blob_id: str) -> BlobInfo:
+        """Return metadata for a finalized blob without reading its body."""
+        validate_blob_id(blob_id)
+        cur = await asyncio.to_thread(
+            self._db().execute,
+            "SELECT blob_id, sha256, direction, size, mime, ref_count "
+            "FROM blobs WHERE blob_id = ? AND finalized = 1",
+            (blob_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise BlobNotFound(blob_id)
+        return BlobInfo(*row)
+
     async def fetch_chunks(
         self, blob_id: str, *, chunk_size: Optional[int] = None
     ) -> AsyncIterator[tuple[int, bytes]]:

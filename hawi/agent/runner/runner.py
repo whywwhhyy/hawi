@@ -26,6 +26,7 @@ from hawi.events.runner_events import (
     AgentRunnerDequeueEvent,
 )
 from hawi.models.message import ContentPart
+from hawi.agent.content_utils import content_preview
 
 from .queue import QueueMessageSnapshot, QueueType, QueuedMessage, MessageQueueManager
 from .interceptor import EventMode, EventInterceptor
@@ -428,16 +429,7 @@ class AgentRunner:
 
     def _build_content_preview(self, content: str | list[ContentPart]) -> str:
         """Build a short content preview without creating a queued message."""
-        if isinstance(content, str):
-            text = content
-        else:
-            texts = [
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ]
-            text = " ".join(texts)
-        return text[:97] + "..." if len(text) > 100 else text
+        return content_preview(content, 100)
 
     def _emit_enqueue_event(
         self,

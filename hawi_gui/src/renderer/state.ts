@@ -1,4 +1,4 @@
-import { VERSION, type CoreFrame, type PluginArtifactPayload, type QueueKind, type RuntimeControlState } from "../shared/protocol";
+import { VERSION, type ContentPart, type CoreFrame, type PluginArtifactPayload, type QueueKind, type RuntimeControlState } from "../shared/protocol";
 
 const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
@@ -41,6 +41,7 @@ export interface ChatNode {
   id: string;
   kind: ChatKind;
   content: string;
+  contentParts?: ContentPart[];
   complete?: boolean;
   contextMessageId?: string;
   contextMessageIndex?: number;
@@ -173,6 +174,7 @@ export interface QueueMessageState {
   queue: QueueKind;
   contentPreview: string;
   content?: string;
+  contentParts?: ContentPart[];
   createdAt?: number;
   metadata?: Record<string, unknown>;
 }
@@ -396,6 +398,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const messageId = optionalString(payload.message_id);
       const contextMessageId = optionalString(payload.context_message_id);
       const userContent = String(payload.user_content ?? "");
+      const contentParts = normalizeContentParts(payload.content);
       const userNodeId = messageId ? userMessageNodeId(messageId) : nodeId("user", runId);
       const contextMessageIndex = state.nextContextMessageIndex;
       const withUser = appendChatNode(state, {
@@ -406,7 +409,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         contextMessageId,
         contextMessageIndex,
         canFork: true,
-        content: userContent
+        content: userContent,
+        contentParts
       });
       const processing: ProcessingState = {
         id: nodeId("processing", `${runId}-${withUser.nodes.length}`),
@@ -430,12 +434,28 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       if (!runId || !contextMessageId || role !== "assistant") {
         return state;
       }
+      const contentParts = visibleMessageContentParts(payload.content);
+      const contentText = Array.isArray(payload.content)
+        ? historyAssistantText(payload.content)
+        : "";
       const agentNodeId = state.runs[runId]?.agentNodeId;
       if (!agentNodeId) {
-        return state;
+        if (!contentParts) {
+          return state;
+        }
+        return appendCommittedAssistantNode(
+          state,
+          runId,
+          contextMessageId,
+          contentText,
+          contentParts,
+          frameTime(frame),
+        );
       }
       return updateChatNode(state, agentNodeId, (node) => ({
         ...node,
+        content: node.content || contentText,
+        contentParts: contentParts ?? node.contentParts,
         contextMessageId,
         canFork: true
       }));
@@ -992,6 +1012,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
     }
     if (record.role === "user") {
       const queue = normalizeQueue(record.metadata?.queue ?? "normal");
+      const contentParts = visibleMessageContentParts(record.content);
       nodes.push({
         id: userMessageNodeId(optionalString(record.metadata?.message_id) ?? `history-${baseId}`),
         kind: "user",
@@ -1004,13 +1025,15 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         contextMessageId: record.contextMessageId,
         contextMessageIndex: record.contextMessageIndex,
         canFork: record.contextMessageId !== undefined || record.contextMessageIndex !== undefined,
-        content: historyContentText(record.content)
+        content: historyContentText(record.content),
+        contentParts
       });
       return;
     }
     if (record.role === "assistant") {
       const reasoning = historyReasoningText(record.content);
       const answer = historyAssistantText(record.content);
+      const contentParts = visibleMessageContentParts(record.content);
       if (reasoning) {
         nodes.push({
           id: nodeId("thinking-history", baseId),
@@ -1022,12 +1045,13 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           complete: true
         });
       }
-      if (answer) {
+      if (answer || contentParts) {
         nodes.push({
           id: nodeId("agent-history", baseId),
           kind: "agent",
           historyIndex: index,
           content: answer,
+          contentParts,
           contextMessageId: record.contextMessageId,
           contextMessageIndex: record.contextMessageIndex,
           canFork: record.contextMessageId !== undefined || record.contextMessageIndex !== undefined,
@@ -1280,6 +1304,22 @@ function historyContentText(
     })
     .filter(Boolean)
     .join("\n\n");
+}
+
+function visibleMessageContentParts(value: unknown): ContentPart[] | undefined {
+  const parts = normalizeContentParts(value);
+  if (!parts) return undefined;
+  const visible = parts.filter(isVisibleMessageContentPart);
+  return visible.length ? visible : undefined;
+}
+
+function isVisibleMessageContentPart(part: ContentPart): boolean {
+  return part.type === "text"
+    || part.type === "image"
+    || part.type === "document"
+    || part.type === "audio"
+    || part.type === "video"
+    || part.type === "file";
 }
 
 function historyToolResult(content: unknown[]): {
@@ -1612,6 +1652,54 @@ function appendRunDelta(
         toolCallAssistantContextIndexed: kind === "agent"
           ? false
           : run.toolCallAssistantContextIndexed,
+      }
+    },
+    nextContextMessageIndex: shouldIndexAssistant
+      ? next.nextContextMessageIndex + 1
+      : next.nextContextMessageIndex
+  };
+}
+
+function appendCommittedAssistantNode(
+  state: AppState,
+  runId: string,
+  contextMessageId: string,
+  content: string,
+  contentParts: ContentPart[],
+  eventAt: number,
+): AppState {
+  const run = state.runs[runId] ?? {};
+  const withoutProcessing = clearProcessingForRun(state, runId);
+  const contextMessageIndex = run.assistantContextMessageIndex ?? withoutProcessing.nextContextMessageIndex;
+  const shouldIndexAssistant = run.assistantContextMessageIndex === undefined;
+  const shouldCountAssistant = run.assistantMessageCounted !== true;
+  const id = nodeId("agent", `${runId}-${withoutProcessing.nodes.length}`);
+  const next = appendChatNode(withoutProcessing, {
+    id,
+    kind: "agent",
+    content,
+    contentParts,
+    contextMessageId,
+    contextMessageIndex,
+    canFork: true,
+    complete: true,
+    streamStartedAt: eventAt,
+    streamFinishedAt: eventAt,
+    streamDurationMs: 0
+  });
+  return {
+    ...next,
+    sessionMessageCount: shouldCountAssistant
+      ? next.sessionMessageCount + 1
+      : next.sessionMessageCount,
+    runs: {
+      ...next.runs,
+      [runId]: {
+        ...(next.runs[runId] ?? {}),
+        agentNodeId: id,
+        assistantMessageCounted: true,
+        assistantContextMessageIndex: contextMessageIndex,
+        toolCallAssistantContextIndexed: false
       }
     },
     nextContextMessageIndex: shouldIndexAssistant
@@ -3135,7 +3223,8 @@ function normalizeQueueMessageList(value: unknown, queue: QueueKind): QueueMessa
         contentPreview: optionalString(item.content_preview)
           ?? optionalString(item.contentPreview)
           ?? "",
-        content: optionalString(item.content),
+        content: typeof item.content === "string" ? optionalString(item.content) : undefined,
+        contentParts: normalizeContentParts(item.content_parts ?? item.contentParts ?? item.content),
         createdAt: optionalNumber(item.created_at ?? item.createdAt),
         metadata: isRecord(item.metadata) ? item.metadata : undefined
       };
@@ -3170,6 +3259,8 @@ function sameQueueMessageList(left: QueueMessageState[], right: QueueMessageStat
     return item.id === other.id
       && item.queue === other.queue
       && item.contentPreview === other.contentPreview
+      && item.content === other.content
+      && JSON.stringify(item.contentParts ?? null) === JSON.stringify(other.contentParts ?? null)
       && item.createdAt === other.createdAt;
   });
 }
@@ -3308,6 +3399,15 @@ function optionalBoolean(value: unknown): boolean | undefined {
     if (normalized === "false") return false;
   }
   return undefined;
+}
+
+function normalizeContentParts(value: unknown): ContentPart[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parts = value
+    .filter(isRecord)
+    .filter((part) => typeof part.type === "string")
+    .map((part) => ({ ...part } as ContentPart));
+  return parts.length ? parts : undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {

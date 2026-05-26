@@ -2,11 +2,75 @@ export const VERSION = "hawi.core.v1";
 
 export type QueueKind = "normal" | "high_prio" | "urgent";
 
+export type ContentPartType =
+  | "text"
+  | "image"
+  | "document"
+  | "audio"
+  | "video"
+  | "file"
+  | "steer"
+  | "tool_call"
+  | "tool_result"
+  | "reasoning"
+  | "cache_point"
+  | "cache_control"
+  | "refusal"
+  | "guard_content"
+  | "citation";
+
+export type BlobDirection = "inbound" | "outbound";
+export type MediaSourceKind = "url" | "data_uri" | "blob" | "file_id" | "path";
+
+export interface MediaSource {
+  kind?: MediaSourceKind;
+  uri?: string;
+  url?: string;
+  data_uri?: string;
+  data?: string;
+  blob_id?: string;
+  file_id?: string;
+  path?: string;
+  mime?: string;
+  mime_type?: string;
+  mimeType?: string;
+  filename?: string;
+  size?: number;
+  sha256?: string;
+  direction?: BlobDirection;
+  format?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BlobSource extends MediaSource {
+  kind: "blob";
+  blob_id: string;
+  uri: string;
+}
+
+export interface ContentPart {
+  type: ContentPartType | string;
+  text?: string;
+  reasoning?: string | null;
+  source?: MediaSource;
+  title?: string | null;
+  context?: string | null;
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+  tool_call_id?: string;
+  content?: string | ContentPart[];
+  is_error?: boolean | null;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface QueueMessageSnapshot {
   id: string;
   queue: QueueKind;
   content_preview: string;
-  content?: string;
+  content?: string | ContentPart[];
+  content_parts?: ContentPart[];
   created_at?: number;
   metadata?: Record<string, unknown>;
 }
@@ -41,6 +105,14 @@ export type CoreCommandType =
   | "queue_task_reorder"
   | "queue_message_remove"
   | "queue_message_promote"
+  | "blob.upload_init"
+  | "blob.upload_chunk"
+  | "blob.upload_finalize"
+  | "blob.info"
+  | "blob.has"
+  | "blob.fetch"
+  | "blob.release"
+  | "blob.request_retransmit"
   | "set_system_prompt"
   | "switch_model"
   | "refresh_models"

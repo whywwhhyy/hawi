@@ -7,6 +7,7 @@ tool execution, and plugin hooks for agent workflows.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import threading
 import time
@@ -14,7 +15,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, Optional, Literal, Callable, cast
+from typing import Any, Awaitable, Optional, Literal, Callable, cast
 
 
 from hawi.models import (
@@ -26,7 +27,7 @@ from hawi.models import (
     ToolCallPart,
     model_registry,
 )
-from hawi.models.message import Message, MessageResponse
+from hawi.models.message import Message, MessageRequest, MessageResponse
 from hawi.models.usage import (
     merge_token_usage,
     normalize_token_usage,
@@ -101,6 +102,11 @@ from .tool_executor import (
 
 SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY = "skip_before_conversation_hooks"
 
+ModelInputResolver = Callable[
+    [MessageRequest],
+    MessageRequest | Awaitable[MessageRequest],
+]
+
 
 class HawiAgent:
     """Core agent implementation for Hawi framework.
@@ -140,6 +146,7 @@ class HawiAgent:
         cache_tool_definitions: CachePoint | dict[str, Any] | bool | None = None,
         auto_cache_static_prefix: CachePoint | dict[str, Any] | bool | None = True,
         permission_set: "PermissionSet | FrozenPermissionSet | dict[str, str] | None" = None,
+        model_input_resolver: ModelInputResolver | None = None,
     ):
         """Initialize HawiAgent.
 
@@ -173,6 +180,8 @@ class HawiAgent:
 
                 When ``None`` (default), all tools are visible (backwards
                 compatible).  See :mod:`hawi.permission`.
+            model_input_resolver: Optional request transformer applied to the
+                model-visible request copy immediately before provider calls.
 
         Note:
             Both `plugins` and `plugin_factories` can be used together.
@@ -187,6 +196,7 @@ class HawiAgent:
         self._streaming = streaming
         self._event_bus = event_bus or EventBus()
         self._auto_compact = self._normalize_auto_compact(auto_compact, model)
+        self._model_input_resolver = model_input_resolver
 
         # Initialize event dump manager
         self._dump_manager = DumpManager(event_dump_file) if event_dump_file else None
@@ -504,6 +514,7 @@ class HawiAgent:
             streaming=self._streaming,
             event_dump_file=self._dump_manager.dump_file if self._dump_manager else None,
             auto_compact=self._auto_compact,
+            model_input_resolver=self._model_input_resolver,
         )
         new_agent._plugin_manager = self._plugin_manager.clone()
         new_agent._plugin_manager.bind_event_bus(new_agent._event_bus)
@@ -2423,6 +2434,7 @@ class HawiAgent:
         while attempt <= max_retries:
             try:
                 request = self._context.prepare_request()
+                request = await self._resolve_model_input(request)
 
                 # Unified event consumption: Model always returns AsyncGenerator
                 async for event in model.ainvoke(
@@ -2509,6 +2521,15 @@ class HawiAgent:
             state.error = err
             if event_bus:
                 await event_bus.publish_async(ModelErrorEvent.create(error=err))
+
+    async def _resolve_model_input(self, request: MessageRequest) -> MessageRequest:
+        """Apply an optional runtime resolver to the model-visible request copy."""
+        if self._model_input_resolver is None:
+            return request
+        resolved = self._model_input_resolver(request)
+        if inspect.isawaitable(resolved):
+            return await cast(Awaitable[MessageRequest], resolved)
+        return resolved
 
     def _convert_event_to_delta_parts(
         self,

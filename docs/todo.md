@@ -216,6 +216,18 @@
     - [ ] 设计可配置 speech-to-text 后端或插件入口，用于把音频内容转写后写回 `AudioSource.transcript`
     - [ ] 为音频降级路径补充 provider adapter 级集成测试
 
+- [ ] 多模态 unsupported fallback：不支持图片/媒体的模型自动降级
+    - [ ] 在 `Model` 或 registry metadata 上声明模型输入能力：`supports_image_input`、`supports_document_input`、`supports_audio_input`、`supports_video_input`
+    - [ ] 在 model input resolver 增加统一策略：`on_unsupported_media = "vision_summary" | "placeholder" | "error"`
+    - [ ] 增加 vision fallback 配置：`vision_fallback_model`、`vision_prompt_template`、`max_fallback_images`、`fallback_cache_ttl`
+    - [ ] `vision_summary` 策略：对不支持图片的目标模型，先调用支持图片理解的模型生成文本摘要，再把原 media part 替换为 text part
+    - [ ] `placeholder` 策略：把 media part 替换为稳定占位文本，例如 `[Image: {filename}, {mime_type}, {size}]`
+    - [ ] `error` 策略：在模型调用前抛出明确错误，GUI 显示当前模型不支持该媒体类型
+    - [ ] fallback 结果进入上下文的方式需要可配置：仅本轮 request 可见，或写回 context/message metadata 供后续轮次复用
+    - [ ] vision fallback 调用需要复用 blob resolver，避免把长期 context 写成 base64
+    - [ ] 增加事件/审计：`model.media_fallback_start`、`model.media_fallback_done`、`model.media_fallback_error`
+    - [ ] 增加测试：能力检测、placeholder 降级、vision 摘要替换、fallback 失败策略、缓存命中、多个图片的顺序保持
+
 - [ ] 重构渐进式加载的 tool 设计，新增 `brief` 字段，使用 `tool_help` 获得 tool 的详细介绍，`run_tool` 执行 tool
     - [ ] `AgentTool` 增加 `brief` 字段：短描述，用于默认暴露给模型
     - [ ] 保留 `description` 作为长说明：详细行为、边界、示例、安全约束

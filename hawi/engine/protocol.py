@@ -72,6 +72,7 @@ COMMAND_TYPES = {
     "blob.upload_init",
     "blob.upload_chunk",
     "blob.upload_finalize",
+    "blob.info",
     "blob.has",
     "blob.fetch",
     "blob.release",

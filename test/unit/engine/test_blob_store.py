@@ -109,6 +109,27 @@ async def test_has_ignores_unfinalized_blob(store: BlobStore):
     assert await store.has(sha256=_hash(body), direction="inbound") is None
 
 
+async def test_info_returns_finalized_blob_metadata(store: BlobStore):
+    body = b"metadata"
+    bid = await store.upload_init(
+        direction="inbound",
+        sha256=_hash(body),
+        size=len(body),
+        mime="text/plain",
+    )
+    await store.upload_chunk(bid, 0, body)
+    await store.upload_finalize(bid)
+
+    info = await store.info(bid)
+
+    assert info.blob_id == bid
+    assert info.sha256 == _hash(body)
+    assert info.direction == "inbound"
+    assert info.size == len(body)
+    assert info.mime == "text/plain"
+    assert info.ref_count == 1
+
+
 async def test_release_decrements_ref_count(store: BlobStore):
     body = b"x"
     bid = await store.upload_init(direction="inbound", sha256=_hash(body), size=1, mime=None)

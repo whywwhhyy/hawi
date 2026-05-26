@@ -12,6 +12,7 @@ Internals (sandbox.py, store.py, commands.py) are not part of the public API.
 """
 
 from .sandbox import Direction, SandboxViolation
+from .resolver import resolve_blob_references_for_model
 from .store import BlobNotFound, BlobStore, QuotaExceeded, Sha256Mismatch
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "BlobNotFound",
     "Direction",
     "QuotaExceeded",
+    "resolve_blob_references_for_model",
     "SandboxViolation",
     "Sha256Mismatch",
 ]

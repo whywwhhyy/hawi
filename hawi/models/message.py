@@ -100,6 +100,45 @@ class TextPart(TypedDict):
     text: str
 
 
+BlobDirection = Literal["inbound", "outbound"]
+MediaSourceKind = Literal["url", "data_uri", "blob", "file_id", "path"]
+
+
+class MediaSource(TypedDict, total=False):
+    """Provider-neutral media reference metadata.
+
+    Long-lived Hawi messages should prefer references (``blob_id``/``uri``)
+    over inline base64. Model adapters or runtime resolvers can lower these
+    references into provider-specific request blocks.
+    """
+
+    kind: MediaSourceKind
+    uri: str  # e.g. hawi-blob://<blob_id>, https://..., file://...
+    url: str
+    data_uri: str
+    data: str
+    blob_id: str
+    file_id: str
+    path: str
+    mime: str
+    mime_type: str
+    filename: str
+    size: int
+    sha256: str
+    direction: BlobDirection
+    format: str
+    detail: Literal["auto", "low", "high"] | None
+    metadata: dict[str, Any]
+
+
+class BlobSource(MediaSource, total=False):
+    """A content-addressed blob reference used by GUI/engine transport."""
+
+    kind: Required[Literal["blob"]]
+    blob_id: Required[str]
+    uri: Required[str]
+
+
 class ImageSource(TypedDict):
     """图片来源"""
 
@@ -111,7 +150,7 @@ class ImagePart(TypedDict):
     """图片内容"""
 
     type: Literal["image"]
-    source: ImageSource
+    source: ImageSource | MediaSource
 
 
 class DocumentSource(TypedDict):
@@ -125,7 +164,7 @@ class DocumentPart(TypedDict):
     """文档内容"""
 
     type: Literal["document"]
-    source: DocumentSource
+    source: DocumentSource | MediaSource
     title: str | None
     context: str | None
 
@@ -312,7 +351,7 @@ class AudioPart(TypedDict):
     """音频内容"""
 
     type: Literal["audio"]
-    source: AudioSource
+    source: AudioSource | MediaSource
 
 
 class VideoSource(TypedDict):
@@ -326,7 +365,7 @@ class VideoPart(TypedDict):
     """视频内容 (Strands)"""
 
     type: Literal["video"]
-    source: VideoSource
+    source: VideoSource | MediaSource
 
 
 class FileSource(TypedDict):
@@ -340,7 +379,7 @@ class FilePart(TypedDict):
     """文件内容引用 (OpenAI File API)"""
 
     type: Literal["file"]
-    source: FileSource
+    source: FileSource | MediaSource
 
 
 class RefusalPart(TypedDict):
@@ -822,3 +861,41 @@ class MessageResponse(BaseModel):
     stop_reason: str | None = None
     usage: TokenUsage | None = None
     reasoning_content: str | None = None  # DeepSeek/Kimi 思考内容
+
+
+BLOB_URI_SCHEME = "hawi-blob://"
+
+
+def blob_uri(blob_id: str) -> str:
+    """Return the canonical URI for a Hawi blob reference."""
+    return f"{BLOB_URI_SCHEME}{blob_id}"
+
+
+def blob_source(
+    blob_id: str,
+    *,
+    mime_type: str | None = None,
+    filename: str | None = None,
+    size: int | None = None,
+    sha256: str | None = None,
+    direction: BlobDirection = "inbound",
+    metadata: dict[str, Any] | None = None,
+) -> BlobSource:
+    """Create a provider-neutral source for content-addressed media."""
+    source: BlobSource = {
+        "kind": "blob",
+        "blob_id": blob_id,
+        "uri": blob_uri(blob_id),
+        "direction": direction,
+    }
+    if mime_type:
+        source["mime_type"] = mime_type
+    if filename:
+        source["filename"] = filename
+    if size is not None:
+        source["size"] = size
+    if sha256:
+        source["sha256"] = sha256
+    if metadata:
+        source["metadata"] = metadata
+    return source

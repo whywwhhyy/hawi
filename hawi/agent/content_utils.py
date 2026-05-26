@@ -35,6 +35,14 @@ def truncate_preview(text: str, max_length: int) -> str:
     return text[: max_length - 3] + "..."
 
 
+def content_preview(content: str | list[ContentPart], max_length: int = 100) -> str:
+    """Build a compact preview for text and referenced media content."""
+    if isinstance(content, str):
+        return truncate_preview(content, max_length)
+    preview = serialize_content_parts(content)
+    return truncate_preview(preview, max_length)
+
+
 def serialize_content_parts(content: list[ContentPart]) -> str:
     """Serialize content parts into readable plain text."""
     chunks: list[str] = []
@@ -66,9 +74,39 @@ def serialize_content_parts(content: list[ContentPart]) -> str:
                     chunks.append(nested_text)
             else:
                 chunks.append(str(nested_content))
+        elif part_type in {"image", "document", "audio", "video", "file"}:
+            chunks.append(_media_part_preview(part))
         else:
             chunks.append(str(part))
     return "\n".join(chunk for chunk in chunks if chunk.strip())
+
+
+def _media_part_preview(part: ContentPart) -> str:
+    part_type = str(part.get("type") or "media")
+    source = part.get("source")
+    source = source if isinstance(source, dict) else {}
+    title = part.get("title") if isinstance(part, dict) else None
+    filename = source.get("filename") or title
+    mime_type = source.get("mime_type") or source.get("format")
+    uri = (
+        source.get("uri")
+        or source.get("url")
+        or source.get("data_uri")
+        or source.get("path")
+        or source.get("file_id")
+        or source.get("blob_id")
+        or ""
+    )
+    if isinstance(uri, str) and uri.startswith("data:"):
+        uri = uri.split(",", 1)[0] + ",..."
+    label_parts = [part_type]
+    if filename:
+        label_parts.append(str(filename))
+    if mime_type:
+        label_parts.append(str(mime_type))
+    if uri:
+        label_parts.append(str(uri))
+    return "[" + ": ".join(label_parts) + "]"
 
 
 def tool_result_content(result: ToolResult) -> str:

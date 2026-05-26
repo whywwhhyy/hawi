@@ -70,6 +70,26 @@ class TestQueuedMessage:
         msg = QueuedMessage.create(content, QueueType.NORMAL)
         assert msg.get_content_preview() == "hello world"
 
+    def test_get_content_preview_media_blob_ref(self):
+        content: list[ContentPart] = [
+            {"type": "text", "text": "describe"},
+            {
+                "type": "image",
+                "source": {
+                    "kind": "blob",
+                    "blob_id": "a" * 64,
+                    "uri": "hawi-blob://" + "a" * 64,
+                    "mime_type": "image/png",
+                    "filename": "chart.png",
+                },
+            },
+        ]
+        msg = QueuedMessage.create(content, QueueType.NORMAL)
+
+        assert "describe" in msg.get_content_preview()
+        assert "image" in msg.get_content_preview()
+        assert "chart.png" in msg.get_content_preview()
+
 
 class TestMessageQueueManager:
     """Test MessageQueueManager."""
@@ -166,6 +186,31 @@ class TestMessageQueueManager:
         assert messages["normal"][0]["metadata"] == {"source": "test"}
         assert messages["high_prio"][0]["id"] == high.id
         assert messages["urgent"][0]["id"] == urgent.id
+
+    def test_get_queue_messages_preserves_content_parts(self):
+        qm = MessageQueueManager()
+        content: list[ContentPart] = [
+            {"type": "text", "text": "see attached"},
+            {
+                "type": "document",
+                "source": {
+                    "kind": "blob",
+                    "blob_id": "b" * 64,
+                    "uri": "hawi-blob://" + "b" * 64,
+                    "mime_type": "application/pdf",
+                    "filename": "paper.pdf",
+                },
+                "title": "paper.pdf",
+                "context": None,
+            },
+        ]
+        msg = qm.enqueue_normal(content)
+
+        snapshot = qm.get_queue_messages()["normal"][0]
+
+        assert snapshot["id"] == msg.id
+        assert snapshot["content_parts"] == content
+        assert "paper.pdf" in snapshot["content_preview"]
 
     def test_remove_message_by_id(self):
         qm = MessageQueueManager()

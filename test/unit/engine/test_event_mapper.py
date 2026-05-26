@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from hawi.events import (
     AgentCompactStartEvent,
@@ -82,6 +82,37 @@ def test_mapper_emits_run_start_with_queue_kind() -> None:
     assert frames[0]["payload"]["display_message_type"] == "urgent"
     assert frames[0]["payload"]["user_content"] == "hello"
     assert frames[0]["payload"]["context_message_id"] == "ctxmsg_user_1"
+    assert frames[0]["payload"]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_mapper_emits_run_start_for_media_only_user_message() -> None:
+    mapper = SemanticEventMapper()
+    image_part = {
+        "type": "image",
+        "source": {
+            "kind": "blob",
+            "blob_id": "a" * 64,
+            "uri": "hawi-blob://" + "a" * 64,
+            "mime_type": "image/png",
+            "filename": "screen.png",
+        },
+    }
+
+    mapper.map(AgentRunStartEvent.create("run-media"))
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-media",
+            "user",
+            [cast(Any, image_part)],
+            metadata={"message_id": "msg-media", "queue": "high_prio"},
+            context_message_id="ctxmsg_media_1",
+        )
+    )
+
+    assert frames[0]["type"] == "run.start"
+    assert frames[0]["payload"]["message_id"] == "msg-media"
+    assert "screen.png" in frames[0]["payload"]["user_content"]
+    assert frames[0]["payload"]["content"] == [image_part]
 
 
 def test_mapper_emits_assistant_commit_context_message_id() -> None:

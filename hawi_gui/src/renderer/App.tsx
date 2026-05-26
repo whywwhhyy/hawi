@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -10,11 +10,12 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, LoaderCircle, Lock, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
+import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, Image as ImageIcon, LoaderCircle, Lock, Paperclip, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import type { BlobSource, ContentPart, CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, MarkdownExportPayload, MediaSource, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { MIN_CONTENT_SIZE, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
+import { StatusCell, StatusCellDisplay, StatusCellTrigger, StatusPopoverHeader } from "./StatusCell";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
 
@@ -66,7 +67,9 @@ markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
   if (language === "svg") {
     return renderSvgFence(token.content);
   }
-  return defaultFence(tokens, idx, options, env, self);
+  return defaultFence
+    ? defaultFence(tokens, idx, options, env, self)
+    : self.renderToken(tokens, idx, options);
 };
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
@@ -75,6 +78,10 @@ const SYSTEM_PROMPT_MAX_ROWS = 3;
 const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
 const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
+const BLOB_CHUNK_SIZE = 256 * 1024;
+const MAX_IMAGE_ATTACHMENTS = 8;
+const MAX_IMAGE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const BLOB_PREVIEW_FETCH_TIMEOUT_MS = 20_000;
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const markdownCodeCopyTimers = new WeakMap<HTMLButtonElement, number>();
 let mermaidRenderSequence = 0;
@@ -114,6 +121,55 @@ interface HistoryLocateTarget {
   messageIndex?: number;
   contextMessageId?: string;
   contextMessageIndex?: number;
+}
+
+type PendingAttachmentStatus = "ready" | "uploading" | "uploaded" | "error";
+
+interface PendingImageAttachment {
+  id: string;
+  file: File;
+  previewUrl: string;
+  dataUrl?: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  status: PendingAttachmentStatus;
+  progress: number;
+  error?: string;
+  blobSource?: BlobSource;
+}
+
+interface BlobFinalizePayload {
+  blob_id: string;
+  uri?: string;
+  sha256?: string;
+  direction?: "inbound" | "outbound";
+  size?: number;
+  mime?: string | null;
+  ref_count?: number;
+}
+
+type BlobPreviewUrls = Record<string, string>;
+
+interface MediaPreviewState {
+  src: string;
+  label: string;
+  meta?: string;
+  kind: string;
+}
+
+interface BlobPreviewRequest {
+  blobId: string;
+  uri?: string;
+  mimeType?: string;
+  size?: number;
+}
+
+interface PendingBlobPreviewFetch {
+  chunks: string[];
+  timeoutId: number;
+  resolve: (dataB64: string) => void;
+  reject: (error: Error) => void;
 }
 
 export function renderQueueStatusText(
@@ -386,29 +442,21 @@ function normalQueueCount(
   return Math.max(queueLengths.normal, queueMessages?.normal.length ?? 0);
 }
 
-function measureMinimumContentSize(
-  appShell: HTMLElement,
-  statusStrip: HTMLElement,
-  compactUsageMeasure: HTMLElement
-): LayoutSize {
+function measureMinimumContentSize(appShell: HTMLElement, statusRow: HTMLElement): LayoutSize {
   return normalizeMinimumContentSize({
-    width: Math.max(
-      measureInlineGroupWidth(statusStrip),
-      measureInlineGroupWidth(compactUsageMeasure)
-    ) + horizontalChromeWidth(appShell),
+    width: measureStatusRowMinimumWidth(statusRow) + horizontalChromeWidth(appShell),
     height: MIN_CONTENT_SIZE.height
   });
 }
 
-function shouldUseStandaloneUsageRow(
-  statusRow: HTMLElement,
-  statusStrip: HTMLElement,
-  inlineUsageMeasure: HTMLElement
-): boolean {
-  const requiredInlineWidth = measureInlineGroupWidth(statusStrip)
-    + measureInlineGroupWidth(inlineUsageMeasure)
-    + flexColumnGap(statusRow);
-  return requiredInlineWidth > contentBoxWidth(statusRow) + 0.5;
+function measureStatusRowMinimumWidth(statusRow: HTMLElement): number {
+  const children = visibleElementChildren(statusRow);
+  if (children.length === 0) {
+    return elementWidth(statusRow);
+  }
+  const gap = flexColumnGap(statusRow);
+  const childrenWidth = children.reduce((sum, child) => sum + measureInlineGroupWidth(child), 0);
+  return Math.ceil(childrenWidth + gap * Math.max(0, children.length - 1) + horizontalChromeWidth(statusRow));
 }
 
 function measureInlineGroupWidth(element: HTMLElement): number {
@@ -435,12 +483,6 @@ function visibleElementChildren(element: HTMLElement): HTMLElement[] {
 function elementWidth(element: HTMLElement): number {
   const width = element.getBoundingClientRect().width;
   return Number.isFinite(width) ? width : 0;
-}
-
-function contentBoxWidth(element: HTMLElement): number {
-  const width = element.clientWidth || elementWidth(element);
-  const style = getComputedStyle(element);
-  return Math.max(0, width - cssPixelValue(style.paddingLeft) - cssPixelValue(style.paddingRight));
 }
 
 function flexColumnGap(element: HTMLElement): number {
@@ -481,6 +523,12 @@ export default function App() {
   const [queueTaskBusy, setQueueTaskBusy] = useState(false);
   const [editingQueueTaskId, setEditingQueueTaskId] = useState<string | null>(null);
   const [queueTaskEditDraft, setQueueTaskEditDraft] = useState("");
+  const [inputAttachments, setInputAttachments] = useState<PendingImageAttachment[]>([]);
+  const [inputAttachmentError, setInputAttachmentError] = useState<string | null>(null);
+  const [inputUploading, setInputUploading] = useState(false);
+  const [inputDropActive, setInputDropActive] = useState(false);
+  const [blobPreviewUrls, setBlobPreviewUrls] = useState<BlobPreviewUrls>({});
+  const [mediaPreview, setMediaPreview] = useState<MediaPreviewState | null>(null);
   const [sessionStats, setSessionStats] = useState<SessionRuntimeStats>({
     running: 0,
     loaded: 0,
@@ -491,7 +539,6 @@ export default function App() {
   const [contextCompactBusy, setContextCompactBusy] = useState(false);
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
-  const [usageStandaloneRow, setUsageStandaloneRow] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
@@ -508,15 +555,12 @@ export default function App() {
   const [mainLocateTarget, setMainLocateTarget] = useState<HistoryLocateTarget | null>(null);
   const appShellRef = useRef<HTMLDivElement | null>(null);
   const statusRowRef = useRef<HTMLDivElement | null>(null);
-  const statusStripRef = useRef<HTMLDivElement | null>(null);
-  const usageInlineMeasureRef = useRef<HTMLDivElement | null>(null);
-  const usageCompactMeasureRef = useRef<HTMLDivElement | null>(null);
   const minimumContentSizeRef = useRef<LayoutSize | null>(null);
-  const usageStandaloneRowRef = useRef(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const historyPreviewRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
   const queueTaskDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const configRef = useRef<PersistedConfig | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
@@ -542,6 +586,11 @@ export default function App() {
     index: number | null;
     draft: string;
   }>({ sessionKey: UNLOADED_INPUT_HISTORY_KEY, index: null, draft: "" });
+  const inputAttachmentsRef = useRef<PendingImageAttachment[]>([]);
+  const blobPreviewUrlsRef = useRef<BlobPreviewUrls>({});
+  const pendingBlobPreviewFetchesRef = useRef<Map<string, PendingBlobPreviewFetch>>(new Map());
+  const fetchingBlobPreviewIdsRef = useRef<Set<string>>(new Set());
+  const failedBlobPreviewIdsRef = useRef<Set<string>>(new Set());
   const queueTaskComposingRef = useRef(false);
   const queueTaskCompositionEndTimerRef = useRef<number | null>(null);
   const artifactPanelSessionRef = useRef<string | null>(null);
@@ -582,24 +631,13 @@ export default function App() {
   const syncMinimumContentSize = useCallback(() => {
     const appShell = appShellRef.current;
     const statusRow = statusRowRef.current;
-    const statusStrip = statusStripRef.current;
-    const inlineUsageMeasure = usageInlineMeasureRef.current;
-    const compactUsageMeasure = usageCompactMeasureRef.current;
     if (
       !appShell
       || !statusRow
-      || !statusStrip
-      || !inlineUsageMeasure
-      || !compactUsageMeasure
       || typeof window === "undefined"
       || typeof window.hawi?.setMinimumContentSize !== "function"
     ) return;
-    const nextUsageStandalone = shouldUseStandaloneUsageRow(statusRow, statusStrip, inlineUsageMeasure);
-    if (usageStandaloneRowRef.current !== nextUsageStandalone) {
-      usageStandaloneRowRef.current = nextUsageStandalone;
-      setUsageStandaloneRow(nextUsageStandalone);
-    }
-    const nextSize = measureMinimumContentSize(appShell, statusStrip, compactUsageMeasure);
+    const nextSize = measureMinimumContentSize(appShell, statusRow);
     const previousSize = minimumContentSizeRef.current;
     if (previousSize?.width === nextSize.width && previousSize.height === nextSize.height) return;
     minimumContentSizeRef.current = nextSize;
@@ -667,15 +705,6 @@ export default function App() {
     if (observer) {
       observer.observe(appShell);
       observer.observe(statusRow);
-      if (statusStripRef.current) {
-        observer.observe(statusStripRef.current);
-      }
-      if (usageInlineMeasureRef.current) {
-        observer.observe(usageInlineMeasureRef.current);
-      }
-      if (usageCompactMeasureRef.current) {
-        observer.observe(usageCompactMeasureRef.current);
-      }
       for (const child of Array.from(statusRow.children)) {
         if (child instanceof HTMLElement) {
           observer.observe(child);
@@ -700,6 +729,7 @@ export default function App() {
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
+    failedBlobPreviewIdsRef.current.clear();
     resetInputHistoryNavigation();
     // Input-history navigation is reset only when the active session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -717,6 +747,39 @@ export default function App() {
   useEffect(() => {
     configRef.current = config;
   }, [config]);
+
+  useEffect(() => {
+    inputAttachmentsRef.current = inputAttachments;
+  }, [inputAttachments]);
+
+  useEffect(() => {
+    blobPreviewUrlsRef.current = blobPreviewUrls;
+  }, [blobPreviewUrls]);
+
+  useEffect(() => () => {
+    for (const pending of pendingBlobPreviewFetchesRef.current.values()) {
+      window.clearTimeout(pending.timeoutId);
+    }
+    pendingBlobPreviewFetchesRef.current.clear();
+    fetchingBlobPreviewIdsRef.current.clear();
+    const retained = new Set(Object.values(blobPreviewUrlsRef.current));
+    for (const attachment of inputAttachmentsRef.current) {
+      if (!retained.has(attachment.previewUrl)) {
+        revokeObjectUrl(attachment.previewUrl);
+      }
+    }
+    for (const previewUrl of retained) {
+      revokeObjectUrl(previewUrl);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!currentSessionId || !coreRunning) return;
+    const requests = collectMissingBlobPreviewRequests(state, blobPreviewUrlsRef.current);
+    for (const request of requests) {
+      void ensureBlobPreview(request);
+    }
+  }, [blobPreviewUrls, coreRunning, currentSessionId, state.nodes, state.queueMessages, state.subagents]);
 
   useEffect(() => {
     function handleDialogKeyboard(event: KeyboardEvent) {
@@ -907,12 +970,39 @@ export default function App() {
   }
 
   function handleCoreEvent(frame: CoreFrame) {
+    if (handleBlobPreviewFetchFrame(frame)) {
+      return;
+    }
     if (frame.type === "gui.session_status") {
       applySessionRuntimeStatus(frame);
       return;
     }
     const sessionId = frameSessionId(frame) ?? currentSessionIdRef.current;
     dispatchSessionState({ sessionId, frame });
+  }
+
+  function handleBlobPreviewFetchFrame(frame: CoreFrame): boolean {
+    if (frame.type !== "blob.chunk" && frame.type !== "blob.complete") {
+      return false;
+    }
+    const payload = framePayload(frame);
+    const blobId = optionalPayloadString(payload?.blob_id);
+    if (!blobId) return true;
+    const pending = pendingBlobPreviewFetchesRef.current.get(blobId);
+    if (!pending) return true;
+
+    if (frame.type === "blob.chunk") {
+      const dataB64 = optionalPayloadString(payload?.data_b64);
+      if (dataB64) {
+        pending.chunks.push(dataB64);
+      }
+      return true;
+    }
+
+    window.clearTimeout(pending.timeoutId);
+    pendingBlobPreviewFetchesRef.current.delete(blobId);
+    pending.resolve(pending.chunks.join(""));
+    return true;
   }
 
   function applySessionRuntimeStatus(frame: CoreFrame) {
@@ -1507,10 +1597,329 @@ export default function App() {
     }
   }
 
+  function addImageAttachments(files: Iterable<File>) {
+    const incoming = Array.from(files);
+    if (incoming.length === 0) return;
+
+    const rejected: string[] = [];
+    const accepted = incoming.filter((file) => {
+      if (!isSupportedImageFile(file)) {
+        rejected.push(file.name || "unsupported file");
+        return false;
+      }
+      if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+        rejected.push(file.name || "large image");
+        return false;
+      }
+      return true;
+    });
+
+    if (accepted.length === 0) {
+      setInputAttachmentError(rejected.length ? "图片格式或大小不支持" : null);
+      return;
+    }
+
+    const previous = inputAttachmentsRef.current;
+    const remaining = MAX_IMAGE_ATTACHMENTS - previous.length;
+    if (remaining <= 0) {
+      setInputAttachmentError(`最多添加 ${MAX_IMAGE_ATTACHMENTS} 张图片`);
+      return;
+    }
+
+    const nextFiles = accepted.slice(0, remaining);
+    const nextAttachments = nextFiles.map(createPendingImageAttachment);
+    setInputAttachmentsAndRef([...previous, ...nextAttachments]);
+    for (const attachment of nextAttachments) {
+      void hydrateAttachmentDataUrl(attachment.id, attachment.file);
+    }
+    if (accepted.length > remaining || rejected.length > 0) {
+      setInputAttachmentError(`已添加 ${nextFiles.length} 张图片，其余未添加`);
+    } else {
+      setInputAttachmentError(null);
+    }
+  }
+
+  async function hydrateAttachmentDataUrl(id: string, file: File) {
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      updateInputAttachment(id, {
+        dataUrl: bytesToDataUrl(bytes, file.type || "image/png"),
+      });
+    } catch {
+      // Object URLs remain as a fallback for preview-only failures.
+    }
+  }
+
+  function rememberBlobPreview(source: BlobSource, previewUrl: string, dataUrl?: string) {
+    const preview = dataUrl || previewUrl;
+    const keys = [
+      source.blob_id,
+      source.uri,
+      `hawi-blob://${source.blob_id}`,
+    ].filter((key): key is string => typeof key === "string" && key.length > 0);
+    const nextBlobPreviewUrls = { ...blobPreviewUrlsRef.current };
+    for (const key of keys) {
+      nextBlobPreviewUrls[key] = preview;
+    }
+    blobPreviewUrlsRef.current = nextBlobPreviewUrls;
+    setBlobPreviewUrls(nextBlobPreviewUrls);
+  }
+
+  async function ensureBlobPreview(request: BlobPreviewRequest) {
+    const blobId = request.blobId;
+    if (
+      blobPreviewUrlsRef.current[blobId]
+      || fetchingBlobPreviewIdsRef.current.has(blobId)
+      || failedBlobPreviewIdsRef.current.has(blobId)
+    ) {
+      return;
+    }
+
+    fetchingBlobPreviewIdsRef.current.add(blobId);
+    const dataB64Promise = createBlobPreviewFetch(blobId);
+    dataB64Promise.catch(() => undefined);
+
+    try {
+      const frame = await sendCommand(
+        "blob.fetch",
+        { blob_id: blobId, chunk_size: BLOB_CHUNK_SIZE },
+        currentSessionIdRef.current,
+      );
+      if (!frame) {
+        throw new Error("blob.fetch failed");
+      }
+      const dataB64 = await dataB64Promise;
+      const previewUrl = `data:${request.mimeType || "image/png"};base64,${dataB64}`;
+      const nextBlobPreviewUrls = {
+        ...blobPreviewUrlsRef.current,
+        [blobId]: previewUrl,
+        [`hawi-blob://${blobId}`]: previewUrl,
+      };
+      if (request.uri) {
+        nextBlobPreviewUrls[request.uri] = previewUrl;
+      }
+      blobPreviewUrlsRef.current = nextBlobPreviewUrls;
+      setBlobPreviewUrls(nextBlobPreviewUrls);
+    } catch {
+      dropPendingBlobPreviewFetch(blobId);
+      failedBlobPreviewIdsRef.current.add(blobId);
+    } finally {
+      fetchingBlobPreviewIdsRef.current.delete(blobId);
+    }
+  }
+
+  function createBlobPreviewFetch(blobId: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        pendingBlobPreviewFetchesRef.current.delete(blobId);
+        fetchingBlobPreviewIdsRef.current.delete(blobId);
+        failedBlobPreviewIdsRef.current.add(blobId);
+        reject(new Error(`Timed out fetching blob preview: ${blobId}`));
+      }, BLOB_PREVIEW_FETCH_TIMEOUT_MS);
+      pendingBlobPreviewFetchesRef.current.set(blobId, {
+        chunks: [],
+        timeoutId,
+        resolve,
+        reject,
+      });
+    });
+  }
+
+  function dropPendingBlobPreviewFetch(blobId: string) {
+    const pending = pendingBlobPreviewFetchesRef.current.get(blobId);
+    if (!pending) return;
+    window.clearTimeout(pending.timeoutId);
+    pendingBlobPreviewFetchesRef.current.delete(blobId);
+  }
+
+  function removeInputAttachment(id: string) {
+    if (inputUploading) return;
+    const previous = inputAttachmentsRef.current;
+    const removed = previous.find((attachment) => attachment.id === id);
+    if (removed) {
+      if (removed.blobSource) {
+        const nextPreviewUrls = { ...blobPreviewUrlsRef.current };
+        delete nextPreviewUrls[removed.blobSource.blob_id];
+        delete nextPreviewUrls[removed.blobSource.uri];
+        delete nextPreviewUrls[`hawi-blob://${removed.blobSource.blob_id}`];
+        blobPreviewUrlsRef.current = nextPreviewUrls;
+        setBlobPreviewUrls(nextPreviewUrls);
+      }
+      revokeObjectUrl(removed.previewUrl);
+    }
+    setInputAttachmentsAndRef(previous.filter((attachment) => attachment.id !== id));
+  }
+
+  function clearInputAttachments({ preserveUploaded = false }: { preserveUploaded?: boolean } = {}) {
+    const retainedPreviews = new Set(Object.values(blobPreviewUrlsRef.current));
+    for (const attachment of inputAttachmentsRef.current) {
+      if (preserveUploaded && attachment.blobSource) {
+        continue;
+      }
+      if (!retainedPreviews.has(attachment.previewUrl)) {
+        revokeObjectUrl(attachment.previewUrl);
+      }
+    }
+    setInputAttachmentsAndRef([]);
+    setInputAttachmentError(null);
+  }
+
+  function setInputAttachmentsAndRef(
+    updater: PendingImageAttachment[] | ((previous: PendingImageAttachment[]) => PendingImageAttachment[]),
+  ) {
+    setInputAttachments((previous) => {
+      const next = typeof updater === "function" ? updater(previous) : updater;
+      inputAttachmentsRef.current = next;
+      return next;
+    });
+  }
+
+  function handleMainInputPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+    const files = imageFilesFromFileList(event.clipboardData.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    addImageAttachments(files);
+  }
+
+  function handleMainInputDrop(event: ReactDragEvent<HTMLTextAreaElement>) {
+    const files = imageFilesFromFileList(event.dataTransfer.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    setInputDropActive(false);
+    addImageAttachments(files);
+  }
+
+  function handleMainInputDragOver(event: ReactDragEvent<HTMLTextAreaElement>) {
+    if (!hasImageFile(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setInputDropActive(true);
+  }
+
+  function handleMainInputDragLeave(event: ReactDragEvent<HTMLTextAreaElement>) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+    setInputDropActive(false);
+  }
+
+  function handleImageFileInputChange(event: ReactChangeEvent<HTMLInputElement>) {
+    addImageAttachments(imageFilesFromFileList(event.target.files));
+    event.target.value = "";
+  }
+
+  async function buildComposerContent(
+    text: string,
+    sessionId: string,
+  ): Promise<string | ContentPart[]> {
+    const attachments = inputAttachmentsRef.current;
+    if (attachments.length === 0) {
+      return text;
+    }
+
+    const parts: ContentPart[] = [];
+    if (text) {
+      parts.push({ type: "text", text });
+    }
+    for (const attachment of attachments) {
+      const source = await uploadImageAttachment(attachment, sessionId);
+      parts.push({ type: "image", source });
+    }
+    return parts;
+  }
+
+  async function uploadImageAttachment(
+    attachment: PendingImageAttachment,
+    sessionId: string,
+  ): Promise<BlobSource> {
+    if (attachment.blobSource) {
+      return attachment.blobSource;
+    }
+
+    updateInputAttachment(attachment.id, { status: "uploading", progress: 0.02, error: undefined });
+    try {
+      const bytes = new Uint8Array(await attachment.file.arrayBuffer());
+      const sha256 = await sha256Hex(bytes);
+      const dataUrl = attachment.dataUrl ?? bytesToDataUrl(bytes, attachment.mimeType || "image/png");
+      updateInputAttachment(attachment.id, { dataUrl });
+      updateInputAttachment(attachment.id, { progress: 0.08 });
+
+      const initFrame = await sendCommand("blob.upload_init", {
+        direction: "inbound",
+        sha256,
+        size: bytes.byteLength,
+        mime: attachment.mimeType || "image/png",
+      }, sessionId);
+      const blobId = isRecord(initFrame?.payload)
+        ? optionalRecordString(initFrame.payload.blob_id)
+        : undefined;
+      if (!blobId) {
+        throw new Error("blob.upload_init did not return blob_id");
+      }
+
+      const totalChunks = Math.max(1, Math.ceil(bytes.byteLength / BLOB_CHUNK_SIZE));
+      for (let seq = 0; seq < totalChunks; seq += 1) {
+        const start = seq * BLOB_CHUNK_SIZE;
+        const end = Math.min(bytes.byteLength, start + BLOB_CHUNK_SIZE);
+        const chunkFrame = await sendCommand("blob.upload_chunk", {
+          blob_id: blobId,
+          seq,
+          data_b64: bytesToBase64(bytes.subarray(start, end)),
+        }, sessionId);
+        if (!chunkFrame) {
+          throw new Error("blob.upload_chunk failed");
+        }
+        updateInputAttachment(attachment.id, {
+          progress: 0.08 + ((seq + 1) / totalChunks) * 0.84,
+        });
+      }
+
+      const finalizeFrame = await sendCommand("blob.upload_finalize", { blob_id: blobId }, sessionId);
+      if (!finalizeFrame) {
+        throw new Error("blob.upload_finalize failed");
+      }
+      const payload = normalizeBlobFinalizePayload(finalizeFrame?.payload, blobId, attachment, sha256);
+      const source: BlobSource = {
+        kind: "blob",
+        blob_id: payload.blob_id,
+        uri: payload.uri ?? `hawi-blob://${payload.blob_id}`,
+        mime_type: payload.mime ?? attachment.mimeType,
+        filename: attachment.filename,
+        size: payload.size ?? attachment.size,
+        sha256: payload.sha256 ?? sha256,
+        direction: payload.direction ?? "inbound",
+      };
+
+      updateInputAttachment(attachment.id, {
+        status: "uploaded",
+        progress: 1,
+        blobSource: source,
+        error: undefined,
+      });
+      rememberBlobPreview(source, attachment.previewUrl, dataUrl);
+      return source;
+    } catch (error) {
+      updateInputAttachment(attachment.id, {
+        status: "error",
+        progress: 0,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  function updateInputAttachment(id: string, patch: Partial<PendingImageAttachment>) {
+    setInputAttachmentsAndRef((previous) => (
+      previous.map((attachment) => (
+        attachment.id === id ? { ...attachment, ...patch } : attachment
+      ))
+    ));
+  }
+
   async function submitInput() {
     const text = input.trim();
-    if (!text) return;
-    if (text.startsWith("/")) {
+    const hasAttachments = inputAttachmentsRef.current.length > 0;
+    if ((!text && !hasAttachments) || inputUploading) return;
+    if (text.startsWith("/") && !hasAttachments) {
       await runSlashCommand(text);
       setInput("");
       resetInputHistoryNavigation();
@@ -1520,27 +1929,51 @@ export default function App() {
     if (!sessionId) {
       return;
     }
-    setInput("");
-    resetInputHistoryNavigation();
-    const frame = await sendCommand(
-      "enqueue",
-      { content: text, queue: "high_prio", metadata: { intent: "user_send", source: "gui_main_input" } },
-      sessionId
-    );
-    if (frame) {
-      rememberInputHistory(text);
+    setInputUploading(true);
+    try {
+      const content = await buildComposerContent(text, sessionId);
+      const frame = await sendCommand(
+        "enqueue",
+        { content, queue: "high_prio", metadata: { intent: "user_send", source: "gui_main_input" } },
+        sessionId
+      );
+      if (frame) {
+        setInput("");
+        resetInputHistoryNavigation();
+        clearInputAttachments({ preserveUploaded: true });
+        if (text) {
+          rememberInputHistory(text);
+        }
+      }
+    } finally {
+      setInputUploading(false);
     }
   }
 
   async function resumeConversation() {
     const text = input.trim();
-    if (text) {
-      setInput("");
-      resetInputHistoryNavigation();
-    }
-    const frame = await sendCommand("resume", resumePayloadFromInput(text));
-    if (frame && text) {
-      rememberInputHistory(text);
+    const hasAttachments = inputAttachmentsRef.current.length > 0;
+    if (inputUploading) return;
+    setInputUploading(true);
+    try {
+      const sessionId = await ensureActiveSession();
+      if (!sessionId) return;
+      const content = hasAttachments
+        ? await buildComposerContent(text, sessionId)
+        : text;
+      const frame = await sendCommand("resume", resumePayloadFromContent(content), sessionId);
+      if (frame) {
+        if (text || hasAttachments) {
+          setInput("");
+          resetInputHistoryNavigation();
+          clearInputAttachments({ preserveUploaded: true });
+        }
+        if (text) {
+          rememberInputHistory(text);
+        }
+      }
+    } finally {
+      setInputUploading(false);
     }
   }
 
@@ -2073,7 +2506,7 @@ export default function App() {
           onOverflowOpenChange={setDebugMenuOpen}
         />
         <div className="status-row" ref={statusRowRef}>
-          <div className="status-strip" ref={statusStripRef}>
+          <div className="status-strip">
             <ProjectStatusCell
               projectPath={currentProjectPath}
               open={projectPopoverOpen}
@@ -2117,6 +2550,8 @@ export default function App() {
             <QueueStatusCell
               queueLengths={state.queueLengths}
               queueMessages={state.queueMessages}
+              blobPreviewUrls={blobPreviewUrls}
+              onOpenMediaPreview={setMediaPreview}
               control={state.control}
               open={queuePopoverOpen}
               onToggle={() => setQueuePopoverOpen((value) => !value)}
@@ -2147,14 +2582,8 @@ export default function App() {
               onTaskClear={clearNormalQueue}
             />
           </div>
-          <div className={`usage-status-strip ${usageStandaloneRow ? "standalone" : ""}`.trim()}>
-            <UsageStatusCell usage={state.modelUsage} compact={usageStandaloneRow} />
-          </div>
-          <div className="usage-status-strip usage-status-measure" ref={usageInlineMeasureRef} aria-hidden="true">
+          <div className="usage-status-strip">
             <UsageStatusCell usage={state.modelUsage} />
-          </div>
-          <div className="usage-status-strip usage-status-measure" ref={usageCompactMeasureRef} aria-hidden="true">
-            <UsageStatusCell usage={state.modelUsage} compact />
           </div>
         </div>
       </header>
@@ -2180,6 +2609,8 @@ export default function App() {
         <ChatTranscript
           ref={chatRef}
           nodes={visibleChatNodes}
+          blobPreviewUrls={blobPreviewUrls}
+          onOpenMediaPreview={setMediaPreview}
           processing={state.processing}
           highlightHistoryIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.messageIndex : undefined}
           highlightContextMessageId={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageId : undefined}
@@ -2211,26 +2642,68 @@ export default function App() {
         )}
       </section>
 
-      <footer className="input-row">
-        <textarea
-          ref={inputRef}
-          rows={1}
-          value={input}
-          placeholder="输入消息"
-          onChange={(event) => {
-            resizeTextareaToRows(event.currentTarget, MESSAGE_INPUT_MAX_ROWS);
-            setInput(event.target.value);
-            resetInputHistoryNavigation(event.target.value);
-          }}
-          onCompositionStart={startInputComposition}
-          onCompositionEnd={endInputComposition}
-          onKeyDown={handleMainInputKeyDown}
-        />
-        <button className="primary-button" disabled={!input.trim()} onClick={submitInput}>
-          <Send size={18} /> 发送
+      <footer className={`input-row ${inputDropActive ? "drop-active" : ""}`}>
+        <div className="composer">
+          {inputAttachments.length > 0 && (
+            <AttachmentStrip
+              attachments={inputAttachments}
+              busy={inputUploading}
+              onRemove={removeInputAttachment}
+            />
+          )}
+          {inputAttachmentError && (
+            <div className="composer-error">{inputAttachmentError}</div>
+          )}
+          <div className="composer-input-line">
+            <input
+              ref={imageFileInputRef}
+              className="hidden-file-input"
+              type="file"
+              accept="image/*"
+              multiple
+              tabIndex={-1}
+              onChange={handleImageFileInputChange}
+            />
+            <button
+              className="icon-button attachment-button"
+              type="button"
+              title="添加图片"
+              aria-label="添加图片"
+              disabled={inputUploading}
+              onClick={() => imageFileInputRef.current?.click()}
+            >
+              <Paperclip size={17} />
+            </button>
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={input}
+              placeholder="输入消息"
+              disabled={inputUploading}
+              onChange={(event) => {
+                resizeTextareaToRows(event.currentTarget, MESSAGE_INPUT_MAX_ROWS);
+                setInput(event.target.value);
+                resetInputHistoryNavigation(event.target.value);
+              }}
+              onCompositionStart={startInputComposition}
+              onCompositionEnd={endInputComposition}
+              onKeyDown={handleMainInputKeyDown}
+              onPaste={handleMainInputPaste}
+              onDrop={handleMainInputDrop}
+              onDragOver={handleMainInputDragOver}
+              onDragLeave={handleMainInputDragLeave}
+            />
+          </div>
+        </div>
+        <button
+          className="primary-button"
+          disabled={inputUploading || (!input.trim() && inputAttachments.length === 0)}
+          onClick={submitInput}
+        >
+          {inputUploading ? <LoaderCircle size={18} className="spin" /> : <Send size={18} />} 发送
         </button>
         {state.control.paused && state.control.resumable ? (
-          <button className="primary-button" onClick={resumeConversation}>
+          <button className="primary-button" disabled={inputUploading} onClick={resumeConversation}>
             <Play size={16} /> 继续
           </button>
         ) : (
@@ -2291,6 +2764,12 @@ export default function App() {
           onClose={() => setSubagentObserverId(null)}
         />
       )}
+      {mediaPreview && (
+        <MediaPreviewModal
+          preview={mediaPreview}
+          onClose={() => setMediaPreview(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2298,6 +2777,8 @@ export default function App() {
 function QueueStatusCell({
   queueLengths,
   queueMessages,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   control,
   open,
   onToggle,
@@ -2324,6 +2805,8 @@ function QueueStatusCell({
 }: {
   queueLengths: Record<QueueKind, number>;
   queueMessages: Record<QueueKind, QueueMessageState[]>;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   control: RuntimeControlState;
   open: boolean;
   onToggle: () => void;
@@ -2352,25 +2835,25 @@ function QueueStatusCell({
   const normalCount = normalQueueCount(queueLengths, queueMessages);
 
   return (
-    <div className={`priority-status ${open ? "active" : ""}`}>
-      <button
-        type="button"
+    <StatusCell className="priority-status" active={open}>
+      <StatusCellTrigger
         className="priority-status-trigger"
         title="Insert messages deliver soon; queued messages run later."
         aria-label={renderQueueStatusText(queueLengths, queueMessages)}
         aria-pressed={open}
         onClick={onToggle}
+        label="Message"
+        contentClassName="message-status-widget"
       >
-        <span className="status-cell-label">Message</span>
-        <span className="message-status-widget" aria-hidden="true">
-          <span><span>Insert</span><strong>{highPriorityCount}</strong></span>
-          <span><span>Queue</span><strong>{normalCount}</strong></span>
-        </span>
-      </button>
+        <span><span>Insert</span><strong>{highPriorityCount}</strong></span>
+        <span><span>Queue</span><strong>{normalCount}</strong></span>
+      </StatusCellTrigger>
       {open && (
         <QueuePopover
           queueLengths={queueLengths}
           queueMessages={queueMessages}
+          blobPreviewUrls={blobPreviewUrls}
+          onOpenMediaPreview={onOpenMediaPreview}
           control={control}
           taskDraft={taskDraft}
           taskDraftRef={taskDraftRef}
@@ -2394,11 +2877,11 @@ function QueueStatusCell({
           onTaskClear={onTaskClear}
         />
       )}
-    </div>
+    </StatusCell>
   );
 }
 
-function UsageStatusCell({ usage, compact = false }: { usage?: ModelUsageState; compact?: boolean }) {
+function UsageStatusCell({ usage }: { usage?: ModelUsageState }) {
   const total = formatUsageTokenCount(usage?.totalTokens ?? 0);
   const input = formatUsageTokenCount(usage?.inputTokens ?? 0);
   const output = formatUsageTokenCount(usage?.outputTokens ?? 0);
@@ -2407,27 +2890,30 @@ function UsageStatusCell({ usage, compact = false }: { usage?: ModelUsageState; 
   const label = renderUsageStatusText(usage);
 
   return (
-    <div className={`usage-status ${compact ? "compact" : ""}`.trim()} title={label} aria-label={label}>
-      <span className="status-cell-label">Usage</span>
-      <span className="usage-status-widget" aria-hidden="true">
-        <span className="usage-status-column">
-          <span>Total</span>
-          <strong>{total}</strong>
-        </span>
-        <span className="usage-status-column">
-          <span>Input</span>
-          <strong>{input}</strong>
-          <span>Output</span>
-          <strong>{output}</strong>
-        </span>
-        <span className="usage-status-column">
-          <span>Cache Write</span>
-          <strong>{cacheWrite}</strong>
-          <span>Cache Read</span>
-          <strong>{cacheRead}</strong>
-        </span>
+    <StatusCellDisplay
+      className="usage-status"
+      title={label}
+      aria-label={label}
+      label="Usage"
+      contentClassName="usage-status-widget"
+    >
+      <span className="usage-status-column">
+        <span>Total</span>
+        <strong>{total}</strong>
       </span>
-    </div>
+      <span className="usage-status-column">
+        <span>Input</span>
+        <strong>{input}</strong>
+        <span>Output</span>
+        <strong>{output}</strong>
+      </span>
+      <span className="usage-status-column">
+        <span>Cache Write</span>
+        <strong>{cacheWrite}</strong>
+        <span>Cache Read</span>
+        <strong>{cacheRead}</strong>
+      </span>
+    </StatusCellDisplay>
   );
 }
 
@@ -2474,40 +2960,38 @@ function ContextUsageCell({
         ? `Context ${usageLabel}${thresholdTitle} · 压缩中`
         : `Context ${usageLabel}${thresholdTitle} · 点击查看上下文设置`;
   return (
-    <div className={`context-status ${compressing ? "compressing" : ""} ${open ? "active" : ""}`}>
-      <button
-        type="button"
+    <StatusCell className={`context-status ${compressing ? "compressing" : ""}`} active={open}>
+      <StatusCellTrigger
         className="context-status-trigger"
         title={title}
         disabled={inactive}
         onClick={onToggle}
         aria-label={`Context ${percent} ${usageLabel}`}
         aria-pressed={open}
+        label="Context"
+        contentClassName={`context-status-widget ${compressing ? "compressing" : ""}`}
       >
-        <span className="status-cell-label">Context</span>
-        <span className={`context-status-widget ${compressing ? "compressing" : ""}`}>
-          {compressing ? (
-            <>
-              <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />
-              <span>Compress</span>
-            </>
-          ) : (
-            <>
-              <span className="context-usage-line">{usageLabel}</span>
-              <span className="context-meter" aria-hidden="true">
-                <span className="context-meter-fill" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
-                {thresholdPercent !== undefined && (
-                  <span
-                    className="context-meter-threshold"
-                    style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
-                  />
-                )}
-                <strong className="context-meter-label">{meterLabel}</strong>
-              </span>
-            </>
-          )}
-        </span>
-      </button>
+        {compressing ? (
+          <>
+            <LoaderCircle className="context-status-spinner" size={13} aria-label="Compressing context" />
+            <span>Compress</span>
+          </>
+        ) : (
+          <>
+            <span className="context-usage-line">{usageLabel}</span>
+            <span className="context-meter" aria-hidden="true">
+              <span className="context-meter-fill" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+              {thresholdPercent !== undefined && (
+                <span
+                  className="context-meter-threshold"
+                  style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
+                />
+              )}
+              <strong className="context-meter-label">{meterLabel}</strong>
+            </span>
+          </>
+        )}
+      </StatusCellTrigger>
       {open && (
         <ContextPopover
           usage={usage}
@@ -2519,7 +3003,7 @@ function ContextUsageCell({
           onThresholdChange={onThresholdChange}
         />
       )}
-    </div>
+    </StatusCell>
   );
 }
 
@@ -2540,26 +3024,21 @@ function ProjectStatusCell({
   const fullPath = projectPath?.trim() || "-";
   const pathLabel = middleEllipsizePath(fullPath, 58);
   return (
-    <div className={`project-status ${open ? "active" : ""}`}>
-      <button
-        type="button"
+    <StatusCell className="project-status" active={open}>
+      <StatusCellTrigger
         className="project-trigger"
         title={`Project\n${projectName}\n${fullPath}`}
         onClick={onToggle}
         aria-label={`Project ${projectName}. ${fullPath}`}
+        label="Project"
+        contentClassName="project-status-widget"
       >
-        <span className="status-cell-label">Project</span>
-        <span className="project-status-widget" aria-hidden="true">
-          <strong className="project-name-line">{projectName}</strong>
-          <span className="project-path-line">{pathLabel}</span>
-        </span>
-      </button>
+        <strong className="project-name-line">{projectName}</strong>
+        <span className="project-path-line">{pathLabel}</span>
+      </StatusCellTrigger>
       {open && (
         <div className="project-popover">
-          <header>
-            <span>Project</span>
-            <strong>{projectName}</strong>
-          </header>
+          <StatusPopoverHeader title="Project" value={projectName} />
           <div className="project-popover-body">
             <div className="project-full-path">{fullPath}</div>
             <button
@@ -2574,7 +3053,7 @@ function ProjectStatusCell({
           </div>
         </div>
       )}
-    </div>
+    </StatusCell>
   );
 }
 
@@ -2660,29 +3139,27 @@ function SessionStatusCell({
   }
 
   return (
-    <div className={`session-status ${open ? "active" : ""}`}>
-      <button
-        type="button"
+    <StatusCell className="session-status" active={open}>
+      <StatusCellTrigger
         className="session-trigger"
         title={`切换 Session\n${sessionRuntimeLabel}\n${currentSessionLabel}`}
         disabled={busy}
         onClick={onToggle}
         aria-label={`Session ${sessionRuntimeLabel}. ${currentSessionLabel}`}
+        label="Session"
+        contentClassName="session-status-widget"
       >
-        <span className="status-cell-label">Session</span>
-        <span className="session-status-widget" aria-hidden="true">
-          <span className="session-runtime-line">
-            <strong>{runningCount}</strong>
-            <span>Running /</span>
-            <strong>{loadedCount}</strong>
-            <span>Active</span>
-          </span>
-          <span className="session-current-line">
-            <span>Current:</span>
-            <strong>{currentSessionName}</strong>
-          </span>
+        <span className="session-runtime-line">
+          <strong>{runningCount}</strong>
+          <span>Running /</span>
+          <strong>{loadedCount}</strong>
+          <span>Active</span>
         </span>
-      </button>
+        <span className="session-current-line">
+          <span>Current:</span>
+          <strong>{currentSessionName}</strong>
+        </span>
+      </StatusCellTrigger>
       <button
         type="button"
         className={`mini-button icon-only ${searchOpen ? "active" : ""}`.trim()}
@@ -2724,10 +3201,7 @@ function SessionStatusCell({
       </button>
       {open && (
         <div className="session-popover">
-          <header>
-            <span>Sessions</span>
-            <strong>{sortedSessions.length}</strong>
-          </header>
+          <StatusPopoverHeader title="Sessions" value={sortedSessions.length} />
           <div className="session-list">
             {sortedSessions.length === 0 ? (
               <div className="session-empty">No sessions</div>
@@ -2830,7 +3304,7 @@ function SessionStatusCell({
           </div>
         </div>
       )}
-    </div>
+    </StatusCell>
   );
 }
 
@@ -3060,6 +3534,8 @@ function isEnglishLetter(value: string): boolean {
 function QueuePopover({
   queueLengths,
   queueMessages,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   control,
   taskDraft,
   taskDraftRef,
@@ -3084,6 +3560,8 @@ function QueuePopover({
 }: {
   queueLengths: Record<QueueKind, number>;
   queueMessages: Record<QueueKind, QueueMessageState[]>;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   control: RuntimeControlState;
   taskDraft: string;
   taskDraftRef: (element: HTMLTextAreaElement | null) => void;
@@ -3125,12 +3603,16 @@ function QueuePopover({
         kind="high_prio"
         length={Math.max(queueLengths.high_prio, queueMessages.high_prio.length)}
         messages={queueMessages.high_prio}
+        blobPreviewUrls={blobPreviewUrls}
+        onOpenMediaPreview={onOpenMediaPreview}
         busy={taskBusy}
         onRemove={onQueuedMessageRemove}
       />
       <QueueTaskGroup
         length={normalCount}
         messages={queueMessages.normal}
+        blobPreviewUrls={blobPreviewUrls}
+        onOpenMediaPreview={onOpenMediaPreview}
         draft={taskDraft}
         draftRef={taskDraftRef}
         busy={taskBusy}
@@ -3159,12 +3641,16 @@ function QueueMessageGroup({
   kind,
   length,
   messages,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   busy = false,
   onRemove
 }: {
   kind: QueueKind;
   length: number;
   messages: QueueMessageState[];
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   busy?: boolean;
   onRemove?: (message: QueueMessageState) => void;
 }) {
@@ -3187,6 +3673,8 @@ function QueueMessageGroup({
             <QueueMessageItem
               message={message}
               key={`${kind}-${message.id}`}
+              blobPreviewUrls={blobPreviewUrls}
+              onOpenMediaPreview={onOpenMediaPreview}
               busy={busy}
               onRemove={onRemove}
             />
@@ -3200,6 +3688,8 @@ function QueueMessageGroup({
 function QueueTaskGroup({
   length,
   messages,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   draft,
   draftRef,
   busy,
@@ -3222,6 +3712,8 @@ function QueueTaskGroup({
 }: {
   length: number;
   messages: QueueMessageState[];
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   draft: string;
   draftRef: (element: HTMLTextAreaElement | null) => void;
   busy: boolean;
@@ -3294,6 +3786,8 @@ function QueueTaskGroup({
             <QueueTaskItem
               message={message}
               key={`normal-${message.id}`}
+              blobPreviewUrls={blobPreviewUrls}
+              onOpenMediaPreview={onOpenMediaPreview}
               index={index}
               count={messages.length}
               busy={busy}
@@ -3317,10 +3811,14 @@ function QueueTaskGroup({
 
 function QueueMessageItem({
   message,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   busy = false,
   onRemove
 }: {
   message: QueueMessageState;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   busy?: boolean;
   onRemove?: (message: QueueMessageState) => void;
 }) {
@@ -3332,7 +3830,11 @@ function QueueMessageItem({
         <span>{message.id}</span>
         {timestamp && <time>{timestamp}</time>}
       </div>
-      <p>{message.contentPreview || "空消息"}</p>
+      <QueueMessageContent
+        message={message}
+        blobPreviewUrls={blobPreviewUrls}
+        onOpenMediaPreview={onOpenMediaPreview}
+      />
       {onRemove && (
         <div className="queue-task-actions queue-message-actions">
           <button
@@ -3353,6 +3855,8 @@ function QueueMessageItem({
 
 function QueueTaskItem({
   message,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   index,
   count,
   busy,
@@ -3368,6 +3872,8 @@ function QueueTaskItem({
   onMove
 }: {
   message: QueueMessageState;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   index: number;
   count: number;
   busy: boolean;
@@ -3419,7 +3925,12 @@ function QueueTaskItem({
         <span>{message.id}</span>
         {timestamp && <time>{timestamp}</time>}
       </div>
-      <p>{(message.content ?? message.contentPreview) || "空消息"}</p>
+      <QueueMessageContent
+        message={message}
+        blobPreviewUrls={blobPreviewUrls}
+        onOpenMediaPreview={onOpenMediaPreview}
+        preferFullContent
+      />
       <div className="queue-task-actions">
         <button
           type="button"
@@ -3454,8 +3965,296 @@ function QueueTaskItem({
   );
 }
 
+function AttachmentStrip({
+  attachments,
+  busy,
+  onRemove
+}: {
+  attachments: PendingImageAttachment[];
+  busy: boolean;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="attachment-strip">
+      {attachments.map((attachment) => (
+        <figure className={`attachment-chip ${attachment.status}`} key={attachment.id}>
+          <img src={attachment.dataUrl ?? attachment.previewUrl} alt={attachment.filename} />
+          <figcaption>
+            <span title={attachment.filename}>{attachment.filename}</span>
+            <small>{attachmentStatusText(attachment)}</small>
+          </figcaption>
+          {attachment.status === "uploading" && (
+            <progress value={attachment.progress} max={1} aria-label="上传进度" />
+          )}
+          {attachment.status === "error" && attachment.error && (
+            <small className="attachment-error" title={attachment.error}>{attachment.error}</small>
+          )}
+          <button
+            type="button"
+            title="移除图片"
+            aria-label="移除图片"
+            disabled={busy}
+            onClick={() => onRemove(attachment.id)}
+          >
+            <X size={12} />
+          </button>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+function QueueMessageContent({
+  message,
+  blobPreviewUrls,
+  onOpenMediaPreview,
+  preferFullContent = false,
+}: {
+  message: QueueMessageState;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
+  preferFullContent?: boolean;
+}) {
+  if (hasRenderableContentParts(message.contentParts)) {
+    return (
+      <ContentPartsView
+        parts={message.contentParts ?? []}
+        fallbackText={message.contentPreview}
+        blobPreviewUrls={blobPreviewUrls}
+        onOpenMediaPreview={onOpenMediaPreview}
+        compact
+      />
+    );
+  }
+  const text = (preferFullContent ? message.content : undefined) ?? message.contentPreview;
+  return <p>{text || "空消息"}</p>;
+}
+
+function ContentPartsView({
+  parts,
+  fallbackText,
+  markdown = false,
+  blobPreviewUrls,
+  onOpenMediaPreview,
+  compact = false,
+}: {
+  parts: ContentPart[];
+  fallbackText?: string;
+  markdown?: boolean;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
+  compact?: boolean;
+}) {
+  const visibleParts = parts.filter(isRenderableContentPart);
+  if (visibleParts.length === 0) {
+    return <p>{fallbackText || "空消息"}</p>;
+  }
+
+  return (
+    <div className={`content-parts ${compact ? "compact" : ""}`.trim()}>
+      {visibleParts.map((part, index) => (
+        <ContentPartView
+          part={part}
+          markdown={markdown}
+          blobPreviewUrls={blobPreviewUrls}
+          onOpenMediaPreview={onOpenMediaPreview}
+          compact={compact}
+          key={`${part.type}-${index}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ContentPartView({
+  part,
+  markdown,
+  blobPreviewUrls,
+  onOpenMediaPreview,
+  compact,
+}: {
+  part: ContentPart;
+  markdown: boolean;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
+  compact: boolean;
+}) {
+  if (part.type === "text") {
+    const text = typeof part.text === "string" ? part.text : "";
+    return <MarkdownView html={markdown ? renderMarkdown(text) : escapeText(text)} />;
+  }
+
+  if (isMediaPart(part)) {
+    return (
+      <MediaPartView
+        part={part}
+        source={isRecord(part.source) ? part.source as MediaSource : undefined}
+        blobPreviewUrls={blobPreviewUrls}
+        onOpenMediaPreview={onOpenMediaPreview}
+        compact={compact}
+      />
+    );
+  }
+
+  return null;
+}
+
+function MediaPartView({
+  part,
+  source,
+  blobPreviewUrls,
+  onOpenMediaPreview,
+  compact,
+}: {
+  part: ContentPart;
+  source?: MediaSource;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
+  compact: boolean;
+}) {
+  const src = mediaDisplayUrl(source, blobPreviewUrls);
+  const label = mediaDisplayName(part, source);
+  const meta = mediaMetaText(source);
+  const mediaKind = String(part.type);
+  const openPreview = src && onOpenMediaPreview
+    ? () => onOpenMediaPreview({ src, label, meta, kind: mediaKind })
+    : undefined;
+
+  if (mediaKind === "image") {
+    return (
+      <figure className={`media-part image ${compact ? "compact" : ""}`.trim()}>
+        {src ? (
+          <button
+            type="button"
+            className="media-preview-button"
+            title="放大查看图片"
+            onClick={openPreview}
+          >
+            <img src={src} alt={label} />
+          </button>
+        ) : (
+          <MediaPlaceholder icon="image" label={label} />
+        )}
+        <figcaption>
+          <span>{label}</span>
+          {meta && <small>{meta}</small>}
+        </figcaption>
+      </figure>
+    );
+  }
+
+  if (mediaKind === "audio" && src) {
+    return (
+      <figure className={`media-part audio ${compact ? "compact" : ""}`.trim()}>
+        <audio src={src} controls />
+        <figcaption>
+          <span>{label}</span>
+          {meta && <small>{meta}</small>}
+        </figcaption>
+      </figure>
+    );
+  }
+
+  if (mediaKind === "video" && src) {
+    return (
+      <figure className={`media-part video ${compact ? "compact" : ""}`.trim()}>
+        <video src={src} controls />
+        <figcaption>
+          <span>{label}</span>
+          {meta && <small>{meta}</small>}
+        </figcaption>
+      </figure>
+    );
+  }
+
+  return (
+    <figure className={`media-part file ${compact ? "compact" : ""}`.trim()}>
+      <MediaPlaceholder icon={mediaKind === "image" ? "image" : "file"} label={label} />
+      <figcaption>
+        <span>{label}</span>
+        {meta && <small>{meta}</small>}
+      </figcaption>
+    </figure>
+  );
+}
+
+function MediaPlaceholder({ icon, label }: { icon: "image" | "file"; label: string }) {
+  return (
+    <div className="media-placeholder" title={label}>
+      {icon === "image" ? <ImageIcon size={20} /> : <FileText size={20} />}
+    </div>
+  );
+}
+
+function MediaPreviewModal({
+  preview,
+  onClose,
+}: {
+  preview: MediaPreviewState;
+  onClose: () => void;
+}) {
+  const modalRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    modalRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="modal-backdrop media-preview-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        ref={modalRef}
+        className="media-preview-lightbox"
+        role="dialog"
+        aria-modal="true"
+        aria-label={preview.label}
+        tabIndex={-1}
+      >
+        <div className="media-preview-content">
+          <img className="media-preview-image" src={preview.src} alt={preview.label} />
+          {(preview.label || preview.meta) && (
+            <div className="media-preview-caption">
+              {preview.label && <span>{preview.label}</span>}
+              {preview.meta && <small>{preview.meta}</small>}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="media-preview-close"
+          title="关闭"
+          aria-label="关闭"
+          onClick={onClose}
+        >
+          <X size={19} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface ChatTranscriptProps {
   nodes: ChatNode[];
+  blobPreviewUrls?: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   processing?: ProcessingState;
   onForkMessage?: (node: ChatNode) => void;
   allowFork?: boolean;
@@ -3471,6 +4270,8 @@ interface ChatTranscriptProps {
 
 const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(function ChatTranscript({
   nodes,
+  blobPreviewUrls = {},
+  onOpenMediaPreview,
   processing,
   onForkMessage,
   allowFork = true,
@@ -3512,6 +4313,8 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
           >
             <ChatBubble
               node={node}
+              blobPreviewUrls={blobPreviewUrls}
+              onOpenMediaPreview={onOpenMediaPreview}
               allowFork={allowFork}
               onForkMessage={onForkMessage}
             />
@@ -3550,10 +4353,14 @@ function guardNativeToggleDuringSelection(event: ReactMouseEvent<HTMLElement>) {
 
 const ChatBubble = memo(function ChatBubble({
   node,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   allowFork,
   onForkMessage
 }: {
   node: ChatNode;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   allowFork: boolean;
   onForkMessage?: (node: ChatNode) => void;
 }) {
@@ -3591,7 +4398,15 @@ const ChatBubble = memo(function ChatBubble({
   if (node.kind === "thinking") {
     return <ThinkingBubble node={node} />;
   }
-  return <MessageBubble node={node} allowFork={allowFork} onForkMessage={onForkMessage} />;
+  return (
+    <MessageBubble
+      node={node}
+      blobPreviewUrls={blobPreviewUrls}
+      onOpenMediaPreview={onOpenMediaPreview}
+      allowFork={allowFork}
+      onForkMessage={onForkMessage}
+    />
+  );
 });
 
 function ProcessingLine({ processing }: { processing: ProcessingState }) {
@@ -3736,15 +4551,20 @@ const FrameworkBubble = memo(function FrameworkBubble({
 
 const MessageBubble = memo(function MessageBubble({
   node,
+  blobPreviewUrls,
+  onOpenMediaPreview,
   allowFork,
   onForkMessage
 }: {
   node: ChatNode;
+  blobPreviewUrls: BlobPreviewUrls;
+  onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   allowFork: boolean;
   onForkMessage?: (node: ChatNode) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
+  const hasStructuredContent = hasRenderableContentParts(node.contentParts);
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
   const toggleCollapsed = () => setCollapsed((value) => !value);
@@ -3813,7 +4633,17 @@ const MessageBubble = memo(function MessageBubble({
         }
         title={collapsed ? "点击展开消息" : undefined}
       >
-        <MarkdownView html={html} />
+        {hasStructuredContent ? (
+          <ContentPartsView
+            parts={node.contentParts ?? []}
+            fallbackText={node.content}
+            markdown={node.kind === "agent"}
+            blobPreviewUrls={blobPreviewUrls}
+            onOpenMediaPreview={onOpenMediaPreview}
+          />
+        ) : (
+          <MarkdownView html={html} />
+        )}
         {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
       </div>
       {afterInjections.length > 0 && (
@@ -5111,10 +5941,7 @@ function ContextPopover({
 
   return (
     <div className="context-popover">
-      <header>
-        <span>Context</span>
-        <strong>{percent}</strong>
-      </header>
+      <StatusPopoverHeader title="Context" value={percent} />
       <div className="context-popover-body">
         <dl className="context-compact-stats">
           <div>
@@ -5722,6 +6549,288 @@ function normalizeMarkdownExportPayload(value: unknown): MarkdownExportPayload |
 export function resumePayloadFromInput(input: string): Record<string, unknown> {
   const message = input.trim();
   return message ? { message } : {};
+}
+
+function resumePayloadFromContent(content: string | ContentPart[]): Record<string, unknown> {
+  if (typeof content === "string") {
+    return resumePayloadFromInput(content);
+  }
+  return content.length > 0 ? { message: content } : {};
+}
+
+function createPendingImageAttachment(file: File): PendingImageAttachment {
+  return {
+    id: `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
+    file,
+    previewUrl: URL.createObjectURL(file),
+    filename: file.name || "image",
+    mimeType: file.type || "image/png",
+    size: file.size,
+    status: "ready",
+    progress: 0,
+  };
+}
+
+function isSupportedImageFile(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  return /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file.name);
+}
+
+function imageFilesFromFileList(files: FileList | null): File[] {
+  if (!files) return [];
+  return Array.from(files).filter(isSupportedImageFile);
+}
+
+function hasImageFile(dataTransfer: DataTransfer): boolean {
+  if (imageFilesFromFileList(dataTransfer.files).length > 0) return true;
+  return Array.from(dataTransfer.items).some((item) => (
+    item.kind === "file" && item.type.startsWith("image/")
+  ));
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  if (!window.crypto?.subtle) {
+    throw new Error("Current runtime does not support crypto.subtle");
+  }
+  const buffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+  const digest = await window.crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
+  return `data:${mimeType || "application/octet-stream"};base64,${bytesToBase64(bytes)}`;
+}
+
+function revokeObjectUrl(value: string) {
+  if (value.startsWith("blob:")) {
+    URL.revokeObjectURL(value);
+  }
+}
+
+function normalizeBlobFinalizePayload(
+  value: unknown,
+  blobId: string,
+  attachment: PendingImageAttachment,
+  sha256: string,
+): BlobFinalizePayload {
+  if (!isRecord(value)) {
+    return {
+      blob_id: blobId,
+      uri: `hawi-blob://${blobId}`,
+      sha256,
+      direction: "inbound",
+      size: attachment.size,
+      mime: attachment.mimeType,
+    };
+  }
+  return {
+    blob_id: optionalRecordString(value.blob_id) ?? blobId,
+    uri: optionalRecordString(value.uri),
+    sha256: optionalRecordString(value.sha256) ?? sha256,
+    direction: value.direction === "outbound" ? "outbound" : "inbound",
+    size: typeof value.size === "number" ? value.size : attachment.size,
+    mime: typeof value.mime === "string" ? value.mime : attachment.mimeType,
+    ref_count: typeof value.ref_count === "number" ? value.ref_count : undefined,
+  };
+}
+
+function attachmentStatusText(attachment: PendingImageAttachment): string {
+  if (attachment.status === "uploading") {
+    return `${Math.round(attachment.progress * 100)}%`;
+  }
+  if (attachment.status === "uploaded") {
+    return "已上传";
+  }
+  if (attachment.status === "error") {
+    return "失败";
+  }
+  return formatByteCount(attachment.size);
+}
+
+function hasRenderableContentParts(parts?: ContentPart[]): boolean {
+  return Array.isArray(parts) && parts.some(isRenderableContentPart);
+}
+
+function isRenderableContentPart(part: ContentPart): boolean {
+  if (part.type === "text") {
+    return typeof part.text === "string" && part.text.length > 0;
+  }
+  return isMediaPart(part);
+}
+
+function isMediaPart(part: ContentPart): boolean {
+  return part.type === "image"
+    || part.type === "document"
+    || part.type === "audio"
+    || part.type === "video"
+    || part.type === "file";
+}
+
+function collectMissingBlobPreviewRequests(
+  state: AppState,
+  blobPreviewUrls: BlobPreviewUrls,
+): BlobPreviewRequest[] {
+  const requests = new Map<string, BlobPreviewRequest>();
+  for (const node of state.nodes) {
+    collectBlobPreviewRequestsFromContentParts(node.contentParts, blobPreviewUrls, requests);
+  }
+  for (const messages of Object.values(state.queueMessages)) {
+    for (const message of messages) {
+      collectBlobPreviewRequestsFromContentParts(message.contentParts, blobPreviewUrls, requests);
+    }
+  }
+  for (const subagent of Object.values(state.subagents)) {
+    for (const node of subagent.nodes) {
+      collectBlobPreviewRequestsFromContentParts(node.contentParts, blobPreviewUrls, requests);
+    }
+  }
+  return [...requests.values()];
+}
+
+function collectBlobPreviewRequestsFromContentParts(
+  parts: ContentPart[] | undefined,
+  blobPreviewUrls: BlobPreviewUrls,
+  requests: Map<string, BlobPreviewRequest>,
+) {
+  if (!Array.isArray(parts)) return;
+  for (const part of parts) {
+    if (part.type === "image" && isRecord(part.source)) {
+      const request = blobPreviewRequestFromSource(part.source as MediaSource, blobPreviewUrls);
+      if (request && !requests.has(request.blobId)) {
+        requests.set(request.blobId, request);
+      }
+    }
+    if (Array.isArray(part.content)) {
+      collectBlobPreviewRequestsFromContentParts(
+        part.content.filter(isContentPartRecord),
+        blobPreviewUrls,
+        requests,
+      );
+    }
+  }
+}
+
+function blobPreviewRequestFromSource(
+  source: MediaSource,
+  blobPreviewUrls: BlobPreviewUrls,
+): BlobPreviewRequest | undefined {
+  const blobId = optionalRecordString(source.blob_id)
+    ?? blobIdFromUri(source.uri)
+    ?? blobIdFromUri(source.url);
+  if (!blobId) return undefined;
+
+  const uri = optionalRecordString(source.uri) ?? `hawi-blob://${blobId}`;
+  const keys = [
+    blobId,
+    uri,
+    `hawi-blob://${blobId}`,
+    optionalRecordString(source.url),
+  ].filter((key): key is string => Boolean(key));
+  if (keys.some((key) => Boolean(blobPreviewUrls[key]))) {
+    return undefined;
+  }
+
+  const size = typeof source.size === "number" ? source.size : undefined;
+  if (size !== undefined && size > MAX_IMAGE_ATTACHMENT_BYTES) {
+    return undefined;
+  }
+  return {
+    blobId,
+    uri,
+    size,
+    mimeType: optionalRecordString(source.mime_type)
+      ?? optionalRecordString(source.mimeType)
+      ?? optionalRecordString(source.mime),
+  };
+}
+
+function isContentPartRecord(value: unknown): value is ContentPart {
+  return isRecord(value) && typeof value.type === "string";
+}
+
+function mediaDisplayUrl(source: MediaSource | undefined, blobPreviewUrls: BlobPreviewUrls): string | undefined {
+  if (!source) return undefined;
+  const blobId = optionalRecordString(source.blob_id);
+  if (blobId && blobPreviewUrls[blobId]) {
+    return blobPreviewUrls[blobId];
+  }
+  for (const key of [source.uri, source.url, source.data_uri]) {
+    if (typeof key === "string" && blobPreviewUrls[key]) {
+      return blobPreviewUrls[key];
+    }
+  }
+  const uriBlobId = blobIdFromUri(source.uri) ?? blobIdFromUri(source.url);
+  if (uriBlobId && blobPreviewUrls[uriBlobId]) {
+    return blobPreviewUrls[uriBlobId];
+  }
+  for (const value of [source.data_uri, source.url, source.uri]) {
+    if (!value) continue;
+    if (value.startsWith("hawi-blob://")) continue;
+    if (value.startsWith("data:") || value.startsWith("blob:") || /^https?:\/\//i.test(value)) {
+      return value;
+    }
+  }
+  if (source.data && (source.mime_type || source.mime)) {
+    return `data:${source.mime_type ?? source.mime};base64,${source.data}`;
+  }
+  return undefined;
+}
+
+function blobIdFromUri(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith("hawi-blob://")) return undefined;
+  return value.slice("hawi-blob://".length) || undefined;
+}
+
+function mediaDisplayName(part: ContentPart, source: MediaSource | undefined): string {
+  return optionalRecordString(source?.filename)
+    ?? (typeof part.title === "string" && part.title.trim() ? part.title : undefined)
+    ?? mediaKindLabel(String(part.type));
+}
+
+function mediaMetaText(source: MediaSource | undefined): string {
+  if (!source) return "";
+  const mime = optionalRecordString(source.mime_type)
+    ?? optionalRecordString(source.mimeType)
+    ?? optionalRecordString(source.mime);
+  const size = typeof source.size === "number" ? formatByteCount(source.size) : "";
+  return [mime, size].filter(Boolean).join(" · ");
+}
+
+function mediaKindLabel(type: string): string {
+  if (type === "image") return "Image";
+  if (type === "audio") return "Audio";
+  if (type === "video") return "Video";
+  if (type === "document") return "Document";
+  return "File";
+}
+
+function formatByteCount(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return "";
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = size / 1024;
+  for (const unit of units) {
+    if (value < 1024 || unit === units[units.length - 1]) {
+      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+    }
+    value /= 1024;
+  }
+  return `${size} B`;
 }
 
 function normalizeSessionList(value: unknown): SessionMetaPayload[] {

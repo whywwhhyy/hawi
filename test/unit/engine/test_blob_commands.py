@@ -87,15 +87,26 @@ async def test_full_upload_then_has_then_fetch(store):
     fin_ack = next(f for f in client.sent if f["id"] == "f1" and f["type"] == "ack")
     assert fin_ack["payload"]["sha256"] == sha
     assert fin_ack["payload"]["size"] == len(body)
+    assert fin_ack["payload"]["mime"] == "application/octet-stream"
+    assert fin_ack["payload"]["direction"] == "inbound"
+    assert fin_ack["payload"]["uri"] == f"hawi-blob://{bid}"
 
-    # 4. has finds it
+    # 4. info returns stable metadata without streaming the blob body
+    info_cmd = CoreCommand(type="blob.info", id="info1", payload={"blob_id": bid})
+    await dispatch_blob_command(client, info_cmd, store=store)
+    info_ack = next(f for f in client.sent if f["id"] == "info1" and f["type"] == "ack")
+    assert info_ack["payload"]["blob_id"] == bid
+    assert info_ack["payload"]["sha256"] == sha
+    assert info_ack["payload"]["uri"] == f"hawi-blob://{bid}"
+
+    # 5. has finds it
     has_cmd = CoreCommand(type="blob.has", id="h1",
                           payload={"sha256": sha, "direction": "inbound"})
     await dispatch_blob_command(client, has_cmd, store=store)
     has_ack = next(f for f in client.sent if f["id"] == "h1" and f["type"] == "ack")
     assert has_ack["payload"]["blob_id"] == bid
 
-    # 5. fetch streams blob.chunk events + blob.complete
+    # 6. fetch streams blob.chunk events + blob.complete
     fetch_cmd = CoreCommand(type="blob.fetch", id="g1",
                             payload={"blob_id": bid, "chunk_size": 8})
     await dispatch_blob_command(client, fetch_cmd, store=store)

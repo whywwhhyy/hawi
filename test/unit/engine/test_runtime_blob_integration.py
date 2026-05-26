@@ -12,8 +12,10 @@ from typing import Any
 import pytest
 
 from hawi.engine.blob.store import BlobStore
+from hawi.engine.blob.resolver import resolve_blob_references_for_model
 from hawi.engine.protocol import VERSION
 from hawi.engine.runtime import CoreRuntime
+from hawi.models.message import MessageRequest, blob_source
 
 
 @dataclass(eq=False)
@@ -51,6 +53,23 @@ def _frame(command_type: str, request_id: str, payload: dict[str, Any]) -> str:
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+async def _store_blob(
+    store: BlobStore,
+    body: bytes,
+    *,
+    mime: str | None = None,
+) -> str:
+    blob_id = await store.upload_init(
+        direction="inbound",
+        sha256=_sha(body),
+        size=len(body),
+        mime=mime,
+    )
+    await store.upload_chunk(blob_id, 0, body)
+    await store.upload_finalize(blob_id)
+    return blob_id
 
 
 async def test_hello_advertises_blob_v1_only_when_store_enabled(blob_store: BlobStore) -> None:
@@ -152,3 +171,38 @@ async def test_runtime_blob_command_requires_authentication(blob_store: BlobStor
 
     assert client.sent[-1]["type"] == "error"
     assert client.sent[-1]["payload"]["code"] == "unauthenticated"
+
+
+async def test_blob_resolver_lowers_blob_source_without_mutating_request(
+    blob_store: BlobStore,
+) -> None:
+    blob_id = await _store_blob(blob_store, b"image bytes", mime="image/png")
+    request = MessageRequest(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": blob_source(
+                            blob_id,
+                            mime_type="image/png",
+                            filename="screen.png",
+                        ),
+                    }
+                ],
+                "name": None,
+                "metadata": None,
+            }
+        ]
+    )
+
+    resolved = await resolve_blob_references_for_model(request, blob_store)
+
+    original_source = request.messages[0]["content"][0]["source"]
+    resolved_source = resolved.messages[0]["content"][0]["source"]
+    assert original_source["blob_id"] == blob_id
+    assert resolved_source["url"].startswith("data:image/png;base64,")
+    assert resolved_source["filename"] == "screen.png"
+    assert "blob_id" not in resolved_source
+    MessageRequest(messages=resolved.messages)

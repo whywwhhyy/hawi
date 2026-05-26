@@ -580,6 +580,7 @@ class SubAgentManager:
             event_bus=event_bus,
             streaming=self._parent._streaming,
             auto_compact=self._parent._auto_compact,
+            model_input_resolver=self._parent._model_input_resolver,
         )
 
     def _rebind_agent_event_bus(self, agent: HawiAgent, event_bus: EventBus) -> None:

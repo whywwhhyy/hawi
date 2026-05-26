@@ -104,6 +104,22 @@ def test_parse_compact_context_command() -> None:
     assert command.id == "compact-1"
 
 
+def test_parse_blob_info_command() -> None:
+    command = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "blob.info",
+                "id": "blob-info-1",
+                "payload": {"blob_id": "a" * 64},
+            }
+        )
+    )
+
+    assert command.type == "blob.info"
+    assert command.payload["blob_id"] == "a" * 64
+
+
 def test_parse_rejects_unknown_command() -> None:
     with pytest.raises(ProtocolError, match="Unknown command"):
         parse_frame(json.dumps({"version": VERSION, "type": "wat"}))

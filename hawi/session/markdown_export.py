@@ -391,9 +391,39 @@ def _render_regular_content(content: list[Any]) -> str:
             parts.append(_content_text(part.get("content")))
         elif part_type == "tool_call":
             continue
+        elif part_type in {"image", "document", "audio", "video", "file"}:
+            parts.append(_render_media_reference(part))
         else:
             parts.append(_fenced(_json_dumps(part), "json"))
     return "\n\n".join(part for part in parts if part)
+
+
+def _render_media_reference(part: dict[str, Any]) -> str:
+    part_type = str(part.get("type") or "media")
+    source = part.get("source")
+    source = source if isinstance(source, dict) else {}
+    title = part.get("title")
+    filename = source.get("filename") or title
+    mime_type = source.get("mime_type") or source.get("mimeType") or source.get("format")
+    uri = (
+        source.get("uri")
+        or source.get("url")
+        or source.get("data_uri")
+        or source.get("path")
+        or source.get("file_id")
+        or source.get("blob_id")
+        or ""
+    )
+    if isinstance(uri, str) and uri.startswith("data:"):
+        uri = uri.split(",", 1)[0] + ",..."
+    details = [part_type]
+    if filename:
+        details.append(str(filename))
+    if mime_type:
+        details.append(str(mime_type))
+    if uri:
+        details.append(str(uri))
+    return "*[" + ": ".join(details) + "]*"
 
 
 def _content_text(value: Any) -> str:

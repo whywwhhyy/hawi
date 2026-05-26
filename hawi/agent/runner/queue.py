@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from hawi.events import EventBus
 from hawi.models.message import ContentPart
+from hawi.agent.content_utils import content_preview
 
 QueueMessageSnapshot = dict[str, Any]
 
@@ -55,18 +56,7 @@ class QueuedMessage:
         )
 
     def get_content_preview(self, max_length: int = 100) -> str:
-        if isinstance(self.content, str):
-            text = self.content
-        else:
-            texts = []
-            for part in self.content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    texts.append(part.get("text", ""))
-            text = " ".join(texts)
-
-        if len(text) > max_length:
-            return text[: max_length - 3] + "..."
-        return text
+        return content_preview(self.content, max_length)
 
 
 class MessageQueueManager:
@@ -377,6 +367,7 @@ class MessageQueueManager:
         if isinstance(msg.content, str):
             snapshot["content"] = msg.content
         else:
+            snapshot["content_parts"] = msg.content
             # For content parts, only include text parts
             text_parts = [
                 p for p in msg.content
