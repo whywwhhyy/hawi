@@ -140,6 +140,14 @@ async def _create_mcp_plugin(config: dict[str, Any]) -> Any:
     return plugin
 
 
+def _create_filesystem_plugin(config: dict[str, Any]) -> Any:
+    from hawi.builtin_plugins.filesystem_plugin import FileSystemPlugin
+
+    return FileSystemPlugin(
+        seek_style=str(config.get("seek_style") or "line"),
+    )
+
+
 def _create_plan_plugin(config: dict[str, Any]) -> Any:
     from hawi.builtin_plugins.plan_plugin import PlanPlugin
 
@@ -169,6 +177,7 @@ PLUGIN_REGISTRY: dict[str, PluginDescriptor] = {
     PLUGIN_FILESYSTEM: PluginDescriptor(
         key=PLUGIN_FILESYSTEM,
         import_path="hawi.builtin_plugins.filesystem_plugin:FileSystemPlugin",
+        factory=_create_filesystem_plugin,
     ),
     PLUGIN_SHELL: PluginDescriptor(
         key=PLUGIN_SHELL,

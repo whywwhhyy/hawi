@@ -66,3 +66,10 @@ async def test_create_plugin_binds_to_descriptor_factory() -> None:
     plugin = await create_plugin("hawi/subagent", {})
 
     assert plugin.__class__.__name__ == "SubAgentPlugin"
+
+
+@pytest.mark.asyncio
+async def test_create_filesystem_plugin_passes_seek_style_config() -> None:
+    plugin = await create_plugin("hawi/filesystem", {"seek_style": "char"})
+
+    assert plugin.seek_style == "char"

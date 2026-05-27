@@ -7512,7 +7512,7 @@ function normalizeReadFileContent(content: string, language?: string): { content
 }
 
 function stripReadFileHeader(content: string): string {
-  return content.replace(/^\[(?:Lines \d+-\d+ of \d+|language: [^\]\n]+)(?: \| (?:Lines \d+-\d+ of \d+|language: [^\]\n]+))*\]\n/, "");
+  return content.replace(/^\[(?:Lines \d+-\d+ of \d+|Chars \d+-\d+ of \d+|language: [^\]\n]+)(?: \| (?:Lines \d+-\d+ of \d+|Chars \d+-\d+ of \d+|language: [^\]\n]+))*\]\n/, "");
 }
 
 function unwrapSingleFencedCodeBlock(content: string): { language?: string; content: string } | null {

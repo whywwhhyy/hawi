@@ -473,9 +473,15 @@ agent = HawiAgent(model=model, plugins=[plugin])
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `file_path` | str | 文件路径 |
-| `offset` | int (可选) | 起始行号 |
-| `limit` | int (可选) | 限制返回行数 |
+| `start_line` | int (可选) | 起始行号（1-based，`seek_style="line"` 时可用） |
+| `line_count` | int (可选) | 限制返回行数（`seek_style="line"` 时可用） |
+| `offset` | int (可选) | 起始字符偏移（0-based，`seek_style="char"` 时可用） |
+| `limit` | int (可选) | 限制返回字符数（`seek_style="char"` 时可用） |
 | `show_line_numbers` | bool (可选, 默认 True) | 是否显示行号 |
+
+`FileSystemPlugin(seek_style="line")` 默认提供行号版本的 `read_file`；
+`FileSystemPlugin(seek_style="char")` 提供字符偏移版本。GUI 插件配置中
+`seek_style` 以 `line` / `char` 下拉列表选择。
 
 **read_file 返回格式：**
 
@@ -493,6 +499,8 @@ agent = HawiAgent(model=model, plugins=[plugin])
     }
 }
 ```
+
+字符偏移模式还会返回 `startOffset`、`numChars`、`totalChars`。
 
 **grep 参数：**
 

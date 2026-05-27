@@ -43,6 +43,13 @@ def test_skills_schema_has_skills_dir():
     assert defaults["skills_dir"] == ".skills"
 
 
+def test_filesystem_schema_has_seek_style_dropdown():
+    schema = FileSystemPlugin.gui_config_schema()
+    defaults = FileSystemPlugin.gui_default_config()
+    assert schema["properties"]["seek_style"]["enum"] == ["line", "char"]
+    assert defaults["seek_style"] == "line"
+
+
 def test_plan_schema_has_context_folding_toggle():
     schema = PlanPlugin.gui_config_schema()
     defaults = PlanPlugin.gui_default_config()

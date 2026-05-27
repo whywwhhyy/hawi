@@ -19,6 +19,7 @@ class FileReadState:
     content: str
     mtime: float
     timestamp: float
+    seek_style: str
     offset: Optional[int]
     limit: Optional[int]
     show_line_numbers: bool
@@ -45,6 +46,7 @@ class FileSystemPlugin(HawiPlugin):
     _GREP_MAX_CONTENT_BYTES = 1_000_000
     _GREP_MAX_RESULT_LINES = 2000
     _GREP_MAX_FILENAMES = 500
+    _READ_FILE_TOOL_METHODS = {"read_file_by_char", "read_file_by_line"}
 
     @property
     def permissions(self):
@@ -81,26 +83,56 @@ class FileSystemPlugin(HawiPlugin):
         "/usr",
     )
 
-    def __init__(self):
+    def __init__(self, seek_style: str = "line"):
+        if seek_style not in ("char", "line"):
+            raise ValueError("seek_style must be either 'char' or 'line'")
+        self.seek_style = seek_style
         self._read_state_cache: dict[str, FileReadState] = {}
 
     @classmethod
     def gui_config_schema(cls) -> dict:
         return {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "seek_style": {
+                    "type": "string",
+                    "title": "Seek style",
+                    "enum": ["line", "char"],
+                    "default": "line",
+                    "description": "read_file seek style: line exposes start_line/line_count; char exposes offset/limit.",
+                },
+            },
             "additionalProperties": False,
         }
 
     @classmethod
     def gui_default_config(cls) -> dict:
-        return {}
+        return {"seek_style": "line"}
 
     def clone(self) -> "FileSystemPlugin":
         """Return a fresh FileSystemPlugin with an empty read state cache."""
-        new_plugin = FileSystemPlugin()
+        new_plugin = FileSystemPlugin(seek_style=self.seek_style)
         new_plugin._read_state_cache = {}
         return new_plugin
+
+    @property
+    def tools(self):
+        selected_method = (
+            "read_file_by_char"
+            if self.seek_style == "char"
+            else "read_file_by_line"
+        )
+        tools = []
+        for tool_instance in super().tools:
+            func = getattr(tool_instance, "_func", None)
+            func_name = getattr(func, "__name__", "")
+            if (
+                func_name in self._READ_FILE_TOOL_METHODS
+                and func_name != selected_method
+            ):
+                continue
+            tools.append(tool_instance)
+        return tools
 
     def _resolve_path(self, file_path: str) -> str:
         return os.path.abspath(file_path)
@@ -566,8 +598,18 @@ class FileSystemPlugin(HawiPlugin):
 
         return f"{perm} {nlink:>2} {owner:<8} {group:<8} {size_str} {mtime_str} {name}"
 
-    @tool(name="read_file")
     def read_file(
+        self,
+        file_path: str,
+        **kwargs,
+    ) -> ToolResult:
+        """Dispatch to the configured read_file variant for direct Python calls."""
+        if self.seek_style == "char":
+            return self.read_file_by_char(file_path, **kwargs)
+        return self.read_file_by_line(file_path, **kwargs)
+
+    @tool(name="read_file")
+    def read_file_by_char(
         self,
         file_path: str,
         offset: Optional[int] = None,
@@ -576,18 +618,18 @@ class FileSystemPlugin(HawiPlugin):
         mode: str = "content",
     ) -> ToolResult:
         """
-        读取文件内容，支持分页读取和行号格式输出。
+        读取文件内容，支持按字符偏移读取和行号格式输出。
 
         Args:
             file_path: 文件路径（绝对路径或相对于当前工作目录）
-            offset: 起始行号（0-based），用于大文件分块读取
-            limit: 读取的最大行数
+            offset: 起始字符偏移（0-based），用于大文件分块读取
+            limit: 读取的最大字符数
             show_line_numbers: 是否在每行前显示行号（默认 true）
             mode: 读取模式 - "content" 或 "structure"
 
         示例:
             read_file("src/main.py")                                   # 读取整个文件
-            read_file("src/main.py", offset=0, limit=50)               # 读取前 50 行
+            read_file("src/main.py", offset=0, limit=4000)             # 读取前 4000 个字符
         """
         abs_path = self._resolve_path(file_path)
 
@@ -625,10 +667,163 @@ class FileSystemPlugin(HawiPlugin):
         except Exception as e:
             return ToolResult(success=False, error=f"Error checking file: {e}")
 
+        total_chars = len(content)
+        start = offset if offset is not None else 0
+        if start < 0:
+            start = 0
+        if start > total_chars:
+            start = total_chars
+
+        normalized_limit = limit
+        if normalized_limit is not None and normalized_limit < 0:
+            normalized_limit = 0
+
         cached = self._read_state_cache.get(abs_path)
         if (
             cached is not None
             and cached.mtime == mtime
+            and cached.seek_style == "char"
+            and cached.offset == start
+            and cached.limit == normalized_limit
+            and cached.show_line_numbers == show_line_numbers
+        ):
+            return ToolResult(
+                success=True,
+                output={
+                    "type": "file_unchanged",
+                    "file": {
+                        "filePath": abs_path,
+                    },
+                },
+            )
+
+        end = (start + normalized_limit) if normalized_limit is not None else total_chars
+
+        if end > total_chars:
+            end = total_chars
+
+        selected_content = content[start:end]
+        selected_lines = selected_content.splitlines(keepends=True)
+        all_lines = content.splitlines(keepends=True)
+        start_line = content[:start].count("\n")
+        formatted = (
+            self._format_lines(selected_lines, start_line)
+            if show_line_numbers
+            else selected_content
+        )
+        is_partial = (start > 0) or (end < total_chars)
+        returned_line_count = len(selected_lines)
+        detected_language = self._detect_language(abs_path)
+
+        # Build header with language annotation and line range
+        header_parts: list[str] = []
+        if is_partial:
+            header_parts.append(f"Chars {start}-{end} of {total_chars}")
+        if detected_language != "text":
+            header_parts.append(f"language: {detected_language}")
+        header = f"[{' | '.join(header_parts)}]\n" if header_parts else ""
+
+        # When line numbers are off and language is known, wrap in fenced code block
+        # for syntax highlighting in model-facing text
+        if not show_line_numbers and detected_language != "text":
+            formatted = f"```{detected_language}\n{formatted}```\n"
+
+        self._read_state_cache[abs_path] = FileReadState(
+            content=content,
+            mtime=mtime,
+            timestamp=time.time(),
+            seek_style="char",
+            offset=start,
+            limit=normalized_limit,
+            show_line_numbers=show_line_numbers,
+        )
+
+        return ToolResult(
+            success=True,
+            output={
+                "type": "text",
+                "file": {
+                    "filePath": abs_path,
+                    "content": header + formatted,
+                    "numLines": returned_line_count,
+                    "startLine": start_line,
+                    "totalLines": len(all_lines),
+                    "numChars": len(selected_content),
+                    "startOffset": start,
+                    "totalChars": total_chars,
+                    "language": detected_language,
+                    "isTruncated": is_partial,
+                },
+            },
+        )
+
+    @tool(name="read_file")
+    def read_file_by_line(
+        self,
+        file_path: str,
+        start_line: Optional[int] = None,
+        line_count: Optional[int] = None,
+        show_line_numbers: bool = True,
+        mode: str = "content",
+    ) -> ToolResult:
+        """
+        读取文件内容，支持按行读取和行号格式输出。
+
+        Args:
+            file_path: 文件路径（绝对路径或相对于当前工作目录）
+            start_line: 起始行号（1-based），用于大文件分块读取
+            line_count: 读取的最大行数
+            show_line_numbers: 是否在每行前显示行号（默认 true）
+            mode: 读取模式 - "content" 或 "structure"
+
+        示例:
+            read_file("src/main.py")                                      # 读取整个文件
+            read_file("src/main.py", start_line=1, line_count=50)         # 读取前 50 行
+        """
+        abs_path = self._resolve_path(file_path)
+
+        if not os.path.exists(abs_path):
+            return ToolResult(success=False, error=f"File not found: {abs_path}")
+
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            return ToolResult(
+                success=False,
+                error=f"File '{abs_path}' appears to be binary and cannot be read as text.",
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Error reading file: {e}")
+
+        if mode == "structure":
+            language = self._detect_language(abs_path)
+            symbols = self._parse_structure(content, language)
+            return ToolResult(
+                success=True,
+                output={
+                    "type": "structure",
+                    "file": abs_path,
+                    "language": language,
+                    "symbols": symbols,
+                    "numSymbols": len(symbols),
+                    "totalLines": len(content.splitlines()),
+                },
+            )
+
+        try:
+            mtime = os.path.getmtime(abs_path)
+        except Exception as e:
+            return ToolResult(success=False, error=f"Error checking file: {e}")
+
+        offset = max(0, start_line - 1) if start_line is not None else 0
+        limit = max(0, line_count) if line_count is not None else None
+
+        cached = self._read_state_cache.get(abs_path)
+        if (
+            cached is not None
+            and cached.mtime == mtime
+            and cached.seek_style == "line"
             and cached.offset == offset
             and cached.limit == limit
             and cached.show_line_numbers == show_line_numbers
@@ -645,11 +840,9 @@ class FileSystemPlugin(HawiPlugin):
 
         lines = content.splitlines(keepends=True)
         total = len(lines)
-        start = offset if offset is not None else 0
+        start = min(offset, total)
         end = (start + limit) if limit is not None else total
 
-        if start < 0:
-            start = 0
         if end > total:
             end = total
 
@@ -666,7 +859,7 @@ class FileSystemPlugin(HawiPlugin):
         # Build header with language annotation and line range
         header_parts: list[str] = []
         if is_partial:
-            header_parts.append(f"Lines {start}-{end} of {total}")
+            header_parts.append(f"Lines {start + 1}-{end} of {total}")
         if detected_language != "text":
             header_parts.append(f"language: {detected_language}")
         header = f"[{' | '.join(header_parts)}]\n" if header_parts else ""
@@ -680,6 +873,7 @@ class FileSystemPlugin(HawiPlugin):
             content=content,
             mtime=mtime,
             timestamp=time.time(),
+            seek_style="line",
             offset=offset,
             limit=limit,
             show_line_numbers=show_line_numbers,
@@ -765,7 +959,8 @@ class FileSystemPlugin(HawiPlugin):
             content=content,
             mtime=new_mtime,
             timestamp=time.time(),
-            offset=None,
+            seek_style=self.seek_style,
+            offset=0,
             limit=None,
             show_line_numbers=True,
         )
@@ -796,7 +991,7 @@ class FileSystemPlugin(HawiPlugin):
         精确编辑文件内容（字符串替换）。
         必须先使用 read_file 读取文件。如果 replace_all 为 false，old_string 必须唯一匹配。
 
-        编辑后自动更新内部缓存，并生成结构化 patch 和 git diff 用于审计。
+        编辑后自动更新内部缓存。成功时只返回简短确认，避免把 diff 或原文写入模型上下文。
 
         规则：
         - edit_file 前必须先用 read_file 读取文件（写保护）
@@ -876,25 +1071,13 @@ class FileSystemPlugin(HawiPlugin):
             content=new_content,
             mtime=new_mtime,
             timestamp=time.time(),
-            offset=None,
+            seek_style=self.seek_style,
+            offset=0,
             limit=None,
             show_line_numbers=True,
         )
 
-        hunks, git_diff = self._generate_structured_patch(
-            original_content, new_content, file_path=abs_path
-        )
-        return ToolResult(
-            success=True,
-            output={
-                "type": "edit",
-                "file_path": abs_path,
-                "replacements_made": matches if replace_all else 1,
-                "structured_patch": hunks,
-                "original_content": original_content,
-                "git_diff": git_diff,
-            },
-        )
+        return ToolResult(success=True, output="success")
 
     @tool(name="list_dir")
     def list_dir(

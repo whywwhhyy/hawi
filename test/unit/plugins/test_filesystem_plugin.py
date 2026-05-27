@@ -45,14 +45,14 @@ class TestFileSystemPlugin:
         assert read_result.output["file"]["totalLines"] == 1
         assert read_result.output["file"]["isTruncated"] is False
 
-    def test_read_file_with_offset_limit(self, plugin, temp_dir):
-        """Test read_file with offset and limit."""
+    def test_read_file_with_start_line_line_count(self, plugin, temp_dir):
+        """Test read_file with start_line and line_count."""
         file_path = os.path.join(temp_dir, "test.txt")
         lines = ["line1\n", "line2\n", "line3\n", "line4\n", "line5\n"]
         with open(file_path, "w") as f:
             f.writelines(lines)
 
-        result = plugin.read_file(file_path, offset=1, limit=2)
+        result = plugin.read_file(file_path, start_line=2, line_count=2)
         assert result.success is True
         assert result.output["type"] == "text"
         content = result.output["file"]["content"]
@@ -63,19 +63,54 @@ class TestFileSystemPlugin:
         assert result.output["file"]["numLines"] == 2
         assert result.output["file"]["isTruncated"] is True
 
-    def test_read_file_clamps_offset_and_limit(self, plugin, temp_dir):
-        """read_file should clamp negative offsets and over-large limits."""
+    def test_read_file_clamps_start_line_and_line_count(self, plugin, temp_dir):
+        """read_file should clamp invalid start_line and over-large line_count."""
         file_path = os.path.join(temp_dir, "test.txt")
         with open(file_path, "w") as f:
             f.write("line1\nline2\nline3\n")
 
-        result = plugin.read_file(file_path, offset=-10, limit=50)
+        result = plugin.read_file(file_path, start_line=-10, line_count=50)
         assert result.success is True
         assert result.output["file"]["startLine"] == 0
         assert result.output["file"]["totalLines"] == 3
         assert result.output["file"]["isTruncated"] is False
         assert "   1|line1" in result.output["file"]["content"]
         assert "   3|line3" in result.output["file"]["content"]
+
+    def test_read_file_char_seek_with_offset_limit(self, temp_dir):
+        """char seek style should expose offset/limit as character range."""
+        plugin = FileSystemPlugin(seek_style="char")
+        file_path = os.path.join(temp_dir, "test.txt")
+        with open(file_path, "w") as f:
+            f.write("abc\ndef\n")
+
+        result = plugin.read_file(file_path, offset=2, limit=4, show_line_numbers=False)
+        assert result.success is True
+        file = result.output["file"]
+        assert file["content"] == "[Chars 2-6 of 8]\nc\nde"
+        assert file["startOffset"] == 2
+        assert file["numChars"] == 4
+        assert file["totalChars"] == 8
+
+    def test_read_file_tool_schema_follows_seek_style(self):
+        """Only one read_file tool should be exposed for the configured seek style."""
+        line_plugin = FileSystemPlugin(seek_style="line")
+        line_tools = [tool for tool in line_plugin.tools if tool.name == "read_file"]
+        assert len(line_tools) == 1
+        assert "start_line" in line_tools[0].parameters_schema["properties"]
+        assert "line_count" in line_tools[0].parameters_schema["properties"]
+        assert "offset" not in line_tools[0].parameters_schema["properties"]
+
+        char_plugin = FileSystemPlugin(seek_style="char")
+        char_tools = [tool for tool in char_plugin.tools if tool.name == "read_file"]
+        assert len(char_tools) == 1
+        assert "offset" in char_tools[0].parameters_schema["properties"]
+        assert "limit" in char_tools[0].parameters_schema["properties"]
+        assert "start_line" not in char_tools[0].parameters_schema["properties"]
+
+    def test_filesystem_plugin_rejects_invalid_seek_style(self):
+        with pytest.raises(ValueError, match="seek_style"):
+            FileSystemPlugin(seek_style="byte")
 
     def test_read_file_without_line_numbers(self, plugin, temp_dir):
         """read_file should allow suppressing line numbers."""
@@ -120,10 +155,7 @@ class TestFileSystemPlugin:
 
         result = plugin.edit_file(file_path, old_string="bar", new_string="qux")
         assert result.success is True
-        assert result.output["type"] == "edit"
-        assert result.output["replacements_made"] == 1
-        assert "structured_patch" in result.output
-        assert "git_diff" in result.output
+        assert result.output == "success"
 
         # Clear cache to read actual file content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
@@ -139,7 +171,7 @@ class TestFileSystemPlugin:
 
         result = plugin.edit_file(file_path, old_string="a", new_string="b", replace_all=True)
         assert result.success is True
-        assert result.output["replacements_made"] == 3
+        assert result.output == "success"
 
         # Clear cache to read actual file content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
@@ -521,8 +553,8 @@ class TestFileSystemPlugin:
         with open(file_path, "r") as f:
             assert f.read() == "deep"
 
-    def test_edit_file_patch_content(self, plugin, temp_dir):
-        """edit_file returns meaningful structured_patch and git_diff."""
+    def test_edit_file_returns_minimal_success(self, plugin, temp_dir):
+        """edit_file should not return patch, diff, or original content."""
         file_path = os.path.join(temp_dir, "test.txt")
         with open(file_path, "w") as f:
             f.write("line1\nline2\nline3\n")
@@ -530,14 +562,8 @@ class TestFileSystemPlugin:
 
         result = plugin.edit_file(file_path, old_string="line2", new_string="LINE2")
         assert result.success is True
-        hunks = result.output["structured_patch"]
-        assert len(hunks) > 0
-        # At least one hunk line should show the removal and addition
-        all_lines = "\n".join(line for hunk in hunks for line in hunk["lines"])
-        assert "-line2" in all_lines
-        assert "+LINE2" in all_lines
-        assert "line2" in result.output["git_diff"]
-        assert "LINE2" in result.output["git_diff"]
+        assert result.output == "success"
+        assert len(result.output) < 20
 
     def test_edit_file_updates_cache(self, plugin, temp_dir):
         """After edit_file, subsequent read_file should see unchanged new content."""
@@ -577,7 +603,7 @@ class TestFileSystemPlugin:
 
         result = plugin.edit_file(file_path, old_string="original", new_string="updated")
         assert result.success is True
-        assert result.output["type"] == "edit"
+        assert result.output == "success"
 
     def test_grep_skips_binary_files(self, plugin, temp_dir):
         """grep should skip files with binary extensions."""
