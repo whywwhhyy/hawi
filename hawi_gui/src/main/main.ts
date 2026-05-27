@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
@@ -9,6 +10,7 @@ import type {
   JsonlExportPayload,
   MarkdownExportPayload,
   PersistedConfig,
+  PluginToolPreviewPayload,
   SaveJsonlExportResult,
   SaveMarkdownExportResult,
   SelectWorkingDirectoryResult,
@@ -20,6 +22,7 @@ import {
   resolveEnvPaths,
   loadInspectPayload,
   loadInspectPayloadAsync,
+  loadPluginToolPreviewPayloadAsync,
   loadConfig,
   saveConfig,
   sanitizeConfig,
@@ -171,6 +174,13 @@ function registerIpc(): void {
   ipcMain.handle("gui:refresh-provider-models", async (_event, provider: string): Promise<GuiMetadata> => {
     return refreshProviderModels(provider);
   });
+
+  ipcMain.handle(
+    "gui:preview-plugin-tools",
+    async (_event, pluginKey: string, pluginConfig: Record<string, unknown> | null): Promise<PluginToolPreviewPayload> => {
+      return previewPluginTools(pluginKey, pluginConfig);
+    },
+  );
 }
 
 function applyMinimumContentSize(window: BrowserWindow, contentSize?: Partial<LayoutSize> | null): void {
@@ -234,6 +244,37 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
     config,
     ...currentManagerSnapshot(),
   };
+}
+
+async function previewPluginTools(
+  pluginKey: string,
+  pluginConfig: Record<string, unknown> | null = null,
+): Promise<PluginToolPreviewPayload> {
+  const key = pluginKey.trim();
+  if (!key) {
+    throw new Error("plugin key is required");
+  }
+  const readyEnv = getEnv();
+  const pluginConfigPath = path.join(
+    tmpdir(),
+    `hawi-gui-plugin-preview-${process.pid}-${Date.now()}.json`,
+  );
+  writeFileSync(pluginConfigPath, JSON.stringify({ [key]: pluginConfig ?? {} }, null, 2), "utf-8");
+  try {
+    return await loadPluginToolPreviewPayloadAsync(
+      readyEnv.repoRoot,
+      readyEnv.workspaceRoot,
+      readyEnv.engineLauncher,
+      key,
+      pluginConfigPath,
+    );
+  } finally {
+    try {
+      unlinkSync(pluginConfigPath);
+    } catch {
+      // Temporary preview config cleanup is best-effort.
+    }
+  }
 }
 
 async function saveMarkdownExport(payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> {

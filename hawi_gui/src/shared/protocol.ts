@@ -218,6 +218,28 @@ export interface PluginPermissionDeclared {
   tool_names: string[];
 }
 
+export interface PluginToolPreviewItem {
+  name: string;
+  short_name: string;
+  description: string;
+  schema: JsonSchemaObject;
+  audit?: boolean;
+  context?: string | null;
+  timeout?: number | null;
+  tags?: string[];
+  supports_sync?: boolean;
+  supports_async?: boolean;
+}
+
+export interface PluginToolPreviewPayload {
+  version: typeof VERSION;
+  plugin_key: string;
+  plugin_name: string;
+  display_name: string;
+  description: string;
+  tools: PluginToolPreviewItem[];
+}
+
 export interface InspectPayload {
   version: typeof VERSION;
   models: string[];

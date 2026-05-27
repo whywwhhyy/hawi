@@ -70,3 +70,24 @@ providers:
     assert provider_config["properties"]["base_url"] == "http://localhost:1234/v1"
     assert provider_config["properties"]["api_key"] == "**** | ano...test"
     assert payload["plugin_catalog"]
+
+
+def test_hawi_core_inspect_plugin_cli_outputs_tool_preview(tmp_path: Path) -> None:
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path / "home"),
+        "PYTHONPATH": str(Path.cwd()),
+    }
+    result = subprocess.run(
+        [sys.executable, "-m", "hawi.engine", "--inspect", "--inspect-plugin", "hawi/web"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["version"] == "hawi.core.v1"
+    assert payload["plugin_key"] == "hawi/web"
+    assert {tool["short_name"] for tool in payload["tools"]} == {"fetch"}

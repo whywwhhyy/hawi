@@ -10,6 +10,7 @@ from hawi.engine.plugin_registry import (
     get_plugin_descriptor,
     iter_plugin_descriptors,
     plugin_catalog,
+    plugin_tool_preview,
 )
 
 
@@ -73,3 +74,25 @@ async def test_create_filesystem_plugin_passes_seek_style_config() -> None:
     plugin = await create_plugin("hawi/filesystem", {"seek_style": "char"})
 
     assert plugin.seek_style == "char"
+
+
+@pytest.mark.asyncio
+async def test_plugin_tool_preview_loads_temporary_plugin_tools() -> None:
+    preview = await plugin_tool_preview("hawi/web", {})
+
+    tools = {tool["short_name"]: tool for tool in preview["tools"]}
+    assert preview["key"] == "hawi/web"
+    assert "fetch" in tools
+    assert tools["fetch"]["name"] == "WebPlugin__fetch"
+    assert "url" in tools["fetch"]["schema"]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_filesystem_tool_preview_reflects_seek_style_config() -> None:
+    preview = await plugin_tool_preview("hawi/filesystem", {"seek_style": "char"})
+
+    tools = {tool["short_name"]: tool for tool in preview["tools"]}
+    schema = tools["read_file"]["schema"]["properties"]
+    assert "offset" in schema
+    assert "limit" in schema
+    assert "start_line" not in schema

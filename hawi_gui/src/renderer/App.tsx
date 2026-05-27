@@ -11,7 +11,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, Image as ImageIcon, LoaderCircle, Lock, Paperclip, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
-import type { BlobSource, ContentPart, CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, JsonlExportPayload, MarkdownExportPayload, MediaSource, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
+import type { BlobSource, ContentPart, CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, JsonlExportPayload, MarkdownExportPayload, MediaSource, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, PluginToolPreviewItem, PluginToolPreviewPayload, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { MIN_CONTENT_SIZE, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
@@ -2483,6 +2483,10 @@ export default function App() {
     dispatch(metaFrame(`已刷新 ${provider} 的模型列表`));
   }
 
+  async function previewPluginTools(pluginKey: string, pluginConfig: Record<string, unknown>) {
+    return window.hawi.previewPluginTools(pluginKey, pluginConfig);
+  }
+
   async function applyPlugins(selectedPlugins: string[], pluginConfigs: Record<string, Record<string, unknown>>) {
     if (!config) return;
     if (!currentSessionIdRef.current) {
@@ -3016,6 +3020,7 @@ export default function App() {
           selectedPlugins={config.selectedPlugins}
           pluginConfigs={config.pluginConfigs}
           onClose={() => setPluginDialogOpen(false)}
+          onPreviewPlugin={previewPluginTools}
           onApply={applyPlugins}
         />
       )}
@@ -6510,11 +6515,31 @@ function formatDialogError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onApply }: { catalog: PluginCatalogItem[]; selectedPlugins: string[]; pluginConfigs: Record<string, Record<string, unknown>>; onClose: () => void; onApply: (selected: string[], configs: Record<string, Record<string, unknown>>) => void }) {
+type PluginPreviewState =
+  | { status: "loading" }
+  | { status: "loaded"; data: PluginToolPreviewPayload }
+  | { status: "error"; error: string };
+
+function PluginDialog({
+  catalog,
+  selectedPlugins,
+  pluginConfigs,
+  onClose,
+  onPreviewPlugin,
+  onApply
+}: {
+  catalog: PluginCatalogItem[];
+  selectedPlugins: string[];
+  pluginConfigs: Record<string, Record<string, unknown>>;
+  onClose: () => void;
+  onPreviewPlugin: (pluginKey: string, pluginConfig: Record<string, unknown>) => Promise<PluginToolPreviewPayload>;
+  onApply: (selected: string[], configs: Record<string, Record<string, unknown>>) => void;
+}) {
   const initial = mergePluginDefaults(catalog, selectedPlugins, pluginConfigs);
   const [selected, setSelected] = useState(new Set(initial.selectedPlugins));
   const [configs, setConfigs] = useState(initial.pluginConfigs);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [previews, setPreviews] = useState<Record<string, PluginPreviewState>>({});
   const selectedCount = catalog.filter((item) => selected.has(item.key)).length;
 
   function apply() {
@@ -6544,6 +6569,44 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
   function updateSelection(next: Set<string>) {
     setSelected(new Set(resolvePluginSelectionChange(catalog, selected, next)));
     if (Object.keys(fieldErrors).length > 0) setFieldErrors({});
+  }
+
+  async function previewPlugin(item: PluginCatalogItem) {
+    const source = configs[item.key] ?? item.defaults ?? {};
+    const pluginConfig = isRecord(source) ? source : {};
+    setPreviews((current) => ({
+      ...current,
+      [item.key]: { status: "loading" },
+    }));
+    try {
+      await waitForNextPaint();
+      const data = await onPreviewPlugin(item.key, pluginConfig);
+      setPreviews((current) => ({
+        ...current,
+        [item.key]: { status: "loaded", data },
+      }));
+    } catch (error) {
+      setPreviews((current) => ({
+        ...current,
+        [item.key]: { status: "error", error: formatDialogError(error) },
+      }));
+    }
+  }
+
+  function updatePluginConfig(pluginKey: string, field: string, value: unknown) {
+    setConfigs({
+      ...configs,
+      [pluginKey]: {
+        ...(configs[pluginKey] ?? catalog.find((item) => item.key === pluginKey)?.defaults ?? {}),
+        [field]: value
+      }
+    });
+    setPreviews((current) => {
+      if (!current[pluginKey]) return current;
+      const next = { ...current };
+      delete next[pluginKey];
+      return next;
+    });
   }
 
   return (
@@ -6585,66 +6648,183 @@ function PluginDialog({ catalog, selectedPlugins, pluginConfigs, onClose, onAppl
       <div className="plugin-list">
         {catalog.map((item) => (
           <section className="plugin-item" key={item.key}>
-            <label className="plugin-enable">
-              <input
-                type="checkbox"
-                checked={selected.has(item.key)}
-                onChange={(event) => {
-                  const next = new Set(selected);
-                  if (event.target.checked) next.add(item.key);
-                  else next.delete(item.key);
-                  updateSelection(next);
-                }}
-              />
-              <strong>{item.display_name}</strong>
-            </label>
-            <div className="plugin-identity">{item.name}</div>
-            {item.description && (
-              <div className="plugin-description">{item.description}</div>
-            )}
-            {item.dependencies.length > 0 && (
-              <div className="plugin-dependencies">
-                依赖: {item.dependencies.join(", ")}
-              </div>
-            )}
-            {item.permissions && item.permissions.length > 0 && (
-              <div className="plugin-permissions">
-                <div className="plugin-permissions-title">声明的权限:</div>
-                {item.permissions.map((perm) => (
-                  <div key={perm.id} className={`permission-tag permission-risk-${perm.risk_level}`}>
-                    <span className="permission-id">{perm.id}</span>
-                    <span className="permission-policy">{perm.default_policy}</span>
-                    {perm.tool_names.length > 0 && (
-                      <span className="permission-tools">{perm.tool_names.join(", ")}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            {Object.entries(item.schema.properties ?? {}).map(([field, schema]) => (
-              <SchemaField
-                key={field}
-                field={field}
-                schema={schema}
-                disabled={!selected.has(item.key)}
-                error={getFieldError(item.key, field)}
-                value={(configs[item.key] ?? item.defaults)[field] ?? schema.default ?? ""}
-                onChange={(value) => {
-                  setConfigs({
-                    ...configs,
-                    [item.key]: {
-                      ...(configs[item.key] ?? item.defaults),
-                      [field]: value
-                    }
-                  });
-                }}
-              />
-            ))}
+            <div className="plugin-main">
+              <label className="plugin-enable">
+                <input
+                  type="checkbox"
+                  checked={selected.has(item.key)}
+                  onChange={(event) => {
+                    const next = new Set(selected);
+                    if (event.target.checked) next.add(item.key);
+                    else next.delete(item.key);
+                    updateSelection(next);
+                  }}
+                />
+                <strong>{item.display_name}</strong>
+              </label>
+              {Object.entries(item.schema.properties ?? {}).map(([field, schema]) => (
+                <SchemaField
+                  key={field}
+                  field={field}
+                  schema={schema}
+                  disabled={!selected.has(item.key)}
+                  error={getFieldError(item.key, field)}
+                  value={(configs[item.key] ?? item.defaults)[field] ?? schema.default ?? ""}
+                  onChange={(value) => updatePluginConfig(item.key, field, value)}
+                />
+              ))}
+            </div>
+            <PluginInfoPreviewPanel
+              item={item}
+              preview={previews[item.key]}
+              onPreview={() => void previewPlugin(item)}
+            />
           </section>
         ))}
       </div>
     </Modal>
   );
+}
+
+function PluginInfoPreviewPanel({
+  item,
+  preview,
+  onPreview
+}: {
+  item: PluginCatalogItem;
+  preview?: PluginPreviewState;
+  onPreview: () => void;
+}) {
+  const loading = preview?.status === "loading";
+  return (
+    <aside className="plugin-info-preview" aria-label={`${item.display_name} 插件信息`}>
+      <div className="plugin-info-head">
+        <div className="plugin-info-title">
+          <div className="plugin-identity">{item.name}</div>
+          {item.description && <div className="plugin-description">{item.description}</div>}
+        </div>
+        <button
+          className="tool-button plugin-preview-button"
+          disabled={loading}
+          title={loading ? "正在读取工具列表" : "预览工具列表"}
+          onClick={onPreview}
+        >
+          {loading ? <LoaderCircle className="inline-spinner" size={15} /> : <Wrench size={15} />}
+          {loading ? "读取中" : preview?.status === "loaded" ? "刷新" : "预览工具"}
+        </button>
+      </div>
+      {item.dependencies.length > 0 && (
+        <div className="plugin-info-section">
+          <div className="plugin-info-section-title">依赖</div>
+          <div className="plugin-chip-row">
+            {item.dependencies.map((dependency) => (
+              <span className="plugin-info-chip" key={dependency}>{dependency}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      <PluginPermissionPreview item={item} />
+      <PluginToolPreview preview={preview} />
+    </aside>
+  );
+}
+
+function PluginPermissionPreview({ item }: { item: PluginCatalogItem }) {
+  if (!item.permissions || item.permissions.length === 0) {
+    return (
+      <div className="plugin-info-section">
+        <div className="plugin-info-section-title">权限声明</div>
+        <div className="plugin-preview-empty">无</div>
+      </div>
+    );
+  }
+  return (
+    <div className="plugin-info-section">
+      <div className="plugin-info-section-title">权限声明</div>
+      <div className="plugin-permissions">
+        {item.permissions.map((perm) => (
+          <div key={perm.id} className={`permission-tag permission-risk-${perm.risk_level}`}>
+            <span className="permission-id">{perm.id}</span>
+            <span className="permission-policy">{perm.default_policy}</span>
+            {perm.tool_names.length > 0 && (
+              <span className="permission-tools">{perm.tool_names.join(", ")}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PluginToolPreview({ preview }: { preview?: PluginPreviewState }) {
+  if (!preview) {
+    return (
+      <div className="plugin-info-section">
+        <div className="plugin-info-section-title">工具</div>
+        <div className="plugin-preview-empty">未预览</div>
+      </div>
+    );
+  }
+  if (preview.status === "loading") {
+    return (
+      <div className="plugin-info-section">
+        <div className="plugin-info-section-title">工具</div>
+        <div className="plugin-preview-empty">读取中</div>
+      </div>
+    );
+  }
+  if (preview.status === "error") {
+    return (
+      <div className="plugin-info-section">
+        <div className="plugin-info-section-title">工具</div>
+        <div className="plugin-preview-error" role="alert">{preview.error}</div>
+      </div>
+    );
+  }
+  const tools = preview.data.tools;
+  if (tools.length === 0) {
+    return (
+      <div className="plugin-info-section">
+        <div className="plugin-info-section-title">工具</div>
+        <div className="plugin-preview-empty">无工具</div>
+      </div>
+    );
+  }
+  return (
+    <div className="plugin-info-section">
+      <div className="plugin-info-section-title">工具 · {tools.length}</div>
+      <div className="plugin-tool-list">
+        {tools.map((tool) => (
+          <PluginToolPreviewRow tool={tool} key={tool.name} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PluginToolPreviewRow({ tool }: { tool: PluginToolPreviewItem }) {
+  const parameterNames = pluginToolParameterNames(tool);
+  return (
+    <div className="plugin-tool-row">
+      <div className="plugin-tool-row-head">
+        <code title={tool.name}>{tool.short_name || tool.name}</code>
+        {tool.audit && <span className="plugin-tool-badge">audit</span>}
+      </div>
+      {tool.description && <div className="plugin-tool-description">{tool.description}</div>}
+      {parameterNames.length > 0 && (
+        <div className="plugin-tool-parameters">
+          {parameterNames.map((name) => (
+            <span className="plugin-info-chip" key={name}>{name}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function pluginToolParameterNames(tool: PluginToolPreviewItem): string[] {
+  const properties = tool.schema?.properties;
+  return properties ? Object.keys(properties) : [];
 }
 
 function SchemaField({ field, schema, disabled, value, error, onChange }: { field: string; schema: JsonSchemaObject; disabled: boolean; value: unknown; error?: string; onChange: (value: unknown) => void }) {

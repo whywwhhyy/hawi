@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CoreCommandType, CoreFrame, GuiMetadata, JsonlExportPayload, MarkdownExportPayload, PersistedConfig, SaveJsonlExportResult, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
+import type { CoreCommandType, CoreFrame, GuiMetadata, JsonlExportPayload, MarkdownExportPayload, PersistedConfig, PluginToolPreviewPayload, SaveJsonlExportResult, SaveMarkdownExportResult, SelectWorkingDirectoryResult } from "../shared/protocol";
 import type { LayoutSize } from "../shared/layout";
 
 const api = {
@@ -14,6 +14,9 @@ const api = {
   },
   refreshProviderModels(provider: string): Promise<GuiMetadata> {
     return ipcRenderer.invoke("gui:refresh-provider-models", provider);
+  },
+  previewPluginTools(pluginKey: string, pluginConfig: Record<string, unknown>): Promise<PluginToolPreviewPayload> {
+    return ipcRenderer.invoke("gui:preview-plugin-tools", pluginKey, pluginConfig);
   },
   sendCommand(type: CoreCommandType, payload: Record<string, unknown>, sessionId?: string | null): Promise<CoreFrame> {
     return ipcRenderer.invoke("core:command", type, payload, sessionId);

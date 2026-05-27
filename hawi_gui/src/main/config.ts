@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { InspectPayload, PersistedConfig } from "../shared/protocol";
+import type { InspectPayload, PersistedConfig, PluginToolPreviewPayload } from "../shared/protocol";
 
 export type EngineLauncherSource = "bundled" | "uv";
 
@@ -301,6 +301,21 @@ export function loadInspectPayloadAsync(
       }
     });
   });
+}
+
+export function loadPluginToolPreviewPayloadAsync(
+  repoRoot: string,
+  workspaceRoot: string,
+  engineLauncher: EngineLauncher,
+  pluginKey: string,
+  pluginConfigPath: string,
+): Promise<PluginToolPreviewPayload> {
+  return loadInspectPayloadAsync(repoRoot, workspaceRoot, engineLauncher, [
+    "--inspect-plugin",
+    pluginKey,
+    "--plugin-config",
+    pluginConfigPath,
+  ]) as unknown as Promise<PluginToolPreviewPayload>;
 }
 
 function formatEngineCommandError(

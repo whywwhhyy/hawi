@@ -75,6 +75,28 @@ class PluginDescriptor:
                 plugin = await plugin
         return plugin
 
+    async def preview_tools(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Create this plugin temporarily and return GUI-facing tool metadata."""
+        plugin = await self.create(config)
+        if hasattr(plugin, "bind_plugin_identity"):
+            plugin.bind_plugin_identity(
+                plugin_id=self.key,
+                plugin_name=self.display_name,
+            )
+        try:
+            tools = []
+            for tool in getattr(plugin, "tools", ()):
+                tools.append(_tool_preview(tool))
+            return {
+                "key": self.key,
+                "name": self.name,
+                "display_name": self.display_name,
+                "description": self.description,
+                "tools": tools,
+            }
+        finally:
+            await _cleanup_plugin_preview(plugin)
+
     def gui_config_schema(self) -> dict[str, Any]:
         """Return the plugin GUI config schema."""
         return self.load_class().gui_config_schema()
@@ -292,3 +314,51 @@ def plugin_catalog() -> list[dict[str, Any]]:
         }
         for descriptor in iter_plugin_descriptors()
     ]
+
+
+async def plugin_tool_preview(
+    key: str,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return tool metadata for one temporarily-created plugin."""
+    return await get_plugin_descriptor(key).preview_tools(config)
+
+
+def _tool_preview(tool: Any) -> dict[str, Any]:
+    name = str(getattr(tool, "name", ""))
+    return {
+        "name": name,
+        "short_name": _short_tool_name(name),
+        "description": str(getattr(tool, "description", "") or ""),
+        "schema": getattr(tool, "parameters_schema", {}) or {},
+        "audit": bool(getattr(tool, "audit", False)),
+        "context": getattr(tool, "context", None),
+        "timeout": getattr(tool, "timeout", None),
+        "tags": list(getattr(tool, "tags", []) or []),
+        "supports_sync": bool(getattr(tool, "supports_sync", False)),
+        "supports_async": bool(getattr(tool, "supports_async", False)),
+    }
+
+
+def _short_tool_name(name: str) -> str:
+    if "__" not in name:
+        return name
+    return name.split("__", 1)[1]
+
+
+async def _cleanup_plugin_preview(plugin: Any) -> None:
+    seen: set[int] = set()
+    for method_name in ("disconnect", "close", "shutdown"):
+        method = getattr(plugin, method_name, None)
+        if not callable(method):
+            continue
+        method_id = id(method)
+        if method_id in seen:
+            continue
+        seen.add(method_id)
+        try:
+            result = method()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            pass

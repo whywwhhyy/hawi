@@ -22,7 +22,7 @@ from .runtime import (
     parse_extra_tool_parameters,
     token_from_arg_or_env,
 )
-from .inspect import build_inspect_payload
+from .inspect import build_inspect_payload, build_plugin_tool_preview_payload
 from .protocol import json_dumps
 from .gateway import GATEWAY_REGISTRY, discover_gateways
 from . import builtin_gateways  # noqa: F401  side-effect import: registers built-in gateways
@@ -83,6 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--inspect",
         action="store_true",
         help="Print GUI metadata JSON and exit",
+    )
+    parser.add_argument(
+        "--inspect-plugin",
+        default=None,
+        help="With --inspect, temporarily load one plugin and print its tool metadata JSON",
     )
     parser.add_argument(
         "--readonly",
@@ -288,6 +293,14 @@ async def async_main(args: argparse.Namespace) -> None:
         return
 
     if args.inspect:
+        if args.inspect_plugin:
+            plugin_configs = load_plugin_config(args.plugin_config)
+            plugin_key = args.inspect_plugin.strip()
+            print(json_dumps(await build_plugin_tool_preview_payload(
+                plugin_key,
+                plugin_configs.get(plugin_key, {}),
+            )))
+            return
         load_model_configs(args.models_config, include_user=not args.no_user_models)
         refresh_model_providers(args.refresh_provider)
         print(json_dumps(build_inspect_payload()))

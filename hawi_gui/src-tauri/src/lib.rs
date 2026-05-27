@@ -2571,6 +2571,54 @@ async fn refresh_provider_models(
     Ok(gui_metadata(next_inspect, next_config, snapshot))
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn preview_plugin_tools(
+    plugin_key: String,
+    plugin_config: Value,
+    state: State<'_, GuiState>,
+) -> Result<Value, String> {
+    let key = plugin_key.trim().to_string();
+    if key.is_empty() {
+        return Err("plugin key is required".to_string());
+    }
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let plugin_config_path = env::temp_dir().join(format!(
+        "hawi-gui-plugin-preview-{}-{suffix}.json",
+        std::process::id()
+    ));
+    let config_value = if plugin_config.is_object() {
+        plugin_config
+    } else {
+        json!({})
+    };
+    let mut wrapped_config = Map::new();
+    wrapped_config.insert(key.clone(), config_value);
+    fs::write(
+        &plugin_config_path,
+        serde_json::to_vec_pretty(&Value::Object(wrapped_config))
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("failed to write plugin preview config: {error}"))?;
+
+    let result = load_inspect_payload_async(
+        state.env.repo_root.clone(),
+        state.env.workspace_root.clone(),
+        state.env.engine_launcher.clone(),
+        vec![
+            "--inspect-plugin".to_string(),
+            key,
+            "--plugin-config".to_string(),
+            plugin_config_path.to_string_lossy().into_owned(),
+        ],
+    )
+    .await;
+    let _ = fs::remove_file(&plugin_config_path);
+    result
+}
+
 #[tauri::command]
 async fn select_working_directory(
     app: AppHandle,
@@ -2816,6 +2864,7 @@ pub fn run() {
             save_config,
             restart_core,
             refresh_provider_models,
+            preview_plugin_tools,
             send_command,
             select_working_directory,
             set_minimum_content_size,

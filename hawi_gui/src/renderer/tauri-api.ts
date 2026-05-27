@@ -7,6 +7,7 @@ import type {
   JsonlExportPayload,
   MarkdownExportPayload,
   PersistedConfig,
+  PluginToolPreviewPayload,
   SaveJsonlExportResult,
   SaveMarkdownExportResult,
   SelectWorkingDirectoryResult,
@@ -36,6 +37,9 @@ if (isTauriRuntime() && !window.hawi) {
     },
     refreshProviderModels(provider: string): Promise<GuiMetadata> {
       return invoke("refresh_provider_models", { provider });
+    },
+    previewPluginTools(pluginKey: string, pluginConfig: Record<string, unknown>): Promise<PluginToolPreviewPayload> {
+      return invoke("preview_plugin_tools", { pluginKey, pluginConfig });
     },
     sendCommand(type: CoreCommandType, payload: Record<string, unknown>, sessionId?: string | null): Promise<CoreFrame> {
       return invoke("send_command", { type, payload, sessionId: sessionId ?? null });

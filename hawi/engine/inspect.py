@@ -6,7 +6,7 @@ from typing import Any
 
 from hawi.models import model_registry
 
-from .plugin_registry import plugin_catalog
+from .plugin_registry import plugin_catalog, plugin_tool_preview
 from .protocol import VERSION, to_json_safe
 from .runtime import DEFAULT_SYSTEM_PROMPT
 
@@ -19,6 +19,22 @@ def build_inspect_payload() -> dict[str, Any]:
         "model_provider_configs": to_json_safe(_model_provider_config_previews()),
         "plugin_catalog": to_json_safe(plugin_catalog()),
         "default_system_prompt": DEFAULT_SYSTEM_PROMPT,
+    }
+
+
+async def build_plugin_tool_preview_payload(
+    plugin_key: str,
+    plugin_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return tool metadata for one plugin after temporary initialization."""
+    preview = await plugin_tool_preview(plugin_key, plugin_config)
+    return {
+        "version": VERSION,
+        "plugin_key": plugin_key,
+        "plugin_name": preview["name"],
+        "display_name": preview["display_name"],
+        "description": preview["description"],
+        "tools": preview["tools"],
     }
 
 
