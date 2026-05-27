@@ -92,6 +92,11 @@ app.whenReady().then(async () => {
   engineManager.configure(inspectPayload, config, refreshedProviders);
   registerIpc();
   createWindow();
+  if (config.modelName) {
+    void engineManager.startInitial(config, inspectPayload, refreshedProviders).catch((error) => {
+      console.error("Failed to prewarm hawi-engine:", error);
+    });
+  }
 });
 
 app.on("window-all-closed", () => {

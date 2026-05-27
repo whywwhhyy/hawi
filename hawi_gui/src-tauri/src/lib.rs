@@ -1226,6 +1226,26 @@ impl SessionEngineManager {
         self.refreshed_providers = refreshed_providers.clone();
     }
 
+    fn start_initial(&mut self, config: Value) -> Result<(), String> {
+        if value_string(&config, "modelName").is_empty() || !self.loaded.is_empty() {
+            return Ok(());
+        }
+        let session_id = generate_session_id();
+        let profile = profile_from_config(&config);
+        self.current_session_id = Some(session_id.clone());
+        self.start_record(
+            &session_id,
+            profile,
+            StartRecordOptions {
+                initial_session_id: Some(session_id.clone()),
+                initial_session_name: Some(session_id.clone()),
+                ..StartRecordOptions::default()
+            },
+        )?;
+        self.emit_session_runtime_status(&session_id, None);
+        Ok(())
+    }
+
     fn snapshot(&self) -> Value {
         json!({
             "currentSessionId": self.current_session_id,
@@ -2093,7 +2113,28 @@ impl SessionEngineManager {
     }
 
     fn read_session_catalog(&mut self) -> Result<Vec<Value>, String> {
-        let frame = self.readonly_command("session_list", json!({}))?;
+        let catalog_id = self
+            .current_session_id
+            .clone()
+            .filter(|session_id| {
+                self.loaded
+                    .get(session_id)
+                    .is_some_and(|record| record.core.is_running())
+            });
+        let frame = if let Some(catalog_id) = catalog_id {
+            let result = {
+                let record = self.loaded.get_mut(&catalog_id).expect("catalog record");
+                record
+                    .core
+                    .send_command("session_list", json!({}), SESSION_COMMAND_TIMEOUT_MS)
+            };
+            match result {
+                Ok(frame) => frame,
+                Err(_) => self.readonly_command("session_list", json!({}))?,
+            }
+        } else {
+            self.readonly_command("session_list", json!({}))?
+        };
         Ok(frame_payload(&frame)
             .get("sessions")
             .and_then(Value::as_array)
@@ -2748,6 +2789,19 @@ pub fn run() {
                 .lock()
                 .map_err(|_| Box::<dyn std::error::Error>::from("manager lock poisoned"))?
                 .configure(inspect.clone(), config.clone(), &HashSet::new());
+            if !value_string(&config, "modelName").is_empty() {
+                let prewarm_manager = manager.clone();
+                let prewarm_config = config.clone();
+                thread::spawn(move || {
+                    let result = prewarm_manager
+                        .lock()
+                        .map_err(|_| "manager lock poisoned".to_string())
+                        .and_then(|mut manager| manager.start_initial(prewarm_config));
+                    if let Err(error) = result {
+                        eprintln!("Failed to prewarm hawi-engine: {error}");
+                    }
+                });
+            }
             app.manage(GuiState {
                 env: env_paths,
                 inspect: Mutex::new(inspect),

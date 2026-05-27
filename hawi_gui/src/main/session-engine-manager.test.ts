@@ -377,6 +377,39 @@ describe("SessionEngineManager", () => {
     expect((frame.payload as Record<string, unknown>).loaded_session_count).toBe(1);
   });
 
+  it("reuses the current core when reading the session catalog", async () => {
+    const currentCore = new FakeCore({
+      session_list: ackFrame("session_list", {
+        sessions: [
+          {
+            session_id: "session-saved",
+            name: "Saved",
+            created_at: "2025-01-01T00:00:00",
+            updated_at: "2025-01-01T00:00:00",
+            last_checkpoint_event: "save_now",
+            components_present: ["context"],
+          },
+        ],
+        current_session_id: "session-current",
+      }),
+    });
+    const readonlyCore = new FakeCore({
+      session_list: ackFrame("session_list", { sessions: [] }),
+    });
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    internals.currentSessionId = "session-current";
+    internals.loaded.set("session-current", fakeRecord("session-current", 1, currentCore));
+    internals.readonlyCore = readonlyCore;
+
+    const frame = await internals.sessionListFrame();
+    const sessions = (frame.payload as Record<string, unknown>).sessions as Array<Record<string, unknown>>;
+
+    expect(sessions.some((session) => session.session_id === "session-saved")).toBe(true);
+    expect(currentCore.commands.map((command) => command.type)).toContain("session_list");
+    expect(readonlyCore.commands).toHaveLength(0);
+  });
+
   it("uses the provided launch profile when creating a new session", async () => {
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;

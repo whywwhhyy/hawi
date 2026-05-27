@@ -634,7 +634,10 @@ export class SessionEngineManager {
   }
 
   private async readSessionCatalog(): Promise<SessionMetaPayload[]> {
-    const frame = await this.readonlyCommand("session_list", {});
+    const catalogRecord = this.currentRecord();
+    const frame = catalogRecord?.core.isRunning()
+      ? await catalogRecord.core.sendCommand("session_list", {}, SESSION_COMMAND_TIMEOUT_MS).catch(() => this.readonlyCommand("session_list", {}))
+      : await this.readonlyCommand("session_list", {});
     const payload = framePayload(frame);
     return Array.isArray(payload.sessions)
       ? payload.sessions.map(normalizeSessionMeta).filter((item): item is SessionMetaPayload => item !== null)
