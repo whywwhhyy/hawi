@@ -47,6 +47,8 @@ class FileSystemPlugin(HawiPlugin):
     _GREP_MAX_RESULT_LINES = 2000
     _GREP_MAX_FILENAMES = 500
     _READ_FILE_TOOL_METHODS = {"read_file_by_char", "read_file_by_line"}
+    _READ_FILE_DEFAULT_CHAR_COUNT = 64 * 1024
+    _READ_FILE_DEFAULT_LINE_COUNT = 500
 
     @property
     def permissions(self):
@@ -628,7 +630,7 @@ class FileSystemPlugin(HawiPlugin):
             mode: 读取模式 - "content" 或 "structure"
 
         示例:
-            read_file("src/main.py")                                   # 读取整个文件
+            read_file("src/main.py")                                   # 读取文件开头（默认最多 64 KiB）
             read_file("src/main.py", offset=0, limit=4000)             # 读取前 4000 个字符
         """
         abs_path = self._resolve_path(file_path)
@@ -677,6 +679,11 @@ class FileSystemPlugin(HawiPlugin):
         normalized_limit = limit
         if normalized_limit is not None and normalized_limit < 0:
             normalized_limit = 0
+        if (
+            normalized_limit is None
+            and total_chars - start > self._READ_FILE_DEFAULT_CHAR_COUNT
+        ):
+            normalized_limit = self._READ_FILE_DEFAULT_CHAR_COUNT
 
         cached = self._read_state_cache.get(abs_path)
         if (
@@ -750,6 +757,7 @@ class FileSystemPlugin(HawiPlugin):
                     "totalLines": len(all_lines),
                     "numChars": len(selected_content),
                     "startOffset": start,
+                    "nextOffset": end if end < total_chars else None,
                     "totalChars": total_chars,
                     "language": detected_language,
                     "isTruncated": is_partial,
@@ -777,7 +785,7 @@ class FileSystemPlugin(HawiPlugin):
             mode: 读取模式 - "content" 或 "structure"
 
         示例:
-            read_file("src/main.py")                                      # 读取整个文件
+            read_file("src/main.py")                                      # 读取文件开头（默认最多 500 行）
             read_file("src/main.py", start_line=1, line_count=50)         # 读取前 50 行
         """
         abs_path = self._resolve_path(file_path)
@@ -818,6 +826,14 @@ class FileSystemPlugin(HawiPlugin):
 
         offset = max(0, start_line - 1) if start_line is not None else 0
         limit = max(0, line_count) if line_count is not None else None
+        lines = content.splitlines(keepends=True)
+        total = len(lines)
+        start = min(offset, total)
+        if (
+            limit is None
+            and total - start > self._READ_FILE_DEFAULT_LINE_COUNT
+        ):
+            limit = self._READ_FILE_DEFAULT_LINE_COUNT
 
         cached = self._read_state_cache.get(abs_path)
         if (
@@ -838,9 +854,6 @@ class FileSystemPlugin(HawiPlugin):
                 },
             )
 
-        lines = content.splitlines(keepends=True)
-        total = len(lines)
-        start = min(offset, total)
         end = (start + limit) if limit is not None else total
 
         if end > total:
@@ -888,6 +901,7 @@ class FileSystemPlugin(HawiPlugin):
                     "content": header + formatted,
                     "numLines": returned_line_count,
                     "startLine": start,
+                    "nextStartLine": end + 1 if end < total else None,
                     "totalLines": total,
                     "language": detected_language,
                     "isTruncated": is_partial,

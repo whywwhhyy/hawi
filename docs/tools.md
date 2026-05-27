@@ -482,6 +482,7 @@ agent = HawiAgent(model=model, plugins=[plugin])
 `FileSystemPlugin(seek_style="line")` 默认提供行号版本的 `read_file`；
 `FileSystemPlugin(seek_style="char")` 提供字符偏移版本。GUI 插件配置中
 `seek_style` 以 `line` / `char` 下拉列表选择。
+未指定分页参数时，`line` 模式默认最多返回前 500 行，`char` 模式默认最多返回前 64 KiB。
 
 **read_file 返回格式：**
 
@@ -493,6 +494,7 @@ agent = HawiAgent(model=model, plugins=[plugin])
         "content": "1|def foo():\n2|    pass\n",
         "numLines": 2,
         "startLine": 0,
+        "nextStartLine": None,
         "totalLines": 2,
         "language": "python",  # 自动检测的语言类型
         "isTruncated": False
@@ -500,7 +502,7 @@ agent = HawiAgent(model=model, plugins=[plugin])
 }
 ```
 
-字符偏移模式还会返回 `startOffset`、`numChars`、`totalChars`。
+字符偏移模式还会返回 `startOffset`、`nextOffset`、`numChars`、`totalChars`。
 
 **grep 参数：**
 

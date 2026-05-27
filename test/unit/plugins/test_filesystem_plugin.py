@@ -77,6 +77,24 @@ class TestFileSystemPlugin:
         assert "   1|line1" in result.output["file"]["content"]
         assert "   3|line3" in result.output["file"]["content"]
 
+    def test_read_file_defaults_to_limited_line_window(self, plugin, temp_dir, monkeypatch):
+        """read_file should not return an entire large file by default."""
+        monkeypatch.setattr(FileSystemPlugin, "_READ_FILE_DEFAULT_LINE_COUNT", 3)
+        file_path = os.path.join(temp_dir, "large.txt")
+        with open(file_path, "w") as f:
+            f.write("line1\nline2\nline3\nline4\nline5\n")
+
+        result = plugin.read_file(file_path)
+
+        assert result.success is True
+        file = result.output["file"]
+        assert file["numLines"] == 3
+        assert file["totalLines"] == 5
+        assert file["nextStartLine"] == 4
+        assert file["isTruncated"] is True
+        assert "line3" in file["content"]
+        assert "line4" not in file["content"]
+
     def test_read_file_char_seek_with_offset_limit(self, temp_dir):
         """char seek style should expose offset/limit as character range."""
         plugin = FileSystemPlugin(seek_style="char")
@@ -91,6 +109,23 @@ class TestFileSystemPlugin:
         assert file["startOffset"] == 2
         assert file["numChars"] == 4
         assert file["totalChars"] == 8
+
+    def test_read_file_defaults_to_limited_char_window(self, temp_dir, monkeypatch):
+        """char seek style should not return an entire large file by default."""
+        monkeypatch.setattr(FileSystemPlugin, "_READ_FILE_DEFAULT_CHAR_COUNT", 5)
+        plugin = FileSystemPlugin(seek_style="char")
+        file_path = os.path.join(temp_dir, "large.txt")
+        with open(file_path, "w") as f:
+            f.write("abcdefghi")
+
+        result = plugin.read_file(file_path, show_line_numbers=False)
+
+        assert result.success is True
+        file = result.output["file"]
+        assert file["content"] == "[Chars 0-5 of 9]\nabcde"
+        assert file["numChars"] == 5
+        assert file["nextOffset"] == 5
+        assert file["isTruncated"] is True
 
     def test_read_file_tool_schema_follows_seek_style(self):
         """Only one read_file tool should be exposed for the configured seek style."""

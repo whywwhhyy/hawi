@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-TOOL_RESULT_MAX_BYTES = 2 * 1024 * 1024
+TOOL_RESULT_MAX_BYTES = 50 * 1024
 TOOL_RESULT_TRUNCATION_WARNING = (
     "Tool result was truncated before being written to context. "
     "Narrow the request, use pagination, or write large output to a file/artifact instead."

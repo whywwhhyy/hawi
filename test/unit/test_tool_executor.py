@@ -340,6 +340,10 @@ async def test_tool_executor_promises_honor_blocked_by_tool_call_id() -> None:
     ]
 
 
+def test_tool_result_default_limit_is_context_friendly() -> None:
+    assert tool_executor_module.TOOL_RESULT_MAX_BYTES == 50 * 1024
+
+
 @pytest.mark.asyncio
 async def test_tool_executor_truncates_oversized_tool_result_in_release(
     monkeypatch: pytest.MonkeyPatch,

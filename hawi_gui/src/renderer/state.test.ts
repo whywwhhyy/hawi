@@ -188,6 +188,33 @@ describe("core event reducer", () => {
     expect(state.nextContextMessageIndex).toBe(2);
   });
 
+  it("renders committed assistant text even when there were no text deltas", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-committed-text",
+      message_id: "msg-committed-text",
+      user_content: "answer directly",
+      queue: "normal"
+    }, 10));
+    state = reduceCoreEvent(state, frame("run.message_committed", {
+      run_id: "run-committed-text",
+      role: "assistant",
+      context_message_id: "ctxmsg-committed-text",
+      content: [{ type: "text", text: "direct answer" }]
+    }, 10));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
+    expect(state.nodes[1]).toMatchObject({
+      kind: "agent",
+      content: "direct answer",
+      contextMessageId: "ctxmsg-committed-text",
+      streamDurationMs: 0
+    });
+    expect(state.sessionMessageCount).toBe(2);
+    expect(state.nextContextMessageIndex).toBe(2);
+  });
+
   it("enables fork controls for live user and assistant messages", () => {
     let state = createInitialState();
 
@@ -222,6 +249,71 @@ describe("core event reducer", () => {
       contextMessageIndex: 1
     });
     expect(state.nextContextMessageIndex).toBe(2);
+  });
+
+  it("hydrates a streamed assistant message committed after a tool call without duplicating it", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-tool-commit",
+      user_content: "lookup",
+      queue: "normal"
+    }, 10));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      run_id: "run-tool-commit",
+      delta: "I will read the file first."
+    }, 11));
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-tool-commit",
+      tool_call_id: "tc-read",
+      tool_name: "read_file"
+    }, 12));
+    state = reduceCoreEvent(state, frame("run.message_committed", {
+      run_id: "run-tool-commit",
+      role: "assistant",
+      context_message_id: "ctxmsg-tool-assistant",
+      content: [
+        { type: "text", text: "I will read the file first." },
+        {
+          type: "tool_call",
+          id: "tc-read",
+          name: "read_file",
+          arguments: { file_path: "notes.md" }
+        }
+      ]
+    }, 12.5));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent", "tool"]);
+    expect(state.nodes[1]).toMatchObject({
+      kind: "agent",
+      content: "I will read the file first.",
+      contextMessageId: "ctxmsg-tool-assistant",
+      contextMessageIndex: 1,
+      streamDurationMs: 1000
+    });
+    expect(state.nodes.filter((node) => node.kind === "agent")).toHaveLength(1);
+    expect(state.sessionMessageCount).toBe(2);
+    expect(state.nextContextMessageIndex).toBe(2);
+
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-tool-commit",
+      tool_call_id: "tc-read",
+      tool_name: "read_file",
+      success: true,
+      output: "contents"
+    }, 13));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      run_id: "run-tool-commit",
+      delta: "Now I can continue."
+    }, 14));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent", "tool", "agent"]);
+    expect(state.nodes[2].tool).toMatchObject({ contextMessageIndex: 2 });
+    expect(state.nodes[3]).toMatchObject({
+      content: "Now I can continue.",
+      contextMessageIndex: 3
+    });
+    expect(state.nextContextMessageIndex).toBe(4);
   });
 
   it("keeps live fork indices aligned across tool calls", () => {

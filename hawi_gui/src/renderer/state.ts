@@ -265,6 +265,7 @@ interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
   processingId?: string;
+  assistantCommitNodeId?: string;
   assistantMessageCounted?: boolean;
   assistantContextMessageIndex?: number;
   toolCallAssistantContextIndexed?: boolean;
@@ -483,8 +484,19 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const contentText = Array.isArray(payload.content)
         ? historyAssistantText(payload.content)
         : "";
-      const agentNodeId = state.runs[runId]?.agentNodeId;
+      const run = state.runs[runId] ?? {};
+      const agentNodeId = run.agentNodeId;
       if (!agentNodeId) {
+        if (run.assistantCommitNodeId) {
+          return commitAssistantNode(
+            state,
+            runId,
+            run.assistantCommitNodeId,
+            contextMessageId,
+            contentText,
+            contentParts
+          );
+        }
         if (!contentParts) {
           return state;
         }
@@ -497,13 +509,14 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           frameTime(frame),
         );
       }
-      return updateChatNode(state, agentNodeId, (node) => ({
-        ...node,
-        content: node.content || contentText,
-        contentParts: contentParts ?? node.contentParts,
+      return commitAssistantNode(
+        state,
+        runId,
+        agentNodeId,
         contextMessageId,
-        canFork: true
-      }));
+        contentText,
+        contentParts
+      );
     }
 
     case "run.text_delta": {
@@ -1661,6 +1674,9 @@ function appendRunDelta(
         [runId]: {
           ...(next.runs[runId] ?? {}),
           [key]: id,
+          assistantCommitNodeId: kind === "agent"
+            ? id
+            : run.assistantCommitNodeId,
           assistantMessageCounted: true,
           assistantContextMessageIndex: kind === "agent"
             ? contextMessageIndex
@@ -1695,6 +1711,9 @@ function appendRunDelta(
       [runId]: {
         ...(next.runs[runId] ?? {}),
         [key]: id,
+        assistantCommitNodeId: kind === "agent"
+          ? id
+          : run.assistantCommitNodeId,
         assistantMessageCounted: true,
         assistantContextMessageIndex: kind === "agent"
           ? contextMessageIndex
@@ -1707,6 +1726,34 @@ function appendRunDelta(
     nextContextMessageIndex: shouldIndexAssistant
       ? next.nextContextMessageIndex + 1
       : next.nextContextMessageIndex
+  };
+}
+
+function commitAssistantNode(
+  state: AppState,
+  runId: string,
+  nodeIdForAssistant: string,
+  contextMessageId: string,
+  content: string,
+  contentParts?: ContentPart[],
+): AppState {
+  const updated = updateChatNode(state, nodeIdForAssistant, (node) => ({
+    ...node,
+    content: node.content || content,
+    contentParts: contentParts ?? node.contentParts,
+    contextMessageId,
+    canFork: true
+  }));
+  return {
+    ...updated,
+    runs: {
+      ...updated.runs,
+      [runId]: {
+        ...(updated.runs[runId] ?? {}),
+        assistantCommitNodeId: undefined,
+        assistantMessageCounted: true
+      }
+    }
   };
 }
 
@@ -1747,6 +1794,7 @@ function appendCommittedAssistantNode(
       [runId]: {
         ...(next.runs[runId] ?? {}),
         agentNodeId: id,
+        assistantCommitNodeId: undefined,
         assistantMessageCounted: true,
         assistantContextMessageIndex: contextMessageIndex,
         toolCallAssistantContextIndexed: false
