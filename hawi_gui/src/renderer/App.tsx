@@ -685,6 +685,7 @@ export default function App() {
   const currentSessionIdRef = useRef<string | null>(null);
   const pendingSystemPromptConfigRef = useRef<PersistedConfig | null>(null);
   const initializeSessionStateRef = useRef<() => Promise<void>>(async () => undefined);
+  const startupSessionStateLoadedRef = useRef(false);
   const applyingSystemPromptRef = useRef(false);
   const sessionBusyRef = useRef(false);
   const followTailRef = useRef(true);
@@ -716,7 +717,8 @@ export default function App() {
   const previousArtifactCountRef = useRef(0);
   const subagentPanelSessionRef = useRef<string | null>(null);
   const previousSubagentCountRef = useRef(0);
-  const coreRunning = shouldInitializeSessionState(metadata) || sessionStats.loaded > 0 || Boolean(currentSessionId);
+  const shouldLoadStartupSessionState = shouldInitializeSessionState(metadata);
+  const coreRunning = shouldLoadStartupSessionState || sessionStats.loaded > 0 || Boolean(currentSessionId);
   const fallbackState = useMemo(createInitialState, []);
   const state = currentSessionId ? statesBySession[currentSessionId] ?? fallbackState : fallbackState;
   const artifactList = useMemo(
@@ -859,9 +861,10 @@ export default function App() {
   }, [sessionBusy]);
 
   useEffect(() => {
-    if (!coreRunning) return;
+    if (!shouldLoadStartupSessionState || startupSessionStateLoadedRef.current) return;
+    startupSessionStateLoadedRef.current = true;
     void initializeSessionStateRef.current();
-  }, [coreRunning]);
+  }, [shouldLoadStartupSessionState]);
 
   useEffect(() => {
     configRef.current = config;
@@ -3520,10 +3523,14 @@ function SessionStatusCell({
                           <span className="session-name-text">{sessionDisplayName(session)}</span>
                         </button>
                       )}
+                    </div>
+                  </div>
+                  {(!isEditing || !isCurrent || canShowDelete) && (
+                    <div className="session-actions">
                       {!isEditing && (
                         <button
                           type="button"
-                          className="session-edit"
+                          className="session-action"
                           title="重命名 Session"
                           aria-label={`重命名 Session ${shortSessionId(session.session_id)}`}
                           disabled={busy}
@@ -3532,13 +3539,9 @@ function SessionStatusCell({
                             startEditingSession(session);
                           }}
                         >
-                          <Pencil size={12} />
+                          <Pencil size={13} />
                         </button>
                       )}
-                    </div>
-                  </div>
-                  {(!isCurrent || canShowDelete) && (
-                    <div className="session-actions">
                       {!isCurrent && (
                         <button
                           type="button"
@@ -3550,6 +3553,9 @@ function SessionStatusCell({
                         >
                           <GitFork size={13} />
                         </button>
+                      )}
+                      {isCurrent && (
+                        <span className="session-action-placeholder" aria-hidden="true" />
                       )}
                       {canShowDelete && (
                         <button

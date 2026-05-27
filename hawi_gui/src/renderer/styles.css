@@ -757,7 +757,7 @@ button:disabled {
   gap: 4px;
   min-height: 50px;
   min-width: 0;
-  padding: 7px 88px 7px 10px;
+  padding: 7px 122px 7px 10px;
   color: inherit;
   text-align: left;
 }
@@ -799,32 +799,6 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-edit {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: #64777a;
-  opacity: 0.78;
-}
-
-.session-edit:focus-visible,
-.session-edit:hover:not(:disabled) {
-  background: var(--color-primary-tint);
-  color: var(--color-primary-dark);
-  opacity: 1;
-}
-
-.session-edit:disabled {
-  cursor: default;
-  opacity: 0.55;
 }
 
 .session-name-input {
@@ -896,7 +870,8 @@ button:disabled {
 }
 
 .session-action,
-.session-delete {
+.session-delete,
+.session-action-placeholder {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -906,6 +881,10 @@ button:disabled {
   border-radius: var(--radius);
   background: transparent;
   color: #64777a;
+}
+
+.session-action-placeholder {
+  pointer-events: none;
 }
 
 .session-action:hover {

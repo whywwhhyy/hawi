@@ -3,6 +3,26 @@ import { VERSION, type ContentPart, type CoreFrame, type PluginArtifactPayload, 
 const TOOL_CALL_PURPOSE_PARAMETER = "tool_call_purpose";
 const MAX_DEBUG_LINES = 200;
 
+type ViteImportMeta = ImportMeta & {
+  env?: {
+    MODE?: string;
+    PROD?: boolean;
+  };
+};
+
+type HawiTestGlobal = typeof globalThis & {
+  __HAWI_TEST_RELEASE_DEDUP_FALLBACK__?: boolean;
+};
+
+function releaseDedupFallbackEnabled(): boolean {
+  const env = (import.meta as ViteImportMeta).env;
+  if (env?.PROD === true) {
+    return true;
+  }
+  return env?.MODE === "test"
+    && (globalThis as HawiTestGlobal).__HAWI_TEST_RELEASE_DEDUP_FALLBACK__ === true;
+}
+
 export type ChatKind = "user" | "agent" | "thinking" | "tool" | "system" | "meta" | "error" | "debug" | "divider" | "compact" | "framework" | "handoff";
 export type DisplayMessageType = "normal" | "steer" | "urgent" | "resume";
 export type FrameworkInjectionKind =
@@ -400,8 +420,18 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const userContent = String(payload.user_content ?? "");
       const contentParts = normalizeContentParts(payload.content);
       const userNodeId = messageId ? userMessageNodeId(messageId) : nodeId("user", runId);
-      const contextMessageIndex = state.nextContextMessageIndex;
-      const withUser = appendChatNode(state, {
+      const existingUser = releaseDedupFallbackEnabled()
+        ? findRunStartUserNode(
+            state,
+            userNodeId,
+            contextMessageId
+          )
+        : undefined;
+      const shouldHydrateContextIndex = existingUser !== undefined
+        && existingUser.contextMessageIndex === undefined;
+      const contextMessageIndex = existingUser?.contextMessageIndex
+        ?? state.nextContextMessageIndex;
+      const userNode: ChatNode = {
         id: userNodeId,
         kind: "user",
         queue,
@@ -411,7 +441,10 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         canFork: true,
         content: userContent,
         contentParts
-      });
+      };
+      const withUser = existingUser
+        ? mergeRunStartUserNode(state, existingUser.id, userNode, contextMessageIndex)
+        : appendChatNode(state, userNode);
       const processing: ProcessingState = {
         id: nodeId("processing", `${runId}-${withUser.nodes.length}`),
         runId,
@@ -419,11 +452,23 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       };
       return {
         ...withUser,
-        sessionMessageCount: state.sessionMessageCount + 1,
-        nextContextMessageIndex: contextMessageIndex + 1,
+        sessionMessageCount: existingUser
+          ? state.sessionMessageCount
+          : state.sessionMessageCount + 1,
+        nextContextMessageIndex: existingUser
+          ? shouldHydrateContextIndex
+            ? state.nextContextMessageIndex + 1
+            : state.nextContextMessageIndex
+          : contextMessageIndex + 1,
         processing,
         activeRunId: runId,
-        runs: { ...withUser.runs, [runId]: { processingId: processing.id } }
+        runs: {
+          ...withUser.runs,
+          [runId]: {
+            ...(withUser.runs[runId] ?? {}),
+            processingId: processing.id
+          }
+        }
       };
     }
 
@@ -1198,17 +1243,22 @@ function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame, historyIndex
         }
       }
     }
-    nodes.push(historyFrameworkNode(frame, injection, nodes.length, historyIndex));
+    appendHistoryFrameworkInjection(nodes, frame, injection, historyIndex);
     return true;
   }
   if (frame.type === "agent.tool_runtime_context_injected") {
-    nodes.push(historyFrameworkNode(frame, frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected"), nodes.length, historyIndex));
+    appendHistoryFrameworkInjection(
+      nodes,
+      frame,
+      frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected"),
+      historyIndex
+    );
     return true;
   }
   if (frame.type === "plugin.message") {
     const injection = pluginMessageFrameworkInjectionFromFrame(frame, payload);
     if (injection) {
-      nodes.push(historyFrameworkNode(frame, injection, nodes.length, historyIndex));
+      appendHistoryFrameworkInjection(nodes, frame, injection, historyIndex);
     }
     return true;
   }
@@ -2089,6 +2139,51 @@ function updateChatNode(state: AppState, id: string, updater: (node: ChatNode) =
   };
 }
 
+function findRunStartUserNode(
+  state: AppState,
+  userNodeId: string,
+  contextMessageId?: string,
+): ChatNode | undefined {
+  const byId = state.nodes.find((node) => (
+    node.kind === "user" && node.id === userNodeId
+  ));
+  if (byId) {
+    return byId;
+  }
+  if (!contextMessageId) {
+    return undefined;
+  }
+  return state.nodes.find((node) => (
+    node.kind === "user" && node.contextMessageId === contextMessageId
+  ));
+}
+
+function mergeRunStartUserNode(
+  state: AppState,
+  targetNodeId: string,
+  incoming: ChatNode,
+  contextMessageIndex: number,
+): AppState {
+  return {
+    ...state,
+    nodes: state.nodes.map((node) => {
+      if (node.id !== targetNodeId || node.kind !== "user") {
+        return node;
+      }
+      return {
+        ...node,
+        queue: node.queue ?? incoming.queue,
+        displayMessageType: node.displayMessageType ?? incoming.displayMessageType,
+        contextMessageId: node.contextMessageId ?? incoming.contextMessageId,
+        contextMessageIndex: node.contextMessageIndex ?? contextMessageIndex,
+        canFork: true,
+        content: node.content || incoming.content,
+        contentParts: node.contentParts ?? incoming.contentParts
+      };
+    })
+  };
+}
+
 function appendChatNode(
   state: AppState,
   node: ChatNode,
@@ -2132,12 +2227,38 @@ function addMeta(state: AppState, content: string): AppState {
 }
 
 function appendFrameworkInjection(state: AppState, injection: FrameworkInjectionState): AppState {
+  if (releaseDedupFallbackEnabled() && hasFrameworkInjectionNode(state.nodes, injection)) {
+    return state;
+  }
   return appendChatNode(state, {
     id: nodeId("framework", `${injection.id}-${state.nodes.length}`),
     kind: "framework",
     content: injection.content,
     framework: injection
   }, { clearProcessing: false });
+}
+
+function appendHistoryFrameworkInjection(
+  nodes: ChatNode[],
+  frame: CoreFrame,
+  injection: FrameworkInjectionState,
+  historyIndex?: number,
+): void {
+  if (releaseDedupFallbackEnabled() && hasFrameworkInjectionNode(nodes, injection)) {
+    return;
+  }
+  nodes.push(historyFrameworkNode(frame, injection, nodes.length, historyIndex));
+}
+
+function hasFrameworkInjectionNode(
+  nodes: ChatNode[],
+  injection: FrameworkInjectionState,
+): boolean {
+  return nodes.some((node) => (
+    node.kind === "framework"
+    && node.framework !== undefined
+    && frameworkInjectionsMatch(node.framework, injection)
+  ));
 }
 
 function mergeSystemPromptInjection(
@@ -2492,12 +2613,61 @@ function normalizeMergePosition(value: unknown): "before" | "after" | undefined 
 }
 
 function orderFrameworkInjections(items: FrameworkInjectionState[]): FrameworkInjectionState[] {
-  return [...items].sort((left, right) => {
+  const ordered = releaseDedupFallbackEnabled()
+    ? uniqueFrameworkInjections(items)
+    : [...items];
+  return ordered.sort((left, right) => {
     const leftPosition = left.contextPosition ?? Number.MAX_SAFE_INTEGER;
     const rightPosition = right.contextPosition ?? Number.MAX_SAFE_INTEGER;
     if (leftPosition !== rightPosition) return leftPosition - rightPosition;
     return left.timestamp - right.timestamp;
   });
+}
+
+function uniqueFrameworkInjections(items: FrameworkInjectionState[]): FrameworkInjectionState[] {
+  const seen = new Set<string>();
+  const result: FrameworkInjectionState[] = [];
+  for (const item of items) {
+    const key = frameworkInjectionIdentity(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+function frameworkInjectionsMatch(
+  left: FrameworkInjectionState,
+  right: FrameworkInjectionState,
+): boolean {
+  return frameworkInjectionIdentity(left) === frameworkInjectionIdentity(right);
+}
+
+function frameworkInjectionIdentity(injection: FrameworkInjectionState): string {
+  return [
+    injection.kind,
+    injection.eventType ?? "",
+    injection.runId ?? "",
+    injection.pluginId ?? "",
+    injection.pluginName ?? "",
+    injection.pluginRole ?? "",
+    injection.injectionName ?? "",
+    injection.hookType ?? "",
+    injection.role ?? "",
+    injection.mergeTarget ?? "",
+    injection.mergePosition ?? "",
+    injection.targetMessageId ?? "",
+    injection.targetContextMessageId ?? "",
+    String(injection.targetMessageIndex ?? ""),
+    String(injection.contextPosition ?? ""),
+    injection.toolName ?? "",
+    injection.toolCallId ?? "",
+    injection.parameterName ?? "",
+    simpleHash(injection.content),
+    simpleHash(formatToolValue(injection.metadata)),
+  ].join(":");
 }
 
 function updateSubAgentFromEvent(

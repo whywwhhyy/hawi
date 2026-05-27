@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { VERSION, type CoreFrame } from "../shared/protocol";
 import { createInitialState, reduceCoreEvent } from "./state";
 
@@ -8,7 +8,19 @@ function frame(type: string, payload: Record<string, unknown>, ts?: number): Cor
     : { version: VERSION, type, payload, ts };
 }
 
+function enableReleaseDedupFallbackForTest() {
+  (globalThis as typeof globalThis & {
+    __HAWI_TEST_RELEASE_DEDUP_FALLBACK__?: boolean;
+  }).__HAWI_TEST_RELEASE_DEDUP_FALLBACK__ = true;
+}
+
 describe("core event reducer", () => {
+  afterEach(() => {
+    delete (globalThis as typeof globalThis & {
+      __HAWI_TEST_RELEASE_DEDUP_FALLBACK__?: boolean;
+    }).__HAWI_TEST_RELEASE_DEDUP_FALLBACK__;
+  });
+
   it("shows materialized high priority messages as normal chat history", () => {
     let state = createInitialState();
 
@@ -34,6 +46,79 @@ describe("core event reducer", () => {
     });
     expect(state.activeRunId).toBe("run-1");
     expect(state.sessionMessageCount).toBe(1);
+  });
+
+  it("keeps repeated live user message events visible outside release fallback", () => {
+    let state = createInitialState();
+    const payload = {
+      run_id: "run-dupe",
+      message_id: "msg-dupe",
+      user_content: "hello",
+      queue: "normal"
+    };
+
+    state = reduceCoreEvent(state, frame("run.start", payload, 10));
+    state = reduceCoreEvent(state, frame("run.start", payload, 11));
+
+    expect(state.nodes.filter((node) => node.kind === "user")).toHaveLength(2);
+    expect(state.sessionMessageCount).toBe(2);
+  });
+
+  it("dedupes repeated live user message events in release fallback", () => {
+    enableReleaseDedupFallbackForTest();
+    let state = createInitialState();
+    const payload = {
+      run_id: "run-dupe",
+      message_id: "msg-dupe",
+      user_content: "hello",
+      queue: "normal"
+    };
+
+    state = reduceCoreEvent(state, frame("run.start", payload, 10));
+    state = reduceCoreEvent(state, frame("run.start", payload, 11));
+
+    expect(state.nodes.filter((node) => node.kind === "user")).toHaveLength(1);
+    expect(state.nodes[0]).toMatchObject({
+      id: "user-message-msg-dupe",
+      content: "hello",
+      contextMessageIndex: 0
+    });
+    expect(state.sessionMessageCount).toBe(1);
+    expect(state.nextContextMessageIndex).toBe(1);
+    expect(state.processing).toMatchObject({ runId: "run-dupe" });
+  });
+
+  it("dedupes a live run.start that overlaps restored history in release fallback", () => {
+    enableReleaseDedupFallbackForTest();
+    let state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
+      message_history: [
+        {
+          run_id: "run-history-dupe",
+          role: "user",
+          content: [{ type: "text", text: "hello from history" }],
+          metadata: { message_id: "msg-history-dupe", queue: "normal" },
+          context_message_id: "ctxmsg-history-dupe"
+        }
+      ]
+    }));
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-history-dupe",
+      message_id: "msg-history-dupe",
+      user_content: "hello from history",
+      queue: "normal",
+      context_message_id: "ctxmsg-history-dupe"
+    }));
+
+    expect(state.nodes.filter((node) => node.kind === "user")).toHaveLength(1);
+    expect(state.nodes[0]).toMatchObject({
+      id: "user-message-msg-history-dupe",
+      content: "hello from history",
+      contextMessageId: "ctxmsg-history-dupe",
+      contextMessageIndex: 0
+    });
+    expect(state.sessionMessageCount).toBe(1);
+    expect(state.nextContextMessageIndex).toBe(1);
   });
 
   it("preserves structured content parts on live user messages", () => {
@@ -1668,6 +1753,41 @@ describe("core event reducer", () => {
       content: "Plugin system material",
       pluginId: "research",
       pluginName: "ResearchPlugin",
+      injectionName: "inject_prompt"
+    });
+  });
+
+  it("dedupes repeated system prompt injected segments in release fallback", () => {
+    enableReleaseDedupFallbackForTest();
+    let state = createInitialState();
+    const childPayload = {
+      run_id: "run-system-dupe",
+      text: "Plugin system material",
+      origin: "before_session",
+      plugin_id: "research",
+      plugin_name: "ResearchPlugin",
+      plugin_role: "plugin",
+      injection_name: "inject_prompt",
+      metadata: { content_scope: "injected_segment", change_type: "append" }
+    };
+
+    state = reduceCoreEvent(state, frame("agent.system_prompt", childPayload, 20));
+    state = reduceCoreEvent(state, frame("agent.system_prompt", childPayload, 21));
+    state = reduceCoreEvent(state, frame("agent.system_prompt", {
+      run_id: "run-system-dupe",
+      text: "Base system",
+      origin: "session_start",
+      plugin_role: "framework",
+      injection_name: "system_prompt",
+      metadata: { content_scope: "full_prompt" }
+    }, 30));
+
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes[0].injections).toHaveLength(1);
+    expect(state.nodes[0].injections?.[0]).toMatchObject({
+      kind: "system_prompt",
+      content: "Plugin system material",
+      pluginId: "research",
       injectionName: "inject_prompt"
     });
   });
