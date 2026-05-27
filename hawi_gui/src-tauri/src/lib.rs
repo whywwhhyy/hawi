@@ -938,6 +938,19 @@ fn load_inspect_payload(
         .map_err(|error| format!("invalid inspect payload: {error}"))
 }
 
+async fn load_inspect_payload_async(
+    repo_root: PathBuf,
+    workspace_root: PathBuf,
+    engine_launcher: EngineLauncher,
+    inspect_args: Vec<String>,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        load_inspect_payload(&repo_root, &workspace_root, &engine_launcher, &inspect_args)
+    })
+    .await
+    .map_err(|error| format!("failed to join inspect task: {error}"))?
+}
+
 fn format_engine_command_error(
     message: &str,
     status: Option<i32>,
@@ -2418,7 +2431,10 @@ fn send_command(
 }
 
 #[tauri::command]
-fn refresh_provider_models(provider: String, state: State<'_, GuiState>) -> Result<Value, String> {
+async fn refresh_provider_models(
+    provider: String,
+    state: State<'_, GuiState>,
+) -> Result<Value, String> {
     let provider_name = provider.trim().to_string();
     if provider_name.is_empty() {
         return Err("provider is required".to_string());
@@ -2434,11 +2450,16 @@ fn refresh_provider_models(provider: String, state: State<'_, GuiState>) -> Resu
         .map_err(|_| "config lock poisoned".to_string())?
         .clone();
 
-    let refresh_frame = state
-        .manager
-        .lock()
-        .map_err(|_| "manager lock poisoned".to_string())?
-        .refresh_models(&provider_name)?;
+    let manager = state.manager.clone();
+    let provider_for_refresh = provider_name.clone();
+    let refresh_frame = tauri::async_runtime::spawn_blocking(move || {
+        manager
+            .lock()
+            .map_err(|_| "manager lock poisoned".to_string())?
+            .refresh_models(&provider_for_refresh)
+    })
+    .await
+    .map_err(|error| format!("failed to join model refresh task: {error}"))??;
 
     let mut next_inspect = ready_inspect.clone();
     let all_models = if let Some(frame) = refresh_frame {
@@ -2453,12 +2474,13 @@ fn refresh_provider_models(provider: String, state: State<'_, GuiState>) -> Resu
                     .collect::<Vec<_>>()
             })
     } else {
-        let refreshed = load_inspect_payload(
-            &state.env.repo_root,
-            &state.env.workspace_root,
-            &state.env.engine_launcher,
-            &["--refresh-provider".to_string(), provider_name.clone()],
-        )?;
+        let refreshed = load_inspect_payload_async(
+            state.env.repo_root.clone(),
+            state.env.workspace_root.clone(),
+            state.env.engine_launcher.clone(),
+            vec!["--refresh-provider".to_string(), provider_name.clone()],
+        )
+        .await?;
         let models = metadata_models(&refreshed);
         next_inspect = refreshed;
         Some(models)

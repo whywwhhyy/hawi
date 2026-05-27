@@ -124,6 +124,13 @@ const documentAttachmentMimeTypes = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/xml",
 ]);
+
+function waitForNextPaint(): Promise<void> {
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
 const extensionMimeTypes: Record<string, string> = {
   aac: "audio/aac",
   avif: "image/avif",
@@ -6409,6 +6416,7 @@ function ModelDialog({
     setRefreshingProvider(provider);
     setRefreshError(null);
     try {
+      await waitForNextPaint();
       await onRefresh(provider);
     } catch (error) {
       setRefreshError(formatDialogError(error));
@@ -6431,7 +6439,8 @@ function ModelDialog({
                 <h3>{provider}</h3>
                 <button
                   className="icon-button model-refresh"
-                  title={`刷新 ${provider} 模型列表`}
+                  title={refreshingProvider === provider ? `正在刷新 ${provider} 模型列表` : `刷新 ${provider} 模型列表`}
+                  aria-label={refreshingProvider === provider ? `正在刷新 ${provider} 模型列表` : `刷新 ${provider} 模型列表`}
                   disabled={Boolean(refreshingProvider)}
                   onClick={() => void refresh(provider)}
                 >

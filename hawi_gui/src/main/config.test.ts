@@ -6,6 +6,7 @@ import {
   buildEngineEnv,
   buildEngineRunArgs,
   isUsablePackagedWorkspaceCwd,
+  loadInspectPayloadAsync,
   preserveProviderOrder,
   resolveBundledEngineCommand,
   resolveEngineLauncher,
@@ -28,6 +29,43 @@ describe("engine launch helpers", () => {
 
   it("passes model refresh args through the engine launcher", () => {
     expect(buildEngineRunArgs("/repo/hawi", ["--inspect", "--refresh-provider", "openai"])).toContain("--refresh-provider");
+  });
+
+  it("loads inspect metadata asynchronously", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hawi-inspect-async-"));
+    const launcher: EngineLauncher = {
+      command: process.execPath,
+      argsPrefix: [
+        "-e",
+        "process.stdout.write(JSON.stringify({version:'hawi.core.v1',models:['openai/gpt'],plugin_catalog:[],default_system_prompt:'system'}))",
+        "--",
+      ],
+      source: "bundled",
+    };
+
+    try {
+      await expect(loadInspectPayloadAsync("/repo/hawi", workspace, launcher, ["--refresh-provider", "openai"])).resolves.toMatchObject({
+        models: ["openai/gpt"],
+        default_system_prompt: "system",
+      });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces async inspect command failures with stderr", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hawi-inspect-fail-"));
+    const launcher: EngineLauncher = {
+      command: process.execPath,
+      argsPrefix: ["-e", "console.error('provider failed'); process.exit(3)", "--"],
+      source: "bundled",
+    };
+
+    try {
+      await expect(loadInspectPayloadAsync("/repo/hawi", workspace, launcher, [])).rejects.toThrow(/stderr: provider failed/);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("runs a bundled engine executable directly", () => {

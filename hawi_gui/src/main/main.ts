@@ -19,6 +19,7 @@ import {
   ensureEngineWorkspace,
   resolveEnvPaths,
   loadInspectPayload,
+  loadInspectPayloadAsync,
   loadConfig,
   saveConfig,
   sanitizeConfig,
@@ -203,7 +204,7 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
       allModels = payload.all_models.filter((item): item is string => typeof item === "string");
     }
   } else {
-    const refreshed = loadInspectPayload(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher, [
+    const refreshed = await loadInspectPayloadAsync(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher, [
       "--refresh-provider",
       providerName,
     ]);

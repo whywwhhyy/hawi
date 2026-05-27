@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -248,6 +248,59 @@ export function loadInspectPayload(
     throw new Error(formatEngineCommandError("Failed to inspect hawi-engine metadata", result.status, result.stderr, result.stdout));
   }
   return JSON.parse(result.stdout) as InspectPayload;
+}
+
+export function loadInspectPayloadAsync(
+  repoRoot: string,
+  workspaceRoot: string,
+  engineLauncher: EngineLauncher,
+  inspectArgs: string[] = [],
+): Promise<InspectPayload> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(engineLauncher.command, buildEngineRunArgs(repoRoot, ["--inspect", ...inspectArgs], engineLauncher), {
+      cwd: workspaceRoot,
+      env: buildEngineEnv(repoRoot, process.env, engineLauncher),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+
+    function fail(error: Error): void {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    }
+
+    function done(payload: InspectPayload): void {
+      if (settled) return;
+      settled = true;
+      resolve(payload);
+    }
+
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      fail(new Error(`Failed to launch ${engineLauncher.command}: ${error.message}`));
+    });
+    child.on("close", (status) => {
+      if (status !== 0) {
+        fail(new Error(formatEngineCommandError("Failed to inspect hawi-engine metadata", status, stderr, stdout)));
+        return;
+      }
+      try {
+        done(JSON.parse(stdout) as InspectPayload);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  });
 }
 
 function formatEngineCommandError(
