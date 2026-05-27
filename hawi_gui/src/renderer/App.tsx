@@ -294,6 +294,7 @@ interface SessionRuntimeStats {
 }
 
 type EscapeDismissTarget =
+  | "mediaPreview"
   | "subagentObserver"
   | "projectPopover"
   | "contextPopover"
@@ -306,6 +307,7 @@ type EscapeDismissTarget =
   | "sessionDialog";
 
 interface EscapeDismissState {
+  mediaPreviewOpen: boolean;
   contextPopoverOpen: boolean;
   projectPopoverOpen: boolean;
   pluginDialogOpen: boolean;
@@ -319,6 +321,7 @@ interface EscapeDismissState {
 }
 
 export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDismissTarget | null {
+  if (state.mediaPreviewOpen) return "mediaPreview";
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
@@ -350,6 +353,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
   switch (target) {
     case "contextPopover":
       return ".context-popover";
+    case "mediaPreview":
+      return ".media-preview-lightbox";
     case "projectPopover":
       return ".project-popover";
     case "subagentObserver":
@@ -917,6 +922,7 @@ export default function App() {
     function handleDialogKeyboard(event: KeyboardEvent) {
       if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
       const keyboardState = {
+        mediaPreviewOpen: mediaPreview !== null,
         contextPopoverOpen,
         projectPopoverOpen,
         pluginDialogOpen,
@@ -933,14 +939,18 @@ export default function App() {
         const target = resolveEscapeDismissTarget(keyboardState);
         if (!target) {
           if (!canStopConversation) return;
-          event.preventDefault();
-          event.stopPropagation();
-          void sendCommand("stop", { reason: "user" });
+          window.setTimeout(() => {
+            if (event.defaultPrevented) return;
+            void sendCommand("stop", { reason: "user" });
+          }, 0);
           return;
         }
         event.preventDefault();
         event.stopPropagation();
         switch (target) {
+          case "mediaPreview":
+            setMediaPreview(null);
+            break;
           case "subagentObserver":
             setSubagentObserverId(null);
             break;
@@ -1007,6 +1017,7 @@ export default function App() {
     projectPopoverOpen,
     pluginDialogOpen,
     modelDialogOpen,
+    mediaPreview,
     subagentObserverId,
     exportMenuOpen,
     debugMenuOpen,

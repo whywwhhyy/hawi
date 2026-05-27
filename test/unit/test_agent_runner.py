@@ -527,6 +527,38 @@ class TestAgentRunnerBasic:
         assert emitted_event.queue_type == "high_prio"
 
     @pytest.mark.asyncio
+    async def test_runner_resume_existing_context_executes_without_enqueue(self, mock_agent):
+        runner = AgentRunner(mock_agent)
+        runner.pause("user_interrupt")
+        executed_messages: list[QueuedMessage] = []
+
+        def fake_execute(message: QueuedMessage):
+            executed_messages.append(message)
+            return object()
+
+        runner._executor.execute_existing_context = MagicMock(side_effect=fake_execute)
+
+        msg_id = await runner.resume_existing_context(
+            metadata={
+                "intent": "resume",
+                "display_message_type": "resume",
+                "skip_before_conversation_hooks": True,
+            }
+        )
+
+        assert msg_id == executed_messages[0].id
+        assert runner.control_snapshot()["paused"] is False
+        assert runner.get_queue_lengths()["high_prio"] == 0
+        assert executed_messages[0].content == ""
+        assert executed_messages[0].queue_type == QueueType.HIGH_PRIO
+        assert executed_messages[0].metadata["materialized_as"] == "existing_context"
+        runner._executor.execute_existing_context.assert_called_once()
+        emitted_event = mock_agent._emit_event.await_args.args[0]
+        assert emitted_event.type == "runner.dequeue"
+        assert emitted_event.message_id == msg_id
+        assert emitted_event.queue_type == "high_prio"
+
+    @pytest.mark.asyncio
     async def test_runner_executes_urgent_message_after_consuming_queue(self, mock_agent):
         runner = AgentRunner(mock_agent)
         runner.enqueue("stop now", "urgent")
@@ -695,6 +727,42 @@ class TestAgentExecutorEventBus:
             None,
             event_bus=event_bus,
             message_metadata=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_existing_context_runs_without_new_message_but_preserves_metadata(self):
+        agent = MagicMock()
+        agent._arun_internal = AsyncMock(return_value=MagicMock())
+        agent.clear_interrupt_state = MagicMock()
+        runner = MagicMock()
+        executor = AgentExecutor(agent, runner)
+        message = QueuedMessage.create(
+            "",
+            QueueType.HIGH_PRIO,
+            metadata={
+                "intent": "resume",
+                "display_message_type": "resume",
+                "skip_before_conversation_hooks": True,
+                "materialized_as": "existing_context",
+            },
+        )
+
+        task = executor.execute_existing_context(message)
+        assert task is not None
+        await task
+
+        agent._arun_internal.assert_awaited_once_with(
+            None,
+            event_bus=None,
+            message_metadata={
+                "intent": "resume",
+                "display_message_type": "resume",
+                "skip_before_conversation_hooks": True,
+                "materialized_as": "existing_context",
+                "message_id": message.id,
+                "queue": "normal",
+                "source_queue": "high_prio",
+            },
         )
 
 

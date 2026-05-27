@@ -232,16 +232,30 @@ describe("project status helpers", () => {
 
 describe("resolveEscapeDismissTarget", () => {
   const closed = {
+    mediaPreviewOpen: false,
     contextPopoverOpen: false,
     projectPopoverOpen: false,
     pluginDialogOpen: false,
     modelDialogOpen: false,
     subagentObserverOpen: false,
+    exportMenuOpen: false,
     debugMenuOpen: false,
     queuePopoverOpen: false,
     editingQueueTaskId: null,
     sessionDialogOpen: false
   };
+
+  it("dismisses media previews before stopping the agent or other dialogs", () => {
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      mediaPreviewOpen: true
+    })).toBe("mediaPreview");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      mediaPreviewOpen: true,
+      subagentObserverOpen: true
+    })).toBe("mediaPreview");
+  });
 
   it("dismisses modal dialogs before popovers", () => {
     expect(resolveEscapeDismissTarget({

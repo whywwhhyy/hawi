@@ -144,10 +144,23 @@ class AgentExecutor:
         )
         return self._start_execution(message, None)
 
+    def execute_existing_context(
+        self,
+        message: QueuedMessage,
+    ) -> asyncio.Task | None:
+        """Execute the current agent context without adding a new message."""
+        return self._start_execution(
+            message,
+            None,
+            include_message_metadata=True,
+        )
+
     def _start_execution(
         self,
         message: QueuedMessage,
         content: str | list[ContentPart] | None,
+        *,
+        include_message_metadata: bool = False,
     ) -> asyncio.Task | None:
         if not self.is_idle:
             return None
@@ -160,7 +173,11 @@ class AgentExecutor:
 
         # Create and start task
         self._current_task = asyncio.create_task(
-            self._execute_with_error_handling(message, content)
+            self._execute_with_error_handling(
+                message,
+                content,
+                include_message_metadata=include_message_metadata,
+            )
         )
         return self._current_task
 
@@ -168,6 +185,8 @@ class AgentExecutor:
         self,
         message: QueuedMessage,
         content: str | list[ContentPart] | None,
+        *,
+        include_message_metadata: bool = False,
     ) -> None:
         """Execute message with error handling."""
         try:
@@ -176,7 +195,7 @@ class AgentExecutor:
                 event_bus=message.event_bus,
                 message_metadata=(
                     self._message_metadata_for_execution(message)
-                    if content is not None
+                    if content is not None or include_message_metadata
                     else None
                 ),
             )
@@ -190,7 +209,11 @@ class AgentExecutor:
             action = await self._runner._on_agent_error(e, message)
             if action == ErrorAction.RETRY:
                 # Retry execution
-                await self._execute_with_error_handling(message, content)
+                await self._execute_with_error_handling(
+                    message,
+                    content,
+                    include_message_metadata=include_message_metadata,
+                )
                 return
             elif action == ErrorAction.ABORT:
                 raise

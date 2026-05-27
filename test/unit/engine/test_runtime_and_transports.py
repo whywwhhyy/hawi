@@ -126,6 +126,7 @@ class DummyAgentRunner:
         self.agent = DummyAgent()
         self.enqueued: list[tuple[Any, str, dict[str, Any]]] = []
         self.resumed = False
+        self.resumed_existing_context_metadata: dict[str, Any] | None = None
 
     @property
     def agent_state(self) -> DummyState:
@@ -144,6 +145,14 @@ class DummyAgentRunner:
 
     def resume(self) -> None:
         self.resumed = True
+
+    async def resume_existing_context(
+        self,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> str | None:
+        self.resumed_existing_context_metadata = metadata
+        return "msg-existing-context"
 
     def control_snapshot(self) -> dict[str, Any]:
         return {"paused": False, "resumable": False}
@@ -1391,6 +1400,42 @@ async def test_runtime_resume_continues_existing_high_prio_work_without_prompt()
 
 
 @pytest.mark.asyncio
+async def test_runtime_resume_reuses_latest_user_message_without_prompt() -> None:
+    runtime = CoreRuntime(model_name="test-model")
+    runner = DummyAgentRunner()
+    runner.agent.messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "继续处理这个任务"}],
+        }
+    ]
+    runtime._runner = runner  # type: ignore[assignment]
+    client = FakeClient(authenticated=True)
+
+    await runtime.handle_command(
+        client,
+        argparse.Namespace(type="resume", id="cmd-resume", payload={}),
+    )
+
+    assert runner.enqueued == []
+    assert runner.resumed_existing_context_metadata is not None
+    assert runner.resumed_existing_context_metadata["intent"] == "resume"
+    assert runner.resumed_existing_context_metadata["auto_generated"] is True
+    assert (
+        runner.resumed_existing_context_metadata["skip_before_conversation_hooks"]
+        is True
+    )
+    assert client.sent[-1]["payload"] == {
+        "command": "resume",
+        "ok": True,
+        "message_id": "msg-existing-context",
+        "queue": "high_prio",
+        "resumed_existing_user_message": True,
+        "control": {"paused": False, "resumable": False},
+    }
+
+
+@pytest.mark.asyncio
 async def test_runtime_default_resume_prompt_skips_before_conversation_hooks() -> None:
     runtime = CoreRuntime(model_name="test-model")
     runner = DummyAgentRunner()
@@ -1403,7 +1448,8 @@ async def test_runtime_default_resume_prompt_skips_before_conversation_hooks() -
     )
 
     assert runner.enqueued
-    _, queue, metadata = runner.enqueued[-1]
+    content, queue, metadata = runner.enqueued[-1]
+    assert content == "继续"
     assert queue == "high_prio"
     assert metadata["intent"] == "resume"
     assert metadata["display_message_type"] == "resume"

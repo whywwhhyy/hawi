@@ -737,6 +737,32 @@ class CoreRuntime:
             )
             return
 
+        if message is None and self._runner_latest_message_role(runner) == "user":
+            resume_existing_context = getattr(runner, "resume_existing_context", None)
+            if callable(resume_existing_context):
+                msg_id = await resume_existing_context(
+                    metadata={
+                        "intent": "resume",
+                        "display_message_type": "resume",
+                        "auto_generated": True,
+                        SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY: True,
+                    },
+                )
+                if msg_id is not None:
+                    await client.send(
+                        make_ack(
+                            "resume",
+                            request_id=command.id,
+                            payload={
+                                "message_id": msg_id,
+                                "queue": "high_prio",
+                                "resumed_existing_user_message": True,
+                                "control": runner.control_snapshot(),
+                            },
+                        )
+                    )
+                    return
+
         content = message if message else DEFAULT_RESUME_PROMPT
         msg_id = runner.submit_immediate_message(
             content,
@@ -762,6 +788,21 @@ class CoreRuntime:
                 },
             )
         )
+
+    @staticmethod
+    def _runner_latest_message_role(runner: Any) -> str | None:
+        agent = getattr(runner, "agent", None)
+        context = getattr(agent, "context", None)
+        messages = getattr(context, "messages", None)
+        if not isinstance(messages, list):
+            return None
+        for message in reversed(messages):
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if isinstance(role, str):
+                return role
+        return None
 
     @staticmethod
     def _runner_has_pending_immediate_work(runner: Any) -> bool:

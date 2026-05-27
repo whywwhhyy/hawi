@@ -558,6 +558,40 @@ class AgentRunner:
         )
         return msg.id
 
+    async def resume_existing_context(
+        self,
+        *,
+        event_bus: EventBus | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Resume by running the current context without appending a prompt."""
+        if not self._executor.is_idle:
+            return None
+
+        self._resume_internal()
+        merged_metadata = dict(metadata or {})
+        merged_metadata.setdefault("intent", "resume")
+        merged_metadata.setdefault("display_message_type", "resume")
+        merged_metadata.setdefault("materialized_as", "existing_context")
+        msg = QueuedMessage.create(
+            "",
+            QueueType.HIGH_PRIO,
+            merged_metadata,
+            event_bus=event_bus,
+        )
+        await self._emit_event(
+            AgentRunnerDequeueEvent.create(
+                message_id=msg.id,
+                queue_type="high_prio",
+            ),
+            event_bus,
+        )
+        task = self._executor.execute_existing_context(msg)
+        if task:
+            self._state = AgentRunnerState.RUNNING
+            return msg.id
+        return None
+
     async def stop_execution(
         self,
         reason: str = "user",
