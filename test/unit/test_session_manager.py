@@ -459,6 +459,29 @@ class TestSessionManager:
         finally:
             sm2.detach()
 
+    def test_pending_audit_persists_only_in_context_snapshot(self, stub_setup) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("needs audit")
+        agent.context._add_pending_tool_call(
+            "audit-1",
+            "reviewed_tool",
+            {"path": "file.txt"},
+        )
+        sid = sm.new_session(name="audit")
+        sm.save_now()
+
+        session_dir = layout.session_dir(sm._root, sid)
+        queues = json.loads(layout.queues_path(session_dir).read_text())
+        context = json.loads(layout.context_path(session_dir).read_text())
+
+        assert "pending_audit_tool_calls" not in queues
+        assert len(context["pending_tool_calls"]) == 1
+        pending = context["pending_tool_calls"][0]
+        assert pending["tool_call_id"] == "audit-1"
+        assert pending["tool_name"] == "reviewed_tool"
+        assert pending["arguments"] == {"path": "file.txt"}
+        assert isinstance(pending["requested_at"], float)
+
     def test_rename_current_session_updates_manifest(self, stub_setup) -> None:
         sm, agent, _ = stub_setup
         sid = sm.new_session(name="old name")
@@ -846,7 +869,7 @@ class TestSessionManager:
             fork_queues = json.loads(layout.queues_path(fork_dir).read_text())
             assert fork_queues["runner"]["normal"] == []
             assert fork_queues["pending_steer_inputs"] == []
-            assert fork_queues["pending_audit_tool_calls"] == []
+            assert "pending_audit_tool_calls" not in fork_queues
             assert fork_queues["runner_control"]["paused"] is False
 
             fork_runtime = json.loads(layout.runtime_path(fork_dir).read_text())

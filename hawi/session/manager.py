@@ -945,15 +945,6 @@ class SessionManager:
             if qm is not None:
                 queues_payload["runner"] = qm.snapshot()
             queues_payload["pending_steer_inputs"] = self._agent.snapshot_steer()
-            queues_payload["pending_audit_tool_calls" if layout.QUEUES_VERSION >= 2 else "pending_audit_tool_calls"] = [
-                {
-                    "tool_call_id": p.tool_call_id,
-                    "tool_name": p.tool_name,
-                    "arguments": p.arguments,
-                    "requested_at": p.requested_at,
-                }
-                for p in self._agent.context.get_pending_tool_calls()
-            ]
             # Save runner control state (pause/resume) for v2+
             if layout.QUEUES_VERSION >= 2 and self._runner is not None:
                 queues_payload["runner_control"] = self._runner.control_snapshot()
@@ -1071,7 +1062,6 @@ class SessionManager:
             "version": layout.QUEUES_VERSION,
             "runner": cls._empty_runner_queue_snapshot(),
             "pending_steer_inputs": [],
-            "pending_audit_tool_calls": [],
             "runner_control": cls._empty_runner_control_snapshot(),
         }
 
@@ -1131,9 +1121,6 @@ class SessionManager:
         pending_steer = data.get("pending_steer_inputs")
         if isinstance(pending_steer, list):
             queues["pending_steer_inputs"] = pending_steer
-        pending_audit = data.get("pending_audit_tool_calls")
-        if isinstance(pending_audit, list):
-            queues["pending_audit_tool_calls"] = pending_audit
         queues["runner_control"] = cls._normalize_runner_control_snapshot(
             data.get("runner_control")
         )
