@@ -1001,6 +1001,7 @@ fn default_config(metadata: &Value) -> Value {
         "pluginConfigs": {},
         "toolCallPurposeEnabled": true,
         "showDebug": true,
+        "focusModeEnabled": true,
     })
 }
 
@@ -1057,6 +1058,7 @@ fn sanitize_config(raw: &Value, metadata: Option<&Value>) -> Value {
         "pluginConfigs": plugin_configs,
         "toolCallPurposeEnabled": raw.get("toolCallPurposeEnabled").and_then(Value::as_bool).unwrap_or(true),
         "showDebug": raw.get("showDebug").and_then(Value::as_bool).unwrap_or(false),
+        "focusModeEnabled": raw.get("focusModeEnabled").and_then(Value::as_bool).unwrap_or(true),
     })
 }
 
@@ -2909,6 +2911,7 @@ fn config_from_profile(profile: &Value, default_config: &Value, metadata: &Value
             "pluginConfigs": profile.get("pluginConfigs").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
             "toolCallPurposeEnabled": profile.get("toolCallPurposeEnabled").and_then(Value::as_bool).unwrap_or(true),
             "showDebug": default_config.get("showDebug").and_then(Value::as_bool).unwrap_or(false),
+            "focusModeEnabled": default_config.get("focusModeEnabled").and_then(Value::as_bool).unwrap_or(true),
         }),
         Some(metadata),
     )

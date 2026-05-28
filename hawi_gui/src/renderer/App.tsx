@@ -748,6 +748,7 @@ export default function App() {
   const observedSubagent = subagentObserverId ? state.subagents[subagentObserverId] : undefined;
   const canStopConversation = canStopRunnerState(state.runnerState);
   const showDebug = config?.showDebug ?? true;
+  const focusModeEnabled = config?.focusModeEnabled ?? true;
   const visibleChatNodes = useMemo(
     () => state.nodes.filter((node) => showDebug || node.kind !== "debug"),
     [showDebug, state.nodes]
@@ -2590,6 +2591,14 @@ export default function App() {
     void saveGlobalAndSet(next);
   }
 
+  function updateFocusModeEnabled(enabled: boolean) {
+    const baseConfig = configRef.current ?? config;
+    if (!baseConfig) return;
+    const next = { ...baseConfig, focusModeEnabled: enabled };
+    setConfig(next);
+    void saveGlobalAndSet(next);
+  }
+
   function updateToolCallPurposeEnabled(enabled: boolean) {
     if (toolCallPurposeLocked) {
       return;
@@ -2713,6 +2722,29 @@ export default function App() {
             </div>
           )}
         </div>
+      )
+    },
+    {
+      id: "focus-mode",
+      render: (placement) => placement === "overflow" ? (
+        <label className="menu-item" title="折叠每轮中的中间过程，只保留最后一条正式回复">
+          <input
+            type="checkbox"
+            checked={focusModeEnabled}
+            onChange={(event) => updateFocusModeEnabled(event.target.checked)}
+          />
+          专注模式
+        </label>
+      ) : (
+        <button
+          type="button"
+          className={toolbarItemClass(placement, focusModeEnabled)}
+          title={focusModeEnabled ? "关闭专注模式" : "开启专注模式"}
+          aria-pressed={focusModeEnabled}
+          onClick={() => updateFocusModeEnabled(!focusModeEnabled)}
+        >
+          <ChevronsUp size={toolbarIconSize(placement)} /> 专注
+        </button>
       )
     },
     {
@@ -2900,6 +2932,7 @@ export default function App() {
           blobPreviewUrls={blobPreviewUrls}
           onOpenMediaPreview={setMediaPreview}
           processing={state.processing}
+          focusMode={focusModeEnabled}
           highlightHistoryIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.messageIndex : undefined}
           highlightContextMessageId={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageId : undefined}
           highlightContextMessageIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageIndex : undefined}
@@ -3049,6 +3082,7 @@ export default function App() {
       {observedSubagent && (
         <SubAgentObserverModal
           subagent={observedSubagent}
+          focusMode={focusModeEnabled}
           onClose={() => setSubagentObserverId(null)}
         />
       )}
@@ -4559,6 +4593,7 @@ interface ChatTranscriptProps {
   blobPreviewUrls?: BlobPreviewUrls;
   onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   processing?: ProcessingState;
+  focusMode?: boolean;
   onForkMessage?: (node: ChatNode) => void;
   allowFork?: boolean;
   emptyLabel?: string;
@@ -4576,6 +4611,7 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   blobPreviewUrls = {},
   onOpenMediaPreview,
   processing,
+  focusMode = false,
   onForkMessage,
   allowFork = true,
   emptyLabel,
@@ -4587,6 +4623,42 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   onTouchStart,
   onMouseDown,
 }, ref) {
+  const [expandedFocusGroups, setExpandedFocusGroups] = useState<Record<string, boolean>>({});
+  const transcriptItems = focusMode
+    ? buildFocusTranscriptItems(nodes)
+    : nodes.map((node): FocusTranscriptItem => ({ type: "node", node }));
+  const toggleFocusGroup = (groupId: string) => {
+    setExpandedFocusGroups((current) => ({
+      ...current,
+      [groupId]: !current[groupId]
+    }));
+  };
+  const renderNodeFrame = (node: ChatNode, key = node.id) => {
+    const highlighted = isHighlightedChatNode(
+      node,
+      highlightHistoryIndex,
+      highlightContextMessageId,
+      highlightContextMessageIndex,
+    );
+    return (
+      <div
+        className={`chat-node-frame ${highlighted ? "history-highlight" : ""}`.trim()}
+        data-history-index={typeof node.historyIndex === "number" ? node.historyIndex : undefined}
+        data-context-message-id={node.contextMessageId}
+        data-context-message-index={typeof node.contextMessageIndex === "number" ? node.contextMessageIndex : undefined}
+        key={key}
+      >
+        <ChatBubble
+          node={node}
+          blobPreviewUrls={blobPreviewUrls}
+          onOpenMediaPreview={onOpenMediaPreview}
+          allowFork={allowFork}
+          onForkMessage={onForkMessage}
+        />
+      </div>
+    );
+  };
+
   return (
     <main
       className="chat-panel"
@@ -4599,35 +4671,196 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
       {nodes.length === 0 && !processing && emptyLabel && (
         <div className="preview-empty">{emptyLabel}</div>
       )}
-      {nodes.map((node) => {
-        const highlighted = isHighlightedChatNode(
+      {transcriptItems.map((item) => {
+        if (item.type === "node") {
+          return renderNodeFrame(item.node);
+        }
+        const containsHighlight = item.group.nodes.some((node) => isHighlightedChatNode(
           node,
           highlightHistoryIndex,
           highlightContextMessageId,
           highlightContextMessageIndex,
-        );
+        ));
+        const expanded = expandedFocusGroups[item.group.id] === true || containsHighlight;
         return (
-          <div
-            className={`chat-node-frame ${highlighted ? "history-highlight" : ""}`.trim()}
-            data-history-index={typeof node.historyIndex === "number" ? node.historyIndex : undefined}
-            data-context-message-id={node.contextMessageId}
-            data-context-message-index={typeof node.contextMessageIndex === "number" ? node.contextMessageIndex : undefined}
-            key={node.id}
-          >
-            <ChatBubble
-              node={node}
-              blobPreviewUrls={blobPreviewUrls}
-              onOpenMediaPreview={onOpenMediaPreview}
-              allowFork={allowFork}
-              onForkMessage={onForkMessage}
-            />
-          </div>
+          <FocusFold
+            group={item.group}
+            expanded={expanded}
+            key={item.group.id}
+            renderNodeFrame={renderNodeFrame}
+            onToggle={() => toggleFocusGroup(item.group.id)}
+          />
         );
       })}
       {processing && <ProcessingLine processing={processing} />}
     </main>
   );
 }));
+
+interface FocusFoldGroup {
+  id: string;
+  nodes: ChatNode[];
+  summary: string;
+}
+
+type FocusTranscriptItem =
+  | { type: "node"; node: ChatNode }
+  | { type: "focus-fold"; group: FocusFoldGroup };
+
+export function buildFocusTranscriptItems(nodes: ChatNode[]): FocusTranscriptItem[] {
+  const items: FocusTranscriptItem[] = [];
+  let index = 0;
+  while (index < nodes.length) {
+    const node = nodes[index];
+    items.push({ type: "node", node });
+    if (node.kind !== "user") {
+      index += 1;
+      continue;
+    }
+
+    const roundStart = index + 1;
+    let roundEnd = roundStart;
+    while (roundEnd < nodes.length && nodes[roundEnd].kind !== "user") {
+      roundEnd += 1;
+    }
+
+    const round = nodes.slice(roundStart, roundEnd);
+    const finalAgentOffset = lastFormalReplyOffset(round);
+    if (finalAgentOffset < 0) {
+      for (const roundNode of round) {
+        items.push({ type: "node", node: roundNode });
+      }
+      index = roundEnd;
+      continue;
+    }
+
+    const finalAgent = round[finalAgentOffset];
+    const foldedNodes = round.filter((_, roundIndex) => roundIndex !== finalAgentOffset);
+    if (foldedNodes.length > 0) {
+      items.push({
+        type: "focus-fold",
+        group: {
+          id: `focus-fold:${node.id}:${finalAgent.id}`,
+          nodes: foldedNodes,
+          summary: focusFoldSummary(foldedNodes)
+        }
+      });
+    }
+    items.push({ type: "node", node: finalAgent });
+    index = roundEnd;
+  }
+  return items;
+}
+
+function lastFormalReplyOffset(nodes: ChatNode[]): number {
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    if (nodes[index].kind === "agent") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function focusFoldSummary(nodes: ChatNode[]): string {
+  const durationMs = focusFoldDurationMs(nodes);
+  const duration = durationMs === undefined ? "" : formatFocusDuration(durationMs);
+  const details = focusFoldDetails(nodes);
+  if (duration && details) {
+    return `已处理 ${duration} · ${details}`;
+  }
+  if (duration) {
+    return `已处理 ${duration}`;
+  }
+  return `已处理 ${nodes.length} 条消息`;
+}
+
+function focusFoldDetails(nodes: ChatNode[]): string {
+  const toolCount = nodes.filter((node) => node.kind === "tool").length;
+  const thinkingCount = nodes.filter((node) => node.kind === "thinking").length;
+  const otherCount = nodes.length - toolCount - thinkingCount;
+  const parts: string[] = [];
+  if (thinkingCount > 0) {
+    parts.push(thinkingCount === 1 ? "思考" : `思考 ${thinkingCount}`);
+  }
+  if (toolCount > 0) {
+    parts.push(`工具 ${toolCount}`);
+  }
+  if (otherCount > 0) {
+    parts.push(`消息 ${otherCount}`);
+  }
+  return parts.join(" · ");
+}
+
+function focusFoldDurationMs(nodes: ChatNode[]): number | undefined {
+  const dividerDuration = nodes
+    .map((node) => node.kind === "divider" ? durationFromDividerContent(node.content) : undefined)
+    .find((duration): duration is number => duration !== undefined);
+  if (dividerDuration !== undefined) {
+    return dividerDuration;
+  }
+  const durations = nodes
+    .map((node) => node.tool?.streamDurationMs ?? node.tool?.durationMs ?? node.streamDurationMs)
+    .filter((duration): duration is number => (
+      typeof duration === "number"
+      && Number.isFinite(duration)
+      && duration > 0
+    ));
+  if (durations.length === 0) return undefined;
+  return durations.reduce((total, duration) => total + duration, 0);
+}
+
+function durationFromDividerContent(content: string): number | undefined {
+  const match = content.match(/(?:^|[·\s])([0-9]+(?:\.[0-9]+)?)s\b/);
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
+}
+
+function formatFocusDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  if (totalSeconds < 60) {
+    return `${Math.max(1, totalSeconds)}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (totalMinutes < 60) {
+    return seconds === 0 ? `${totalMinutes}m` : `${totalMinutes}m ${seconds}s`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+function FocusFold({
+  group,
+  expanded,
+  renderNodeFrame,
+  onToggle
+}: {
+  group: FocusFoldGroup;
+  expanded: boolean;
+  renderNodeFrame: (node: ChatNode, key?: string) => ReactNode;
+  onToggle: () => void;
+}) {
+  return (
+    <div className={`focus-fold ${expanded ? "expanded" : "collapsed"}`}>
+      <button
+        type="button"
+        className="focus-fold-toggle"
+        aria-expanded={expanded}
+        onClick={onToggle}
+      >
+        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span>{group.summary}</span>
+      </button>
+      {expanded && (
+        <div className="focus-fold-content">
+          {group.nodes.map((node) => renderNodeFrame(node, `${group.id}:${node.id}`))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function guardedToggle(toggle: () => void) {
   if (hasActiveTextSelection()) return;
@@ -5854,9 +6087,11 @@ function SubAgentSidebarContent({
 
 function SubAgentObserverModal({
   subagent,
+  focusMode,
   onClose,
 }: {
   subagent: SubAgentRuntimeState;
+  focusMode: boolean;
   onClose: () => void;
 }) {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -5978,6 +6213,7 @@ function SubAgentObserverModal({
           ref={transcriptRef}
           nodes={subagent.nodes}
           processing={subagent.processing}
+          focusMode={focusMode}
           allowFork={false}
           emptyLabel="等待 SubAgent 消息..."
           onScroll={updateFollowTail}

@@ -71,6 +71,7 @@ const baseConfig: PersistedConfig = {
   pluginConfigs: { "hawi/filesystem": { root: "." } },
   toolCallPurposeEnabled: true,
   showDebug: true,
+  focusModeEnabled: true,
 };
 
 const inspect: InspectPayload = {
@@ -84,7 +85,7 @@ const inspect: InspectPayload = {
 };
 
 describe("session launch profiles", () => {
-  it("round-trips config fields without persisting showDebug", () => {
+  it("round-trips config fields without persisting display-only GUI settings", () => {
     const profile = profileFromConfig(baseConfig);
 
     expect(profile).toMatchObject({
@@ -96,7 +97,9 @@ describe("session launch profiles", () => {
     });
     expect(profile.engineArgs).toContain("--extra-tool-parameter-json");
     expect(profile).not.toHaveProperty("showDebug");
+    expect(profile).not.toHaveProperty("focusModeEnabled");
     expect(configFromProfile(profile, { ...baseConfig, showDebug: false }, inspect).showDebug).toBe(false);
+    expect(configFromProfile(profile, { ...baseConfig, focusModeEnabled: false }, inspect).focusModeEnabled).toBe(false);
   });
 
   it("normalizes unknown persisted profile data", () => {

@@ -273,6 +273,7 @@ export interface PersistedConfig {
   pluginConfigs: Record<string, Record<string, unknown>>;
   toolCallPurposeEnabled: boolean;
   showDebug: boolean;
+  focusModeEnabled: boolean;
 }
 
 export interface SessionLaunchProfile {

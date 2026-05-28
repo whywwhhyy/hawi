@@ -360,6 +360,7 @@ export function defaultConfig(metadata: InspectPayload): PersistedConfig {
     pluginConfigs: {},
     toolCallPurposeEnabled: true,
     showDebug: true,
+    focusModeEnabled: true,
   };
 }
 
@@ -385,6 +386,7 @@ export function sanitizeConfig(raw: PersistedConfig, metadata: InspectPayload | 
     pluginConfigs,
     toolCallPurposeEnabled: raw.toolCallPurposeEnabled !== false,
     showDebug: Boolean(raw.showDebug),
+    focusModeEnabled: raw.focusModeEnabled !== false,
   };
 }
 

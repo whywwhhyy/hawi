@@ -3,9 +3,9 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
-import type { PluginArtifactState, SubAgentRuntimeState } from "./state";
+import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
@@ -28,7 +28,8 @@ function makeMetadata(coreRunning: boolean): GuiMetadata {
       selectedPlugins: [],
       pluginConfigs: {},
       toolCallPurposeEnabled: true,
-      showDebug: true
+      showDebug: true,
+      focusModeEnabled: true
     },
     coreRunning
   };
@@ -55,6 +56,51 @@ describe("thinkingExcerpt", () => {
 
   it("adds an ellipsis only when content is truncated", () => {
     expect(thinkingExcerpt("too long", 3)).toBe("too...");
+  });
+});
+
+describe("buildFocusTranscriptItems", () => {
+  it("folds everything after a user message except the last agent reply", () => {
+    const nodes: ChatNode[] = [
+      { id: "user-1", kind: "user", content: "question" },
+      { id: "thinking-1", kind: "thinking", content: "working", streamDurationMs: 1500 },
+      {
+        id: "tool-1",
+        kind: "tool",
+        content: "",
+        tool: {
+          runId: "run-1",
+          toolCallId: "tool-1",
+          name: "read_file",
+          status: "success",
+          argsRaw: "{}",
+          argsState: "complete",
+          resultPreview: "ok"
+        }
+      },
+      { id: "agent-1", kind: "agent", content: "draft" },
+      { id: "divider-1", kind: "divider", content: "end_turn · 4.1s" },
+      { id: "agent-2", kind: "agent", content: "final" },
+      { id: "user-2", kind: "user", content: "next" },
+      { id: "agent-3", kind: "agent", content: "answer" },
+    ];
+
+    const items = buildFocusTranscriptItems(nodes);
+
+    expect(items.map((item) => item.type)).toEqual(["node", "focus-fold", "node", "node", "node"]);
+    expect(items[1]).toMatchObject({
+      type: "focus-fold",
+      group: {
+        nodes: [
+          { id: "thinking-1" },
+          { id: "tool-1" },
+          { id: "agent-1" },
+          { id: "divider-1" },
+        ],
+        summary: "已处理 4s · 思考 · 工具 1 · 消息 2"
+      }
+    });
+    expect(items[2]).toMatchObject({ type: "node", node: { id: "agent-2" } });
   });
 });
 
