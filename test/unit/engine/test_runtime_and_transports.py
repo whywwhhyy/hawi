@@ -126,6 +126,7 @@ class DummyAgentRunner:
         self.agent = DummyAgent()
         self.enqueued: list[tuple[Any, str, dict[str, Any]]] = []
         self.resumed = False
+        self.loaded_control: dict[str, Any] | None = None
         self.resumed_existing_context_metadata: dict[str, Any] | None = None
 
     @property
@@ -145,6 +146,10 @@ class DummyAgentRunner:
 
     def resume(self) -> None:
         self.resumed = True
+
+    def load_control_snapshot(self, data: dict[str, Any] | None) -> None:
+        self.loaded_control = dict(data or {})
+        self.resumed = not bool(self.loaded_control.get("paused"))
 
     async def resume_existing_context(
         self,
@@ -892,6 +897,11 @@ async def test_session_fork_command_returns_forked_history() -> None:
     assert payload["forked_from_session_id"] == "saved-session"
     assert payload["message_history"][0]["content"][0]["text"] == "saved"
     assert sm.fork_session_name == "copy"
+    assert sm.saved_now is True
+    assert runner.agent.loaded_steer == []
+    assert runner.agent.loaded_runtime["current_tool_calls"] == []
+    assert runner.loaded_control is not None
+    assert runner.loaded_control["paused"] is False
 
 
 @pytest.mark.asyncio

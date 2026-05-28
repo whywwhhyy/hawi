@@ -494,30 +494,32 @@ class SessionManager:
                     loaded_system_prompt = "system_prompt" in ctx_data
 
                 queues_path = layout.queues_path(session_dir)
-                if queues_path.exists() and self._runner is not None:
-                    queues_data = json.loads(queues_path.read_text(encoding="utf-8"))
+                queues_data = self._empty_queues_snapshot()
+                if queues_path.exists():
+                    queues_data = self._normalize_queues_snapshot(
+                        json.loads(queues_path.read_text(encoding="utf-8"))
+                    )
                     qm = self._runner_queue_manager()
                     if qm is not None and "runner" in queues_data:
                         qm.load_snapshot(queues_data["runner"])
                         qm.rebind_event_bus(self._event_bus)
-                    if "pending_steer_inputs" in queues_data:
-                        self._agent.load_steer(queues_data["pending_steer_inputs"])
-                    # Restore runner control state (pause/resume) for v2+
-                    runner_control = queues_data.get("runner_control")
-                    if runner_control is not None and isinstance(runner_control, dict):
-                        if runner_control.get("paused") and hasattr(self._runner, "pause"):
-                            reason = runner_control.get("pause_reason", "session_restored")
-                            self._runner.pause(
-                                reason,
-                                error_message=runner_control.get("last_error_message"),
-                            )
                     loaded.append(layout.COMPONENT_QUEUES)
+                else:
+                    qm = self._runner_queue_manager()
+                    if qm is not None:
+                        qm.load_snapshot(queues_data["runner"])
+                        qm.rebind_event_bus(self._event_bus)
+                self._agent.load_steer(queues_data["pending_steer_inputs"])
+                self._restore_runner_control(queues_data.get("runner_control"))
 
                 runtime_path = layout.runtime_path(session_dir)
+                runtime_data = self._empty_runtime_snapshot()
                 if runtime_path.exists():
-                    runtime_data = json.loads(runtime_path.read_text(encoding="utf-8"))
-                    self._agent.load_runtime(runtime_data)
+                    runtime_data = self._normalize_runtime_snapshot(
+                        json.loads(runtime_path.read_text(encoding="utf-8"))
+                    )
                     loaded.append(layout.COMPONENT_RUNTIME)
+                self._agent.load_runtime(runtime_data)
 
                 # Synthesize error tool results for any in-flight tool calls that
                 # were interrupted by the crash. Done at load time (not deferred to
@@ -739,6 +741,7 @@ class SessionManager:
                     message_index=after_message_index,
                     context_message_id=after_context_message_id,
                 )
+            self._reset_fork_volatile_state(temp_dir)
             self._rewrite_fork_manifest(
                 temp_dir,
                 fork_id=fork_id,
@@ -1042,6 +1045,167 @@ class SessionManager:
             session_id = f"session-{timestamp}-{uuid.uuid4().hex[:6]}"
             if not layout.session_dir(self._root, session_id).exists():
                 return session_id
+
+    @staticmethod
+    def _empty_runner_queue_snapshot() -> dict[str, Any]:
+        return {
+            "version": 1,
+            "urgent": None,
+            "high_prio": [],
+            "normal": [],
+        }
+
+    @classmethod
+    def _empty_runner_control_snapshot(cls) -> dict[str, Any]:
+        return {
+            "paused": False,
+            "pause_reason": None,
+            "resumable": False,
+            "paused_at": None,
+            "last_error_message": None,
+        }
+
+    @classmethod
+    def _empty_queues_snapshot(cls) -> dict[str, Any]:
+        return {
+            "version": layout.QUEUES_VERSION,
+            "runner": cls._empty_runner_queue_snapshot(),
+            "pending_steer_inputs": [],
+            "pending_audit_tool_calls": [],
+            "runner_control": cls._empty_runner_control_snapshot(),
+        }
+
+    @staticmethod
+    def _empty_tool_executor_snapshot() -> dict[str, Any]:
+        return {"version": 1, "queue": [], "requests": []}
+
+    @classmethod
+    def _empty_runtime_snapshot(cls) -> dict[str, Any]:
+        return {
+            "version": layout.RUNTIME_VERSION,
+            "active_run_id": None,
+            "iteration": 0,
+            "current_tool_calls": [],
+            "interrupted_tool_call_ids": [],
+            "last_unsent_tool_results": [],
+            "last_interrupt_reason": None,
+            "tool_executor": cls._empty_tool_executor_snapshot(),
+        }
+
+    @classmethod
+    def _normalize_runner_control_snapshot(
+        cls,
+        data: Any,
+    ) -> dict[str, Any]:
+        control = cls._empty_runner_control_snapshot()
+        if not isinstance(data, dict):
+            return control
+        paused = bool(data.get("paused"))
+        control["paused"] = paused
+        reason = data.get("pause_reason")
+        control["pause_reason"] = (
+            reason
+            if isinstance(reason, str) and reason
+            else ("session_restored" if paused else None)
+        )
+        paused_at = data.get("paused_at")
+        control["paused_at"] = (
+            float(paused_at) if isinstance(paused_at, (int, float)) else None
+        )
+        last_error = data.get("last_error_message")
+        control["last_error_message"] = (
+            last_error if isinstance(last_error, str) else None
+        )
+        control["resumable"] = bool(data.get("resumable")) if paused else False
+        return control
+
+    @classmethod
+    def _normalize_queues_snapshot(cls, data: Any) -> dict[str, Any]:
+        queues = cls._empty_queues_snapshot()
+        if not isinstance(data, dict):
+            return queues
+        queues["version"] = data.get("version", layout.QUEUES_VERSION)
+        runner_snapshot = data.get("runner")
+        if isinstance(runner_snapshot, dict):
+            queues["runner"] = runner_snapshot
+        pending_steer = data.get("pending_steer_inputs")
+        if isinstance(pending_steer, list):
+            queues["pending_steer_inputs"] = pending_steer
+        pending_audit = data.get("pending_audit_tool_calls")
+        if isinstance(pending_audit, list):
+            queues["pending_audit_tool_calls"] = pending_audit
+        queues["runner_control"] = cls._normalize_runner_control_snapshot(
+            data.get("runner_control")
+        )
+        return queues
+
+    @classmethod
+    def _normalize_runtime_snapshot(cls, data: Any) -> dict[str, Any]:
+        runtime = cls._empty_runtime_snapshot()
+        if not isinstance(data, dict):
+            return runtime
+        runtime.update(data)
+        runtime["version"] = data.get("version", layout.RUNTIME_VERSION)
+        if not isinstance(runtime.get("current_tool_calls"), list):
+            runtime["current_tool_calls"] = []
+        if not isinstance(runtime.get("interrupted_tool_call_ids"), list):
+            runtime["interrupted_tool_call_ids"] = []
+        if not isinstance(runtime.get("last_unsent_tool_results"), list):
+            runtime["last_unsent_tool_results"] = []
+        if not isinstance(runtime.get("tool_executor"), dict):
+            runtime["tool_executor"] = cls._empty_tool_executor_snapshot()
+        return runtime
+
+    def _restore_runner_control(self, data: Any) -> None:
+        if self._runner is None:
+            return
+        control = self._normalize_runner_control_snapshot(data)
+        loader = getattr(self._runner, "load_control_snapshot", None)
+        if callable(loader):
+            loader(control)
+            return
+        if control.get("paused") and hasattr(self._runner, "pause"):
+            self._runner.pause(
+                control.get("pause_reason") or "session_restored",
+                error_message=control.get("last_error_message"),
+            )
+            return
+        resume = getattr(self._runner, "resume", None)
+        if callable(resume):
+            resume()
+
+    def _reset_fork_volatile_state(self, session_dir: Path) -> None:
+        """Make a copied session branch interactive instead of mid-run."""
+        self._clear_context_pending_tool_calls(session_dir)
+        layout.atomic_write_text(
+            layout.queues_path(session_dir),
+            json.dumps(self._empty_queues_snapshot(), ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+        layout.atomic_write_text(
+            layout.runtime_path(session_dir),
+            json.dumps(self._empty_runtime_snapshot(), ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+
+    @staticmethod
+    def _clear_context_pending_tool_calls(session_dir: Path) -> None:
+        ctx_path = layout.context_path(session_dir)
+        if not ctx_path.exists():
+            return
+        try:
+            ctx_data = json.loads(ctx_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.warning("could not clear pending tool calls in %s", ctx_path)
+            return
+        if not isinstance(ctx_data, dict) or not ctx_data.get("pending_tool_calls"):
+            return
+        ctx_data["pending_tool_calls"] = []
+        layout.atomic_write_text(
+            ctx_path,
+            json.dumps(ctx_data, ensure_ascii=False, indent=2),
+            fsync=True,
+        )
 
     def _apply_context_message_boundary(
         self,

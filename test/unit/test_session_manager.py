@@ -77,6 +77,8 @@ class _StubAgent:
         self.context = AgentContext()
         self._plugin_manager = _StubPluginManager(plugins=plugins)
         self.event_bus = EventBus()
+        self.loaded_runtime: dict[str, Any] | None = None
+        self.loaded_steer: list[dict[str, Any]] | None = None
 
     def snapshot_runtime(self) -> dict:
         return {
@@ -90,13 +92,44 @@ class _StubAgent:
         }
 
     def load_runtime(self, data: dict) -> None:  # pragma: no cover - exercised below
-        pass
+        self.loaded_runtime = data
 
     def snapshot_steer(self) -> list:
         return []
 
     def load_steer(self, data: list) -> None:  # pragma: no cover - exercised below
-        pass
+        self.loaded_steer = data
+
+
+class _ControlStubRunner(_StubAgentRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.control: dict[str, Any] = {
+            "paused": False,
+            "pause_reason": None,
+            "resumable": False,
+            "paused_at": None,
+            "last_error_message": None,
+        }
+        self.loaded_controls: list[dict[str, Any]] = []
+
+    def control_snapshot(self) -> dict[str, Any]:
+        return dict(self.control)
+
+    def load_control_snapshot(self, data: dict[str, Any] | None) -> None:
+        snapshot = dict(data or {})
+        self.loaded_controls.append(snapshot)
+        self.control = {
+            "paused": bool(snapshot.get("paused")),
+            "pause_reason": snapshot.get("pause_reason"),
+            "resumable": bool(snapshot.get("resumable")),
+            "paused_at": snapshot.get("paused_at"),
+            "last_error_message": snapshot.get("last_error_message"),
+        }
+
+    @property
+    def paused(self) -> bool:
+        return bool(self.control.get("paused"))
 
 
 class _PartialStreamingModel(Model):
@@ -727,6 +760,217 @@ class TestSessionManager:
         finally:
             sm2.detach()
             external_lock.release()
+
+    def test_load_session_restores_unpaused_runner_control(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        runner = _ControlStubRunner()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
+        try:
+            agent.context.add_user_message("paused")
+            paused_sid = sm.new_session(name="paused")
+            sm.save_now()
+
+            agent.context.clear()
+            agent.context.add_user_message("open")
+            open_sid = sm.new_session(name="open")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        self._write_runner_control(session_root, paused_sid, paused=True)
+        self._write_runner_control(
+            session_root,
+            open_sid,
+            paused=False,
+            include_stale_work=False,
+        )
+
+        agent2 = _StubAgent()
+        runner2 = _ControlStubRunner()
+        sm2 = SessionManager(root=session_root)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
+        try:
+            sm2.load_session(paused_sid)
+            assert runner2.paused is True
+
+            sm2.load_session(open_sid)
+            assert runner2.paused is False
+            assert agent2.loaded_steer == []
+            assert agent2.loaded_runtime is not None
+            assert agent2.loaded_runtime["current_tool_calls"] == []
+        finally:
+            sm2.detach()
+
+    def test_fork_session_resets_copied_volatile_state_and_releases_lock(
+        self,
+        session_root: Path,
+    ) -> None:
+        agent = _StubAgent()
+        runner = _ControlStubRunner()
+        sm = SessionManager(root=session_root)
+        sm.attach(agent, runner, event_bus=agent.event_bus)
+        try:
+            agent.context.add_user_message("fork source")
+            source_sid = sm.new_session(name="source")
+            sm.save_now()
+
+            agent.context.clear()
+            agent.context.add_user_message("target")
+            target_sid = sm.new_session(name="target")
+            sm.save_now()
+        finally:
+            sm.detach()
+
+        self._write_runner_control(session_root, source_sid, paused=True)
+        self._write_runtime_state(session_root, source_sid)
+        self._write_pending_tool_call(session_root, source_sid)
+
+        agent2 = _StubAgent()
+        runner2 = _ControlStubRunner()
+        sm2 = SessionManager(root=session_root)
+        sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
+        try:
+            forked_sid = sm2.fork_session(source_sid, name="forked")
+
+            assert sm2.current_session_id == forked_sid
+            assert runner2.paused is False
+            assert agent2.loaded_steer == []
+            assert agent2.loaded_runtime is not None
+            assert agent2.loaded_runtime["current_tool_calls"] == []
+
+            fork_dir = layout.session_dir(session_root, forked_sid)
+            fork_queues = json.loads(layout.queues_path(fork_dir).read_text())
+            assert fork_queues["runner"]["normal"] == []
+            assert fork_queues["pending_steer_inputs"] == []
+            assert fork_queues["pending_audit_tool_calls"] == []
+            assert fork_queues["runner_control"]["paused"] is False
+
+            fork_runtime = json.loads(layout.runtime_path(fork_dir).read_text())
+            assert fork_runtime["current_tool_calls"] == []
+            assert fork_runtime["interrupted_tool_call_ids"] == []
+
+            fork_context = json.loads(layout.context_path(fork_dir).read_text())
+            assert fork_context["pending_tool_calls"] == []
+
+            sm2.switch_to(target_sid)
+            metas = {meta.session_id: meta for meta in sm2.list_sessions()}
+            assert metas[forked_sid].locked is False
+        finally:
+            sm2.detach()
+
+    @staticmethod
+    def _write_runner_control(
+        session_root: Path,
+        session_id: str,
+        *,
+        paused: bool,
+        include_stale_work: bool = True,
+    ) -> None:
+        session_dir = layout.session_dir(session_root, session_id)
+        payload = {
+            "version": layout.QUEUES_VERSION,
+            "runner": {
+                "version": 1,
+                "urgent": None,
+                "high_prio": [],
+                "normal": [
+                    {
+                        "id": "queued-1",
+                        "content": "stale queue item",
+                        "queue_type": "NORMAL",
+                        "created_at": 1.0,
+                        "metadata": {},
+                        "merged_tool_call_ids": [],
+                    }
+                ] if include_stale_work else [],
+            },
+            "pending_steer_inputs": [
+                {
+                    "id": "steer-1",
+                    "content": [{"type": "text", "text": "stale steer"}],
+                    "candidate_tool_call_ids": [],
+                    "created_at": 1.0,
+                    "preferred_merge_mode": None,
+                }
+            ] if include_stale_work else [],
+            "pending_audit_tool_calls": [
+                {
+                    "tool_call_id": "audit-1",
+                    "tool_name": "needs_review",
+                    "arguments": {},
+                    "requested_at": 1.0,
+                }
+            ] if include_stale_work else [],
+            "runner_control": {
+                "paused": paused,
+                "pause_reason": "model_error" if paused else None,
+                "resumable": paused,
+                "paused_at": 1.0 if paused else None,
+                "last_error_message": "boom" if paused else None,
+            },
+        }
+        layout.atomic_write_text(
+            layout.queues_path(session_dir),
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+
+    @staticmethod
+    def _write_runtime_state(session_root: Path, session_id: str) -> None:
+        session_dir = layout.session_dir(session_root, session_id)
+        payload = {
+            "version": layout.RUNTIME_VERSION,
+            "active_run_id": "run-stale",
+            "iteration": 2,
+            "current_tool_calls": [
+                {
+                    "type": "tool_call",
+                    "id": "tc-stale",
+                    "name": "tool",
+                    "arguments": {},
+                }
+            ],
+            "interrupted_tool_call_ids": ["tc-stale"],
+            "last_unsent_tool_results": [
+                {
+                    "tool_call_id": "tc-stale",
+                    "tool_name": "tool",
+                    "content": "unsent",
+                    "is_error": False,
+                    "truncate_attempts": 0,
+                }
+            ],
+            "last_interrupt_reason": "user",
+            "tool_executor": {"version": 1, "queue": [], "requests": []},
+        }
+        layout.atomic_write_text(
+            layout.runtime_path(session_dir),
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+
+    @staticmethod
+    def _write_pending_tool_call(session_root: Path, session_id: str) -> None:
+        session_dir = layout.session_dir(session_root, session_id)
+        context_path = layout.context_path(session_dir)
+        payload = json.loads(context_path.read_text(encoding="utf-8"))
+        payload["pending_tool_calls"] = [
+            {
+                "tool_call_id": "audit-1",
+                "tool_name": "needs_review",
+                "arguments": {},
+                "requested_at": 1.0,
+            }
+        ]
+        layout.atomic_write_text(
+            context_path,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            fsync=True,
+        )
 
     def test_fork_session_after_user_pops_user_and_prunes_history(
         self,

@@ -1506,17 +1506,7 @@ class CoreRuntime:
         if name is not None and not isinstance(name, str):
             raise ValueError("'session_new.payload.name' must be a string when present")
         runner.agent.context.clear()
-        runner.clear_all_queues()
-        runner.agent.load_steer([])
-        runner.agent.load_runtime(
-            {
-                "version": 1,
-                "current_tool_calls": [],
-                "interrupted_tool_call_ids": [],
-                "last_unsent_tool_results": [],
-                "last_interrupt_reason": None,
-            }
-        )
+        self._reset_runner_volatile_state()
         session_id = sm.new_session(name=name)
         await client.send(
             make_ack(
@@ -1560,6 +1550,8 @@ class CoreRuntime:
         branch_result = None
         if message_index is None and context_message_id is None:
             session_id = sm.fork_session(session_id=source_session_id, name=name)
+            self._reset_runner_volatile_state()
+            sm.save_now()
         elif context_message_id is not None:
             branch_result = sm.fork_session_after_message_id(
                 session_id=source_session_id,
@@ -1829,6 +1821,21 @@ class CoreRuntime:
                 "last_interrupt_reason": None,
             }
         )
+        load_control = getattr(runner, "load_control_snapshot", None)
+        if callable(load_control):
+            load_control(
+                {
+                    "paused": False,
+                    "pause_reason": None,
+                    "resumable": False,
+                    "paused_at": None,
+                    "last_error_message": None,
+                }
+            )
+        else:
+            resume = getattr(runner, "resume", None)
+            if callable(resume):
+                resume()
 
     def _context_branch_payload(self, branch_result: Any | None) -> dict[str, Any]:
         if branch_result is None:

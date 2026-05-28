@@ -516,6 +516,29 @@ class AgentRunner:
             "last_error_message": self._last_pause_error,
         }
 
+    def load_control_snapshot(self, data: dict[str, Any] | None) -> None:
+        """Restore queue-consumption control state from session storage."""
+        snapshot = data if isinstance(data, dict) else {}
+        if not snapshot.get("paused"):
+            self._resume_internal()
+            return
+
+        reason = snapshot.get("pause_reason")
+        self._paused = True
+        self._pause_reason = (
+            reason if isinstance(reason, str) and reason else "session_restored"
+        )
+
+        paused_at = snapshot.get("paused_at")
+        self._paused_at = (
+            float(paused_at)
+            if isinstance(paused_at, (int, float))
+            else time.time()
+        )
+
+        last_error = snapshot.get("last_error_message")
+        self._last_pause_error = last_error if isinstance(last_error, str) else None
+
     def submit_immediate_message(
         self,
         content: str | list[ContentPart],
