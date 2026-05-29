@@ -93,6 +93,15 @@ Electron build output is written to `hawi_gui/release/`. Both create native
 targets for the machine running the command, such as `.dmg` on macOS, `.exe` on
 Windows, and `.AppImage` on Linux.
 
+`install.sh` / `npm run release:local` also install `Hawi.app` into
+`/Applications` on macOS and point the `hawi` launcher at that installed app.
+Use `--no-app-install` to keep the app only under the local release directory,
+or `--app-dir <dir>` to choose a different macOS install directory.
+
+On macOS, Dock and Finder launches activate an already-running app instance.
+Use `hawi --new` from a terminal to launch an additional Hawi app instance for
+the current working directory.
+
 When a packaged GUI is launched from a terminal, the engine workspace is the
 terminal's current directory, so project-local data is written to `.hawi/` under
 that directory. Double-click launches usually start from a system or install

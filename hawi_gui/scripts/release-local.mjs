@@ -23,6 +23,7 @@ if (options.help) {
 const prefix = path.resolve(expandHome(options.prefix ?? process.env.HAWI_RELEASE_PREFIX ?? "~/.local"));
 const releaseRoot = path.resolve(expandHome(options.releaseRoot ?? process.env.HAWI_RELEASE_ROOT ?? path.join(prefix, "share", "hawi", "release")));
 const binDir = path.resolve(expandHome(options.binDir ?? process.env.HAWI_RELEASE_BIN_DIR ?? path.join(prefix, "bin")));
+const macAppDir = resolveMacAppDir(options);
 const currentDir = path.join(releaseRoot, "current");
 
 if (!options.skipBuild) {
@@ -44,16 +45,21 @@ preparePackagedApp(packaged);
 clearDirectory(currentDir);
 
 const installedApp = installPackagedApp(packaged, currentDir);
+const launchApp = installMacLaunchApp(installedApp, macAppDir);
 const externalEngineCommand = installExternalEngine(packaged, currentDir);
-installedApp.engineCommand = externalEngineCommand;
-verifyEngineCommand(externalEngineCommand);
-verifyInstalledApp(installedApp);
-prewarmEngine(externalEngineCommand, currentDir);
+const launchEngineCommand = resolvePackagedEngineCommand(launchApp) ?? externalEngineCommand;
+launchApp.engineCommand = launchEngineCommand;
+verifyEngineCommand(launchEngineCommand);
+verifyInstalledApp(launchApp);
+prewarmEngine(launchEngineCommand, currentDir);
 if (!options.noShim) {
-  installShim(installedApp, binDir);
+  installShim(launchApp, binDir);
 }
 
 console.log(`[release-local] Installed ${productName} (${options.shell}) to ${currentDir}`);
+if (launchApp.root !== installedApp.root) {
+  console.log(`[release-local] Installed macOS app to ${launchApp.root}`);
+}
 if (!options.noShim) {
   console.log(`[release-local] Installed hawi launcher to ${path.join(binDir, shimName())}`);
   console.log(`[release-local] Make sure ${binDir} is on PATH.`);
@@ -65,7 +71,9 @@ function parseArgs(args) {
     releaseRoot: null,
     binDir: null,
     shell: process.env.HAWI_RELEASE_SHELL ?? defaultShell,
+    appDir: null,
     skipBuild: false,
+    noAppInstall: false,
     noShim: false,
     help: false
   };
@@ -76,6 +84,8 @@ function parseArgs(args) {
       parsed.help = true;
     } else if (arg === "--skip-build") {
       parsed.skipBuild = true;
+    } else if (arg === "--no-app-install") {
+      parsed.noAppInstall = true;
     } else if (arg === "--no-shim") {
       parsed.noShim = true;
     } else if (arg === "--shell" || arg === "--runtime" || arg === "--gui") {
@@ -98,6 +108,10 @@ function parseArgs(args) {
       parsed.binDir = requireValue(args, ++index, arg);
     } else if (arg.startsWith("--bin-dir=")) {
       parsed.binDir = arg.slice("--bin-dir=".length);
+    } else if (arg === "--app-dir") {
+      parsed.appDir = requireValue(args, ++index, arg);
+    } else if (arg.startsWith("--app-dir=")) {
+      parsed.appDir = arg.slice("--app-dir=".length);
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -129,10 +143,23 @@ Options:
   --prefix DIR        Base install prefix. Default: ~/.local
   --release-root DIR  Release root. Default: <prefix>/share/hawi/release
   --bin-dir DIR       Launcher directory. Default: <prefix>/bin
+  --app-dir DIR       macOS app install directory. Default: /Applications
   --skip-build        Reuse the existing build output for the selected shell.
+  --no-app-install    Do not install Hawi.app into /Applications on macOS.
   --no-shim           Do not install the hawi launcher.
   -h, --help          Show this help.
 `);
+}
+
+function resolveMacAppDir(parsedOptions) {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  if (parsedOptions.noAppInstall || process.env.HAWI_RELEASE_NO_APP_INSTALL === "1") {
+    return null;
+  }
+  const configured = parsedOptions.appDir ?? process.env.HAWI_RELEASE_APP_DIR ?? "/Applications";
+  return path.resolve(expandHome(configured));
 }
 
 function run(command, args, cwd) {
@@ -249,6 +276,7 @@ function installPackagedApp(packaged, destinationRoot) {
     ditto(packaged.path, destination);
     return {
       kind: "app",
+      shell: packaged.shell,
       root: destination,
       executable: executableForAppBundle(destination, packaged.shell ?? "electron")
     };
@@ -261,6 +289,7 @@ function installPackagedApp(packaged, destinationRoot) {
     }
     return {
       kind: "file",
+      shell: packaged.shell,
       root: destination,
       executable: destination
     };
@@ -269,8 +298,33 @@ function installPackagedApp(packaged, destinationRoot) {
   cpSync(packaged.path, destinationRoot, { recursive: true });
   return {
     kind: "directory",
+    shell: packaged.shell,
     root: destinationRoot,
     executable: path.join(destinationRoot, path.relative(packaged.path, packaged.executable))
+  };
+}
+
+function installMacLaunchApp(installedApp, targetDir) {
+  if (process.platform !== "darwin" || !targetDir || installedApp.kind !== "app") {
+    return installedApp;
+  }
+  const destination = path.join(targetDir, path.basename(installedApp.root));
+  if (path.resolve(destination) === path.resolve(installedApp.root)) {
+    return installedApp;
+  }
+  mkdirSync(targetDir, { recursive: true });
+  rmSync(destination, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
+  ditto(installedApp.root, destination);
+  return {
+    kind: "app",
+    shell: installedApp.shell,
+    root: destination,
+    executable: executableForAppBundle(destination, installedApp.shell ?? "electron"),
   };
 }
 
@@ -414,10 +468,34 @@ function shimName() {
 function posixShim(executable, engineCommand) {
   return `#!/usr/bin/env bash
 set -euo pipefail
-export HAWI_GUI_CWD="\${HAWI_GUI_CWD:-$PWD}"
-export HAWI_GUI_ENGINE_COMMAND=${shellQuote(engineCommand)}
+launcher_executable=${shellQuote(executable)}
+launcher_engine=${shellQuote(engineCommand)}
+launch_cwd="\${HAWI_GUI_CWD:-$PWD}"
+new_instance=0
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --new|--new-instance)
+      new_instance=1
+      ;;
+    *)
+      args+=("$arg")
+      ;;
+  esac
+done
+export HAWI_GUI_CWD="$launch_cwd"
 unset ELECTRON_RUN_AS_NODE
-exec ${shellQuote(executable)} "$@"
+if [[ "$new_instance" == "1" ]]; then
+  app_bundle=""
+  if [[ "$launcher_executable" == *.app/Contents/MacOS/* ]]; then
+    app_bundle="\${launcher_executable%%.app/Contents/MacOS/*}.app"
+  fi
+  if [[ -n "$app_bundle" && -d "$app_bundle" && -x /usr/bin/open ]]; then
+    exec /usr/bin/open -n "$app_bundle" --args --cwd "$launch_cwd" "\${args[@]}"
+  fi
+fi
+export HAWI_GUI_ENGINE_COMMAND="$launcher_engine"
+exec "$launcher_executable" "\${args[@]}"
 `;
 }
 
