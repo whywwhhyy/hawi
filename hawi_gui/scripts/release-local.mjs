@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const guiRoot = path.resolve(scriptDir, "..");
@@ -14,55 +14,65 @@ const tauriBinaryName = "hawi-gui-tauri";
 const defaultShell = "tauri";
 const validShells = new Set(["tauri", "electron"]);
 
-const options = parseArgs(process.argv.slice(2));
-if (options.help) {
-  printHelp();
-  process.exit(0);
+if (isMainModule()) {
+  main();
 }
 
-const prefix = path.resolve(expandHome(options.prefix ?? process.env.HAWI_RELEASE_PREFIX ?? "~/.local"));
-const releaseRoot = path.resolve(expandHome(options.releaseRoot ?? process.env.HAWI_RELEASE_ROOT ?? path.join(prefix, "share", "hawi", "release")));
-const binDir = path.resolve(expandHome(options.binDir ?? process.env.HAWI_RELEASE_BIN_DIR ?? path.join(prefix, "bin")));
-const macAppDir = resolveMacAppDir(options);
-const currentDir = path.join(releaseRoot, "current");
+function main(argv = process.argv.slice(2)) {
+  const options = parseArgs(argv);
+  if (options.help) {
+    printHelp();
+    return;
+  }
 
-if (!options.skipBuild) {
-  if (options.shell === "tauri") {
-    run("npm", ["run", "tauri:build"], guiRoot);
-  } else {
-    run("npm", ["run", "build:all"], guiRoot);
-    run("npx", ["electron-builder", "--dir"], guiRoot);
+  const prefix = path.resolve(expandHome(options.prefix ?? process.env.HAWI_RELEASE_PREFIX ?? "~/.local"));
+  const releaseRoot = path.resolve(expandHome(options.releaseRoot ?? process.env.HAWI_RELEASE_ROOT ?? path.join(prefix, "share", "hawi", "release")));
+  const binDir = path.resolve(expandHome(options.binDir ?? process.env.HAWI_RELEASE_BIN_DIR ?? path.join(prefix, "bin")));
+  const macAppDir = resolveMacAppDir(options);
+  const currentDir = path.join(releaseRoot, "current");
+
+  if (!options.skipBuild) {
+    if (options.shell === "tauri") {
+      run("npm", ["run", "tauri:build"], guiRoot);
+    } else {
+      run("npm", ["run", "build:all"], guiRoot);
+      run("npx", ["electron-builder", "--dir"], guiRoot);
+    }
+  }
+
+  const packaged = findPackagedApp(packagedRootForShell(options.shell), options.shell);
+  if (!packaged) {
+    throw new Error(`Could not find a ${options.shell} build. Run without --skip-build or check ${packagedRootForShell(options.shell)}.`);
+  }
+  verifyBundledEngine(packaged);
+  preparePackagedApp(packaged);
+
+  clearDirectory(currentDir);
+
+  const installedApp = installPackagedApp(packaged, currentDir);
+  const launchApp = installMacLaunchApp(installedApp, macAppDir);
+  const externalEngineCommand = installExternalEngine(packaged, currentDir);
+  const launchEngineCommand = resolvePackagedEngineCommand(launchApp, { allowTauriBuildFallback: false }) ?? externalEngineCommand;
+  launchApp.engineCommand = launchEngineCommand;
+  verifyEngineCommand(launchEngineCommand);
+  verifyInstalledApp(launchApp);
+  prewarmEngine(launchEngineCommand, currentDir);
+  if (!options.noShim) {
+    installShim(launchApp, binDir);
+  }
+
+  console.log(`[release-local] Installed ${productName} (${options.shell}) to ${currentDir}`);
+  if (launchApp.root !== installedApp.root) {
+    console.log(`[release-local] Installed macOS app to ${launchApp.root}`);
+  }
+  if (!options.noShim) {
+    console.log(`[release-local] Installed hawi launcher to ${path.join(binDir, shimName())}`);
+    console.log(`[release-local] Make sure ${binDir} is on PATH.`);
   }
 }
 
-const packaged = findPackagedApp(packagedRootForShell(options.shell), options.shell);
-if (!packaged) {
-  throw new Error(`Could not find a ${options.shell} build. Run without --skip-build or check ${packagedRootForShell(options.shell)}.`);
-}
-verifyBundledEngine(packaged);
-preparePackagedApp(packaged);
-
-clearDirectory(currentDir);
-
-const installedApp = installPackagedApp(packaged, currentDir);
-const launchApp = installMacLaunchApp(installedApp, macAppDir);
-const externalEngineCommand = installExternalEngine(packaged, currentDir);
-const launchEngineCommand = resolvePackagedEngineCommand(launchApp, { allowTauriBuildFallback: false }) ?? externalEngineCommand;
-launchApp.engineCommand = launchEngineCommand;
-verifyEngineCommand(launchEngineCommand);
-verifyInstalledApp(launchApp);
-prewarmEngine(launchEngineCommand, currentDir);
-if (!options.noShim) {
-  installShim(launchApp, binDir);
-}
-
-console.log(`[release-local] Installed ${productName} (${options.shell}) to ${currentDir}`);
-if (launchApp.root !== installedApp.root) {
-  console.log(`[release-local] Installed macOS app to ${launchApp.root}`);
-}
-if (!options.noShim) {
-  console.log(`[release-local] Installed hawi launcher to ${path.join(binDir, shimName())}`);
-  console.log(`[release-local] Make sure ${binDir} is on PATH.`);
+function isMainModule() {
+  return process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 }
 
 function parseArgs(args) {
@@ -490,11 +500,17 @@ if [[ "$new_instance" == "1" ]]; then
     app_bundle="\${launcher_executable%%.app/Contents/MacOS/*}.app"
   fi
   if [[ -n "$app_bundle" && -d "$app_bundle" && -x /usr/bin/open ]]; then
-    exec /usr/bin/open -n "$app_bundle" --args --cwd "$launch_cwd" "\${args[@]}"
+    if (( \${#args[@]} > 0 )); then
+      exec /usr/bin/open -n "$app_bundle" --args --cwd "$launch_cwd" "\${args[@]}"
+    fi
+    exec /usr/bin/open -n "$app_bundle" --args --cwd "$launch_cwd"
   fi
 fi
 export HAWI_GUI_ENGINE_COMMAND="$launcher_engine"
-exec "$launcher_executable" "\${args[@]}"
+if (( \${#args[@]} > 0 )); then
+  exec "$launcher_executable" "\${args[@]}"
+fi
+exec "$launcher_executable"
 `;
 }
 
@@ -510,3 +526,11 @@ set ELECTRON_RUN_AS_NODE=\r
 function shellQuote(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
+
+export {
+  main,
+  parseArgs,
+  posixShim,
+  shellQuote,
+  windowsShim,
+};
