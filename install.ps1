@@ -32,6 +32,18 @@ if ($requiresUv) {
     }
 }
 
+function Invoke-Uv {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    & $uv.Source @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 function Invoke-Npm {
     param(
         [Parameter(ValueFromRemainingArguments = $true)]
@@ -44,6 +56,54 @@ function Invoke-Npm {
     }
 }
 
+function Add-HawiBinToUserPath {
+    if ($env:OS -ne "Windows_NT") {
+        return
+    }
+
+    $binDir = Join-Path $env:USERPROFILE ".local\bin"
+    if (-not (Test-Path -LiteralPath $binDir -PathType Container)) {
+        return
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $pathParts = @()
+    if (-not [string]::IsNullOrWhiteSpace($userPath)) {
+        $pathParts = @($userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
+    $alreadyPresent = $false
+    foreach ($part in $pathParts) {
+        if ([string]::Equals($part.TrimEnd('\'), $binDir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            $alreadyPresent = $true
+            break
+        }
+    }
+
+    if (-not $alreadyPresent) {
+        $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $binDir } else { "$userPath;$binDir" }
+        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        Write-Host "Added $binDir to the user PATH."
+    }
+
+    $processParts = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $processHasBin = $false
+    foreach ($part in $processParts) {
+        if ([string]::Equals($part.TrimEnd('\'), $binDir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            $processHasBin = $true
+            break
+        }
+    }
+    if (-not $processHasBin) {
+        $env:Path = "$binDir;$env:Path"
+    }
+}
+
+if ($requiresUv) {
+    Write-Host "Syncing Hawi Python dependencies..."
+    Invoke-Uv sync --all-extras --all-groups
+}
+
 Push-Location -LiteralPath $guiDir
 try {
     if (-not (Test-Path -LiteralPath "node_modules" -PathType Container)) {
@@ -51,11 +111,16 @@ try {
         Invoke-Npm install
     }
 
+    if ($env:HAWI_INSTALL_SKIP_PREFLIGHT -ne "1") {
+        Invoke-Npm run install:preflight '--' @args
+    }
+
     if ([string]::IsNullOrEmpty($env:HAWI_RELEASE_COMMAND)) {
         $env:HAWI_RELEASE_COMMAND = Join-Path $scriptDir "install.ps1"
     }
 
     Invoke-Npm run release:local '--' @args
+    Add-HawiBinToUserPath
 } finally {
     Pop-Location
 }

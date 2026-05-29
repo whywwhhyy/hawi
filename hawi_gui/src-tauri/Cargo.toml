@@ -6,7 +6,7 @@ authors = ["Hawi"]
 edition = "2021"
 
 [lib]
-name = "hawi_gui_tauri"
+name = "hawi_gui_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]

@@ -24,9 +24,18 @@ if [[ "$requires_uv" == "1" ]] && ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ "$requires_uv" == "1" ]]; then
+  echo "Syncing Hawi Python dependencies..."
+  uv sync --all-extras --all-groups
+fi
+
 if [[ ! -d node_modules ]]; then
   echo "Installing Hawi GUI dependencies..."
   npm install
+fi
+
+if [[ "${HAWI_INSTALL_SKIP_PREFLIGHT:-}" != "1" ]]; then
+  npm run install:preflight -- "$@"
 fi
 
 export HAWI_RELEASE_COMMAND="${HAWI_RELEASE_COMMAND:-$script_dir/install.sh}"

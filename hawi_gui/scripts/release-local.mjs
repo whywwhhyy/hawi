@@ -47,7 +47,7 @@ clearDirectory(currentDir);
 const installedApp = installPackagedApp(packaged, currentDir);
 const launchApp = installMacLaunchApp(installedApp, macAppDir);
 const externalEngineCommand = installExternalEngine(packaged, currentDir);
-const launchEngineCommand = resolvePackagedEngineCommand(launchApp) ?? externalEngineCommand;
+const launchEngineCommand = resolvePackagedEngineCommand(launchApp, { allowTauriBuildFallback: false }) ?? externalEngineCommand;
 launchApp.engineCommand = launchEngineCommand;
 verifyEngineCommand(launchEngineCommand);
 verifyInstalledApp(launchApp);
@@ -329,7 +329,7 @@ function installMacLaunchApp(installedApp, targetDir) {
 }
 
 function installExternalEngine(packaged, destinationRoot) {
-  const sourceCommand = resolvePackagedEngineCommand(packaged);
+  const sourceCommand = resolvePackagedEngineCommand(packaged, { allowTauriBuildFallback: true });
   if (!sourceCommand) {
     throw new Error(`Bundled hawi-engine executable was not found for ${packaged.path}.`);
   }
@@ -367,19 +367,19 @@ function verifyInstalledApp(installedApp) {
 }
 
 function verifyBundledEngine(app) {
-  const command = resolvePackagedEngineCommand(app);
+  const command = resolvePackagedEngineCommand(app, { allowTauriBuildFallback: true });
   if (!command) {
     throw new Error(`Bundled hawi-engine executable was not found for ${app.path}.`);
   }
 }
 
-function resolvePackagedEngineCommand(app) {
+function resolvePackagedEngineCommand(app, options = {}) {
   const resourcesRoot = resourcesRootFor(app);
   const bundled = resourcesRoot ? resolveBundledEngineCommand(resourcesRoot) : null;
   if (bundled) {
     return bundled;
   }
-  if (app.shell === "tauri") {
+  if (options.allowTauriBuildFallback && app.shell === "tauri") {
     return resolveBundledEngineCommand(path.join(guiRoot, "build"));
   }
   return null;
@@ -404,8 +404,7 @@ function prewarmEngine(command, cwd) {
     cwd,
     env,
     encoding: "utf-8",
-    stdio: ["ignore", "ignore", "inherit"],
-    shell: process.platform === "win32"
+    stdio: ["ignore", "ignore", "inherit"]
   });
   if (result.error) {
     throw result.error;
