@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
+import signal
 import sys
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+try:
+    import readline  # noqa: F401  Enables input line editing/history on supported terminals.
+except ImportError:
+    readline = None  # type: ignore[assignment]
+
+from rich.console import Console
+
+from hawi.agent import AutoCompactConfig, HawiAgent
+from hawi.agent.printers.rich import RichPrinter
 from hawi.models import model_registry
 from hawi.utils.config_loader import load_config_file
 
@@ -70,6 +82,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--model", default=None, help="Model factory name from models.yaml")
+    parser.add_argument(
+        "--chat",
+        action="store_true",
+        help=(
+            "Run a minimal streaming Markdown chat CLI instead of the JSON "
+            "gateway. Plugins are not loaded in this mode."
+        ),
+    )
     parser.add_argument(
         "--max-context-tokens",
         type=int,
@@ -343,6 +363,10 @@ async def async_main(args: argparse.Namespace) -> None:
             "pass --models-config PATH, or run `hawi-engine init`."
         )
 
+    if args.chat:
+        await run_chat_cli(args)
+        return
+
     selected_plugins = parse_plugins(args.plugins)
     plugin_configs = load_plugin_config(args.plugin_config)
     extra_tool_parameters = parse_extra_tool_parameters(
@@ -381,6 +405,150 @@ async def async_main(args: argparse.Namespace) -> None:
     if gateway is None:
         raise RuntimeError(f"Unsupported gateway: {gateway_name}")
     await gateway.serve(runtime, args)
+
+
+class ChatRichPrinter(RichPrinter):
+    """Minimal Markdown renderer for the interactive chat CLI."""
+
+    def _print_usage(self, usage: Any) -> None:
+        return None
+
+    def stop_live(self) -> None:
+        self._stop_live()
+
+
+async def run_chat_cli(args: argparse.Namespace) -> None:
+    """Run a minimal interactive streaming chat loop."""
+    console = Console()
+    model_overrides: dict[str, Any] = {}
+    if args.max_context_tokens is not None:
+        model_overrides["max_context_tokens"] = args.max_context_tokens
+    model = model_registry.create_model(args.model, **model_overrides)
+    auto_compact = (
+        AutoCompactConfig(enabled=True, max_context_tokens=args.max_context_tokens)
+        if args.max_context_tokens is not None
+        else True
+    )
+    agent = HawiAgent(
+        model=model,
+        plugins=[],
+        system_prompt=args.system_prompt,
+        max_iterations=None,
+        streaming=True,
+        auto_compact=auto_compact,
+    )
+    printer = ChatRichPrinter(
+        show_reasoning=False,
+        show_tools=False,
+        show_error_stack=False,
+        streaming=True,
+        console=console,
+    )
+    agent.subscribe(printer.handle)
+
+    console.print(f"[dim]Hawi chat · model: {args.model} · Ctrl+C interrupts, /exit quits[/dim]")
+    while True:
+        try:
+            prompt = await asyncio.to_thread(console.input, "[bold cyan]>>> [/bold cyan]")
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return
+        prompt = prompt.strip()
+        if not prompt:
+            continue
+        if prompt.lower() in {"exit", "quit", "q", "/exit", "/quit", "/q"}:
+            return
+        await _run_chat_turn(agent, prompt, console, printer)
+
+
+async def _run_chat_turn(
+    agent: HawiAgent,
+    prompt: str,
+    console: Console,
+    printer: ChatRichPrinter,
+) -> None:
+    loop = asyncio.get_running_loop()
+    task = asyncio.create_task(agent.arun(prompt))
+    interrupted = False
+
+    def request_interrupt() -> None:
+        nonlocal interrupted
+        if interrupted:
+            return
+        interrupted = True
+        agent.interrupt("user")
+        task.cancel()
+
+    with _temporary_sigint_handler(loop, request_interrupt), _suppress_stdin_echo():
+        try:
+            await task
+        except asyncio.CancelledError:
+            if not interrupted:
+                raise
+        except KeyboardInterrupt:
+            request_interrupt()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        finally:
+            if interrupted:
+                printer.stop_live()
+                agent.clear_interrupt_state()
+                console.print("\n[dim]Interrupted.[/dim]")
+            else:
+                console.print()
+
+
+@contextlib.contextmanager
+def _temporary_sigint_handler(
+    loop: asyncio.AbstractEventLoop,
+    callback: Any,
+) -> Iterator[None]:
+    previous_handler = signal.getsignal(signal.SIGINT)
+    try:
+        loop.add_signal_handler(signal.SIGINT, callback)
+        restore_with_loop = True
+    except (NotImplementedError, RuntimeError):
+        restore_with_loop = False
+
+        def handler(signum: int, frame: Any) -> None:
+            loop.call_soon_threadsafe(callback)
+
+        signal.signal(signal.SIGINT, handler)
+    try:
+        yield
+    finally:
+        if restore_with_loop:
+            loop.remove_signal_handler(signal.SIGINT)
+        signal.signal(signal.SIGINT, previous_handler)
+
+
+@contextlib.contextmanager
+def _suppress_stdin_echo() -> Iterator[None]:
+    if not sys.stdin.isatty():
+        yield
+        return
+    try:
+        import termios
+    except ImportError:
+        yield
+        return
+
+    fd = sys.stdin.fileno()
+    try:
+        previous = termios.tcgetattr(fd)
+    except termios.error:
+        yield
+        return
+    next_attrs = previous[:]
+    next_attrs[3] &= ~termios.ECHO
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, next_attrs)
+        yield
+    finally:
+        with contextlib.suppress(termios.error):
+            termios.tcsetattr(fd, termios.TCSADRAIN, previous)
+        with contextlib.suppress(termios.error):
+            termios.tcflush(fd, termios.TCIFLUSH)
 
 
 def parse_plugins(raw: str) -> list[str]:

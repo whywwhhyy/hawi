@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import hawi.engine.__main__ as engine_main
 from hawi.engine.__main__ import build_parser
 from hawi.engine.init import prepare_hawi_dir, render_template_text
 
@@ -13,6 +14,47 @@ def test_parser_accepts_optional_hawi_dir() -> None:
 
     assert args.command == "init"
     assert args.hawi_dir == "/tmp/.hawi"
+
+
+def test_parser_accepts_chat_cli_mode() -> None:
+    args = build_parser().parse_args(["--chat", "--model", "demo/model"])
+
+    assert args.chat is True
+    assert args.model == "demo/model"
+
+
+async def test_chat_cli_constructs_agent_without_plugins(monkeypatch) -> None:
+    args = build_parser().parse_args(["--chat", "--model", "demo/model"])
+    captured: dict[str, object] = {}
+
+    class FakeConsole:
+        def print(self, *args, **kwargs) -> None:
+            pass
+
+        def input(self, prompt: str) -> str:
+            return "/exit"
+
+    class FakePrinter:
+        async def handle(self, event) -> None:
+            pass
+
+    class FakeAgent:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def subscribe(self, callback) -> None:
+            captured["subscribed"] = True
+
+    monkeypatch.setattr(engine_main, "Console", lambda: FakeConsole())
+    monkeypatch.setattr(engine_main, "ChatRichPrinter", lambda **kwargs: FakePrinter())
+    monkeypatch.setattr(engine_main.model_registry, "create_model", lambda *args, **kwargs: object())
+    monkeypatch.setattr(engine_main, "HawiAgent", FakeAgent)
+
+    await engine_main.run_chat_cli(args)
+
+    assert captured["plugins"] == []
+    assert captured["streaming"] is True
+    assert captured["subscribed"] is True
 
 
 def test_prepare_hawi_dir_copies_template_when_no_dir_is_given(
