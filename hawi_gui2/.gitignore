@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+dist-electron/
+release/
+
+# Coverage
+coverage/
+
+# Vite cache
+.vite/
+
+# OS files
+.DS_Store
+
+# Hawi logs
+.hawi/hawi-core.log
+
+# Environment files
+.env
+.env.local
