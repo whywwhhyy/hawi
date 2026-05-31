@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -4758,11 +4758,11 @@ function FocusFold({
         {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         <span>{group.summary}</span>
       </button>
-      {expanded && (
+      <div className="focus-fold-content-shell" aria-hidden={!expanded}>
         <div className="focus-fold-content">
           {group.nodes.map((node) => renderNodeFrame(node, `${group.id}:${node.id}`))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -4790,6 +4790,69 @@ function guardNativeToggleDuringSelection(event: ReactMouseEvent<HTMLElement>) {
   if (!hasActiveTextSelection()) return;
   event.preventDefault();
   event.stopPropagation();
+}
+
+function useMeasuredContentHeight() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [height, setHeight] = useState<number | null>(null);
+
+  const syncHeight = useCallback(() => {
+    const element = ref.current;
+    if (!element) return;
+    const next = Math.ceil(element.scrollHeight);
+    setHeight((current) => current === next ? current : next);
+  }, []);
+
+  useBrowserLayoutEffect(() => {
+    syncHeight();
+  });
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(syncHeight);
+    observer?.observe(element);
+    window.addEventListener("resize", syncHeight);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", syncHeight);
+    };
+  }, [syncHeight]);
+
+  return [ref, height] as const;
+}
+
+function AnimatedMessageBody({
+  collapsed,
+  expandTitle,
+  onExpand,
+  children
+}: {
+  collapsed: boolean;
+  expandTitle: string;
+  onExpand: (event: ReactMouseEvent<HTMLElement>) => void;
+  children: ReactNode;
+}) {
+  const [contentRef, measuredHeight] = useMeasuredContentHeight();
+  const style = measuredHeight === null
+    ? undefined
+    : ({ "--message-expanded-height": `${measuredHeight}px` } as CSSProperties);
+
+  return (
+    <div
+      className={`message-body ${collapsed ? "is-collapsed can-expand" : ""}`}
+      style={style}
+      onClick={collapsed ? onExpand : undefined}
+      title={collapsed ? expandTitle : undefined}
+    >
+      <div className="message-body-inner" ref={contentRef}>
+        {children}
+      </div>
+      {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
+    </div>
+  );
 }
 
 const ChatBubble = memo(function ChatBubble({
@@ -4921,18 +4984,13 @@ const SystemPromptBubble = memo(function SystemPromptBubble({ node }: { node: Ch
           </button>
         </span>
       </div>
-      <div
-        className={`message-body ${collapsed ? "is-collapsed can-expand" : ""}`}
-        onClick={
-          collapsed
-            ? (event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))
-            : undefined
-        }
-        title={collapsed ? "点击展开 System prompt" : undefined}
+      <AnimatedMessageBody
+        collapsed={collapsed}
+        expandTitle="点击展开 System prompt"
+        onExpand={(event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))}
       >
         <MarkdownView html={html} />
-        {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
-      </div>
+      </AnimatedMessageBody>
       {childInjections.length > 0 && (
         <div className="message-injections after">
           <div className="message-injections-inner">
@@ -5065,14 +5123,10 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         </div>
       )}
-      <div
-        className={`message-body ${collapsed ? "is-collapsed can-expand" : ""}`}
-        onClick={
-          collapsed
-            ? (event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))
-            : undefined
-        }
-        title={collapsed ? "点击展开消息" : undefined}
+      <AnimatedMessageBody
+        collapsed={collapsed}
+        expandTitle="点击展开消息"
+        onExpand={(event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))}
       >
         {hasStructuredContent ? (
           <ContentPartsView
@@ -5085,8 +5139,7 @@ const MessageBubble = memo(function MessageBubble({
         ) : (
           <MarkdownView html={html} />
         )}
-        {collapsed && <span className="message-collapse-mask" aria-hidden="true" />}
-      </div>
+      </AnimatedMessageBody>
       {afterInjections.length > 0 && (
         <div className="message-injections after">
           <div className="message-injections-inner">

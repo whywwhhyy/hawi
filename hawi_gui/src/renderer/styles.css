@@ -2002,6 +2002,7 @@ button:disabled {
   background: #f7f8f8;
   border-color: #dfe4e5;
   color: #435057;
+  transition: width 190ms ease, background-color 180ms ease, border-color 180ms ease;
 }
 
 .bubble.framework.collapsed {
@@ -2092,10 +2093,41 @@ button:disabled {
   white-space: nowrap;
 }
 
+.focus-fold-content-shell {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin-top: 6px;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    grid-template-rows 190ms ease,
+    margin-top 190ms ease,
+    opacity 140ms ease,
+    transform 190ms ease,
+    visibility 0s linear 0s;
+}
+
+.focus-fold.collapsed .focus-fold-content-shell {
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  visibility: hidden;
+  transition:
+    grid-template-rows 190ms ease,
+    margin-top 190ms ease,
+    opacity 120ms ease,
+    transform 190ms ease,
+    visibility 0s linear 190ms;
+}
+
 .focus-fold-content {
   display: grid;
   gap: 0;
-  margin-top: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .bubble.tool.success {
@@ -2467,14 +2499,13 @@ button:disabled {
   position: relative;
   min-width: 0;
   max-width: 100%;
-  max-height: none;
-  overflow: visible;
+  max-height: var(--message-expanded-height, 9999px);
+  overflow: hidden;
   transition: max-height 190ms ease;
 }
 
 .message-body.is-collapsed {
-  max-height: calc(1.48em * 10 + 20px);
-  overflow: hidden;
+  max-height: min(var(--message-expanded-height, 9999px), calc(1.48em * 10 + 20px));
 }
 
 .message-body.is-collapsed.can-expand {
@@ -2487,7 +2518,11 @@ button:disabled {
   min-width: 0;
 }
 
-.message-body > .content-parts {
+.message-body-inner {
+  min-width: 0;
+}
+
+.message-body-inner > .content-parts {
   padding: 10px 12px;
 }
 
@@ -2621,7 +2656,9 @@ button:disabled {
   .collapsible-body.is-collapsed,
   .message-body,
   .message-injections,
-  .bubble.message-collapsed .message-injections {
+  .bubble.message-collapsed .message-injections,
+  .focus-fold-content-shell,
+  .bubble.framework {
     transition: none;
     animation: none;
   }
