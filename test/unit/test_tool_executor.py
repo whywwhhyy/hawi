@@ -345,7 +345,7 @@ def test_tool_result_default_limit_is_context_friendly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_truncates_oversized_tool_result_in_release(
+async def test_tool_executor_converts_oversized_text_result_to_error_with_preview(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -368,20 +368,28 @@ async def test_tool_executor_truncates_oversized_tool_result_in_release(
         _ExecutionState(run_id="run-big", iteration=1),
     )
 
-    assert record.result.success is True
-    assert isinstance(record.result.output, str)
-    assert "Hawi warning:" in record.result.output
-    assert "Tool result was truncated" in record.result.output
+    assert record.result.success is False
+    assert "Tool result from 'big_text_tool'" in record.result.error
+    assert isinstance(record.result.output, dict)
+    assert record.result.output["hawi_oversized_tool_result"] is True
+    assert record.result.output["original_output_type"] == "str"
+    assert record.result.output["output_preview"].startswith("xxx")
+    assert "Hawi warning:" in record.result.output["output_preview"]
     serialized = tool_executor_module.ToolExecutor._serialize_tool_result_for_limit(
         record.result
     )
     assert len(serialized.encode("utf-8")) <= 3000
-    assert len(record.result.output.encode("utf-8")) <= 3000
     assert "exceeding limit 3000 bytes" in caplog.text
+    tool_part = agent.context.messages[-1]["content"][0]
+    assert tool_part["tool_call_id"] == "call-big"
+    assert tool_part["is_error"] is True
+    tool_text = tool_part["content"][0]["text"]
+    assert "Output before error:" in tool_text
+    assert "Error: Tool result from 'big_text_tool'" in tool_text
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_wraps_oversized_structured_result_in_release(
+async def test_tool_executor_converts_oversized_structured_result_to_error_with_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("HAWI_DEBUG", raising=False)
@@ -402,11 +410,13 @@ async def test_tool_executor_wraps_oversized_structured_result_in_release(
         _ExecutionState(run_id="run-big", iteration=1),
     )
 
-    assert record.result.success is True
+    assert record.result.success is False
+    assert "Tool result from 'big_dict_tool'" in record.result.error
     assert isinstance(record.result.output, dict)
-    assert record.result.output["hawi_truncated_tool_result"] is True
+    assert record.result.output["hawi_oversized_tool_result"] is True
     assert record.result.output["original_output_type"] == "dict"
     assert "serialized_preview" in record.result.output
+    assert "payload" in record.result.output["serialized_preview"]
     serialized = tool_executor_module.ToolExecutor._serialize_tool_result_for_limit(
         record.result
     )
@@ -414,7 +424,7 @@ async def test_tool_executor_wraps_oversized_structured_result_in_release(
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_raises_on_oversized_tool_result_in_debug(
+async def test_tool_executor_does_not_raise_on_oversized_tool_result_in_debug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HAWI_DEBUG", "1")
@@ -425,16 +435,20 @@ async def test_tool_executor_raises_on_oversized_tool_result_in_debug(
         streaming=True,
     )
 
-    with pytest.raises(AssertionError, match="Tool result from 'big_text_tool'"):
-        await agent._execute_tool(
-            {
-                "type": "tool_call",
-                "id": "call-big-debug",
-                "name": "big_text_tool",
-                "arguments": {},
-            },
-            _ExecutionState(run_id="run-big", iteration=1),
-        )
+    record = await agent._execute_tool(
+        {
+            "type": "tool_call",
+            "id": "call-big-debug",
+            "name": "big_text_tool",
+            "arguments": {},
+        },
+        _ExecutionState(run_id="run-big", iteration=1),
+    )
+
+    assert record.result.success is False
+    assert "Tool result from 'big_text_tool'" in record.result.error
+    assert isinstance(record.result.output, dict)
+    assert record.result.output["output_preview"].startswith("xxx")
 
 
 @pytest.mark.asyncio

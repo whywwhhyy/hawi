@@ -14,7 +14,6 @@ import contextlib
 import inspect
 import json
 import logging
-import os
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -1342,27 +1341,16 @@ class ToolExecutor:
             f"Tool result from '{tool_name}' ({tool_call_id}) is {size_bytes} bytes, "
             f"exceeding limit {TOOL_RESULT_MAX_BYTES} bytes"
         )
-        if self._debug_enabled():
-            raise AssertionError(message)
-
-        logger.warning("%s; truncating before persisting to context", message)
-        return self._truncated_tool_result(
+        logger.warning("%s; returning truncated error tool result", message)
+        return self._oversized_tool_result(
             result,
+            error_message=message,
             serialized=serialized,
             size_bytes=size_bytes,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             run_id=run_id,
         )
-
-    @staticmethod
-    def _debug_enabled() -> bool:
-        return os.environ.get("HAWI_DEBUG", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
 
     @staticmethod
     def _serialize_tool_result_for_limit(result: ToolResult) -> str:
@@ -1392,44 +1380,54 @@ class ToolExecutor:
         prefix = encoded[: max_bytes - len(suffix_bytes)]
         return prefix.decode("utf-8", errors="ignore") + suffix
 
-    def _truncated_tool_result(
+    def _oversized_tool_result(
         self,
         result: ToolResult,
         *,
+        error_message: str,
         serialized: str,
         size_bytes: int,
         tool_name: str,
         tool_call_id: str,
         run_id: str,
     ) -> ToolResult:
-        error_budget_bytes = 1024 if result.error else 0
+        error_budget_bytes = len(error_message.encode("utf-8")) + 256
         max_payload_bytes = max(
             0,
             TOOL_RESULT_MAX_BYTES - 2048 - error_budget_bytes,
         )
         if isinstance(result.output, str):
-            output: Any = self._truncate_utf8(result.output, max_payload_bytes)
+            output_preview = self._truncate_utf8(result.output, max_payload_bytes)
+            serialized_preview = None
         else:
-            output = {
-                "hawi_truncated_tool_result": True,
-                "warning": TOOL_RESULT_TRUNCATION_WARNING,
-                "tool_name": tool_name,
-                "tool_call_id": tool_call_id,
-                "run_id": run_id,
-                "original_size_bytes": size_bytes,
-                "max_size_bytes": TOOL_RESULT_MAX_BYTES,
-                "original_output_type": type(result.output).__name__,
-                "serialized_preview": self._truncate_utf8(serialized, max_payload_bytes),
-            }
+            output_preview = None
+            serialized_preview = self._truncate_utf8(serialized, max_payload_bytes)
 
-        error = result.error
-        if error:
-            error = self._truncate_utf8(error, error_budget_bytes)
+        output: dict[str, Any] = {
+            "hawi_oversized_tool_result": True,
+            "warning": TOOL_RESULT_TRUNCATION_WARNING,
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "run_id": run_id,
+            "original_success": result.success,
+            "original_size_bytes": size_bytes,
+            "max_size_bytes": TOOL_RESULT_MAX_BYTES,
+            "original_output_type": type(result.output).__name__,
+        }
+        if output_preview is not None:
+            output["output_preview"] = output_preview
+        if serialized_preview is not None:
+            output["serialized_preview"] = serialized_preview
+        if result.error:
+            output["original_error_preview"] = self._truncate_utf8(
+                result.error,
+                1024,
+            )
 
         return ToolResult(
-            success=result.success,
+            success=False,
             output=output,
-            error=error,
+            error=error_message,
             cache_point=result.cache_point,
             cache_point_source=result.cache_point_source,
         )

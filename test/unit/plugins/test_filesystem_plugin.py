@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import shutil
@@ -367,6 +368,53 @@ class TestFileSystemPlugin:
         assert result.output["numLines"] == 1
         assert result.output["content"] == f"{file_path}:2: beta"
 
+    def test_grep_default_match_limit_returns_total_count(self, plugin, temp_dir):
+        """grep should return the first 1000 matches and expose total matches."""
+        plugin._GREP_MAX_CONTENT_BYTES = 10_000_000
+        file_path = os.path.join(temp_dir, "matches.txt")
+        plugin.write_file(
+            file_path,
+            "\n".join(f"needle {index}" for index in range(1005)) + "\n",
+        )
+
+        result = plugin.grep("needle", path=temp_dir)
+
+        assert result.success is True
+        assert result.output["numMatches"] == 1005
+        assert result.output["numLines"] == 1000
+        assert result.output["maxReturnedLines"] == 1000
+        assert result.output["maxReturnedMatches"] == 1000
+        assert result.output["omittedMatches"] == 5
+        assert result.output["isTruncated"] is True
+        assert "needle 999" in result.output["content"]
+        assert "needle 1000" not in result.output["content"]
+        assert "returned 1000 of 1005 matches" in result.output["content"]
+        assert "total matches: 1005" in result.output["content"]
+
+    def test_grep_default_output_stays_under_tool_result_limit(self, plugin, temp_dir):
+        """Default grep limits should avoid the executor's oversized fallback."""
+        file_path = os.path.join(temp_dir, "many.txt")
+        plugin.write_file(
+            file_path,
+            "\n".join(f"needle {index} {'x' * 80}" for index in range(2000)) + "\n",
+        )
+
+        result = plugin.grep("needle", path=temp_dir)
+
+        payload = json.dumps(
+            {
+                "success": result.success,
+                "output": result.output,
+                "error": result.error,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        assert result.success is True
+        assert result.output["isTruncated"] is True
+        assert result.output["maxReturnedBytes"] == 32 * 1024
+        assert len(payload.encode("utf-8")) <= 50 * 1024
+
     def test_grep_truncates_large_results(self, plugin, temp_dir):
         """grep should cap returned content while preserving total counts."""
         plugin._GREP_MAX_RESULT_LINES = 3
@@ -385,6 +433,7 @@ class TestFileSystemPlugin:
         assert result.output["isTruncated"] is True
         assert result.output["omittedMatches"] == 2
         assert "returned 3 of 5 matches" in result.output["content"]
+        assert "total matches: 5" in result.output["content"]
 
     def test_grep_truncates_by_byte_budget(self, plugin, temp_dir):
         """grep should not return a single huge matching line in full."""

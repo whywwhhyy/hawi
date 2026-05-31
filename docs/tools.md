@@ -310,6 +310,14 @@ image_result = ToolResult(
 )
 ```
 
+### 工具结果大小策略
+
+工具实现应优先在工具内部限制高容量输出，而不是把完整结果交给 Agent 层裁剪。面向搜索、列表、日志、命令输出这类可能无限增长的工具，建议返回“预览 + 总数 + 是否截断 + 省略数量”，并提示调用方缩小范围、分页读取或把大结果写入文件。
+
+Agent 层仍有兜底保护：`ToolExecutor` 会在写入对话上下文前检查序列化后的 `ToolResult`，默认上限为 50 KiB。超过上限时，Hawi 不会抛出内部异常，也不会丢失模型所需的 tool result；它会把超长结果转换为一个失败的 tool result，`error` 中说明原始大小和上限，`output` 中保留截断预览和元数据。这保证了带 `tool_calls` 的 assistant 消息总能跟随后续 tool 消息，避免模型 API 因消息结构不完整返回 400。
+
+这个 Agent 层保护只是最后防线。内置 `grep` 工具会主动限制返回内容：最多显示前 1000 条匹配文本，`content` 还受 32 KiB 预览预算限制；即使截断，它仍会继续扫描完整范围并返回 `numMatches`、`omittedMatches`、`isTruncated` 等字段，`content` 末尾也会提示总匹配数。
+
 ## 高级示例
 
 ### 文件处理工具
@@ -520,10 +528,17 @@ agent = HawiAgent(model=model, plugins=[plugin])
     "mode": "content",
     "numFiles": 1,
     "numLines": 2,
+    "numMatches": 2,
     "filenames": ["/path/to/file.py"],
-    "content": "/path/to/file.py:1: def foo():\n/path/to/file.py:2: def bar():\n"
+    "content": "/path/to/file.py:1: def foo():\n/path/to/file.py:2: def bar():\n",
+    "isTruncated": False,
+    "maxReturnedMatches": 1000,
+    "maxReturnedBytes": 32768,
+    "omittedMatches": 0
 }
 ```
+
+当匹配数超过返回上限时，`numMatches` 是完整搜索范围内的总匹配数，`numLines` 是实际返回到 `content` 的匹配行数，`omittedMatches` 是省略的匹配数。`content` 末尾会附加类似 `returned 1000 of 1200 matches; total matches: 1200` 的截断提示。
 
 **特性：**
 - **乐观并发控制**：文件修改前必须先读取，检查 mtime 防冲突
@@ -533,6 +548,7 @@ agent = HawiAgent(model=model, plugins=[plugin])
 - **语言检测**：自动根据文件扩展名检测编程语言（支持 30+ 种语言）
 - **系统路径保护**：拒绝写入 /System, /Library, /etc, /usr 等系统目录
 - **隐藏目录过滤**：grep 默认跳过以 `.` 开头的隐藏目录
+- **结果限流**：grep 默认返回最多前 1000 条匹配，并报告总匹配数和省略数量
 
 ### ShellPlugin
 

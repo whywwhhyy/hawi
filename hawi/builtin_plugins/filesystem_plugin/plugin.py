@@ -43,9 +43,9 @@ class FileSystemPlugin(HawiPlugin):
     description = "提供文件读取、写入、编辑、目录列表、glob 和 grep 搜索工具。"
     dependencies = ()
     _GLOB_MAX_MATCHES = 5000
-    _GREP_MAX_CONTENT_BYTES = 1_000_000
-    _GREP_MAX_RESULT_LINES = 2000
-    _GREP_MAX_FILENAMES = 500
+    _GREP_MAX_CONTENT_BYTES = 32 * 1024
+    _GREP_MAX_RESULT_LINES = 1000
+    _GREP_MAX_FILENAMES = 50
     _READ_FILE_TOOL_METHODS = {"read_file_by_char", "read_file_by_line"}
     _READ_FILE_DEFAULT_CHAR_COUNT = 64 * 1024
     _READ_FILE_DEFAULT_LINE_COUNT = 500
@@ -1292,6 +1292,7 @@ class FileSystemPlugin(HawiPlugin):
         - 自动跳过常见二进制文件（图片、压缩包、编译产物等）
         - 支持 ``file_glob``（或别名 ``glob``）过滤文件名，如 ``file_glob="*.py"``
         - 可指定单个文件路径直接搜索
+        - 最多返回前 1000 条匹配内容，超出后省略但仍统计总匹配数
         - 正则无效时返回明确的失败信息
 
         Args:
@@ -1395,9 +1396,12 @@ class FileSystemPlugin(HawiPlugin):
         )
         content = "\n".join(result_lines)
         if truncated:
+            omitted_matches = max(total_matches - returned_matches, 0)
             footer = (
                 f"... (truncated: returned {returned_matches} of {total_matches} "
-                f"matches across {len(returned_filenames)} of {len(filenames)} files; "
+                f"matches; total matches: {total_matches}; "
+                f"omitted matches: {omitted_matches}; "
+                f"matching files: {len(returned_filenames)} of {len(filenames)}; "
                 "narrow path/file_glob/pattern or search a smaller directory)"
             )
             content = f"{content}\n{footer}" if content else footer
@@ -1415,6 +1419,7 @@ class FileSystemPlugin(HawiPlugin):
                 "filenamesIsTruncated": filenames_truncated,
                 "maxReturnedBytes": self._GREP_MAX_CONTENT_BYTES,
                 "maxReturnedLines": self._GREP_MAX_RESULT_LINES,
+                "maxReturnedMatches": self._GREP_MAX_RESULT_LINES,
                 "maxReturnedFilenames": self._GREP_MAX_FILENAMES,
                 "omittedMatches": max(total_matches - returned_matches, 0),
                 "omittedFiles": max(len(filenames) - len(returned_filenames), 0),
