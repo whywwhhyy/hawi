@@ -2,8 +2,16 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-gui_dir="$script_dir/hawi_gui"
+gui_dir_name="hawi_gui"
+gui_dir="$script_dir/$gui_dir_name"
 launch_cwd="$PWD"
+
+if [[ ! -f "$gui_dir/package.json" ]]; then
+  echo "Current Hawi GUI directory is missing: $gui_dir" >&2
+  echo "Start only targets $gui_dir_name; hawi_legacy_gui is archived and not used by this script." >&2
+  exit 1
+fi
+
 cd "$gui_dir"
 
 if ! command -v npm >/dev/null 2>&1; then

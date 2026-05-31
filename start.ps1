@@ -2,8 +2,15 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$guiDir = Join-Path $scriptDir "hawi_gui"
+$guiDirName = "hawi_gui"
+$guiDir = Join-Path $scriptDir $guiDirName
 $launchCwd = (Get-Location).Path
+
+if (-not (Test-Path -LiteralPath (Join-Path $guiDir "package.json") -PathType Leaf)) {
+    [Console]::Error.WriteLine("Current Hawi GUI directory is missing: $guiDir")
+    [Console]::Error.WriteLine("Start only targets $guiDirName; hawi_legacy_gui is archived and not used by this script.")
+    exit 1
+}
 
 $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if ($null -eq $npm) {

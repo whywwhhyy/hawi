@@ -2,7 +2,15 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-gui_dir="$script_dir/hawi_gui"
+gui_dir_name="hawi_gui"
+gui_dir="$script_dir/$gui_dir_name"
+
+if [[ ! -f "$gui_dir/package.json" ]]; then
+  echo "Current Hawi GUI directory is missing: $gui_dir" >&2
+  echo "Install only targets $gui_dir_name; hawi_legacy_gui is archived and not used by this script." >&2
+  exit 1
+fi
+
 cd "$gui_dir"
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -20,7 +28,7 @@ for arg in "$@"; do
 done
 
 if [[ "$requires_uv" == "1" ]] && ! command -v uv >/dev/null 2>&1; then
-  echo "uv is required to build the bundled Hawi engine. Use --skip-build only if hawi_gui/release already exists." >&2
+  echo "uv is required to build the bundled Hawi engine. Use --skip-build only if the selected GUI shell already has build output." >&2
   exit 1
 fi
 
