@@ -1088,7 +1088,7 @@ class CoreRuntime:
         if not isinstance(system_prompt, str):
             raise ValueError("'set_system_prompt.payload.system_prompt' must be a string")
         self.system_prompt = system_prompt
-        self._require_runner().agent.context.set_system_prompt(system_prompt)
+        self._require_runner().agent.set_system_prompt(system_prompt)
         self._update_gui_launch_profile(system_prompt=system_prompt)
         await client.send(make_ack("set_system_prompt", request_id=command.id))
 

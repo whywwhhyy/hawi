@@ -239,8 +239,6 @@ class HawiAgent:
         else:
             system_prompt_parts = system_prompt
 
-        self._system_prompt = system_prompt_parts
-
         # Initialize context with tool definitions
         defs = self._plugin_manager.get_tool_definitions()
         self._context = AgentContext(
@@ -388,12 +386,7 @@ class HawiAgent:
 
     def set_system_prompt(self, system_prompt: str | list[ContentPart] | None) -> None:
         """Replace the agent system prompt and keep clone defaults in sync."""
-        if system_prompt is None:
-            self._context.system_prompt = None
-            self._system_prompt = None
-            return
         self._context.set_system_prompt(system_prompt)
-        self._system_prompt = self._context.get_system_prompt()
 
     def suppress_system_prompt_hooks(self, suppress: bool = True) -> None:
         """Control whether declared system-prompt injection hooks are skipped."""
@@ -507,7 +500,7 @@ class HawiAgent:
         """
         new_agent = HawiAgent(
             model=self._default_model,
-            system_prompt=self._system_prompt,
+            system_prompt=self._context.get_base_system_prompt(),
             max_iterations=self._max_iterations,
             model_error_policy=self._model_error_policy,
             event_bus=self._event_bus,
@@ -1138,8 +1131,8 @@ class HawiAgent:
     ) -> list[ContentPart]:
         """Return only the base system prompt parts for UI display events."""
         injected_part_ids = set(self._system_prompt_part_variability_rank)
-        if not injected_part_ids and self._system_prompt is not None:
-            return deepcopy(self._system_prompt)
+        if not injected_part_ids:
+            return deepcopy(self._context.get_base_system_prompt() or content)
         return [
             deepcopy(part)
             for part in content

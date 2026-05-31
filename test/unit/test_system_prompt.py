@@ -62,6 +62,7 @@ class TestSystemPromptTypes:
         ctx.set_system_prompt("You are helpful.")
 
         assert ctx.system_prompt == [{"type": "text", "text": "You are helpful."}]
+        assert ctx.get_base_system_prompt() == [{"type": "text", "text": "You are helpful."}]
 
     def test_agent_context_set_system_prompt_list(self):
         """AgentContext.set_system_prompt should accept ContentPart list."""
@@ -81,6 +82,20 @@ class TestSystemPromptTypes:
 
         result = ctx.get_system_prompt()
         assert result == [{"type": "text", "text": "Test prompt"}]
+
+    def test_agent_context_keeps_base_system_prompt_separate_from_injections(self):
+        """Plugin-injected prompt parts should not overwrite the configured base prompt."""
+        ctx = AgentContext(system_prompt=[{"type": "text", "text": "Base prompt"}])
+
+        system_prompt = list(ctx.system_prompt or [])
+        system_prompt.append({"type": "text", "text": "Injected prompt"})
+        ctx.system_prompt = system_prompt
+
+        assert ctx.get_base_system_prompt() == [{"type": "text", "text": "Base prompt"}]
+        assert ctx.get_system_prompt() == [
+            {"type": "text", "text": "Base prompt"},
+            {"type": "text", "text": "Injected prompt"},
+        ]
 
     def test_agent_context_prepare_request_with_system(self):
         """AgentContext.prepare_request should include system_prompt."""
@@ -252,6 +267,19 @@ class TestHawiAgentSystemPrompt:
         agent.run("hi")
 
         assert model.system_seen == [{"type": "text", "text": "You are helpful."}]
+
+    def test_hawi_agent_system_prompt_event_reads_updated_context_prompt(self):
+        """System-prompt display events should come from AgentContext, not stale agent state."""
+        model = _CaptureSystemModel()
+        agent = HawiAgent(model=model, system_prompt="old prompt")
+        events = []
+        agent.subscribe_blocking(events.append, ["agent.system_prompt"])
+
+        agent.context.set_system_prompt("new prompt")
+        agent.run("hi")
+
+        assert events
+        assert events[0].content == [{"type": "text", "text": "new prompt"}]
 
     @pytest.mark.asyncio
     async def test_declared_system_prompt_hooks_sort_across_session_phases(self):

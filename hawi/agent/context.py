@@ -294,12 +294,14 @@ class AgentContext:
     Attributes:
         messages: Conversation history (不支持 role="system")
         tool_definitions: Available tool definitions for model consumption
-        system_prompt: System prompt as list of ContentPart
+        system_prompt: Current model-visible system prompt as list of ContentPart
+        base_system_prompt: User/developer configured system prompt before plugin injections
     """
 
     messages: list[Message] = field(default_factory=list)
     tool_definitions: list[ToolDefinition] | None = None
     system_prompt: list[ContentPart] | None = None
+    base_system_prompt: list[ContentPart] | None = None
     cache_point: CachePoint | None = None
     cache_tool_definitions: CachePoint | None = None
     auto_cache_static_prefix: CachePoint | None = None
@@ -320,6 +322,10 @@ class AgentContext:
     tool_call_context: ToolCallContext | None = field(
         default=None, repr=False, compare=False
     )
+
+    def __post_init__(self) -> None:
+        if self.base_system_prompt is None and self.system_prompt is not None:
+            self.base_system_prompt = deepcopy(self.system_prompt)
 
     def _add_pending_tool_call(self, tool_call_id: str, tool_name: str, arguments: dict[str, Any]) -> PendingToolCall:
         """Add a tool call to pending queue for audit (internal use)."""
@@ -370,16 +376,25 @@ class AgentContext:
         """Clear all pending tool calls."""
         self._pending_tool_calls.clear()
 
-    def set_system_prompt(self, content: str | list[ContentPart]) -> None:
+    def set_system_prompt(self, content: str | list[ContentPart] | None) -> None:
         """设置系统提示词。
 
         Args:
-            content: 文本字符串或 ContentPart 列表
+            content: 文本字符串、ContentPart 列表或 None
         """
+        parts = self._normalize_system_prompt(content)
+        self.system_prompt = deepcopy(parts)
+        self.base_system_prompt = deepcopy(parts)
+
+    @staticmethod
+    def _normalize_system_prompt(
+        content: str | list[ContentPart] | None,
+    ) -> list[ContentPart] | None:
+        if content is None:
+            return None
         if isinstance(content, str):
-            self.system_prompt = [{"type": "text", "text": content}]
-        else:
-            self.system_prompt = content
+            return [{"type": "text", "text": content}]
+        return content
 
     def set_cache_point(
         self,
@@ -443,6 +458,10 @@ class AgentContext:
             ContentPart 列表或 None
         """
         return self.system_prompt
+
+    def get_base_system_prompt(self) -> list[ContentPart] | None:
+        """Return the configured system prompt before plugin injections."""
+        return self.base_system_prompt
 
     def prepare_request(self) -> MessageRequest:
         """Build MessageRequest from current context.
@@ -1082,6 +1101,7 @@ class AgentContext:
             messages=deepcopy(self.messages),
             tool_definitions=deepcopy(self.tool_definitions) if self.tool_definitions else None,
             system_prompt=deepcopy(self.system_prompt),
+            base_system_prompt=deepcopy(self.base_system_prompt),
             cache_point=deepcopy(self.cache_point),
             cache_tool_definitions=deepcopy(self.cache_tool_definitions),
             auto_cache_static_prefix=deepcopy(self.auto_cache_static_prefix),
@@ -1123,6 +1143,7 @@ class AgentContext:
             "version": "1.0",
             "saved_at": datetime.now().isoformat(),
             "system_prompt": self.system_prompt,
+            "base_system_prompt": self.base_system_prompt,
             "cache_point": self.cache_point,
             "cache_tool_definitions": self.cache_tool_definitions,
             "auto_cache_static_prefix": self.auto_cache_static_prefix,
@@ -1161,6 +1182,10 @@ class AgentContext:
             if isinstance(message, dict):
                 ensure_context_message_id(cast(Message, message))
         self.system_prompt = data.get("system_prompt")
+        self.base_system_prompt = data.get(
+            "base_system_prompt",
+            deepcopy(self.system_prompt),
+        )
         self.cache_point = normalize_cache_point(data.get("cache_point"))
         self.cache_tool_definitions = normalize_cache_point(
             data.get("cache_tool_definitions")

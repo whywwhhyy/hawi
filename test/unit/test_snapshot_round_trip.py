@@ -34,6 +34,7 @@ class TestAgentContextSnapshot:
         ctx2.load_snapshot(json.loads(encoded))
 
         assert ctx2.system_prompt == ctx.system_prompt
+        assert ctx2.get_base_system_prompt() == ctx.get_base_system_prompt()
         assert ctx2.messages == ctx.messages
 
     def test_messages_get_stable_context_message_ids(self) -> None:
