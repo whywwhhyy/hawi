@@ -1,10 +1,7 @@
-# Hawi GUI 2
+# Hawi GUI
 
-Shadcn-style desktop GUI for Hawi core-cli. This directory is an experimental
-visual fork of `hawi_gui`: engine management, protocol types, session state, and
-renderer behavior are copied from the original GUI; the renderer adds a
-shadcn-inspired shell and design-token override layer in
-`src/renderer/shadcn-theme.css`.
+Desktop GUI for Hawi core-cli. Tauri is the default desktop shell; Electron is
+still available for compatibility builds.
 
 ## Prerequisites
 
@@ -19,7 +16,6 @@ npm run build
 npm start
 ```
 
-`npm run dev:renderer` serves the renderer at `http://127.0.0.1:1421`.
 `npm start` and `npm run dev` launch Tauri by default. Use
 `npm start -- --shell electron` or `npm run dev -- --shell electron` to launch
 the Electron shell instead.

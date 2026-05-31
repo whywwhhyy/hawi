@@ -6,13 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     watch: {
-      ignored: [
-        "**/build/**",
-        "**/coverage/**",
-        "**/dist/**",
-        "**/dist-electron/**",
-        "**/src-tauri/target/**"
-      ]
+      ignored: ["**/src-tauri/target/**"]
     }
   },
   build: {

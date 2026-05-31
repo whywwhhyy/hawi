@@ -2816,62 +2816,8 @@ export default function App() {
   ];
 
   return (
-    <div className="app-shell shadcn-workbench" ref={appShellRef}>
-      <aside className="app-rail" aria-label="Hawi navigation">
-        <div className="rail-brand" title="Hawi">
-          <span className="rail-brand-mark" aria-hidden="true"><Bot size={19} /></span>
-          <strong>Hawi</strong>
-        </div>
-        <nav className="rail-actions" aria-label="Primary actions">
-          <button type="button" className="rail-button" title="切换模型" onClick={() => setModelDialogOpen(true)}>
-            <Brain size={18} />
-            <span>Model</span>
-          </button>
-          <button type="button" className="rail-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
-            <Plug size={18} />
-            <span>Plugins</span>
-          </button>
-          <button type="button" className="rail-button" title="聊天记录搜索" onClick={() => setHistorySearchOpen(true)}>
-            <Search size={18} />
-            <span>Search</span>
-          </button>
-          <button type="button" className="rail-button" title="新会话" onClick={() => void newSession()}>
-            <Plus size={18} />
-            <span>New</span>
-          </button>
-        </nav>
-        <div className="rail-footer">
-          <button
-            type="button"
-            className="rail-button"
-            title="重启 Engine"
-            onClick={() => void restartWith(config)}
-          >
-            <RotateCcw size={18} />
-            <span>Restart</span>
-          </button>
-          <div className={`rail-engine ${coreRunning ? "running" : "idle"}`} title={coreRunning ? "Engine online" : "Engine idle"}>
-            <span aria-hidden="true" />
-            <strong>{coreRunning ? "On" : "Idle"}</strong>
-          </div>
-        </div>
-      </aside>
-
-      <main className="main-shell">
+    <div className="app-shell" ref={appShellRef}>
       <header className="topbar">
-        <div className="brand-bar">
-          <div className="brand-lockup" aria-label="Hawi">
-            <span className="brand-mark" aria-hidden="true"><Bot size={17} /></span>
-            <span className="brand-copy">
-              <strong>Hawi</strong>
-              <span>{config.modelName || "No model selected"}</span>
-            </span>
-          </div>
-          <span className={`engine-pill ${coreRunning ? "running" : "idle"}`}>
-            <span aria-hidden="true" />
-            {coreRunning ? "Engine online" : "Engine idle"}
-          </span>
-        </div>
         <OverflowToolbar
           className="top-action-toolbar"
           label="Hawi 操作栏"
@@ -3090,7 +3036,6 @@ export default function App() {
           </button>
         )}
       </footer>
-      </main>
 
       {modelDialogOpen && (
         <ModelDialog

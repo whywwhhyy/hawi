@@ -36,8 +36,8 @@ describe("release-local launcher shim", () => {
   it("uses macOS open -n for app bundle new-instance launches", async () => {
     const { posixShim } = await loadReleaseLocal();
     const shim = posixShim(
-      "/Applications/Hawi Shadcn.app/Contents/MacOS/hawi-gui2-tauri",
-      "/Applications/Hawi Shadcn.app/Contents/Resources/bin/hawi-engine/hawi-engine",
+      "/Applications/Hawi.app/Contents/MacOS/hawi-gui-tauri",
+      "/Applications/Hawi.app/Contents/Resources/bin/hawi-engine/hawi-engine",
     );
 
     expect(shim).toContain("exec /usr/bin/open -n");

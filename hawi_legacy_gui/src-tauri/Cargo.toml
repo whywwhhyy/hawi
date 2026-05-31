@@ -1,16 +1,16 @@
 [package]
-name = "hawi-gui2-tauri"
+name = "hawi-gui-tauri"
 version = "0.1.0"
-description = "Shadcn-style Tauri shell for Hawi"
+description = "Tauri shell for Hawi"
 authors = ["Hawi"]
 edition = "2021"
 
 [lib]
-name = "hawi_gui2_tauri_lib"
+name = "hawi_gui_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "hawi-gui2-tauri"
+name = "hawi-gui-tauri"
 path = "src/main.rs"
 
 [build-dependencies]

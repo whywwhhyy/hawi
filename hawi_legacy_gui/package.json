@@ -1,8 +1,8 @@
 {
-  "name": "hawi-gui2",
+  "name": "hawi-gui",
   "version": "0.1.0",
   "private": true,
-  "description": "Shadcn-style desktop GUI for Hawi core-cli",
+  "description": "Desktop GUI for Hawi core-cli",
   "main": "dist-electron/main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.node.json && vite build",
@@ -10,7 +10,7 @@
     "build:core": "node scripts/build-python-core.mjs",
     "build:all": "npm run build:core && npm run build",
     "install:preflight": "node scripts/install-preflight.mjs",
-    "dev:renderer": "vite --host 127.0.0.1 --port 1421",
+    "dev:renderer": "vite --host 127.0.0.1 --port 1420",
     "run": "electron .",
     "start": "node scripts/start-desktop.mjs",
     "start:tauri": "node scripts/run-tauri.mjs dev",
@@ -70,8 +70,8 @@
     "vitest": "^4.0.15"
   },
   "build": {
-    "appId": "com.hawi.gui2",
-    "productName": "Hawi Shadcn",
+    "appId": "com.hawi.gui",
+    "productName": "Hawi",
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"

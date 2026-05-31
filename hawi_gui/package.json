@@ -2,7 +2,7 @@
   "name": "hawi-gui",
   "version": "0.1.0",
   "private": true,
-  "description": "Desktop GUI for Hawi core-cli",
+  "description": "Shadcn-style desktop GUI for Hawi core-cli",
   "main": "dist-electron/main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.node.json && vite build",

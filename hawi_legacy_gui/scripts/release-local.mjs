@@ -10,7 +10,7 @@ const guiRoot = path.resolve(scriptDir, "..");
 const packageJson = JSON.parse(readFileSync(path.join(guiRoot, "package.json"), "utf-8"));
 const productName = packageJson.build?.productName ?? "Hawi";
 const packageName = packageJson.name ?? "hawi-gui";
-const tauriBinaryName = "hawi-gui2-tauri";
+const tauriBinaryName = "hawi-gui-tauri";
 const defaultShell = "tauri";
 const validShells = new Set(["tauri", "electron"]);
 
