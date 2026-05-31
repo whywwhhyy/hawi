@@ -97,10 +97,38 @@ describe("buildFocusTranscriptItems", () => {
           { id: "agent-1" },
           { id: "divider-1" },
         ],
-        summary: "已处理 4s · 思考 · 工具 1 · 消息 2"
+        summary: {
+          toolCount: 1,
+          activity: "reading",
+          active: false,
+          label: "1 tool · reading"
+        }
       }
     });
     expect(items[2]).toMatchObject({ type: "node", node: { id: "agent-2" } });
+  });
+
+  it("folds active work before the final reply exists", () => {
+    const nodes: ChatNode[] = [
+      { id: "user-1", kind: "user", content: "question" },
+      { id: "thinking-1", kind: "thinking", content: "working", complete: false },
+    ];
+
+    const items = buildFocusTranscriptItems(nodes);
+
+    expect(items.map((item) => item.type)).toEqual(["node", "focus-fold"]);
+    expect(items[1]).toMatchObject({
+      type: "focus-fold",
+      group: {
+        nodes: [{ id: "thinking-1" }],
+        summary: {
+          toolCount: 0,
+          activity: "thinking",
+          active: true,
+          label: "0 tools · thinking"
+        }
+      }
+    });
   });
 });
 

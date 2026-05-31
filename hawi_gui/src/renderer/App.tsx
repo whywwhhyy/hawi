@@ -4605,7 +4605,14 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
 interface FocusFoldGroup {
   id: string;
   nodes: ChatNode[];
-  summary: string;
+  summary: FocusFoldSummary;
+}
+
+interface FocusFoldSummary {
+  toolCount: number;
+  activity: string;
+  active: boolean;
+  label: string;
 }
 
 type FocusTranscriptItem =
@@ -4632,8 +4639,16 @@ export function buildFocusTranscriptItems(nodes: ChatNode[]): FocusTranscriptIte
     const round = nodes.slice(roundStart, roundEnd);
     const finalAgentOffset = lastFormalReplyOffset(round);
     if (finalAgentOffset < 0) {
-      for (const roundNode of round) {
-        items.push({ type: "node", node: roundNode });
+      if (round.length > 0) {
+        const lastRoundNode = round[round.length - 1];
+        items.push({
+          type: "focus-fold",
+          group: {
+            id: `focus-fold:${node.id}:active:${lastRoundNode.id}`,
+            nodes: round,
+            summary: focusFoldSummary(round)
+          }
+        });
       }
       index = roundEnd;
       continue;
@@ -4666,74 +4681,90 @@ function lastFormalReplyOffset(nodes: ChatNode[]): number {
   return -1;
 }
 
-function focusFoldSummary(nodes: ChatNode[]): string {
-  const durationMs = focusFoldDurationMs(nodes);
-  const duration = durationMs === undefined ? "" : formatFocusDuration(durationMs);
-  const details = focusFoldDetails(nodes);
-  if (duration && details) {
-    return `已处理 ${duration} · ${details}`;
-  }
-  if (duration) {
-    return `已处理 ${duration}`;
-  }
-  return `已处理 ${nodes.length} 条消息`;
-}
-
-function focusFoldDetails(nodes: ChatNode[]): string {
+function focusFoldSummary(nodes: ChatNode[]): FocusFoldSummary {
   const toolCount = nodes.filter((node) => node.kind === "tool").length;
-  const thinkingCount = nodes.filter((node) => node.kind === "thinking").length;
-  const otherCount = nodes.length - toolCount - thinkingCount;
-  const parts: string[] = [];
-  if (thinkingCount > 0) {
-    parts.push(thinkingCount === 1 ? "思考" : `思考 ${thinkingCount}`);
-  }
-  if (toolCount > 0) {
-    parts.push(`工具 ${toolCount}`);
-  }
-  if (otherCount > 0) {
-    parts.push(`消息 ${otherCount}`);
-  }
-  return parts.join(" · ");
+  const activity = focusFoldActivity(nodes);
+  return {
+    toolCount,
+    activity,
+    active: nodes.some(isActiveFocusNode),
+    label: `${formatToolCount(toolCount)} · ${activity}`
+  };
 }
 
-function focusFoldDurationMs(nodes: ChatNode[]): number | undefined {
-  const dividerDuration = nodes
-    .map((node) => node.kind === "divider" ? durationFromDividerContent(node.content) : undefined)
-    .find((duration): duration is number => duration !== undefined);
-  if (dividerDuration !== undefined) {
-    return dividerDuration;
+function focusFoldActivity(nodes: ChatNode[]): string {
+  const activeNode = [...nodes].reverse().find(isActiveFocusNode);
+  if (activeNode) {
+    return focusNodeActivity(activeNode);
   }
-  const durations = nodes
-    .map((node) => node.tool?.streamDurationMs ?? node.tool?.durationMs ?? node.streamDurationMs)
-    .filter((duration): duration is number => (
-      typeof duration === "number"
-      && Number.isFinite(duration)
-      && duration > 0
-    ));
-  if (durations.length === 0) return undefined;
-  return durations.reduce((total, duration) => total + duration, 0);
+  const actionableNode = [...nodes].reverse().find((node) => (
+    node.kind === "tool"
+    || node.kind === "thinking"
+    || node.kind === "compact"
+    || node.kind === "framework"
+  ));
+  if (actionableNode) {
+    return focusNodeActivity(actionableNode);
+  }
+  const lastNode = [...nodes].reverse().find((node) => node.kind !== "divider");
+  return lastNode ? focusNodeActivity(lastNode) : "working";
 }
 
-function durationFromDividerContent(content: string): number | undefined {
-  const match = content.match(/(?:^|[·\s])([0-9]+(?:\.[0-9]+)?)s\b/);
-  if (!match) return undefined;
-  const seconds = Number(match[1]);
-  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
+function isActiveFocusNode(node: ChatNode): boolean {
+  if (node.complete === false) return true;
+  if (node.kind !== "tool" || !node.tool) return false;
+  return node.tool.status === "pending"
+    || node.tool.status === "running"
+    || node.tool.argsState === "pending"
+    || node.tool.argsState === "streaming";
 }
 
-function formatFocusDuration(durationMs: number): string {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
-  if (totalSeconds < 60) {
-    return `${Math.max(1, totalSeconds)}s`;
+function focusNodeActivity(node: ChatNode): string {
+  switch (node.kind) {
+    case "thinking":
+      return "thinking";
+    case "tool":
+      return toolFocusActivity(node.tool);
+    case "compact":
+      return "compacting";
+    case "framework":
+    case "system":
+      return "preparing";
+    case "agent":
+      return "responding";
+    default:
+      return "working";
   }
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (totalMinutes < 60) {
-    return seconds === 0 ? `${totalMinutes}m` : `${totalMinutes}m ${seconds}s`;
+}
+
+function toolFocusActivity(tool?: ToolState): string {
+  const canonicalName = canonicalToolName(tool?.name ?? "");
+  if (readToolNamePatterns.some((pattern) => pattern.test(canonicalName))) {
+    return "reading";
   }
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  if (writeToolNamePatterns.some((pattern) => pattern.test(canonicalName))) {
+    return "writing";
+  }
+  return "tool calling";
+}
+
+function canonicalToolName(name: string): string {
+  const withoutNamespace = name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name;
+  return withoutNamespace.trim().toLowerCase().replace(/[-\s]+/g, "_");
+}
+
+const readToolNamePatterns = [
+  /^(read|view|open|cat|list|ls|glob|grep|search|find|scan|fetch|browse|inspect)/,
+  /(read|view|search|fetch|list|grep|glob)$/
+];
+
+const writeToolNamePatterns = [
+  /^(write|edit|patch|apply|create|delete|remove|move|rename|copy|mkdir|touch|update|replace)/,
+  /(write|edit|patch|create|delete|remove|move|rename|update|replace)$/
+];
+
+function formatToolCount(count: number): string {
+  return `${count} ${count === 1 ? "tool" : "tools"}`;
 }
 
 function FocusFold({
@@ -4756,7 +4787,15 @@ function FocusFold({
         onClick={onToggle}
       >
         {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <span>{group.summary}</span>
+        {group.summary.active && (
+          <span className="focus-fold-spinner">
+            <LiveSpinner title={group.summary.activity} />
+          </span>
+        )}
+        <span className="focus-fold-summary">
+          <strong>{formatToolCount(group.summary.toolCount)}</strong>
+          <span>{group.summary.activity}</span>
+        </span>
       </button>
       <div className="focus-fold-content-shell" aria-hidden={!expanded}>
         <div className="focus-fold-content">
