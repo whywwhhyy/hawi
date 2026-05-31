@@ -10,11 +10,10 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, Image as ImageIcon, LoaderCircle, Lock, Paperclip, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, Image as ImageIcon, LoaderCircle, Lock, Paperclip, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Settings, Square, Trash2, Wrench, X } from "lucide-react";
 import type { BlobSource, ContentPart, CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, JsonlExportPayload, MarkdownExportPayload, MediaSource, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, PluginToolPreviewItem, PluginToolPreviewPayload, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { MIN_CONTENT_SIZE, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
-import { OverflowToolbar, type OverflowToolbarItem, type OverflowToolbarPlacement } from "./OverflowToolbar";
 import { StatusCell, StatusCellDisplay, StatusCellTrigger, StatusPopoverHeader } from "./StatusCell";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
 import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
@@ -307,8 +306,7 @@ type EscapeDismissTarget =
   | "contextPopover"
   | "pluginDialog"
   | "modelDialog"
-  | "exportMenu"
-  | "debugMenu"
+  | "settingsMenu"
   | "queueTaskEdit"
   | "queuePopover"
   | "sessionDialog";
@@ -320,8 +318,7 @@ interface EscapeDismissState {
   pluginDialogOpen: boolean;
   modelDialogOpen: boolean;
   subagentObserverOpen: boolean;
-  exportMenuOpen: boolean;
-  debugMenuOpen: boolean;
+  settingsMenuOpen: boolean;
   queuePopoverOpen: boolean;
   editingQueueTaskId: string | null;
   sessionDialogOpen: boolean;
@@ -332,8 +329,7 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
-  if (state.debugMenuOpen) return "debugMenu";
-  if (state.exportMenuOpen) return "exportMenu";
+  if (state.settingsMenuOpen) return "settingsMenu";
   if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) {
@@ -347,8 +343,7 @@ function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTar
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
-  if (state.debugMenuOpen) return "debugMenu";
-  if (state.exportMenuOpen) return "exportMenu";
+  if (state.settingsMenuOpen) return "settingsMenu";
   if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
   if (state.queuePopoverOpen) return "queuePopover";
@@ -370,10 +365,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
       return ".plugin-modal";
     case "modelDialog":
       return ".model-modal";
-    case "exportMenu":
-      return ".overflow-toolbar-list .export-menu-popover";
-    case "debugMenu":
-      return ".menu-popover";
+    case "settingsMenu":
+      return ".rail-settings-menu";
     case "queueTaskEdit":
     case "queuePopover":
       return ".queue-popover";
@@ -450,9 +443,7 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
       case "sessionDialog":
         return scope.querySelector<HTMLElement>(".session-option.current .session-title-button:not(:disabled)")
           ?? scope.querySelector<HTMLElement>(".session-title-button:not(:disabled)");
-      case "exportMenu":
-        return scope.querySelector<HTMLElement>(".menu-item:not(:disabled)");
-      case "debugMenu":
+      case "settingsMenu":
       case "queueTaskEdit":
       case "queuePopover":
         return null;
@@ -664,8 +655,7 @@ export default function App() {
   const [contextCompactBusy, setContextCompactBusy] = useState(false);
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const [debugMenuOpen, setDebugMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [historySearchCaseSensitive, setHistorySearchCaseSensitive] = useState(false);
@@ -887,22 +877,17 @@ export default function App() {
   }, [blobPreviewUrls]);
 
   useEffect(() => {
-    if (!exportMenuOpen) return;
+    if (!settingsMenuOpen) return;
     function handlePointerDown(event: PointerEvent) {
       const target = event.target;
-      if (target instanceof Element && target.closest(".export-menu-anchor")) return;
-      setExportMenuOpen(false);
+      if (target instanceof Element && target.closest(".rail-settings-anchor")) return;
+      setSettingsMenuOpen(false);
     }
     document.addEventListener("pointerdown", handlePointerDown);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [exportMenuOpen]);
-
-  useEffect(() => {
-    if (currentSessionId && state.sessionMessageCount > 0) return;
-    setExportMenuOpen(false);
-  }, [currentSessionId, state.sessionMessageCount]);
+  }, [settingsMenuOpen]);
 
   useEffect(() => () => {
     for (const pending of pendingBlobPreviewFetchesRef.current.values()) {
@@ -939,8 +924,7 @@ export default function App() {
         pluginDialogOpen,
         modelDialogOpen,
         subagentObserverOpen: subagentObserverId !== null,
-        exportMenuOpen,
-        debugMenuOpen,
+        settingsMenuOpen,
         queuePopoverOpen,
         editingQueueTaskId,
         sessionDialogOpen
@@ -977,11 +961,8 @@ export default function App() {
           case "modelDialog":
             setModelDialogOpen(false);
             break;
-          case "exportMenu":
-            setExportMenuOpen(false);
-            break;
-          case "debugMenu":
-            setDebugMenuOpen(false);
+          case "settingsMenu":
+            setSettingsMenuOpen(false);
             break;
           case "queueTaskEdit":
             setEditingQueueTaskId(null);
@@ -1030,8 +1011,7 @@ export default function App() {
     modelDialogOpen,
     mediaPreview,
     subagentObserverId,
-    exportMenuOpen,
-    debugMenuOpen,
+    settingsMenuOpen,
     queuePopoverOpen,
     editingQueueTaskId,
     sessionDialogOpen,
@@ -1110,7 +1090,6 @@ export default function App() {
     }
   }, []);
 
-  const selectedModel = config?.modelName || "-";
   const systemPromptLocked = state.nodes.some(isConversationNode);
   const toolCallPurposeLocked = Boolean(currentSessionId);
   const contextRunnerBusy = state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING";
@@ -2615,205 +2594,10 @@ export default function App() {
     return <div className="boot">Loading Hawi metadata...</div>;
   }
 
-  const toolbarItemClass = (placement: OverflowToolbarPlacement, active = false) => {
-    if (placement === "overflow") return "menu-item";
-    return `tool-button ${active ? "active" : ""}`.trim();
-  };
-  const toolbarIconSize = (placement: OverflowToolbarPlacement) => placement === "overflow" ? 15 : 17;
   const currentProjectPath = sessions.find((session) => session.session_id === currentSessionId)?.last_cwd
     ?? metadata.currentWorkspaceRoot
     ?? null;
   const exportDisabled = !currentSessionId || state.sessionMessageCount === 0 || exportBusy;
-  const toolbarItems: OverflowToolbarItem[] = [
-    {
-      id: "plugins",
-      render: (placement, closeOverflow) => (
-        <button
-          type="button"
-          className={toolbarItemClass(placement)}
-          title="插件配置"
-          onClick={() => {
-            closeOverflow();
-            setPluginDialogOpen(true);
-          }}
-        >
-          <Plug size={toolbarIconSize(placement)} /> 插件配置
-        </button>
-      )
-    },
-    {
-      id: "model",
-      render: (placement, closeOverflow) => (
-        <button
-          type="button"
-          className={toolbarItemClass(placement)}
-          title="切换模型"
-          onClick={() => {
-            closeOverflow();
-            setModelDialogOpen(true);
-          }}
-        >
-          <Bot size={toolbarIconSize(placement)} /> Model: {selectedModel}
-        </button>
-      )
-    },
-    {
-      id: "export",
-      render: (placement, closeOverflow) => placement === "overflow" ? (
-        <>
-          <button
-            type="button"
-            className="menu-item"
-            disabled={exportDisabled}
-            onClick={() => {
-              closeOverflow();
-              void exportCurrentSession("jsonl");
-            }}
-          >
-            <FileText size={toolbarIconSize(placement)} /> 导出 JSONL
-          </button>
-          <button
-            type="button"
-            className="menu-item"
-            disabled={exportDisabled}
-            onClick={() => {
-              closeOverflow();
-              void exportCurrentSession("markdown");
-            }}
-          >
-            <FileText size={toolbarIconSize(placement)} /> 导出 Markdown
-          </button>
-        </>
-      ) : (
-        <div className="export-menu-anchor">
-          <button
-            type="button"
-            className={toolbarItemClass(placement, exportMenuOpen)}
-            title="导出当前 Session"
-            aria-haspopup="menu"
-            aria-expanded={exportMenuOpen}
-            disabled={exportDisabled}
-            onClick={() => {
-              closeOverflow();
-              setDebugMenuOpen(false);
-              setExportMenuOpen((open) => !open);
-            }}
-          >
-            <FileText size={toolbarIconSize(placement)} /> {exportBusy ? "导出中" : "导出"} <ChevronDown size={14} />
-          </button>
-          {exportMenuOpen && (
-            <div className="menu-popover export-menu-popover" role="menu">
-              <button
-                type="button"
-                className="menu-item"
-                disabled={exportBusy}
-                onClick={() => void exportCurrentSession("jsonl")}
-              >
-                <FileText size={15} /> JSONL
-              </button>
-              <button
-                type="button"
-                className="menu-item"
-                disabled={exportBusy}
-                onClick={() => void exportCurrentSession("markdown")}
-              >
-                <FileText size={15} /> Markdown
-              </button>
-            </div>
-          )}
-        </div>
-      )
-    },
-    {
-      id: "focus-mode",
-      render: (placement) => placement === "overflow" ? (
-        <label className="menu-item" title="折叠每轮中的中间过程，只保留最后一条正式回复">
-          <input
-            type="checkbox"
-            checked={focusModeEnabled}
-            onChange={(event) => updateFocusModeEnabled(event.target.checked)}
-          />
-          专注模式
-        </label>
-      ) : (
-        <button
-          type="button"
-          className={toolbarItemClass(placement, focusModeEnabled)}
-          title={focusModeEnabled ? "关闭专注模式" : "开启专注模式"}
-          aria-pressed={focusModeEnabled}
-          onClick={() => updateFocusModeEnabled(!focusModeEnabled)}
-        >
-          <ChevronsUp size={toolbarIconSize(placement)} /> 专注
-        </button>
-      )
-    },
-    {
-      id: "debug",
-      render: (placement) => placement === "overflow" ? (
-        <label className="menu-item">
-          <input
-            type="checkbox"
-            checked={showDebug}
-            onChange={(event) => updateShowDebug(event.target.checked)}
-          />
-          Debug 信息
-        </label>
-      ) : (
-        <button
-          type="button"
-          className={toolbarItemClass(placement, showDebug)}
-          title={showDebug ? "隐藏 Debug 信息" : "显示 Debug 信息"}
-          aria-pressed={showDebug}
-          onClick={() => updateShowDebug(!showDebug)}
-        >
-          <Activity size={toolbarIconSize(placement)} /> Debug
-        </button>
-      )
-    },
-    {
-      id: "tool-call-purpose",
-      render: (placement) => placement === "overflow" ? (
-        <label
-          className="menu-item"
-          title={toolCallPurposeLocked ? "仅新 Session 可修改" : "新 Session 工具调用要求填写目的"}
-        >
-          <input
-            type="checkbox"
-            checked={config.toolCallPurposeEnabled}
-            disabled={toolCallPurposeLocked}
-            onChange={(event) => updateToolCallPurposeEnabled(event.target.checked)}
-          />
-          Purpose 参数
-        </label>
-      ) : (
-        <button
-          type="button"
-          className={toolbarItemClass(placement, config.toolCallPurposeEnabled)}
-          title={toolCallPurposeLocked ? "仅新 Session 可修改" : "新 Session 工具调用要求填写目的"}
-          aria-pressed={config.toolCallPurposeEnabled}
-          disabled={toolCallPurposeLocked}
-          onClick={() => updateToolCallPurposeEnabled(!config.toolCallPurposeEnabled)}
-        >
-          <Wrench size={toolbarIconSize(placement)} /> Purpose
-        </button>
-      )
-    },
-    {
-      id: "restart",
-      render: (placement, closeOverflow) => (
-        <button
-          type="button"
-          className={toolbarItemClass(placement)}
-          onClick={() => {
-            closeOverflow();
-            void restartWith(config);
-          }}
-        >
-          <RotateCcw size={toolbarIconSize(placement)} /> 重启 Engine
-        </button>
-      )
-    }
-  ];
 
   return (
     <div className="app-shell shadcn-workbench" ref={appShellRef}>
@@ -2839,6 +2623,79 @@ export default function App() {
             <Plus size={18} />
             <span>New</span>
           </button>
+          <div className="rail-settings-anchor">
+            <button
+              type="button"
+              className={`rail-button ${settingsMenuOpen ? "active" : ""}`}
+              title="设置"
+              aria-haspopup="menu"
+              aria-expanded={settingsMenuOpen}
+              onClick={() => setSettingsMenuOpen((open) => !open)}
+            >
+              <Settings size={18} />
+              <span>Settings</span>
+            </button>
+            {settingsMenuOpen && (
+              <div className="rail-settings-menu menu-popover" role="menu">
+                <div className="rail-menu-section">
+                  <strong>Session</strong>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    disabled={exportDisabled}
+                    onClick={() => {
+                      setSettingsMenuOpen(false);
+                      void exportCurrentSession("jsonl");
+                    }}
+                  >
+                    <FileText size={15} /> 导出 JSONL
+                  </button>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    disabled={exportDisabled}
+                    onClick={() => {
+                      setSettingsMenuOpen(false);
+                      void exportCurrentSession("markdown");
+                    }}
+                  >
+                    <FileText size={15} /> 导出 Markdown
+                  </button>
+                </div>
+                <div className="rail-menu-section">
+                  <strong>Display</strong>
+                  <label className="menu-item checkbox-menu-item" title="折叠每轮中的中间过程，只保留最后一条正式回复">
+                    <input
+                      type="checkbox"
+                      checked={focusModeEnabled}
+                      onChange={(event) => updateFocusModeEnabled(event.target.checked)}
+                    />
+                    专注模式
+                  </label>
+                  <label className="menu-item checkbox-menu-item">
+                    <input
+                      type="checkbox"
+                      checked={showDebug}
+                      onChange={(event) => updateShowDebug(event.target.checked)}
+                    />
+                    调试信息
+                  </label>
+                  <label
+                    className="menu-item checkbox-menu-item"
+                    title={toolCallPurposeLocked ? "仅新 Session 可修改" : "新 Session 工具调用要求填写目的"}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={config.toolCallPurposeEnabled}
+                      disabled={toolCallPurposeLocked}
+                      onChange={(event) => updateToolCallPurposeEnabled(event.target.checked)}
+                    />
+                    工具目的参数
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
         </nav>
         <div className="rail-footer">
           <button
@@ -2872,13 +2729,6 @@ export default function App() {
             {coreRunning ? "Engine online" : "Engine idle"}
           </span>
         </div>
-        <OverflowToolbar
-          className="top-action-toolbar"
-          label="Hawi 操作栏"
-          items={toolbarItems}
-          overflowOpen={debugMenuOpen}
-          onOverflowOpenChange={setDebugMenuOpen}
-        />
         <div className="status-row" ref={statusRowRef}>
           <div className="status-strip">
             <ProjectStatusCell

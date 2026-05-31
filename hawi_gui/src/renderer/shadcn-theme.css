@@ -161,10 +161,53 @@ body {
 }
 
 .rail-button:hover:not(:disabled),
-.rail-button:focus-visible {
+.rail-button:focus-visible,
+.rail-button.active {
   border-color: hsl(var(--border));
   background: hsl(var(--accent));
   color: hsl(var(--foreground));
+}
+
+.rail-settings-anchor {
+  position: relative;
+  min-width: 0;
+}
+
+.rail-settings-menu {
+  top: 0;
+  right: auto;
+  left: calc(100% + 10px);
+  display: grid;
+  width: 246px;
+  gap: 6px;
+  padding: 6px;
+}
+
+.rail-menu-section {
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+}
+
+.rail-menu-section + .rail-menu-section {
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 8px;
+}
+
+.rail-menu-section > strong {
+  padding: 4px 8px 5px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.checkbox-menu-item {
+  justify-content: flex-start;
+}
+
+.checkbox-menu-item input {
+  accent-color: hsl(var(--primary));
 }
 
 .rail-engine {
@@ -196,11 +239,11 @@ body {
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.28fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "brand toolbar"
-    "status status";
-  gap: 8px 10px;
+    "brand"
+    "status";
+  gap: 8px;
   align-items: center;
   padding: 8px;
   border: 1px solid hsl(var(--border));
@@ -292,12 +335,6 @@ body {
 
 .engine-pill.running > span {
   background: hsl(142.1 76.2% 36.3%);
-}
-
-.top-action-toolbar {
-  grid-area: toolbar;
-  min-width: 0;
-  justify-self: end;
 }
 
 .status-row {
@@ -798,12 +835,7 @@ body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "brand"
-      "toolbar"
       "status";
-  }
-
-  .top-action-toolbar {
-    justify-self: stretch;
   }
 
   .status-row {

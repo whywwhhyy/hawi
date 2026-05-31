@@ -284,8 +284,7 @@ describe("resolveEscapeDismissTarget", () => {
     pluginDialogOpen: false,
     modelDialogOpen: false,
     subagentObserverOpen: false,
-    exportMenuOpen: false,
-    debugMenuOpen: false,
+    settingsMenuOpen: false,
     queuePopoverOpen: false,
     editingQueueTaskId: null,
     sessionDialogOpen: false
