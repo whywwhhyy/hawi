@@ -636,12 +636,17 @@ body {
 .tool-content-block,
 .tool-diff-block,
 .argument-code,
-.artifact-code,
-.markdown pre {
+.artifact-code {
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   background: hsl(222.2 47.4% 11.2%);
   color: hsl(210 40% 98%);
+}
+
+.markdown pre {
+  border-color: hsl(var(--border));
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
 }
 
 .tool-result-block.search,
@@ -822,11 +827,16 @@ body {
   .tool-diff-block,
   .argument-code,
   .artifact-code,
-  .markdown pre,
   .tool-result-block.search,
   .tool-result-block.terminal {
     border-color: hsl(217.2 32.6% 24%);
     background: hsl(222.2 47.4% 11.2%);
+  }
+
+  .markdown pre {
+    border-color: hsl(217.2 32.6% 24%);
+    background: hsl(217.2 32.6% 17.5%);
+    color: hsl(210 40% 98%);
   }
 }
 
