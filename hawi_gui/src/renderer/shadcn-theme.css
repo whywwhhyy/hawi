@@ -402,6 +402,7 @@ body {
 
 .context-meter {
   height: 10px;
+  border-color: hsl(var(--border));
   background: hsl(var(--muted));
 }
 

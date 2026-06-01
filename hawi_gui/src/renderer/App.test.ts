@@ -564,6 +564,8 @@ describe("renderMarkdown", () => {
     expect(html).toContain("class=\"code-block\"");
     expect(html).toContain("class=\"hljs language-typescript\"");
     expect(html).toContain("hljs-keyword");
+    expect(html).not.toContain("<pre><code");
+    expect(html.match(/<pre\b/g) ?? []).toHaveLength(1);
   });
 
   it("escapes unknown language code blocks", () => {

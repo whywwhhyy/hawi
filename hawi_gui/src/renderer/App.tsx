@@ -56,8 +56,7 @@ markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrSet("rel", "noopener noreferrer");
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
-const defaultFence = markdown.renderer.rules.fence;
-markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
+markdown.renderer.rules.fence = (tokens, idx) => {
   const token = tokens[idx];
   const language = token.info.trim().split(/\s+/)[0]?.toLowerCase();
   if (language === "mermaid") {
@@ -66,9 +65,8 @@ markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
   if (language === "svg") {
     return renderSvgFence(token.content);
   }
-  return defaultFence
-    ? defaultFence(tokens, idx, options, env, self)
-    : self.renderToken(tokens, idx, options);
+  const highlighted = highlightedCode(token.content, language);
+  return `${codeBlock(highlighted.html, highlighted.language)}\n`;
 };
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
@@ -2923,19 +2921,19 @@ export default function App() {
           </div>
         </div>
         <button
-          className="primary-button"
+          className="primary-button composer-action-button"
           disabled={inputUploading || (!input.trim() && inputAttachments.length === 0)}
           onClick={submitInput}
         >
           {inputUploading ? <LoaderCircle size={18} className="spin" /> : <Send size={18} />} 发送
         </button>
         {state.control.paused && state.control.resumable ? (
-          <button className="primary-button" disabled={inputUploading} onClick={resumeConversation}>
+          <button className="primary-button composer-action-button" disabled={inputUploading} onClick={resumeConversation}>
             <Play size={16} /> 继续
           </button>
         ) : (
           <button
-            className="danger-button"
+            className="danger-button composer-action-button"
             disabled={!canStopConversation}
             onClick={() => sendCommand("stop", { reason: "user" })}
           >

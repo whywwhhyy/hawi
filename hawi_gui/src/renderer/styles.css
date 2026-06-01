@@ -426,6 +426,7 @@ button:disabled {
   min-width: 0;
   height: 12px;
   overflow: hidden;
+  border: 1px solid #cfd8dd;
   border-radius: var(--radius-pill);
   background: #e3e8e9;
 }
@@ -2447,7 +2448,7 @@ button:disabled {
 .copy-button.code-copy-overlay,
 .code-copy-button {
   position: absolute;
-  top: 14px;
+  top: 8px;
   right: 8px;
   z-index: 3;
   background: rgba(255, 255, 255, 0.84);
@@ -3354,6 +3355,22 @@ button:disabled {
 .attachment-button {
   align-self: center;
   flex: 0 0 auto;
+}
+
+.composer-action-button {
+  align-self: flex-end;
+  min-height: 39px;
+  height: 39px;
+  gap: 8px;
+  padding: 0 14px;
+  line-height: 1;
+}
+
+.composer-action-button svg {
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
 }
 
 .input-row.drop-active .composer-input-line textarea {
