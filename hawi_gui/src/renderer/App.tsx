@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DependencyList, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
@@ -6147,6 +6147,7 @@ function LiveSpinner({ title }: { title: string }) {
 
 function MarkdownView({ html, className = "" }: { html: string; className?: string }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  useCodeBlockOverflowState(rootRef, [html]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -6211,6 +6212,74 @@ function MarkdownView({ html, className = "" }: { html: string; className?: stri
   );
 }
 
+function useCodeBlockOverflowState(
+  rootRef: { current: HTMLElement | null },
+  dependencies: DependencyList = []
+) {
+  useBrowserLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    const root = rootRef.current;
+    if (!root) return;
+
+    let animationFrame: number | null = null;
+    const sync = () => {
+      syncCodeBlockOverflowState(root);
+    };
+    const scheduleSync = () => {
+      if (typeof window.requestAnimationFrame !== "function") {
+        sync();
+        return;
+      }
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        sync();
+      });
+    };
+
+    scheduleSync();
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(scheduleSync);
+    observer?.observe(root);
+    root.querySelectorAll<HTMLElement>(".code-block-shell > pre, .copyable-code-shell > pre").forEach((pre) => {
+      observer?.observe(pre);
+    });
+    window.addEventListener("resize", scheduleSync);
+    return () => {
+      if (animationFrame !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+    };
+    // The caller passes render-shape dependencies so newly inserted <pre> nodes are observed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, dependencies);
+}
+
+function syncCodeBlockOverflowState(root: HTMLElement): void {
+  const shells = [
+    ...(root.matches(".code-block-shell, .copyable-code-shell") ? [root] : []),
+    ...root.querySelectorAll<HTMLElement>(".code-block-shell, .copyable-code-shell")
+  ];
+  shells.forEach((shell) => {
+    const pre = shell.querySelector<HTMLElement>("pre");
+    const hasHorizontalScroll = pre ? codeBlockHasHorizontalOverflow(pre) : false;
+    shell.classList.toggle("has-horizontal-scroll", hasHorizontalScroll);
+  });
+}
+
+export function codeBlockHasHorizontalOverflow({
+  clientWidth,
+  scrollWidth
+}: {
+  clientWidth: number;
+  scrollWidth: number;
+}): boolean {
+  return scrollWidth > clientWidth + 1;
+}
+
 async function copyMarkdownCodeBlock(button: HTMLButtonElement, text: string): Promise<void> {
   let state: "copied" | "failed" = "copied";
   try {
@@ -6239,8 +6308,11 @@ async function copyMarkdownCodeBlock(button: HTMLButtonElement, text: string): P
 }
 
 function CopyableCodeShell({ text, children }: { text: string; children: ReactNode }) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  useCodeBlockOverflowState(shellRef, [text]);
+
   return (
-    <div className="copyable-code-shell">
+    <div className="copyable-code-shell" ref={shellRef}>
       <CopyButton text={text} title="复制代码" className="code-copy-overlay" />
       {children}
     </div>
