@@ -60,6 +60,11 @@ button:disabled {
   opacity: 0.58;
 }
 
+html[data-hawi-input-modality="pointer"] button:focus,
+html[data-hawi-input-modality="pointer"] button:focus-visible {
+  outline: none !important;
+}
+
 :focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
@@ -156,4 +161,3 @@ button:disabled {
   pointer-events: none;
   white-space: nowrap;
 }
-
