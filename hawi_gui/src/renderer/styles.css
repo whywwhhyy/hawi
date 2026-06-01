@@ -83,8 +83,7 @@ button:disabled {
 }
 
 .topbar,
-.input-row,
-.prompt-row {
+.input-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -165,11 +164,18 @@ button:disabled {
   justify-content: flex-start;
   gap: 8px;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  overscroll-behavior-x: contain;
+}
+
+.status-row.has-open-popover {
   overflow: visible;
 }
 
-.status-strip,
-.usage-status-strip {
+.status-strip {
   display: flex;
   align-items: center;
   width: max-content;
@@ -180,12 +186,6 @@ button:disabled {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
-}
-
-.usage-status-strip {
-  flex: 0 0 auto;
-  margin-left: auto;
-  min-width: max-content;
 }
 
 .status-cell {
@@ -202,13 +202,11 @@ button:disabled {
   white-space: nowrap;
 }
 
-.status-strip > .status-cell:first-child,
-.usage-status-strip > .status-cell:first-child {
+.status-strip > .status-cell:first-child {
   border-radius: var(--radius) 0 0 var(--radius);
 }
 
-.status-strip > .status-cell:last-child,
-.usage-status-strip > .status-cell:last-child {
+.status-strip > .status-cell:last-child {
   border-right: 0;
   border-radius: 0 var(--radius) var(--radius) 0;
 }
@@ -3308,13 +3306,11 @@ button:disabled {
   color: #52656a;
 }
 
-.prompt-row label,
 .label {
   color: #4b585e;
   white-space: nowrap;
 }
 
-.prompt-row textarea,
 .input-row textarea {
   width: 100%;
   min-width: 0;
@@ -3323,30 +3319,6 @@ button:disabled {
   border-radius: var(--radius);
   padding: 9px 10px;
   background: var(--color-surface);
-}
-
-.prompt-row textarea {
-  min-height: calc(1.4em + 20px);
-  max-height: calc(4.2em + 20px);
-  line-height: 1.4;
-  resize: none;
-  overflow-y: hidden;
-}
-
-.prompt-row textarea:focus,
-.prompt-row textarea:focus-visible {
-  outline: none;
-}
-
-.prompt-row.locked {
-  color: #7a858a;
-}
-
-.prompt-row.locked textarea {
-  color: #6f7a7f;
-  border-color: #d9dedf;
-  background: #f0f2f2;
-  cursor: not-allowed;
 }
 
 .input-row textarea {

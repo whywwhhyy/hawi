@@ -73,7 +73,7 @@ markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
 const COPY_FEEDBACK_MS = 1200;
-const SYSTEM_PROMPT_MAX_ROWS = 3;
+const SYSTEM_PROMPT_MAX_ROWS = 8;
 const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
 const UNLOADED_INPUT_HISTORY_KEY = "__unloaded__";
@@ -541,21 +541,12 @@ function normalQueueCount(
   return Math.max(queueLengths.normal, queueMessages?.normal.length ?? 0);
 }
 
-function measureMinimumContentSize(appShell: HTMLElement, statusRow: HTMLElement): LayoutSize {
+function measureMinimumContentSize(appShell: HTMLElement, brandBar: HTMLElement): LayoutSize {
+  const brandWidth = measureInlineGroupWidth(brandBar);
   return normalizeMinimumContentSize({
-    width: measureStatusRowMinimumWidth(statusRow) + horizontalChromeWidth(appShell),
+    width: brandWidth + horizontalChromeWidth(appShell),
     height: MIN_CONTENT_SIZE.height
   });
-}
-
-function measureStatusRowMinimumWidth(statusRow: HTMLElement): number {
-  const children = visibleElementChildren(statusRow);
-  if (children.length === 0) {
-    return elementWidth(statusRow);
-  }
-  const gap = flexColumnGap(statusRow);
-  const childrenWidth = children.reduce((sum, child) => sum + measureInlineGroupWidth(child), 0);
-  return Math.ceil(childrenWidth + gap * Math.max(0, children.length - 1) + horizontalChromeWidth(statusRow));
 }
 
 function measureInlineGroupWidth(element: HTMLElement): number {
@@ -670,6 +661,7 @@ export default function App() {
   const [historyPreviewLocateTarget, setHistoryPreviewLocateTarget] = useState<HistoryLocateTarget | null>(null);
   const [mainLocateTarget, setMainLocateTarget] = useState<HistoryLocateTarget | null>(null);
   const appShellRef = useRef<HTMLDivElement | null>(null);
+  const brandBarRef = useRef<HTMLDivElement | null>(null);
   const statusRowRef = useRef<HTMLDivElement | null>(null);
   const minimumContentSizeRef = useRef<LayoutSize | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -749,14 +741,16 @@ export default function App() {
   );
   const syncMinimumContentSize = useCallback(() => {
     const appShell = appShellRef.current;
+    const brandBar = brandBarRef.current;
     const statusRow = statusRowRef.current;
     if (
       !appShell
+      || !brandBar
       || !statusRow
       || typeof window === "undefined"
       || typeof window.hawi?.setMinimumContentSize !== "function"
     ) return;
-    const nextSize = measureMinimumContentSize(appShell, statusRow);
+    const nextSize = measureMinimumContentSize(appShell, brandBar);
     const previousSize = minimumContentSizeRef.current;
     if (previousSize?.width === nextSize.width && previousSize.height === nextSize.height) return;
     minimumContentSizeRef.current = nextSize;
@@ -804,8 +798,9 @@ export default function App() {
   useBrowserLayoutEffect(() => {
     if (typeof window === "undefined") return;
     const appShell = appShellRef.current;
+    const brandBar = brandBarRef.current;
     const statusRow = statusRowRef.current;
-    if (!appShell || !statusRow) return;
+    if (!appShell || !brandBar || !statusRow) return;
     let animationFrame: number | null = null;
     const scheduleSync = () => {
       if (typeof window.requestAnimationFrame !== "function") {
@@ -823,7 +818,18 @@ export default function App() {
       : new ResizeObserver(scheduleSync);
     if (observer) {
       observer.observe(appShell);
+      observer.observe(brandBar);
       observer.observe(statusRow);
+      for (const child of Array.from(brandBar.children)) {
+        if (child instanceof HTMLElement) {
+          observer.observe(child);
+          for (const grandchild of Array.from(child.children)) {
+            if (grandchild instanceof HTMLElement) {
+              observer.observe(grandchild);
+            }
+          }
+        }
+      }
       for (const child of Array.from(statusRow.children)) {
         if (child instanceof HTMLElement) {
           observer.observe(child);
@@ -1097,7 +1103,7 @@ export default function App() {
 
   useEffect(() => {
     resizeTextareaToRows(systemPromptRef.current, SYSTEM_PROMPT_MAX_ROWS);
-  }, [config?.systemPrompt, systemPromptLocked]);
+  }, [config?.systemPrompt, settingsMenuOpen, systemPromptLocked]);
 
   useEffect(() => {
     resizeTextareaToRows(inputRef.current, MESSAGE_INPUT_MAX_ROWS);
@@ -2598,6 +2604,7 @@ export default function App() {
     ?? metadata.currentWorkspaceRoot
     ?? null;
   const exportDisabled = !currentSessionId || state.sessionMessageCount === 0 || exportBusy;
+  const statusPopoverOpen = projectPopoverOpen || sessionDialogOpen || contextPopoverOpen || queuePopoverOpen;
 
   return (
     <div className="app-shell shadcn-workbench" ref={appShellRef}>
@@ -2637,6 +2644,24 @@ export default function App() {
             </button>
             {settingsMenuOpen && (
               <div className="rail-settings-menu menu-popover" role="menu">
+                <div className="rail-menu-section rail-system-prompt-section">
+                  <strong>System Prompt</strong>
+                  <textarea
+                    ref={systemPromptRef}
+                    className="rail-system-prompt-input"
+                    rows={4}
+                    value={config.systemPrompt}
+                    disabled={systemPromptLocked}
+                    title={systemPromptLocked ? "当前会话已有消息，System Prompt 已锁定" : "System Prompt"}
+                    aria-label="System Prompt"
+                    onChange={(event) => {
+                      resizeTextareaToRows(event.currentTarget, SYSTEM_PROMPT_MAX_ROWS);
+                      const nextConfig = { ...config, systemPrompt: event.target.value };
+                      setConfig(nextConfig);
+                      applySystemPrompt(nextConfig);
+                    }}
+                  />
+                </div>
                 <div className="rail-menu-section">
                   <strong>Session</strong>
                   <button
@@ -2716,20 +2741,18 @@ export default function App() {
 
       <main className="main-shell">
       <header className="topbar">
-        <div className="brand-bar">
-          <div className="brand-lockup" aria-label="Hawi">
-            <span className="brand-mark" aria-hidden="true"><Bot size={17} /></span>
+        <div className="brand-bar" ref={brandBarRef}>
+          <div className="brand-lockup" aria-label="Model">
             <span className="brand-copy">
-              <strong>Hawi</strong>
+              <strong>Model</strong>
               <span>{config.modelName || "No model selected"}</span>
             </span>
           </div>
-          <span className={`engine-pill ${coreRunning ? "running" : "idle"}`}>
-            <span aria-hidden="true" />
-            {coreRunning ? "Engine online" : "Engine idle"}
-          </span>
+          <div className="brand-usage">
+            <UsageStatusCell usage={state.modelUsage} />
+          </div>
         </div>
-        <div className="status-row" ref={statusRowRef}>
+        <div className={`status-row ${statusPopoverOpen ? "has-open-popover" : ""}`} ref={statusRowRef}>
           <div className="status-strip">
             <ProjectStatusCell
               projectPath={currentProjectPath}
@@ -2806,28 +2829,8 @@ export default function App() {
               onTaskClear={clearNormalQueue}
             />
           </div>
-          <div className="usage-status-strip">
-            <UsageStatusCell usage={state.modelUsage} />
-          </div>
         </div>
       </header>
-
-      <section className={`prompt-row ${systemPromptLocked ? "locked" : ""}`}>
-        <label>System Prompt:</label>
-        <textarea
-          ref={systemPromptRef}
-          rows={1}
-          value={config.systemPrompt}
-          disabled={systemPromptLocked}
-          title={systemPromptLocked ? "当前会话已有消息，System Prompt 已锁定" : "System Prompt"}
-          onChange={(event) => {
-            resizeTextareaToRows(event.currentTarget, SYSTEM_PROMPT_MAX_ROWS);
-            const nextConfig = { ...config, systemPrompt: event.target.value };
-            setConfig(nextConfig);
-            applySystemPrompt(nextConfig);
-          }}
-        />
-      </section>
 
       <section className={`workspace-row ${hasRightSidebar ? "has-sidebar" : ""}`}>
         <ChatTranscript
