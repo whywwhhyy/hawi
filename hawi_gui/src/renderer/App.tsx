@@ -71,6 +71,10 @@ markdown.renderer.rules.fence = (tokens, idx) => {
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 5;
 const AUTO_SCROLL_SETTLE_FRAMES = 2;
 const COPY_FEEDBACK_MS = 1200;
+const RAIL_SETTINGS_MENU_GAP_PX = 10;
+const RAIL_SETTINGS_MENU_MARGIN_PX = 10;
+const RAIL_SETTINGS_MENU_MAX_WIDTH_PX = 520;
+const RAIL_SETTINGS_MENU_MIN_WIDTH_PX = 220;
 const SYSTEM_PROMPT_MAX_ROWS = 8;
 const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
@@ -255,6 +259,14 @@ interface BlobPreviewRequest {
   uri?: string;
   mimeType?: string;
   size?: number;
+}
+
+interface RailSettingsMenuLayoutInput {
+  anchorTop: number;
+  anchorRight: number;
+  menuHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 interface PendingBlobPreviewFetch {
@@ -609,6 +621,47 @@ function cssPixelValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+export function resolveRailSettingsMenuLayout({
+  anchorTop,
+  anchorRight,
+  menuHeight,
+  viewportWidth,
+  viewportHeight
+}: RailSettingsMenuLayoutInput): CSSProperties {
+  const maxHeight = Math.max(0, viewportHeight - RAIL_SETTINGS_MENU_MARGIN_PX * 2);
+  const preferredLeft = anchorRight + RAIL_SETTINGS_MENU_GAP_PX;
+  const preferredAvailableWidth = viewportWidth - preferredLeft - RAIL_SETTINGS_MENU_MARGIN_PX;
+  const left = preferredAvailableWidth >= RAIL_SETTINGS_MENU_MIN_WIDTH_PX
+    ? preferredLeft
+    : Math.max(
+      RAIL_SETTINGS_MENU_MARGIN_PX,
+      viewportWidth - RAIL_SETTINGS_MENU_MIN_WIDTH_PX - RAIL_SETTINGS_MENU_MARGIN_PX
+    );
+  const width = Math.max(
+    0,
+    Math.min(
+      RAIL_SETTINGS_MENU_MAX_WIDTH_PX,
+      viewportWidth - left - RAIL_SETTINGS_MENU_MARGIN_PX
+    )
+  );
+  const measuredHeight = menuHeight > 0 ? Math.min(menuHeight, maxHeight) : maxHeight;
+  const maxTop = Math.max(
+    RAIL_SETTINGS_MENU_MARGIN_PX,
+    viewportHeight - measuredHeight - RAIL_SETTINGS_MENU_MARGIN_PX
+  );
+  const top = Math.max(
+    RAIL_SETTINGS_MENU_MARGIN_PX,
+    Math.min(anchorTop, maxTop)
+  );
+
+  return {
+    top: Math.round(top),
+    left: Math.round(left),
+    width: Math.round(width),
+    maxHeight: Math.round(maxHeight),
+  };
+}
+
 export default function App() {
   const [metadata, setMetadata] = useState<GuiMetadata | null>(null);
   const [config, setConfig] = useState<PersistedConfig | null>(null);
@@ -645,6 +698,7 @@ export default function App() {
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [settingsMenuStyle, setSettingsMenuStyle] = useState<CSSProperties>({});
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [historySearchCaseSensitive, setHistorySearchCaseSensitive] = useState(false);
@@ -665,6 +719,8 @@ export default function App() {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const historyPreviewRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const settingsMenuAnchorRef = useRef<HTMLDivElement | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentFileInputRef = useRef<HTMLInputElement | null>(null);
   const queueTaskDraftRef = useRef<HTMLTextAreaElement | null>(null);
@@ -890,6 +946,63 @@ export default function App() {
     document.addEventListener("pointerdown", handlePointerDown);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [settingsMenuOpen]);
+
+  useBrowserLayoutEffect(() => {
+    if (!settingsMenuOpen) {
+      setSettingsMenuStyle({});
+      return;
+    }
+    const anchor = settingsMenuAnchorRef.current;
+    const menu = settingsMenuRef.current;
+    if (!anchor || !menu) return;
+
+    let frameId: number | null = null;
+    const updateMenuLayout = () => {
+      const anchorRect = anchor.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const nextStyle = resolveRailSettingsMenuLayout({
+        anchorTop: anchorRect.top,
+        anchorRight: anchorRect.right,
+        menuHeight: menuRect.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      });
+      setSettingsMenuStyle((current) => (
+        current.top === nextStyle.top
+          && current.left === nextStyle.left
+          && current.width === nextStyle.width
+          && current.maxHeight === nextStyle.maxHeight
+          ? current
+          : nextStyle
+      ));
+    };
+    const scheduleMenuLayout = () => {
+      if (frameId !== null) return;
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        updateMenuLayout();
+      });
+    };
+
+    updateMenuLayout();
+    scheduleMenuLayout();
+    window.addEventListener("resize", scheduleMenuLayout);
+    window.addEventListener("scroll", scheduleMenuLayout, true);
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(scheduleMenuLayout);
+    resizeObserver?.observe(anchor);
+    resizeObserver?.observe(menu);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      window.removeEventListener("resize", scheduleMenuLayout);
+      window.removeEventListener("scroll", scheduleMenuLayout, true);
+      resizeObserver?.disconnect();
     };
   }, [settingsMenuOpen]);
 
@@ -2628,7 +2741,7 @@ export default function App() {
             <Plus size={18} />
             <span>New</span>
           </button>
-          <div className="rail-settings-anchor">
+          <div className="rail-settings-anchor" ref={settingsMenuAnchorRef}>
             <button
               type="button"
               className={`rail-button ${settingsMenuOpen ? "active" : ""}`}
@@ -2641,7 +2754,12 @@ export default function App() {
               <span>Settings</span>
             </button>
             {settingsMenuOpen && (
-              <div className="rail-settings-menu menu-popover" role="menu">
+              <div
+                ref={settingsMenuRef}
+                className="rail-settings-menu menu-popover"
+                role="menu"
+                style={settingsMenuStyle}
+              >
                 <div className="rail-menu-section rail-system-prompt-section">
                   <strong>System Prompt</strong>
                   <textarea
@@ -2713,7 +2831,7 @@ export default function App() {
                       disabled={toolCallPurposeLocked}
                       onChange={(event) => updateToolCallPurposeEnabled(event.target.checked)}
                     />
-                    工具目的参数
+                    工具调用目的
                   </label>
                 </div>
               </div>

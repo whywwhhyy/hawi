@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -231,6 +231,35 @@ describe("resolveOverflowVisibleCount", () => {
 
   it("shows only the overflow trigger when the first item cannot fit beside it", () => {
     expect(resolveOverflowVisibleCount(95, [50, 60, 70], 40, 8)).toBe(0);
+  });
+});
+
+describe("resolveRailSettingsMenuLayout", () => {
+  it("keeps the settings menu within a short viewport", () => {
+    const style = resolveRailSettingsMenuLayout({
+      anchorTop: 520,
+      anchorRight: 86,
+      menuHeight: 360,
+      viewportWidth: 900,
+      viewportHeight: 560,
+    });
+
+    expect(style.top).toBe(190);
+    expect(style.left).toBe(96);
+    expect(style.maxHeight).toBe(540);
+  });
+
+  it("limits menu height so overflowing content can scroll", () => {
+    const style = resolveRailSettingsMenuLayout({
+      anchorTop: 10,
+      anchorRight: 86,
+      menuHeight: 900,
+      viewportWidth: 900,
+      viewportHeight: 300,
+    });
+
+    expect(style.top).toBe(10);
+    expect(style.maxHeight).toBe(280);
   });
 });
 

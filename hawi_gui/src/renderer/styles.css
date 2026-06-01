@@ -2784,7 +2784,7 @@ button:disabled {
   max-width: 100%;
   min-width: 0;
   overflow: auto;
-  margin: 8px 0 0 0;
+  margin: 8px 0;
   padding: 10px 12px;
   border: 1px solid #dbe1e4;
   border-radius: 6px;
@@ -2797,6 +2797,7 @@ button:disabled {
 }
 
 .markdown .code-block-shell > pre {
+  margin: 0;
   padding-right: 58px;
 }
 
