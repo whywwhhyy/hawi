@@ -127,6 +127,19 @@ class TestKimiOpenAIUnit:
         )
         assert model.enable_thinking is False
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "kimi-k2.6",
+            "kimi-k2-6",
+            "moonshot/kimi-k2.6",
+            "KIMI_K2_6",
+        ],
+    )
+    def test_k26_thinking_model_detection_variants(self, model_id: str):
+        """Test K2.6 model ID variants are detected as thinking models."""
+        assert KimiOpenAIModel._is_thinking_model_id(model_id)
+
     def test_k25_fixed_params_with_thinking(self):
         """Test K2.5 fixed parameters when thinking is enabled."""
         model = KimiOpenAIModel(
@@ -232,6 +245,33 @@ class TestKimiOpenAIUnit:
         assert result.get("reasoning_content")
         assert isinstance(result["reasoning_content"], str)
         assert len(result["reasoning_content"]) > 0
+
+    def test_k26_mixed_tool_call_history_includes_reasoning(self):
+        """Test K2.6 split tool-call history preserves reasoning_content."""
+        model = KimiOpenAIModel(
+            api_key="test-key",
+            model_id="kimi-k2.6",
+        )
+
+        msg = _create_assistant_message(content=[
+            _reasoning_part("Need to inspect the project files."),
+            _text_part("I'll inspect the project."),
+            _tool_call_part(
+                id="call_123",
+                name="list_dir",
+                arguments={"path": "."},
+            ),
+        ])
+
+        results = model._convert_message_to_openai(msg)
+        tool_call_message = next(item for item in results if item.get("tool_calls"))
+
+        assert tool_call_message["role"] == "assistant"
+        assert tool_call_message["content"] is None
+        assert (
+            tool_call_message["reasoning_content"]
+            == "Need to inspect the project files."
+        )
 
 
 @pytest.mark.skipif(not HAS_KIMI, reason=SKIP_REASON)

@@ -21,8 +21,8 @@ from ._token_estimate import KimiTokenEstimateMixin
 
 logger = logging.getLogger(__name__)
 
-# Kimi K2.5 模型的固定参数
-KIMI_K25_FIXED_PARAMS = {
+# Kimi K2 thinking 模型的固定参数
+KIMI_K2_THINKING_FIXED_PARAMS = {
     "top_p": 0.95,
     "n": 1,
     "presence_penalty": 0.0,
@@ -34,10 +34,10 @@ class KimiOpenAIModel(KimiTokenEstimateMixin, OpenAIModel):
     """
     Kimi/Moonshot OpenAI API 兼容模型
 
-    支持 Kimi 系列模型，包括 K2.5 的 thinking 模式。
+    支持 Kimi 系列模型，包括 K2 thinking 模式。
 
     Kimi API 特殊处理:
-    - K2.5 thinking 模式需要固定 temperature=1.0
+    - K2 thinking 模式需要固定 temperature=1.0
     - 非 thinking 模式 temperature=0.6
     - 固定 top_p=0.95, n=1, presence_penalty=0.0, frequency_penalty=0.0
 
@@ -49,14 +49,14 @@ class KimiOpenAIModel(KimiTokenEstimateMixin, OpenAIModel):
             base_url="https://api.moonshot.cn/v1",
         )
 
-        # K2.5 thinking 模式（默认启用）
+        # K2 thinking 模式（默认启用）
         model = KimiOpenAIModel(
             model_id="kimi-k2.5",
             api_key="sk-...",
             base_url="https://api.moonshot.cn/v1",
         )
 
-        # K2.5 禁用 thinking 模式
+        # K2 thinking 禁用 thinking 模式
         model = KimiOpenAIModel(
             model_id="kimi-k2.5",
             api_key="sk-...",
@@ -81,7 +81,7 @@ class KimiOpenAIModel(KimiTokenEstimateMixin, OpenAIModel):
             model_id: 模型标识符，默认为 "kimi-k2.5"
             api_key: API 密钥
             base_url: API 基础 URL，默认为 "https://api.moonshot.cn/v1"
-            enable_thinking: 是否启用 thinking 模式（K2.5），默认为 True
+            enable_thinking: 是否启用 thinking 模式（K2 thinking），默认为 True
             **params: 其他参数
         """
         thinking_model = self._is_thinking_model_id(model_id)
@@ -108,30 +108,48 @@ class KimiOpenAIModel(KimiTokenEstimateMixin, OpenAIModel):
         )
         self.enable_thinking = enable_thinking
 
-    # K2.5 系列 thinking 模型标识符（支持多种变体）
+    # K2 thinking 模型标识符（支持多种变体）
     _THINKING_MODELS = frozenset({
         "kimi-k2.5",
         "kimi-k2-5",
+        "kimi-k2.6",
+        "kimi-k2-6",
         "kimi-k2-0711-preview",
         "kimi-k2-0905-preview",
         "kimi-k2-thinking",
         "kimi-k2-thinking-turbo",
     })
+    _THINKING_MODEL_PREFIXES = (
+        "kimi-k2.5",
+        "kimi-k2-5",
+        "kimi-k2.6",
+        "kimi-k2-6",
+    )
+
+    @staticmethod
+    def _normalize_model_id(model_id: str) -> str:
+        """Normalize provider-qualified model IDs for capability detection."""
+        return model_id.rsplit("/", 1)[-1].strip().lower().replace("_", "-")
 
     @classmethod
     def _is_thinking_model_id(cls, model_id: str) -> bool:
         """检查模型 ID 是否为 thinking 模型"""
-        return model_id in cls._THINKING_MODELS
+        normalized = cls._normalize_model_id(model_id)
+        return (
+            normalized in cls._THINKING_MODELS
+            or normalized.startswith(cls._THINKING_MODEL_PREFIXES)
+            or "thinking" in normalized
+        )
 
     def _is_thinking_model(self) -> bool:
         """检查是否为 thinking 模型"""
         return self._is_thinking_model_id(self.model_id)
 
     def _get_params(self) -> dict[str, Any]:
-        """获取模型参数（K2.5 固定参数处理）"""
+        """获取模型参数（K2 thinking 固定参数处理）"""
         params = dict(self.params)
 
-        # 对 K2.5 模型应用固定参数
+        # 对 K2 thinking 模型应用固定参数
         if self._is_thinking_model():
             # 根据是否启用 thinking 设置 temperature
             if self.enable_thinking:
@@ -140,19 +158,19 @@ class KimiOpenAIModel(KimiTokenEstimateMixin, OpenAIModel):
                 params["temperature"] = 0.6
 
             # 应用其他固定参数
-            params.update(KIMI_K25_FIXED_PARAMS)
+            params.update(KIMI_K2_THINKING_FIXED_PARAMS)
 
             # K2 系列推荐使用 max_completion_tokens（包含 reasoning tokens）
             # 如果用户提供了 max_completion_tokens，则移除 max_tokens 以避免冲突
             if params.get("max_completion_tokens") is not None:
                 params.pop("max_tokens", None)
                 logger.debug(
-                    "Kimi K2.5 使用 max_completion_tokens=%s",
+                    "Kimi K2 thinking 使用 max_completion_tokens=%s",
                     params["max_completion_tokens"]
                 )
 
             logger.debug(
-                "Kimi K2.5 使用固定参数: temperature=%s, top_p=0.95",
+                "Kimi K2 thinking 使用固定参数: temperature=%s, top_p=0.95",
                 params["temperature"]
             )
 
@@ -162,7 +180,7 @@ class KimiOpenAIModel(KimiTokenEstimateMixin, OpenAIModel):
         """准备请求，处理 Kimi 特殊参数"""
         req = super()._prepare_request_impl(request)
 
-        # 对 K2.5 模型，如果禁用 thinking，通过 extra_body 传递参数
+        # 对 K2 thinking 模型，如果禁用 thinking，通过 extra_body 传递参数
         if self._is_thinking_model() and not self.enable_thinking:
             req["extra_body"] = {"thinking": {"type": "disabled"}}
             if "thinking" in req:
