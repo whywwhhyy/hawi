@@ -459,6 +459,10 @@
   overflow: hidden;
 }
 
+.bubble.system-prompt:not(.message-collapsed) .message-injections.after {
+  padding-bottom: 10px;
+}
+
 .bubble.message-collapsed .message-injections {
   grid-template-rows: 0fr;
   padding-top: 0;
@@ -864,4 +868,3 @@
     linear-gradient(to bottom, rgba(255, 255, 255, 0.36), rgba(255, 255, 255, 0.36)),
     linear-gradient(to bottom, rgba(238, 247, 243, 0), #eef7f3 88%);
 }
-
