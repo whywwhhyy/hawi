@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -260,6 +260,76 @@ describe("resolveRailSettingsMenuLayout", () => {
 
     expect(style.top).toBe(10);
     expect(style.maxHeight).toBe(280);
+  });
+});
+
+describe("resolveStatusPopoverLayout", () => {
+  it("moves a status popover back inside the right and bottom viewport edges", () => {
+    const layout = resolveStatusPopoverLayout({
+      anchorRect: {
+        top: 420,
+        right: 980,
+        bottom: 456,
+        left: 900,
+        width: 80,
+        height: 36,
+      },
+      popoverSize: { width: 360, height: 180 },
+      viewportWidth: 1000,
+      viewportHeight: 500,
+    });
+
+    expect(layout.left).toBe(632);
+    expect(layout.top).toBe(234);
+    expect(layout.maxWidth).toBe(984);
+    expect(layout.maxHeight).toBe(484);
+  });
+
+  it("caps status popover size in a very narrow viewport", () => {
+    const layout = resolveStatusPopoverLayout({
+      anchorRect: {
+        top: 120,
+        right: 160,
+        bottom: 148,
+        left: 120,
+        width: 40,
+        height: 28,
+      },
+      popoverSize: { width: 420, height: 260 },
+      viewportWidth: 280,
+      viewportHeight: 160,
+    });
+
+    expect(layout.left).toBe(8);
+    expect(layout.top).toBe(8);
+    expect(layout.maxWidth).toBe(264);
+    expect(layout.maxHeight).toBe(144);
+  });
+});
+
+describe("resolveStatusMainColumnLayout", () => {
+  it("keeps flexible status segments at their minimums when the row is narrow", () => {
+    expect(resolveStatusMainColumnLayout({ containerWidth: 600 })).toEqual({
+      project: 250,
+      session: 292,
+      context: 180,
+    });
+  });
+
+  it("gives extra width to the shortest flexible status segment first", () => {
+    expect(resolveStatusMainColumnLayout({ containerWidth: 940 })).toEqual({
+      project: 250,
+      session: 292,
+      context: 230,
+    });
+  });
+
+  it("equalizes flexible status segments when there is enough room", () => {
+    const layout = resolveStatusMainColumnLayout({ containerWidth: 1600 });
+
+    expect(layout.project).toBeCloseTo(477.333, 3);
+    expect(layout.session).toBeCloseTo(477.333, 3);
+    expect(layout.context).toBeCloseTo(477.333, 3);
   });
 });
 

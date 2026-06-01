@@ -1,4 +1,5 @@
 import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { createPortal } from "react-dom";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -90,7 +91,12 @@ const STATUS_OVERLAY_SELECTOR = [
   ".queue-popover",
   ".menu-popover"
 ].join(",");
+const STATUS_PROJECT_MIN_WIDTH_PX = 250;
+const STATUS_SESSION_MIN_WIDTH_PX = 292;
+const STATUS_CONTEXT_MIN_WIDTH_PX = 180;
+const STATUS_MESSAGE_WIDTH_PX = 168;
 const STATUS_POPOVER_VIEWPORT_MARGIN = 8;
+const STATUS_POPOVER_GAP_PX = 6;
 const imageAttachmentExtensions = new Set(["avif", "bmp", "gif", "jpg", "jpeg", "png", "svg", "webp"]);
 const audioAttachmentExtensions = new Set(["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
 const videoAttachmentExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ogv", "webm"]);
@@ -269,6 +275,52 @@ interface RailSettingsMenuLayoutInput {
   viewportWidth: number;
   viewportHeight: number;
 }
+
+interface StatusPopoverRect {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+interface StatusPopoverLayoutInput {
+  anchorRect: StatusPopoverRect;
+  popoverSize: {
+    width: number;
+    height: number;
+  };
+  viewportWidth: number;
+  viewportHeight: number;
+  margin?: number;
+  gap?: number;
+}
+
+interface StatusPopoverLayout {
+  top: number;
+  left: number;
+  maxWidth: number;
+  maxHeight: number;
+}
+
+interface StatusMainColumnLayoutInput {
+  containerWidth: number;
+  projectMinWidth?: number;
+  sessionMinWidth?: number;
+  contextMinWidth?: number;
+  messageWidth?: number;
+}
+
+interface StatusMainColumnLayout {
+  project: number;
+  session: number;
+  context: number;
+}
+
+type StatusPopoverAnchorRef = {
+  current: HTMLElement | null;
+};
 
 interface PendingBlobPreviewFetch {
   chunks: string[];
@@ -622,80 +674,265 @@ function cssPixelValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function useViewportBoundedPopover(open: boolean) {
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-
+function useStatusMainColumnLayout(stripRef: { current: HTMLElement | null }) {
   useBrowserLayoutEffect(() => {
-    if (!open || typeof window === "undefined") return;
-    const popover = popoverRef.current;
-    if (!popover) return;
+    if (typeof window === "undefined") return;
+    const strip = stripRef.current;
+    if (!strip) return;
 
     let animationFrame: number | null = null;
-    const schedulePlacement = () => {
+    const updateLayout = () => {
+      const contentWidth = strip.clientWidth || Math.max(0, strip.getBoundingClientRect().width - horizontalBorderWidth(strip));
+      const columns = resolveStatusMainColumnLayout({ containerWidth: contentWidth });
+      strip.style.setProperty("--status-project-width", `${columns.project}px`);
+      strip.style.setProperty("--status-session-width", `${columns.session}px`);
+      strip.style.setProperty("--status-context-width", `${columns.context}px`);
+    };
+    const scheduleLayout = () => {
       if (typeof window.requestAnimationFrame !== "function") {
-        clampStatusPopoverToViewport(popover);
+        updateLayout();
         return;
       }
       if (animationFrame !== null) return;
       animationFrame = window.requestAnimationFrame(() => {
         animationFrame = null;
-        clampStatusPopoverToViewport(popover);
+        updateLayout();
       });
     };
 
-    clampStatusPopoverToViewport(popover);
+    scheduleLayout();
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(scheduleLayout);
+    observer?.observe(strip);
+    window.addEventListener("resize", scheduleLayout);
+    return () => {
+      if (animationFrame !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleLayout);
+    };
+  }, [stripRef]);
+}
+
+export function resolveStatusMainColumnLayout({
+  containerWidth,
+  projectMinWidth = STATUS_PROJECT_MIN_WIDTH_PX,
+  sessionMinWidth = STATUS_SESSION_MIN_WIDTH_PX,
+  contextMinWidth = STATUS_CONTEXT_MIN_WIDTH_PX,
+  messageWidth = STATUS_MESSAGE_WIDTH_PX
+}: StatusMainColumnLayoutInput): StatusMainColumnLayout {
+  const minimums = [
+    nonNegative(projectMinWidth),
+    nonNegative(sessionMinWidth),
+    nonNegative(contextMinWidth)
+  ];
+  const mainMinimumTotal = minimums.reduce((sum, width) => sum + width, 0);
+  const availableMainWidth = Math.max(
+    mainMinimumTotal,
+    nonNegative(containerWidth) - nonNegative(messageWidth)
+  );
+  const widths = distributeExtraToShortestColumns(
+    minimums,
+    availableMainWidth - mainMinimumTotal
+  );
+
+  return {
+    project: roundLayoutPixel(widths[0]),
+    session: roundLayoutPixel(widths[1]),
+    context: roundLayoutPixel(widths[2])
+  };
+}
+
+function distributeExtraToShortestColumns(minWidths: number[], extraWidth: number): number[] {
+  const columns = minWidths.map((width, index) => ({ index, width }));
+  let remaining = Math.max(0, extraWidth);
+  const epsilon = 0.001;
+
+  while (remaining > epsilon) {
+    columns.sort((a, b) => a.width === b.width ? a.index - b.index : a.width - b.width);
+    const shortestWidth = columns[0].width;
+    const shortestColumns = columns.filter((column) => Math.abs(column.width - shortestWidth) <= epsilon);
+    const nextColumn = columns.find((column) => column.width > shortestWidth + epsilon);
+
+    if (!nextColumn) {
+      const delta = remaining / columns.length;
+      for (const column of columns) {
+        column.width += delta;
+      }
+      break;
+    }
+
+    const costToNext = (nextColumn.width - shortestWidth) * shortestColumns.length;
+    if (remaining >= costToNext) {
+      for (const column of shortestColumns) {
+        column.width = nextColumn.width;
+      }
+      remaining -= costToNext;
+      continue;
+    }
+
+    const delta = remaining / shortestColumns.length;
+    for (const column of shortestColumns) {
+      column.width += delta;
+    }
+    break;
+  }
+
+  return columns
+    .sort((a, b) => a.index - b.index)
+    .map((column) => column.width);
+}
+
+function roundLayoutPixel(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+const hiddenStatusPopoverStyle = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  maxWidth: `calc(100vw - ${STATUS_POPOVER_VIEWPORT_MARGIN * 2}px)`,
+  maxHeight: `calc(100vh - ${STATUS_POPOVER_VIEWPORT_MARGIN * 2}px)`,
+  "--status-popover-max-width": `calc(100vw - ${STATUS_POPOVER_VIEWPORT_MARGIN * 2}px)`,
+  "--status-popover-max-height": `calc(100vh - ${STATUS_POPOVER_VIEWPORT_MARGIN * 2}px)`,
+  visibility: "hidden"
+} as CSSProperties;
+
+function useAnchoredStatusPopover(open: boolean, anchorRef: StatusPopoverAnchorRef) {
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [style, setStyle] = useState<CSSProperties>(hiddenStatusPopoverStyle);
+
+  useBrowserLayoutEffect(() => {
+    if (!open || typeof window === "undefined") {
+      setStyle(hiddenStatusPopoverStyle);
+      return;
+    }
+
+    let animationFrame: number | null = null;
+    const updateLayout = () => {
+      const anchor = anchorRef.current;
+      const popover = popoverRef.current;
+      if (!anchor || !popover) return;
+
+      const anchorRect = anchor.getBoundingClientRect();
+      const popoverRect = popover.getBoundingClientRect();
+      const next = resolveStatusPopoverLayout({
+        anchorRect,
+        popoverSize: {
+          width: popoverRect.width,
+          height: popoverRect.height
+        },
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight
+      });
+
+      setStyle({
+        position: "fixed",
+        top: next.top,
+        left: next.left,
+        maxWidth: next.maxWidth,
+        maxHeight: next.maxHeight,
+        "--status-popover-max-width": `${next.maxWidth}px`,
+        "--status-popover-max-height": `${next.maxHeight}px`,
+        visibility: "visible"
+      } as CSSProperties);
+    };
+    const scheduleLayout = () => {
+      if (typeof window.requestAnimationFrame !== "function") {
+        updateLayout();
+        return;
+      }
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        updateLayout();
+      });
+    };
+
+    scheduleLayout();
     const resizeObserver = typeof ResizeObserver === "undefined"
       ? null
-      : new ResizeObserver(schedulePlacement);
-    resizeObserver?.observe(popover);
-    window.addEventListener("resize", schedulePlacement);
-    window.addEventListener("scroll", schedulePlacement, true);
+      : new ResizeObserver(scheduleLayout);
+    if (resizeObserver) {
+      const anchor = anchorRef.current;
+      const popover = popoverRef.current;
+      if (anchor) resizeObserver.observe(anchor);
+      if (popover) resizeObserver.observe(popover);
+    }
+    window.addEventListener("resize", scheduleLayout);
+    window.addEventListener("scroll", scheduleLayout, true);
     return () => {
       if (animationFrame !== null && typeof window.cancelAnimationFrame === "function") {
         window.cancelAnimationFrame(animationFrame);
       }
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", schedulePlacement);
-      window.removeEventListener("scroll", schedulePlacement, true);
-      resetStatusPopoverPlacement(popover);
+      window.removeEventListener("resize", scheduleLayout);
+      window.removeEventListener("scroll", scheduleLayout, true);
     };
-  }, [open]);
+  }, [anchorRef, open]);
 
-  return popoverRef;
+  return { popoverRef, style };
 }
 
-function clampStatusPopoverToViewport(popover: HTMLElement): void {
-  resetStatusPopoverPlacement(popover);
-  const margin = STATUS_POPOVER_VIEWPORT_MARGIN;
-  popover.style.maxWidth = `calc(100vw - ${margin * 2}px)`;
-  popover.style.maxHeight = `calc(100vh - ${margin * 2}px)`;
-
-  const rect = popover.getBoundingClientRect();
-  const viewportRight = window.innerWidth - margin;
-  const viewportBottom = window.innerHeight - margin;
-  let shiftX = 0;
-  let shiftY = 0;
-
-  if (rect.right > viewportRight) {
-    shiftX = viewportRight - rect.right;
-  }
-  if (rect.left + shiftX < margin) {
-    shiftX += margin - (rect.left + shiftX);
-  }
-  if (rect.bottom > viewportBottom) {
-    shiftY = viewportBottom - rect.bottom;
-  }
-  if (rect.top + shiftY < margin) {
-    shiftY += margin - (rect.top + shiftY);
-  }
-
-  popover.style.setProperty("--status-popover-shift-x", `${Math.round(shiftX)}px`);
-  popover.style.setProperty("--status-popover-shift-y", `${Math.round(shiftY)}px`);
+function StatusPopoverLayer({
+  open,
+  anchorRef,
+  children
+}: {
+  open: boolean;
+  anchorRef: StatusPopoverAnchorRef;
+  children: ReactNode;
+}) {
+  const { popoverRef, style } = useAnchoredStatusPopover(open, anchorRef);
+  if (!open || typeof document === "undefined") return null;
+  return createPortal(
+    <div className="status-popover-layer" ref={popoverRef} style={style}>
+      {children}
+    </div>,
+    document.body
+  );
 }
 
-function resetStatusPopoverPlacement(popover: HTMLElement): void {
-  popover.style.setProperty("--status-popover-shift-x", "0px");
-  popover.style.setProperty("--status-popover-shift-y", "0px");
+export function resolveStatusPopoverLayout({
+  anchorRect,
+  popoverSize,
+  viewportWidth,
+  viewportHeight,
+  margin = STATUS_POPOVER_VIEWPORT_MARGIN,
+  gap = STATUS_POPOVER_GAP_PX
+}: StatusPopoverLayoutInput): StatusPopoverLayout {
+  const maxWidth = Math.max(0, viewportWidth - margin * 2);
+  const maxHeight = Math.max(0, viewportHeight - margin * 2);
+  const popoverWidth = Math.min(nonNegative(popoverSize.width), maxWidth);
+  const popoverHeight = Math.min(nonNegative(popoverSize.height), maxHeight);
+  const maxLeft = Math.max(margin, viewportWidth - margin - popoverWidth);
+  const maxTop = Math.max(margin, viewportHeight - margin - popoverHeight);
+  const preferredLeft = anchorRect.left;
+  const belowTop = anchorRect.bottom + gap;
+  const aboveTop = anchorRect.top - gap - popoverHeight;
+  const preferredTop = belowTop + popoverHeight <= viewportHeight - margin
+    ? belowTop
+    : aboveTop >= margin
+      ? aboveTop
+      : belowTop;
+
+  return {
+    top: Math.round(clampNumber(preferredTop, margin, maxTop)),
+    left: Math.round(clampNumber(preferredLeft, margin, maxLeft)),
+    maxWidth: Math.round(maxWidth),
+    maxHeight: Math.round(maxHeight)
+  };
+}
+
+function nonNegative(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (max < min) return min;
+  return Math.max(min, Math.min(value, max));
 }
 
 export function resolveRailSettingsMenuLayout({
@@ -792,6 +1029,7 @@ export default function App() {
   const appShellRef = useRef<HTMLDivElement | null>(null);
   const brandBarRef = useRef<HTMLDivElement | null>(null);
   const statusRowRef = useRef<HTMLDivElement | null>(null);
+  const statusStripRef = useRef<HTMLDivElement | null>(null);
   const minimumContentSizeRef = useRef<LayoutSize | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const historyPreviewRef = useRef<HTMLDivElement | null>(null);
@@ -889,6 +1127,7 @@ export default function App() {
       console.warn("failed to update minimum content size", error);
     });
   }, []);
+  useStatusMainColumnLayout(statusStripRef);
 
   useEffect(() => {
     window.hawi.getMetadata().then((meta) => {
@@ -2792,7 +3031,6 @@ export default function App() {
     ?? metadata.currentWorkspaceRoot
     ?? null;
   const exportDisabled = !currentSessionId || state.sessionMessageCount === 0 || exportBusy;
-  const statusPopoverOpen = projectPopoverOpen || sessionDialogOpen || contextPopoverOpen || queuePopoverOpen;
 
   return (
     <div className="app-shell shadcn-workbench" ref={appShellRef}>
@@ -2945,8 +3183,8 @@ export default function App() {
             <UsageStatusCell usage={state.modelUsage} />
           </div>
         </div>
-        <div className={`status-row ${statusPopoverOpen ? "has-open-popover" : ""}`} ref={statusRowRef}>
-          <div className="status-strip">
+        <div className="status-row" ref={statusRowRef}>
+          <div className="status-strip" ref={statusStripRef}>
             <ProjectStatusCell
               projectPath={currentProjectPath}
               open={projectPopoverOpen}
@@ -3254,11 +3492,12 @@ function QueueStatusCell({
   onTaskMove: (messageId: string, direction: -1 | 1) => void;
   onTaskClear: () => void;
 }) {
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   const highPriorityCount = hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0;
   const normalCount = normalQueueCount(queueLengths, queueMessages);
 
   return (
-    <StatusCell className="priority-status" active={open}>
+    <StatusCell ref={anchorRef} className="priority-status" active={open}>
       <StatusCellTrigger
         className="priority-status-trigger"
         title="Insert messages deliver soon; queued messages run later."
@@ -3271,7 +3510,7 @@ function QueueStatusCell({
         <span><span>Insert</span><strong>{highPriorityCount}</strong></span>
         <span><span>Queue</span><strong>{normalCount}</strong></span>
       </StatusCellTrigger>
-      {open && (
+      <StatusPopoverLayer open={open} anchorRef={anchorRef}>
         <QueuePopover
           queueLengths={queueLengths}
           queueMessages={queueMessages}
@@ -3299,7 +3538,7 @@ function QueueStatusCell({
           onTaskMove={onTaskMove}
           onTaskClear={onTaskClear}
         />
-      )}
+      </StatusPopoverLayer>
     </StatusCell>
   );
 }
@@ -3357,6 +3596,7 @@ function ContextUsageCell({
   onConfirm: () => void;
   onThresholdChange: (percent: number) => Promise<void>;
 }) {
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   const compressing = compression?.active === true;
   const ratio = usage?.ratio ?? 0;
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(ratio * 100)}%`;
@@ -3375,7 +3615,7 @@ function ContextUsageCell({
         ? `Context ${usageLabel}${thresholdTitle} · 压缩中`
         : `Context ${usageLabel}${thresholdTitle} · 点击查看上下文设置`;
   return (
-    <StatusCell className={`context-status ${compressing ? "compressing" : ""}`} active={open}>
+    <StatusCell ref={anchorRef} className={`context-status ${compressing ? "compressing" : ""}`} active={open}>
       <StatusCellTrigger
         className="context-status-trigger"
         title={title}
@@ -3407,7 +3647,7 @@ function ContextUsageCell({
           </>
         )}
       </StatusCellTrigger>
-      {open && (
+      <StatusPopoverLayer open={open} anchorRef={anchorRef}>
         <ContextPopover
           usage={usage}
           autoCompact={autoCompact}
@@ -3417,7 +3657,7 @@ function ContextUsageCell({
           onConfirm={onConfirm}
           onThresholdChange={onThresholdChange}
         />
-      )}
+      </StatusPopoverLayer>
     </StatusCell>
   );
 }
@@ -3435,12 +3675,12 @@ function ProjectStatusCell({
   onToggle: () => void;
   onSwitch: () => void;
 }) {
-  const popoverRef = useViewportBoundedPopover(open);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   const projectName = projectNameFromPath(projectPath);
   const fullPath = projectPath?.trim() || "-";
   const pathLabel = middleEllipsizePath(fullPath, 58);
   return (
-    <StatusCell className="project-status" active={open}>
+    <StatusCell ref={anchorRef} className="project-status" active={open}>
       <StatusCellTrigger
         className="project-trigger"
         title={`Project\n${projectName}\n${fullPath}`}
@@ -3452,8 +3692,8 @@ function ProjectStatusCell({
         <strong className="project-name-line">{projectName}</strong>
         <span className="project-path-line">{pathLabel}</span>
       </StatusCellTrigger>
-      {open && (
-        <div className="project-popover status-popover" ref={popoverRef}>
+      <StatusPopoverLayer open={open} anchorRef={anchorRef}>
+        <div className="project-popover">
           <StatusPopoverHeader title="Project" value={projectName} />
           <div className="project-popover-body">
             <div className="project-full-path">{fullPath}</div>
@@ -3468,7 +3708,7 @@ function ProjectStatusCell({
             </button>
           </div>
         </div>
-      )}
+      </StatusPopoverLayer>
     </StatusCell>
   );
 }
@@ -3506,7 +3746,7 @@ function SessionStatusCell({
   onFork: (sessionId?: string) => void;
   onSearch: () => void;
 }) {
-  const popoverRef = useViewportBoundedPopover(open);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const editInputRef = useRef<HTMLInputElement | null>(null);
@@ -3556,7 +3796,7 @@ function SessionStatusCell({
   }
 
   return (
-    <StatusCell className="session-status" active={open}>
+    <StatusCell ref={anchorRef} className="session-status" active={open}>
       <StatusCellTrigger
         className="session-trigger"
         title={`切换 Session\n${sessionRuntimeLabel}\n${currentSessionLabel}`}
@@ -3616,8 +3856,8 @@ function SessionStatusCell({
       >
         <GitFork size={14} />
       </button>
-      {open && (
-        <div className="session-popover status-popover" ref={popoverRef}>
+      <StatusPopoverLayer open={open} anchorRef={anchorRef}>
+        <div className="session-popover">
           <StatusPopoverHeader title="Sessions" value={sortedSessions.length} />
           <div className="session-list">
             {sortedSessions.length === 0 ? (
@@ -3714,7 +3954,7 @@ function SessionStatusCell({
             })}
           </div>
         </div>
-      )}
+      </StatusPopoverLayer>
     </StatusCell>
   );
 }
@@ -3995,11 +4235,10 @@ function QueuePopover({
   onTaskMove: (messageId: string, direction: -1 | 1) => void;
   onTaskClear: () => void;
 }) {
-  const popoverRef = useViewportBoundedPopover(true);
   const normalCount = normalQueueCount(queueLengths, queueMessages);
   const total = (hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0) + normalCount;
   return (
-    <div className="queue-popover status-popover" ref={popoverRef}>
+    <div className="queue-popover">
       <header>
         <span>待处理</span>
         <strong>{total}</strong>
@@ -6673,7 +6912,6 @@ function ContextPopover({
   onConfirm: () => void;
   onThresholdChange: (percent: number) => Promise<void>;
 }) {
-  const popoverRef = useViewportBoundedPopover(true);
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(usage.ratio * 100)}%`;
@@ -6695,7 +6933,7 @@ function ContextPopover({
   }
 
   return (
-    <div className="context-popover status-popover" ref={popoverRef}>
+    <div className="context-popover">
       <StatusPopoverHeader title="Context" value={percent} />
       <div className="context-popover-body">
         <dl className="context-compact-stats">

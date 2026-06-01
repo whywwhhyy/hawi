@@ -391,15 +391,11 @@ body {
 }
 
 .status-strip {
-  overflow: visible;
   border-color: hsl(var(--border));
-  border-radius: var(--radius);
   background: hsl(var(--secondary) / 0.62);
-  box-shadow: none;
 }
 
 .status-cell {
-  min-height: 36px;
   color: hsl(var(--foreground));
 }
 

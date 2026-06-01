@@ -1,21 +1,25 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 
-export function StatusCell({
+export const StatusCell = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement> & {
+  active?: boolean;
+}>(function StatusCell({
   active = false,
   className,
   children,
   ...props
-}: HTMLAttributes<HTMLDivElement> & {
-  active?: boolean;
-}) {
+}, ref) {
   return (
-    <div {...props} className={classNames("status-cell", className, active && "active")}>
+    <div ref={ref} {...props} className={classNames("status-cell", className, active && "active")}>
       {children}
     </div>
   );
-}
+});
 
-export function StatusCellTrigger({
+export const StatusCellTrigger = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: ReactNode;
+  contentClassName: string;
+  contentAriaHidden?: boolean;
+}>(function StatusCellTrigger({
   label,
   contentClassName,
   contentAriaHidden = true,
@@ -23,20 +27,16 @@ export function StatusCellTrigger({
   type = "button",
   className,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  label: ReactNode;
-  contentClassName: string;
-  contentAriaHidden?: boolean;
-}) {
+}, ref) {
   return (
-    <button {...props} type={type} className={classNames("status-cell-trigger", className)}>
+    <button ref={ref} {...props} type={type} className={classNames("status-cell-trigger", className)}>
       <span className="status-cell-label">{label}</span>
       <span className={contentClassName} aria-hidden={contentAriaHidden}>
         {children}
       </span>
     </button>
   );
-}
+});
 
 export function StatusCellDisplay({
   label,
