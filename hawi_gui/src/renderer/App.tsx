@@ -5080,8 +5080,8 @@ export function buildFocusTranscriptItems(nodes: ChatNode[], processing?: Proces
 
     const round = nodes.slice(roundStart, roundEnd);
     const roundProcessing = processing && roundEnd === nodes.length ? processing : undefined;
-    const finalAgentOffset = lastFormalReplyOffset(round);
-    if (finalAgentOffset < 0) {
+    const roundActive = roundProcessing !== undefined || round.some(isActiveFocusNode);
+    if (roundActive) {
       if (round.length > 0 || roundProcessing) {
         const lastRoundNode = round[round.length - 1];
         items.push({
@@ -5090,7 +5090,25 @@ export function buildFocusTranscriptItems(nodes: ChatNode[], processing?: Proces
             id: `focus-fold:${node.id}:active:${lastRoundNode?.id ?? roundProcessing?.id ?? "processing"}`,
             roundId: node.id,
             nodes: round,
-            summary: focusFoldSummary(round, roundProcessing)
+            summary: focusFoldSummary(round, roundProcessing, round)
+          }
+        });
+      }
+      index = roundEnd;
+      continue;
+    }
+
+    const finalAgentOffset = lastFormalReplyOffset(round);
+    if (finalAgentOffset < 0) {
+      if (round.length > 0) {
+        const lastRoundNode = round[round.length - 1];
+        items.push({
+          type: "focus-fold",
+          group: {
+            id: `focus-fold:${node.id}:${lastRoundNode?.id ?? "work"}`,
+            roundId: node.id,
+            nodes: round,
+            summary: focusFoldSummary(round, undefined, round)
           }
         });
       }
@@ -5107,7 +5125,7 @@ export function buildFocusTranscriptItems(nodes: ChatNode[], processing?: Proces
           id: `focus-fold:${node.id}:${finalAgent.id}`,
           roundId: node.id,
           nodes: foldedNodes,
-          summary: focusFoldSummary(foldedNodes)
+          summary: focusFoldSummary(foldedNodes, undefined, round)
         }
       });
     }
@@ -5126,36 +5144,33 @@ function lastFormalReplyOffset(nodes: ChatNode[]): number {
   return -1;
 }
 
-function focusFoldSummary(nodes: ChatNode[], processing?: ProcessingState): FocusFoldSummary {
+function focusFoldSummary(
+  nodes: ChatNode[],
+  processing?: ProcessingState,
+  summaryNodes: ChatNode[] = nodes
+): FocusFoldSummary {
   const toolCount = nodes.filter((node) => node.kind === "tool").length;
-  const activity = focusFoldActivity(nodes, processing);
+  const active = processing !== undefined || nodes.some(isActiveFocusNode);
+  const activity = active
+    ? focusFoldActiveActivity(nodes, processing)
+    : `耗时${formatFocusDurationSeconds(focusFoldDurationMs(summaryNodes))}秒`;
   return {
     toolCount,
     activity,
-    active: processing !== undefined || nodes.some(isActiveFocusNode),
-    label: `${formatToolCount(toolCount)} · ${activity}`
+    active,
+    label: `${formatFocusToolCount(toolCount)}, ${activity}`
   };
 }
 
-function focusFoldActivity(nodes: ChatNode[], processing?: ProcessingState): string {
+function focusFoldActiveActivity(nodes: ChatNode[], processing?: ProcessingState): string {
   const activeNode = [...nodes].reverse().find(isActiveFocusNode);
   if (activeNode) {
-    return focusNodeActivity(activeNode);
+    return activeFocusNodeActivity(activeNode);
   }
   if (processing) {
-    return "working";
+    return "思考中";
   }
-  const actionableNode = [...nodes].reverse().find((node) => (
-    node.kind === "tool"
-    || node.kind === "thinking"
-    || node.kind === "compact"
-    || node.kind === "framework"
-  ));
-  if (actionableNode) {
-    return focusNodeActivity(actionableNode);
-  }
-  const lastNode = [...nodes].reverse().find((node) => node.kind !== "divider");
-  return lastNode ? focusNodeActivity(lastNode) : "working";
+  return "思考中";
 }
 
 function isActiveFocusNode(node: ChatNode): boolean {
@@ -5210,52 +5225,73 @@ function hasActiveNonToolTranscriptWork(nodes: ChatNode[]): boolean {
   return nodes.some((node) => node.complete === false && !isActiveToolCallNode(node));
 }
 
-function focusNodeActivity(node: ChatNode): string {
+function activeFocusNodeActivity(node: ChatNode): string {
   switch (node.kind) {
     case "thinking":
-      return "thinking";
+      return "思考中";
     case "tool":
-      return toolFocusActivity(node.tool);
+      return `调用工具中: ${toolDisplayName(node.tool)}`;
     case "compact":
-      return "compacting";
+      return "压缩上下文中";
     case "framework":
     case "system":
-      return "preparing";
+      return "准备中";
     case "agent":
-      return "responding";
+      return "回答中";
     default:
-      return "working";
+      return "思考中";
   }
 }
 
-function toolFocusActivity(tool?: ToolState): string {
-  const canonicalName = canonicalToolName(tool?.name ?? "");
-  if (readToolNamePatterns.some((pattern) => pattern.test(canonicalName))) {
-    return "reading";
-  }
-  if (writeToolNamePatterns.some((pattern) => pattern.test(canonicalName))) {
-    return "writing";
-  }
-  return "tool calling";
+function toolDisplayName(tool?: ToolState): string {
+  const name = tool?.name.trim();
+  if (!name) return "工具";
+  return name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name;
 }
 
-function canonicalToolName(name: string): string {
-  const withoutNamespace = name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name;
-  return withoutNamespace.trim().toLowerCase().replace(/[-\s]+/g, "_");
+function focusFoldDurationMs(nodes: ChatNode[]): number {
+  const dividerDuration = latestRunDividerDurationMs(nodes);
+  if (dividerDuration !== undefined) {
+    return dividerDuration;
+  }
+
+  const timedNodes = nodes.filter((node) => (
+    Number.isFinite(node.streamStartedAt)
+    && Number.isFinite(node.streamFinishedAt)
+    && (node.streamFinishedAt ?? 0) >= (node.streamStartedAt ?? 0)
+  ));
+  if (timedNodes.length > 0) {
+    const startedAt = Math.min(...timedNodes.map((node) => node.streamStartedAt ?? 0));
+    const finishedAt = Math.max(...timedNodes.map((node) => node.streamFinishedAt ?? 0));
+    return Math.max(0, finishedAt - startedAt);
+  }
+
+  return nodes.reduce((sum, node) => {
+    const duration = node.streamDurationMs ?? node.tool?.streamDurationMs ?? node.tool?.durationMs ?? 0;
+    return Number.isFinite(duration) && duration > 0 ? sum + duration : sum;
+  }, 0);
 }
 
-const readToolNamePatterns = [
-  /^(read|view|open|cat|list|ls|glob|grep|search|find|scan|fetch|browse|inspect)/,
-  /(read|view|search|fetch|list|grep|glob)$/
-];
+function latestRunDividerDurationMs(nodes: ChatNode[]): number | undefined {
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index];
+    if (node.kind !== "divider") continue;
+    const match = node.content.match(/(?:^|[·\s])(\d+(?:\.\d+)?)s\b/);
+    if (!match) continue;
+    const duration = Number(match[1]) * 1000;
+    if (Number.isFinite(duration) && duration >= 0) {
+      return duration;
+    }
+  }
+  return undefined;
+}
 
-const writeToolNamePatterns = [
-  /^(write|edit|patch|apply|create|delete|remove|move|rename|copy|mkdir|touch|update|replace)/,
-  /(write|edit|patch|create|delete|remove|move|rename|update|replace)$/
-];
+function formatFocusDurationSeconds(durationMs: number): string {
+  return (Math.max(0, durationMs) / 1000).toFixed(1);
+}
 
-function formatToolCount(count: number): string {
-  return `${count} ${count === 1 ? "tool" : "tools"}`;
+function formatFocusToolCount(count: number): string {
+  return `已运行${Math.max(0, count)}个工具`;
 }
 
 function FocusFold({
@@ -5284,8 +5320,7 @@ function FocusFold({
           </span>
         )}
         <span className="focus-fold-summary">
-          <strong>{formatToolCount(group.summary.toolCount)}</strong>
-          <span>{group.summary.activity}</span>
+          {group.summary.label}
         </span>
       </button>
       <div className="focus-fold-content-shell" aria-hidden={!expanded}>

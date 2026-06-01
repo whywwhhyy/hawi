@@ -99,9 +99,9 @@ describe("buildFocusTranscriptItems", () => {
         ],
         summary: {
           toolCount: 1,
-          activity: "reading",
+          activity: "耗时4.1秒",
           active: false,
-          label: "1 tool · reading"
+          label: "已运行1个工具, 耗时4.1秒"
         }
       }
     });
@@ -123,9 +123,9 @@ describe("buildFocusTranscriptItems", () => {
         nodes: [{ id: "thinking-1" }],
         summary: {
           toolCount: 0,
-          activity: "thinking",
+          activity: "思考中",
           active: true,
-          label: "0 tools · thinking"
+          label: "已运行0个工具, 思考中"
         }
       }
     });
@@ -153,6 +153,84 @@ describe("buildFocusTranscriptItems", () => {
     }
   });
 
+  it("keeps streaming agent replies inside the active focus fold", () => {
+    const items = buildFocusTranscriptItems([
+      { id: "user-1", kind: "user", content: "question" },
+      { id: "thinking-1", kind: "thinking", content: "working", complete: true },
+      { id: "agent-1", kind: "agent", content: "partial answer", complete: false },
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual(["node", "focus-fold"]);
+    expect(items[1]).toMatchObject({
+      type: "focus-fold",
+      group: {
+        nodes: [
+          { id: "thinking-1" },
+          { id: "agent-1" },
+        ],
+        summary: {
+          activity: "回答中",
+          active: true,
+          label: "已运行0个工具, 回答中"
+        }
+      }
+    });
+  });
+
+  it("shows the active tool name in the collapsed focus summary", () => {
+    const items = buildFocusTranscriptItems([
+      { id: "user-1", kind: "user", content: "question" },
+      {
+        id: "tool-1",
+        kind: "tool",
+        content: "",
+        tool: {
+          runId: "run-1",
+          toolCallId: "tool-1",
+          name: "fs__read_file",
+          status: "running",
+          argsRaw: "{}",
+          argsState: "complete",
+          resultPreview: ""
+        }
+      },
+    ]);
+
+    expect(items[1]).toMatchObject({
+      type: "focus-fold",
+      group: {
+        summary: {
+          toolCount: 1,
+          activity: "调用工具中: read_file",
+          active: true,
+          label: "已运行1个工具, 调用工具中: read_file"
+        }
+      }
+    });
+  });
+
+  it("extracts the final agent reply only after the focus round is complete", () => {
+    const items = buildFocusTranscriptItems([
+      { id: "user-1", kind: "user", content: "question" },
+      { id: "thinking-1", kind: "thinking", content: "working", complete: true, streamDurationMs: 1200 },
+      { id: "agent-1", kind: "agent", content: "final answer", complete: true, streamDurationMs: 800 },
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual(["node", "focus-fold", "node"]);
+    expect(items[1]).toMatchObject({
+      type: "focus-fold",
+      group: {
+        nodes: [{ id: "thinking-1" }],
+        summary: {
+          active: false,
+          activity: "耗时2.0秒",
+          label: "已运行0个工具, 耗时2.0秒"
+        }
+      }
+    });
+    expect(items[2]).toMatchObject({ type: "node", node: { id: "agent-1" } });
+  });
+
   it("creates an active focus fold for initial processing before agent output starts", () => {
     const items = buildFocusTranscriptItems([
       { id: "user-1", kind: "user", content: "question" },
@@ -170,8 +248,9 @@ describe("buildFocusTranscriptItems", () => {
         nodes: [],
         summary: {
           toolCount: 0,
-          activity: "working",
+          activity: "思考中",
           active: true,
+          label: "已运行0个工具, 思考中"
         }
       }
     });
