@@ -44,6 +44,7 @@ class FileSystemPlugin(HawiPlugin):
     dependencies = ()
     _GLOB_MAX_MATCHES = 5000
     _GREP_MAX_CONTENT_BYTES = 32 * 1024
+    _GREP_FULL_CONTENT_LINES = 500
     _GREP_MAX_RESULT_LINES = 1000
     _GREP_MAX_FILENAMES = 50
     _READ_FILE_TOOL_METHODS = {"read_file_by_char", "read_file_by_line"}
@@ -1292,6 +1293,7 @@ class FileSystemPlugin(HawiPlugin):
         - 自动跳过常见二进制文件（图片、压缩包、编译产物等）
         - 支持 ``file_glob``（或别名 ``glob``）过滤文件名，如 ``file_glob="*.py"``
         - 可指定单个文件路径直接搜索
+        - 500 条以内的匹配内容完整返回，不受预览字节预算影响
         - 最多返回前 1000 条匹配内容，超出后省略但仍统计总匹配数
         - 正则无效时返回明确的失败信息
 
@@ -1342,11 +1344,48 @@ class FileSystemPlugin(HawiPlugin):
                 error=f"Error: path '{target}' does not exist",
             )
 
-        result_lines: list[str] = []
+        full_result_lines: list[str] = []
+        budgeted_result_lines: list[str] = []
         content_bytes = 0
         total_matches = 0
-        content_truncated = False
+        content_limit_reached = False
+        budget_mode = False
         matching_files: set[str] = set()
+        full_content_lines = min(
+            self._GREP_FULL_CONTENT_LINES,
+            self._GREP_MAX_RESULT_LINES,
+        )
+
+        def append_with_budget(result_line: str) -> None:
+            nonlocal content_bytes, content_limit_reached
+            if content_limit_reached:
+                return
+            if len(budgeted_result_lines) >= self._GREP_MAX_RESULT_LINES:
+                content_limit_reached = True
+                return
+            separator_bytes = 1 if budgeted_result_lines else 0
+            line_bytes = len(result_line.encode("utf-8"))
+            if (
+                content_bytes
+                + separator_bytes
+                + line_bytes
+                > self._GREP_MAX_CONTENT_BYTES
+            ):
+                remaining = (
+                    self._GREP_MAX_CONTENT_BYTES
+                    - content_bytes
+                    - separator_bytes
+                )
+                if remaining > 32:
+                    budgeted_result_lines.append(
+                        self._truncate_utf8(result_line, remaining)
+                    )
+                    content_bytes = self._GREP_MAX_CONTENT_BYTES
+                content_limit_reached = True
+                return
+            budgeted_result_lines.append(result_line)
+            content_bytes += separator_bytes + line_bytes
+
         for filepath in files_to_search:
             try:
                 with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
@@ -1355,48 +1394,27 @@ class FileSystemPlugin(HawiPlugin):
                             total_matches += 1
                             matching_files.add(filepath)
                             result_line = f"{filepath}:{line_no}: {line.rstrip()}"
-                            if content_truncated:
-                                continue
-                            if len(result_lines) >= self._GREP_MAX_RESULT_LINES:
-                                content_truncated = True
-                                continue
-                            separator_bytes = 1 if result_lines else 0
-                            line_bytes = len(result_line.encode("utf-8"))
-                            if (
-                                content_bytes
-                                + separator_bytes
-                                + line_bytes
-                                > self._GREP_MAX_CONTENT_BYTES
-                            ):
-                                remaining = (
-                                    self._GREP_MAX_CONTENT_BYTES
-                                    - content_bytes
-                                    - separator_bytes
-                                )
-                                if remaining > 32:
-                                    result_lines.append(
-                                        self._truncate_utf8(result_line, remaining)
-                                    )
-                                    content_bytes = self._GREP_MAX_CONTENT_BYTES
-                                content_truncated = True
-                                continue
-                            result_lines.append(result_line)
-                            content_bytes += separator_bytes + line_bytes
+                            if not budget_mode and total_matches > full_content_lines:
+                                budget_mode = True
+                                for existing_line in full_result_lines:
+                                    append_with_budget(existing_line)
+                                full_result_lines = []
+                            if budget_mode:
+                                append_with_budget(result_line)
+                            else:
+                                full_result_lines.append(result_line)
             except Exception:
                 continue
 
         filenames = sorted(matching_files)
         returned_filenames = filenames[: self._GREP_MAX_FILENAMES]
         filenames_truncated = len(filenames) > len(returned_filenames)
+        result_lines = budgeted_result_lines if budget_mode else full_result_lines
         returned_matches = len(result_lines)
-        truncated = (
-            content_truncated
-            or filenames_truncated
-            or returned_matches < total_matches
-        )
+        content_truncated = content_limit_reached or returned_matches < total_matches
         content = "\n".join(result_lines)
-        if truncated:
-            omitted_matches = max(total_matches - returned_matches, 0)
+        omitted_matches = max(total_matches - returned_matches, 0)
+        if content_truncated:
             footer = (
                 f"... (truncated: returned {returned_matches} of {total_matches} "
                 f"matches; total matches: {total_matches}; "
@@ -1406,25 +1424,30 @@ class FileSystemPlugin(HawiPlugin):
             )
             content = f"{content}\n{footer}" if content else footer
 
-        return ToolResult(
-            success=True,
-            output={
-                "mode": "content",
-                "numFiles": len(filenames),
-                "filenames": returned_filenames,
-                "content": content,
-                "numLines": returned_matches,
-                "numMatches": total_matches,
-                "isTruncated": truncated,
-                "filenamesIsTruncated": filenames_truncated,
+        output = {
+            "mode": "content",
+            "numFiles": len(filenames),
+            "filenames": returned_filenames,
+            "content": content,
+            "numLines": returned_matches,
+            "numMatches": total_matches,
+        }
+        if content_truncated:
+            output.update({
+                "isTruncated": True,
                 "maxReturnedBytes": self._GREP_MAX_CONTENT_BYTES,
                 "maxReturnedLines": self._GREP_MAX_RESULT_LINES,
                 "maxReturnedMatches": self._GREP_MAX_RESULT_LINES,
+                "omittedMatches": omitted_matches,
+            })
+        if filenames_truncated and content_truncated:
+            output.update({
+                "filenamesIsTruncated": True,
                 "maxReturnedFilenames": self._GREP_MAX_FILENAMES,
-                "omittedMatches": max(total_matches - returned_matches, 0),
                 "omittedFiles": max(len(filenames) - len(returned_filenames), 0),
-            },
-        )
+            })
+
+        return ToolResult(success=True, output=output)
 
     @staticmethod
     def _truncate_utf8(text: str, max_bytes: int) -> str:

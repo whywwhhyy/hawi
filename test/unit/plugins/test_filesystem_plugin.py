@@ -335,6 +335,8 @@ class TestFileSystemPlugin:
         assert "test.py" in result.output["filenames"][0]
         assert "hello" in result.output["content"]
         assert "world" in result.output["content"]
+        assert "isTruncated" not in result.output
+        assert "truncated" not in result.output["content"]
 
     def test_grep_with_file_glob(self, plugin, temp_dir):
         """Test grep with file_glob filter."""
@@ -391,6 +393,53 @@ class TestFileSystemPlugin:
         assert "returned 1000 of 1005 matches" in result.output["content"]
         assert "total matches: 1005" in result.output["content"]
 
+    def test_grep_returns_up_to_500_matches_without_byte_truncation(
+        self,
+        plugin,
+        temp_dir,
+    ):
+        """grep should fully return small result sets even past byte budget."""
+        plugin._GREP_MAX_CONTENT_BYTES = 80
+        file_path = os.path.join(temp_dir, "matches.txt")
+        plugin.write_file(
+            file_path,
+            "\n".join(f"needle {index} {'x' * 20}" for index in range(500)) + "\n",
+        )
+
+        result = plugin.grep("needle", path=temp_dir)
+
+        assert result.success is True
+        assert result.output["numMatches"] == 500
+        assert result.output["numLines"] == 500
+        assert "isTruncated" not in result.output
+        assert "needle 499" in result.output["content"]
+        assert "truncated" not in result.output["content"]
+
+    def test_grep_content_truncation_ignores_filename_list_truncation(
+        self,
+        plugin,
+        temp_dir,
+    ):
+        """A shortened filenames list should not mark complete content truncated."""
+        plugin._GREP_MAX_FILENAMES = 1
+        for index in range(2):
+            plugin.write_file(
+                os.path.join(temp_dir, f"{index}.txt"),
+                f"needle {index}\n",
+            )
+
+        result = plugin.grep("needle", path=temp_dir)
+
+        assert result.success is True
+        assert result.output["numMatches"] == 2
+        assert result.output["numLines"] == 2
+        assert len(result.output["filenames"]) == 1
+        assert "isTruncated" not in result.output
+        assert "filenamesIsTruncated" not in result.output
+        assert "truncated:" not in result.output["content"]
+        assert "needle 0" in result.output["content"]
+        assert "needle 1" in result.output["content"]
+
     def test_grep_default_output_stays_under_tool_result_limit(self, plugin, temp_dir):
         """Default grep limits should avoid the executor's oversized fallback."""
         file_path = os.path.join(temp_dir, "many.txt")
@@ -436,16 +485,21 @@ class TestFileSystemPlugin:
         assert "total matches: 5" in result.output["content"]
 
     def test_grep_truncates_by_byte_budget(self, plugin, temp_dir):
-        """grep should not return a single huge matching line in full."""
+        """grep should apply the byte budget after the full-result window."""
         plugin._GREP_MAX_RESULT_LINES = 10
         plugin._GREP_MAX_CONTENT_BYTES = 80
         file_path = os.path.join(temp_dir, "large.txt")
-        plugin.write_file(file_path, "needle " + ("x" * 500) + "\n")
+        plugin.write_file(
+            file_path,
+            "needle " + ("x" * 500) + "\n"
+            + "\n".join(f"needle {index}" for index in range(500))
+            + "\n",
+        )
 
         result = plugin.grep("needle", path=temp_dir)
 
         assert result.success is True
-        assert result.output["numMatches"] == 1
+        assert result.output["numMatches"] == 501
         assert result.output["numLines"] == 1
         assert result.output["isTruncated"] is True
         assert "[line truncated]" in result.output["content"]
