@@ -676,8 +676,8 @@ body {
 }
 
 .markdown pre {
-  border-color: hsl(var(--border));
-  background: hsl(var(--muted));
+  border-color: hsl(210 10% 84%);
+  background: hsl(210 12% 96%);
   color: hsl(var(--foreground));
 }
 
@@ -807,15 +807,79 @@ body {
 }
 
 .copy-button {
-  border-color: hsl(var(--border));
+  border-color: transparent;
   border-radius: var(--radius-sm);
-  background: hsl(var(--background));
+  background: transparent;
   color: hsl(var(--muted-foreground));
+  box-shadow: none;
 }
 
 .copy-button:hover {
-  background: hsl(var(--accent));
+  border-color: hsl(var(--input));
+  background: hsl(var(--background));
   color: hsl(var(--foreground));
+  box-shadow: 0 1px 3px hsl(var(--shadow-color) / 0.08);
+}
+
+.icon-button,
+.mini-button.icon-only,
+.session-action,
+.session-delete,
+.queue-task-actions button,
+.thinking-toggle,
+.code-copy-button,
+.attachment-chip > button,
+.media-preview-close,
+.modal header > .icon-button[data-dialog-close="true"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.mini-button.icon-only.active {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: hsl(var(--primary));
+}
+
+.icon-button:hover:not(:disabled),
+.mini-button.icon-only:hover:not(:disabled),
+.session-action:hover:not(:disabled),
+.session-delete:hover:not(:disabled),
+.queue-task-actions button:hover:not(:disabled),
+.thinking-toggle:hover:not(:disabled),
+.code-copy-button:hover:not(:disabled),
+.attachment-chip > button:hover:not(:disabled),
+.media-preview-close:hover:not(:disabled),
+.modal header > .icon-button[data-dialog-close="true"]:hover:not(:disabled),
+.icon-button:focus-visible,
+.mini-button.icon-only:focus-visible,
+.session-action:focus-visible,
+.session-delete:focus-visible,
+.queue-task-actions button:focus-visible,
+.thinking-toggle:focus-visible,
+.code-copy-button:focus-visible,
+.attachment-chip > button:focus-visible,
+.media-preview-close:focus-visible,
+.modal header > .icon-button[data-dialog-close="true"]:focus-visible {
+  border-color: hsl(var(--input));
+  background: hsl(var(--background));
+  box-shadow: 0 1px 3px hsl(var(--shadow-color) / 0.08);
+}
+
+.icon-button:active:not(:disabled),
+.mini-button.icon-only:active:not(:disabled),
+.session-action:active:not(:disabled),
+.session-delete:active:not(:disabled),
+.queue-task-actions button:active:not(:disabled),
+.copy-button:active:not(:disabled),
+.thinking-toggle:active:not(:disabled),
+.code-copy-button:active:not(:disabled),
+.attachment-chip > button:active:not(:disabled),
+.media-preview-close:active:not(:disabled),
+.modal header > .icon-button[data-dialog-close="true"]:active:not(:disabled) {
+  transform: translateY(1px) scale(0.96);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -902,8 +966,8 @@ body {
   }
 
   .markdown pre {
-    border-color: hsl(var(--border));
-    background: hsl(var(--muted));
+    border-color: hsl(210 10% 30%);
+    background: hsl(210 12% 15%);
     color: hsl(var(--foreground));
   }
 
@@ -915,11 +979,6 @@ body {
     grid-template-areas:
       "brand"
       "status";
-  }
-
-  .status-row {
-    align-items: center;
-    flex-direction: row;
   }
 
 }

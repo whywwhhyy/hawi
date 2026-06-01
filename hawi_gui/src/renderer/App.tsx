@@ -90,6 +90,7 @@ const STATUS_OVERLAY_SELECTOR = [
   ".queue-popover",
   ".menu-popover"
 ].join(",");
+const STATUS_POPOVER_VIEWPORT_MARGIN = 8;
 const imageAttachmentExtensions = new Set(["avif", "bmp", "gif", "jpg", "jpeg", "png", "svg", "webp"]);
 const audioAttachmentExtensions = new Set(["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
 const videoAttachmentExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ogv", "webm"]);
@@ -619,6 +620,82 @@ function cssPixelValue(value: string): number {
   if (!value || value === "normal") return 0;
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function useViewportBoundedPopover(open: boolean) {
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useBrowserLayoutEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    const popover = popoverRef.current;
+    if (!popover) return;
+
+    let animationFrame: number | null = null;
+    const schedulePlacement = () => {
+      if (typeof window.requestAnimationFrame !== "function") {
+        clampStatusPopoverToViewport(popover);
+        return;
+      }
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        clampStatusPopoverToViewport(popover);
+      });
+    };
+
+    clampStatusPopoverToViewport(popover);
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(schedulePlacement);
+    resizeObserver?.observe(popover);
+    window.addEventListener("resize", schedulePlacement);
+    window.addEventListener("scroll", schedulePlacement, true);
+    return () => {
+      if (animationFrame !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", schedulePlacement);
+      window.removeEventListener("scroll", schedulePlacement, true);
+      resetStatusPopoverPlacement(popover);
+    };
+  }, [open]);
+
+  return popoverRef;
+}
+
+function clampStatusPopoverToViewport(popover: HTMLElement): void {
+  resetStatusPopoverPlacement(popover);
+  const margin = STATUS_POPOVER_VIEWPORT_MARGIN;
+  popover.style.maxWidth = `calc(100vw - ${margin * 2}px)`;
+  popover.style.maxHeight = `calc(100vh - ${margin * 2}px)`;
+
+  const rect = popover.getBoundingClientRect();
+  const viewportRight = window.innerWidth - margin;
+  const viewportBottom = window.innerHeight - margin;
+  let shiftX = 0;
+  let shiftY = 0;
+
+  if (rect.right > viewportRight) {
+    shiftX = viewportRight - rect.right;
+  }
+  if (rect.left + shiftX < margin) {
+    shiftX += margin - (rect.left + shiftX);
+  }
+  if (rect.bottom > viewportBottom) {
+    shiftY = viewportBottom - rect.bottom;
+  }
+  if (rect.top + shiftY < margin) {
+    shiftY += margin - (rect.top + shiftY);
+  }
+
+  popover.style.setProperty("--status-popover-shift-x", `${Math.round(shiftX)}px`);
+  popover.style.setProperty("--status-popover-shift-y", `${Math.round(shiftY)}px`);
+}
+
+function resetStatusPopoverPlacement(popover: HTMLElement): void {
+  popover.style.setProperty("--status-popover-shift-x", "0px");
+  popover.style.setProperty("--status-popover-shift-y", "0px");
 }
 
 export function resolveRailSettingsMenuLayout({
@@ -3358,6 +3435,7 @@ function ProjectStatusCell({
   onToggle: () => void;
   onSwitch: () => void;
 }) {
+  const popoverRef = useViewportBoundedPopover(open);
   const projectName = projectNameFromPath(projectPath);
   const fullPath = projectPath?.trim() || "-";
   const pathLabel = middleEllipsizePath(fullPath, 58);
@@ -3375,7 +3453,7 @@ function ProjectStatusCell({
         <span className="project-path-line">{pathLabel}</span>
       </StatusCellTrigger>
       {open && (
-        <div className="project-popover">
+        <div className="project-popover status-popover" ref={popoverRef}>
           <StatusPopoverHeader title="Project" value={projectName} />
           <div className="project-popover-body">
             <div className="project-full-path">{fullPath}</div>
@@ -3428,6 +3506,7 @@ function SessionStatusCell({
   onFork: (sessionId?: string) => void;
   onSearch: () => void;
 }) {
+  const popoverRef = useViewportBoundedPopover(open);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const editInputRef = useRef<HTMLInputElement | null>(null);
@@ -3538,7 +3617,7 @@ function SessionStatusCell({
         <GitFork size={14} />
       </button>
       {open && (
-        <div className="session-popover">
+        <div className="session-popover status-popover" ref={popoverRef}>
           <StatusPopoverHeader title="Sessions" value={sortedSessions.length} />
           <div className="session-list">
             {sortedSessions.length === 0 ? (
@@ -3595,52 +3674,41 @@ function SessionStatusCell({
                       )}
                     </div>
                   </div>
-                  {(!isEditing || !isCurrent || canShowDelete) && (
-                    <div className="session-actions">
-                      {!isEditing && (
-                        <button
-                          type="button"
-                          className="session-action"
-                          title="重命名 Session"
-                          aria-label={`重命名 Session ${shortSessionId(session.session_id)}`}
-                          disabled={busy}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            startEditingSession(session);
-                          }}
-                        >
-                          <Pencil size={13} />
-                        </button>
-                      )}
-                      {!isCurrent && (
-                        <button
-                          type="button"
-                          className="session-action"
-                          title="Fork Session"
-                          aria-label={`Fork Session ${shortSessionId(session.session_id)}`}
-                          disabled={busy}
-                          onClick={() => onFork(session.session_id)}
-                        >
-                          <GitFork size={13} />
-                        </button>
-                      )}
-                      {isCurrent && (
-                        <span className="session-action-placeholder" aria-hidden="true" />
-                      )}
-                      {canShowDelete && (
-                        <button
-                          type="button"
-                          className="session-delete"
-                          title={isLoadedHere ? "关闭并删除 Session" : "删除 Session"}
-                          aria-label={`删除 Session ${shortSessionId(session.session_id)}`}
-                          disabled={busy}
-                          onClick={() => onDelete(session.session_id)}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  <div className="session-actions">
+                    <button
+                      type="button"
+                      className="session-action"
+                      title={isEditing ? "正在重命名" : "重命名 Session"}
+                      aria-label={`重命名 Session ${shortSessionId(session.session_id)}`}
+                      disabled={busy || isEditing}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        startEditingSession(session);
+                      }}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="session-action"
+                      title={isCurrent ? "当前 Session 无需 Fork" : "Fork Session"}
+                      aria-label={`Fork Session ${shortSessionId(session.session_id)}`}
+                      disabled={busy || isCurrent}
+                      onClick={() => onFork(session.session_id)}
+                    >
+                      <GitFork size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="session-delete"
+                      title={canShowDelete ? (isLoadedHere ? "关闭并删除 Session" : "删除 Session") : "当前状态不可删除"}
+                      aria-label={`删除 Session ${shortSessionId(session.session_id)}`}
+                      disabled={busy || !canShowDelete}
+                      onClick={() => onDelete(session.session_id)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -3927,10 +3995,11 @@ function QueuePopover({
   onTaskMove: (messageId: string, direction: -1 | 1) => void;
   onTaskClear: () => void;
 }) {
+  const popoverRef = useViewportBoundedPopover(true);
   const normalCount = normalQueueCount(queueLengths, queueMessages);
   const total = (hasHighPriorityWork(queueLengths, queueMessages) ? 1 : 0) + normalCount;
   return (
-    <div className="queue-popover">
+    <div className="queue-popover status-popover" ref={popoverRef}>
       <header>
         <span>待处理</span>
         <strong>{total}</strong>
@@ -5854,13 +5923,11 @@ async function copyMarkdownCodeBlock(button: HTMLButtonElement, text: string): P
 
   const label = state === "copied" ? "已复制" : "复制失败";
   button.dataset.copyState = state;
-  button.textContent = label;
   button.title = label;
   button.setAttribute("aria-label", label);
 
   const timer = window.setTimeout(() => {
     button.dataset.copyState = "idle";
-    button.textContent = "复制";
     button.title = "复制代码";
     button.setAttribute("aria-label", "复制代码");
     markdownCodeCopyTimers.delete(button);
@@ -6606,6 +6673,7 @@ function ContextPopover({
   onConfirm: () => void;
   onThresholdChange: (percent: number) => Promise<void>;
 }) {
+  const popoverRef = useViewportBoundedPopover(true);
   const used = usage ? compactNumber(usage.usedTokens) : "-";
   const max = usage?.maxContextTokens ? compactNumber(usage.maxContextTokens) : "-";
   const percent = usage?.ratio === undefined ? "n/a" : `${Math.round(usage.ratio * 100)}%`;
@@ -6627,7 +6695,7 @@ function ContextPopover({
   }
 
   return (
-    <div className="context-popover">
+    <div className="context-popover status-popover" ref={popoverRef}>
       <StatusPopoverHeader title="Context" value={percent} />
       <div className="context-popover-body">
         <dl className="context-compact-stats">
@@ -8681,7 +8749,7 @@ function codeBlock(value: string, language?: string): string {
   const languageClass = language ? ` language-${escapeHtmlAttribute(language)}` : "";
   return [
     "<div class=\"code-block-shell\">",
-    "<button type=\"button\" class=\"code-copy-button\" title=\"复制代码\" aria-label=\"复制代码\">复制</button>",
+    "<button type=\"button\" class=\"code-copy-button\" data-copy-state=\"idle\" title=\"复制代码\" aria-label=\"复制代码\"><span class=\"code-copy-icon\" aria-hidden=\"true\"></span></button>",
     `<pre class="code-block"><code class="hljs${languageClass}">${value}</code></pre>`,
     "</div>"
   ].join("");

@@ -158,11 +158,8 @@ button:disabled {
 }
 
 .status-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  justify-content: flex-start;
-  gap: 8px;
+  display: block;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
@@ -176,16 +173,31 @@ button:disabled {
 }
 
 .status-strip {
+  --status-project-min: 250px;
+  --status-session-min: 292px;
+  --status-context-min: 180px;
+  --status-message-min: 168px;
   display: flex;
-  align-items: center;
-  width: max-content;
+  align-items: stretch;
+  width: 100%;
   max-width: none;
-  min-width: 0;
+  min-width: calc(
+    var(--status-project-min)
+    + var(--status-session-min)
+    + var(--status-context-min)
+    + var(--status-message-min)
+  );
   flex: 0 0 auto;
   overflow: visible;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
+}
+
+.status-strip > .status-cell {
+  flex: 1 1 0;
+  min-width: var(--status-cell-min, 140px);
+  max-width: none;
 }
 
 .status-cell {
@@ -217,6 +229,8 @@ button:disabled {
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
   min-height: 38px;
   border: 0;
   background: transparent;
@@ -248,6 +262,7 @@ button:disabled {
 }
 
 .priority-status {
+  --status-cell-min: var(--status-message-min);
   padding: 0;
   border: 0;
   border-right: 1px solid var(--color-border);
@@ -257,6 +272,7 @@ button:disabled {
 
 .priority-status-trigger {
   gap: 8px;
+  justify-content: space-between;
 }
 
 .status-cell-label {
@@ -269,7 +285,7 @@ button:disabled {
 .message-status-widget {
   display: grid;
   gap: 1px;
-  min-width: 52px;
+  min-width: 72px;
   color: #69777d;
   font-size: 10px;
   line-height: 1.1;
@@ -347,9 +363,8 @@ button:disabled {
 }
 
 .context-status {
-  width: max-content;
-  min-width: 164px;
-  max-width: none;
+  --status-cell-min: var(--status-context-min);
+  width: auto;
   overflow: visible;
   padding: 0;
   justify-content: flex-start;
@@ -361,8 +376,8 @@ button:disabled {
 }
 
 .context-status-trigger {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
   gap: 6px;
   padding: 0 8px;
@@ -384,8 +399,8 @@ button:disabled {
 
 .context-status-widget {
   display: grid;
-  flex: 0 0 94px;
-  width: 94px;
+  flex: 1 1 94px;
+  width: auto;
   min-width: 94px;
   overflow: hidden;
   gap: 2px;
@@ -465,6 +480,12 @@ button:disabled {
   white-space: nowrap;
 }
 
+.status-popover {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  transform: translate(var(--status-popover-shift-x, 0), var(--status-popover-shift-y, 0));
+}
+
 .context-popover {
   position: absolute;
   z-index: var(--layer-popover);
@@ -504,9 +525,7 @@ button:disabled {
 }
 
 .project-status {
-  flex: 0 1 300px;
-  min-width: 230px;
-  max-width: min(420px, 42vw);
+  --status-cell-min: var(--status-project-min);
   padding: 0;
   justify-content: flex-start;
   background: transparent;
@@ -604,10 +623,9 @@ button:disabled {
 }
 
 .session-status {
-  flex: 0 0 auto;
+  --status-cell-min: var(--status-session-min);
   justify-content: flex-start;
-  min-width: 0;
-  gap: 7px;
+  gap: 0;
 }
 
 .session-trigger {
@@ -620,9 +638,10 @@ button:disabled {
 
 .session-status-widget {
   display: grid;
+  flex: 1 1 auto;
   gap: 1px;
   min-width: 118px;
-  max-width: 158px;
+  max-width: none;
   color: #69777d;
   font-size: 10px;
   line-height: 1.1;
@@ -692,6 +711,15 @@ button:disabled {
 
 .mini-button.icon-only {
   width: 24px;
+  padding: 0;
+}
+
+.session-status > .mini-button.icon-only {
+  flex: 0 0 30px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
   padding: 0;
 }
 
@@ -861,7 +889,7 @@ button:disabled {
   align-items: center;
   gap: 2px;
   padding: 0 5px 0 38px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.92) 34%, var(--color-surface) 100%);
+  background: transparent;
 }
 
 .session-option:hover .session-actions,
@@ -2452,9 +2480,9 @@ button:disabled {
   top: 8px;
   right: 8px;
   z-index: 3;
-  background: rgba(255, 255, 255, 0.84);
-  border-color: #d4dadd;
-  box-shadow: 0 1px 3px rgba(23, 36, 42, 0.08);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .copy-button.code-copy-overlay:hover,
@@ -2466,16 +2494,33 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 38px;
+  width: 24px;
   height: 24px;
-  padding: 0 7px;
+  padding: 0;
   border: 1px solid #d4dadd;
   border-radius: 5px;
   color: #59666c;
-  font-size: 11px;
-  line-height: 1;
   cursor: pointer;
   user-select: none;
+}
+
+.code-copy-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2' ry='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2' ry='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.code-copy-button[data-copy-state="copied"] .code-copy-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+
+.code-copy-button[data-copy-state="failed"] .code-copy-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18'/%3E%3Cpath d='m6 6 12 12'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18'/%3E%3Cpath d='m6 6 12 12'/%3E%3C/svg%3E");
 }
 
 .code-copy-button[data-copy-state="copied"] {
@@ -2484,6 +2529,83 @@ button:disabled {
 
 .code-copy-button[data-copy-state="failed"] {
   color: #9d3028;
+}
+
+.bubble .copy-button,
+.bubble .thinking-toggle,
+.copyable-code-shell > .copy-button,
+.code-block-shell > .code-copy-button,
+.session-status > .mini-button.icon-only,
+.session-action,
+.session-delete,
+.queue-message .queue-task-actions button,
+.attachment-chip > button,
+.media-preview-lightbox .media-preview-close,
+.modal header > .icon-button[data-dialog-close="true"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease,
+    transform 90ms ease;
+}
+
+.bubble .copy-button:hover:not(:disabled),
+.bubble .thinking-toggle:hover:not(:disabled),
+.copyable-code-shell > .copy-button:hover:not(:disabled),
+.code-block-shell > .code-copy-button:hover:not(:disabled),
+.session-status > .mini-button.icon-only:hover:not(:disabled),
+.session-action:hover:not(:disabled),
+.session-delete:hover:not(:disabled),
+.queue-message .queue-task-actions button:hover:not(:disabled),
+.attachment-chip > button:hover:not(:disabled),
+.media-preview-lightbox .media-preview-close:hover:not(:disabled),
+.modal header > .icon-button[data-dialog-close="true"]:hover:not(:disabled),
+.copy-button:focus-visible,
+.thinking-toggle:focus-visible,
+.code-copy-button:focus-visible,
+.mini-button.icon-only:focus-visible,
+.session-action:focus-visible,
+.session-delete:focus-visible,
+.queue-task-actions button:focus-visible,
+.attachment-chip > button:focus-visible,
+.media-preview-close:focus-visible,
+.modal header > .icon-button[data-dialog-close="true"]:focus-visible {
+  border-color: #d4dadd;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(23, 36, 42, 0.08);
+}
+
+.bubble .copy-button:active:not(:disabled),
+.bubble .thinking-toggle:active:not(:disabled),
+.copyable-code-shell > .copy-button:active:not(:disabled),
+.code-block-shell > .code-copy-button:active:not(:disabled),
+.session-status > .mini-button.icon-only:active:not(:disabled),
+.session-action:active:not(:disabled),
+.session-delete:active:not(:disabled),
+.queue-message .queue-task-actions button:active:not(:disabled),
+.attachment-chip > button:active:not(:disabled),
+.media-preview-lightbox .media-preview-close:active:not(:disabled),
+.modal header > .icon-button[data-dialog-close="true"]:active:not(:disabled) {
+  transform: translateY(1px) scale(0.96);
+}
+
+.session-action:disabled,
+.session-delete:disabled,
+.queue-message .queue-task-actions button:disabled,
+.session-status > .mini-button.icon-only:disabled,
+.attachment-chip > button:disabled {
+  color: #9aa4a8;
+  opacity: 0.45;
+  pointer-events: none;
+  transform: none;
 }
 
 .tool-diff-pane > .copyable-code-shell {
