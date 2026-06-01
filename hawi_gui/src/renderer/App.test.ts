@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -129,6 +129,93 @@ describe("buildFocusTranscriptItems", () => {
         }
       }
     });
+  });
+
+  it("keeps the same focus round id while active work changes shape", () => {
+    const activeItems = buildFocusTranscriptItems([
+      { id: "user-1", kind: "user", content: "question" },
+      { id: "thinking-1", kind: "thinking", content: "working", complete: false },
+    ]);
+    const completedItems = buildFocusTranscriptItems([
+      { id: "user-1", kind: "user", content: "question" },
+      { id: "thinking-1", kind: "thinking", content: "working", complete: true },
+      { id: "agent-1", kind: "agent", content: "answer", complete: false },
+    ]);
+
+    const activeFold = activeItems.find((item) => item.type === "focus-fold");
+    const completedFold = completedItems.find((item) => item.type === "focus-fold");
+
+    expect(activeFold?.type).toBe("focus-fold");
+    expect(completedFold?.type).toBe("focus-fold");
+    if (activeFold?.type === "focus-fold" && completedFold?.type === "focus-fold") {
+      expect(activeFold.group.roundId).toBe("user-1");
+      expect(completedFold.group.roundId).toBe("user-1");
+    }
+  });
+
+  it("creates an active focus fold for initial processing before agent output starts", () => {
+    const items = buildFocusTranscriptItems([
+      { id: "user-1", kind: "user", content: "question" },
+    ], {
+      id: "processing-1",
+      runId: "run-1",
+      content: "处理中...",
+    });
+
+    expect(items.map((item) => item.type)).toEqual(["node", "focus-fold"]);
+    expect(items[1]).toMatchObject({
+      type: "focus-fold",
+      group: {
+        roundId: "user-1",
+        nodes: [],
+        summary: {
+          toolCount: 0,
+          activity: "working",
+          active: true,
+        }
+      }
+    });
+  });
+});
+
+describe("resolveTranscriptProcessingLine", () => {
+  it("hides bottom processing when an active focus fold is collapsed", () => {
+    expect(resolveTranscriptProcessingLine({
+      nodes: [{ id: "thinking-1", kind: "thinking", content: "working", complete: false }],
+      processing: { id: "processing-1", runId: "run-1", content: "处理中..." },
+      focusMode: true,
+      activeCollapsedFocusFold: true,
+    })).toBeNull();
+  });
+
+  it("shows bottom processing for active agent output when it is not hidden in a collapsed fold", () => {
+    expect(resolveTranscriptProcessingLine({
+      nodes: [{ id: "agent-1", kind: "agent", content: "answer", complete: false }],
+      focusMode: true,
+      activeCollapsedFocusFold: false,
+    })).toMatchObject({ content: "处理中..." });
+  });
+
+  it("hides bottom processing while a tool call is active", () => {
+    expect(resolveTranscriptProcessingLine({
+      nodes: [{
+        id: "tool-1",
+        kind: "tool",
+        content: "",
+        tool: {
+          runId: "run-1",
+          toolCallId: "tool-1",
+          name: "read_file",
+          status: "running",
+          argsRaw: "{}",
+          argsState: "complete",
+          resultPreview: "",
+        }
+      }],
+      processing: { id: "processing-1", runId: "run-1", content: "处理中..." },
+      focusMode: false,
+      activeCollapsedFocusFold: false,
+    })).toBeNull();
   });
 });
 

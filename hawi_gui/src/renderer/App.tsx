@@ -4955,14 +4955,34 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   onTouchStart,
   onMouseDown,
 }, ref) {
-  const [expandedFocusGroups, setExpandedFocusGroups] = useState<Record<string, boolean>>({});
+  const [expandedFocusRounds, setExpandedFocusRounds] = useState<Record<string, boolean>>({});
   const transcriptItems = focusMode
-    ? buildFocusTranscriptItems(nodes)
+    ? buildFocusTranscriptItems(nodes, processing)
     : nodes.map((node): FocusTranscriptItem => ({ type: "node", node }));
-  const toggleFocusGroup = (groupId: string) => {
-    setExpandedFocusGroups((current) => ({
+  const focusGroupContainsHighlight = (group: FocusFoldGroup) => group.nodes.some((node) => isHighlightedChatNode(
+    node,
+    highlightHistoryIndex,
+    highlightContextMessageId,
+    highlightContextMessageIndex,
+  ));
+  const isFocusGroupExpanded = (group: FocusFoldGroup) => (
+    expandedFocusRounds[group.roundId] === true || focusGroupContainsHighlight(group)
+  );
+  const activeCollapsedFocusFold = focusMode && transcriptItems.some((item) => (
+    item.type === "focus-fold"
+    && item.group.summary.active
+    && !isFocusGroupExpanded(item.group)
+  ));
+  const processingLine = resolveTranscriptProcessingLine({
+    nodes,
+    processing,
+    focusMode,
+    activeCollapsedFocusFold
+  });
+  const toggleFocusGroup = (group: FocusFoldGroup) => {
+    setExpandedFocusRounds((current) => ({
       ...current,
-      [groupId]: !current[groupId]
+      [group.roundId]: !current[group.roundId]
     }));
   };
   const renderNodeFrame = (node: ChatNode, key = node.id) => {
@@ -5007,30 +5027,25 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
         if (item.type === "node") {
           return renderNodeFrame(item.node);
         }
-        const containsHighlight = item.group.nodes.some((node) => isHighlightedChatNode(
-          node,
-          highlightHistoryIndex,
-          highlightContextMessageId,
-          highlightContextMessageIndex,
-        ));
-        const expanded = expandedFocusGroups[item.group.id] === true || containsHighlight;
+        const expanded = isFocusGroupExpanded(item.group);
         return (
           <FocusFold
             group={item.group}
             expanded={expanded}
-            key={item.group.id}
+            key={item.group.roundId}
             renderNodeFrame={renderNodeFrame}
-            onToggle={() => toggleFocusGroup(item.group.id)}
+            onToggle={() => toggleFocusGroup(item.group)}
           />
         );
       })}
-      {processing && <ProcessingLine processing={processing} />}
+      {processingLine && <ProcessingLine processing={processingLine} />}
     </main>
   );
 }));
 
 interface FocusFoldGroup {
   id: string;
+  roundId: string;
   nodes: ChatNode[];
   summary: FocusFoldSummary;
 }
@@ -5046,7 +5061,7 @@ type FocusTranscriptItem =
   | { type: "node"; node: ChatNode }
   | { type: "focus-fold"; group: FocusFoldGroup };
 
-export function buildFocusTranscriptItems(nodes: ChatNode[]): FocusTranscriptItem[] {
+export function buildFocusTranscriptItems(nodes: ChatNode[], processing?: ProcessingState): FocusTranscriptItem[] {
   const items: FocusTranscriptItem[] = [];
   let index = 0;
   while (index < nodes.length) {
@@ -5064,16 +5079,18 @@ export function buildFocusTranscriptItems(nodes: ChatNode[]): FocusTranscriptIte
     }
 
     const round = nodes.slice(roundStart, roundEnd);
+    const roundProcessing = processing && roundEnd === nodes.length ? processing : undefined;
     const finalAgentOffset = lastFormalReplyOffset(round);
     if (finalAgentOffset < 0) {
-      if (round.length > 0) {
+      if (round.length > 0 || roundProcessing) {
         const lastRoundNode = round[round.length - 1];
         items.push({
           type: "focus-fold",
           group: {
-            id: `focus-fold:${node.id}:active:${lastRoundNode.id}`,
+            id: `focus-fold:${node.id}:active:${lastRoundNode?.id ?? roundProcessing?.id ?? "processing"}`,
+            roundId: node.id,
             nodes: round,
-            summary: focusFoldSummary(round)
+            summary: focusFoldSummary(round, roundProcessing)
           }
         });
       }
@@ -5088,6 +5105,7 @@ export function buildFocusTranscriptItems(nodes: ChatNode[]): FocusTranscriptIte
         type: "focus-fold",
         group: {
           id: `focus-fold:${node.id}:${finalAgent.id}`,
+          roundId: node.id,
           nodes: foldedNodes,
           summary: focusFoldSummary(foldedNodes)
         }
@@ -5108,21 +5126,24 @@ function lastFormalReplyOffset(nodes: ChatNode[]): number {
   return -1;
 }
 
-function focusFoldSummary(nodes: ChatNode[]): FocusFoldSummary {
+function focusFoldSummary(nodes: ChatNode[], processing?: ProcessingState): FocusFoldSummary {
   const toolCount = nodes.filter((node) => node.kind === "tool").length;
-  const activity = focusFoldActivity(nodes);
+  const activity = focusFoldActivity(nodes, processing);
   return {
     toolCount,
     activity,
-    active: nodes.some(isActiveFocusNode),
+    active: processing !== undefined || nodes.some(isActiveFocusNode),
     label: `${formatToolCount(toolCount)} · ${activity}`
   };
 }
 
-function focusFoldActivity(nodes: ChatNode[]): string {
+function focusFoldActivity(nodes: ChatNode[], processing?: ProcessingState): string {
   const activeNode = [...nodes].reverse().find(isActiveFocusNode);
   if (activeNode) {
     return focusNodeActivity(activeNode);
+  }
+  if (processing) {
+    return "working";
   }
   const actionableNode = [...nodes].reverse().find((node) => (
     node.kind === "tool"
@@ -5139,11 +5160,54 @@ function focusFoldActivity(nodes: ChatNode[]): string {
 
 function isActiveFocusNode(node: ChatNode): boolean {
   if (node.complete === false) return true;
-  if (node.kind !== "tool" || !node.tool) return false;
-  return node.tool.status === "pending"
-    || node.tool.status === "running"
-    || node.tool.argsState === "pending"
-    || node.tool.argsState === "streaming";
+  return isActiveToolCallNode(node);
+}
+
+export function resolveTranscriptProcessingLine({
+  nodes,
+  processing,
+  focusMode,
+  activeCollapsedFocusFold
+}: {
+  nodes: ChatNode[];
+  processing?: ProcessingState;
+  focusMode: boolean;
+  activeCollapsedFocusFold: boolean;
+}): ProcessingState | null {
+  if (hasActiveToolCall(nodes)) {
+    return null;
+  }
+  if (focusMode && activeCollapsedFocusFold) {
+    return null;
+  }
+  if (processing) {
+    return processing;
+  }
+  if (hasActiveNonToolTranscriptWork(nodes)) {
+    return {
+      id: "transcript-active-processing",
+      runId: "transcript-active",
+      content: "处理中..."
+    };
+  }
+  return null;
+}
+
+function hasActiveToolCall(nodes: ChatNode[]): boolean {
+  return nodes.some(isActiveToolCallNode);
+}
+
+function isActiveToolCallNode(node: ChatNode): boolean {
+  const tool = node.tool;
+  if (node.kind !== "tool" || !tool) return false;
+  return tool.status === "pending"
+    || tool.status === "running"
+    || tool.argsState === "pending"
+    || tool.argsState === "streaming";
+}
+
+function hasActiveNonToolTranscriptWork(nodes: ChatNode[]): boolean {
+  return nodes.some((node) => node.complete === false && !isActiveToolCallNode(node));
 }
 
 function focusNodeActivity(node: ChatNode): string {
