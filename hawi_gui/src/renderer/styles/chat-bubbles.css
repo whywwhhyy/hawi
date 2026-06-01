@@ -403,8 +403,29 @@
   gap: 4px;
 }
 
+.tool-status {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 3px;
+}
+
+.tool-status .live-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.tool-status .live-spinner svg {
+  width: 14px;
+  height: 14px;
+}
+
 .bubble.tool.pending .tool-actions strong {
   color: #6b7780;
+}
+
+.bubble.tool.running .tool-actions strong {
+  color: #526168;
 }
 
 .bubble.tool.success .tool-actions strong {

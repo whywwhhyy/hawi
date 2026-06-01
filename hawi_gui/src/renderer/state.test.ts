@@ -2253,6 +2253,22 @@ describe("core event reducer", () => {
 
     expect(state.nodes.map((node) => node.kind)).toEqual(["user", "divider"]);
     expect(state.nodes[1].content).toBe("end_turn · 1.2s");
+    expect(state.nodes[1].streamDurationMs).toBe(1234);
+  });
+
+  it("records run stop duration from the run start time", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-total-time", user_content: "hi", queue: "normal" }, 10));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-total-time", delta: "answer" }, 12));
+    state = reduceCoreEvent(state, frame("run.stop", { run_id: "run-total-time", stop_reason: "end_turn" }, 13.5));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent", "divider"]);
+    expect(state.nodes[2]).toMatchObject({
+      content: "end_turn",
+      streamStartedAt: 10000,
+      streamFinishedAt: 13500,
+      streamDurationMs: 3500
+    });
   });
 
   it("clears visible chat while preserving status", () => {

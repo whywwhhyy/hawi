@@ -265,6 +265,7 @@ interface RunState {
   agentNodeId?: string;
   thinkingNodeId?: string;
   processingId?: string;
+  startedAt?: number;
   assistantCommitNodeId?: string;
   assistantMessageCounted?: boolean;
   assistantContextMessageIndex?: number;
@@ -411,6 +412,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "run.start": {
       const runId = String(payload.run_id ?? "");
+      const eventAt = frameTime(frame);
       const queue = normalizeQueue(payload.queue);
       const displayMessageType = normalizeDisplayMessageType(
         payload.display_message_type,
@@ -467,6 +469,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           ...withUser.runs,
           [runId]: {
             ...(withUser.runs[runId] ?? {}),
+            startedAt: withUser.runs[runId]?.startedAt ?? eventAt,
             processingId: processing.id
           }
         }
@@ -542,6 +545,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     case "run.stop": {
       const runId = String(payload.run_id ?? "");
       const eventAt = frameTime(frame);
+      const runStartedAt = state.runs[runId]?.startedAt;
+      const runDurationMs = resolveRunDurationMs(payload, runStartedAt, eventAt);
       const completedState = completeActiveCompressionOnRunStop(
         completeOpenRunNodesForRun(state, runId, eventAt),
         payload,
@@ -550,7 +555,14 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const withDivider = appendChatNode(completedState, {
         id: nodeId("divider", `${runId}-${Date.now()}`),
         kind: "divider",
-        content: formatRunStop(payload)
+        content: formatRunStop(payload),
+        ...(runDurationMs === undefined
+          ? {}
+          : {
+              streamStartedAt: runStartedAt ?? eventAt - runDurationMs,
+              streamFinishedAt: eventAt,
+              streamDurationMs: runDurationMs
+            })
       });
       const nextRuns = { ...withDivider.runs };
       delete nextRuns[runId];
@@ -618,6 +630,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         ...withTool.runs,
         [runId]: {
           ...(withTool.runs[runId] ?? {}),
+          startedAt: withTool.runs[runId]?.startedAt ?? eventAt,
           agentNodeId: undefined,
           thinkingNodeId: undefined,
           assistantContextMessageIndex: undefined,
@@ -666,12 +679,12 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       });
 
     case "tool.result": {
+      const eventAt = frameTime(frame);
       const toolCallId = String(payload.tool_call_id ?? "");
       const contextMessageIndex = toolResultNeedsContextIndex(state, toolCallId, payload)
         ? state.nextContextMessageIndex
         : undefined;
       const updated = updateToolResult(state, toolCallId, payload, (tool) => {
-        const eventAt = frameTime(frame);
         const text = formatToolResultText(payload);
         const isPart = payload.is_part === true;
         const nextTool = {
@@ -699,7 +712,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         && withContextIndex.activeRunId === runId
         && !hasActiveToolsForRun(withContextIndex, runId)
       ) {
-        return ensureProcessingForRun(withContextIndex, runId);
+        return ensureProcessingForRun(withContextIndex, runId, eventAt);
       }
       return withContextIndex;
     }
@@ -1673,6 +1686,7 @@ function appendRunDelta(
         ...next.runs,
         [runId]: {
           ...(next.runs[runId] ?? {}),
+          startedAt: (next.runs[runId] ?? run).startedAt ?? eventAt,
           [key]: id,
           assistantCommitNodeId: kind === "agent"
             ? id
@@ -1710,6 +1724,7 @@ function appendRunDelta(
       ...next.runs,
       [runId]: {
         ...(next.runs[runId] ?? {}),
+        startedAt: (next.runs[runId] ?? run).startedAt ?? eventAt,
         [key]: id,
         assistantCommitNodeId: kind === "agent"
           ? id
@@ -1793,6 +1808,7 @@ function appendCommittedAssistantNode(
       ...next.runs,
       [runId]: {
         ...(next.runs[runId] ?? {}),
+        startedAt: (next.runs[runId] ?? run).startedAt ?? eventAt,
         agentNodeId: id,
         assistantCommitNodeId: undefined,
         assistantMessageCounted: true,
@@ -2075,7 +2091,7 @@ function clearProcessingForRun(state: AppState, runId: string): AppState {
   };
 }
 
-function ensureProcessingForRun(state: AppState, runId: string): AppState {
+function ensureProcessingForRun(state: AppState, runId: string, eventAt?: number): AppState {
   const existingId = state.runs[runId]?.processingId;
   if (existingId && state.processing?.id === existingId) {
     return state;
@@ -2093,6 +2109,7 @@ function ensureProcessingForRun(state: AppState, runId: string): AppState {
       ...base.runs,
       [runId]: {
         ...(base.runs[runId] ?? {}),
+        startedAt: base.runs[runId]?.startedAt ?? eventAt,
         processingId: processing.id
       }
     }
@@ -3490,6 +3507,21 @@ function formatRunStop(payload: Record<string, unknown>): string {
     return reason;
   }
   return `${reason} · ${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function resolveRunDurationMs(
+  payload: Record<string, unknown>,
+  startedAt: number | undefined,
+  stoppedAt: number
+): number | undefined {
+  const explicitDuration = optionalNumber(payload.duration_ms);
+  if (explicitDuration !== undefined && explicitDuration >= 0) {
+    return explicitDuration;
+  }
+  if (startedAt !== undefined && Number.isFinite(startedAt) && Number.isFinite(stoppedAt)) {
+    return Math.max(0, stoppedAt - startedAt);
+  }
+  return undefined;
 }
 
 function formatContextCompactionStop(payload: Record<string, unknown>): string {

@@ -5276,6 +5276,13 @@ function latestRunDividerDurationMs(nodes: ChatNode[]): number | undefined {
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     const node = nodes[index];
     if (node.kind !== "divider") continue;
+    if (
+      node.streamDurationMs !== undefined
+      && Number.isFinite(node.streamDurationMs)
+      && node.streamDurationMs >= 0
+    ) {
+      return node.streamDurationMs;
+    }
     const match = node.content.match(/(?:^|[·\s])(\d+(?:\.\d+)?)s\b/);
     if (!match) continue;
     const duration = Number(match[1]) * 1000;
@@ -5823,7 +5830,10 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           />
         </span>
         <span className="tool-actions">
-          <strong>{running ? "running" : tool.status}</strong>
+          <span className="tool-status">
+            <strong>{running ? "running" : tool.status}</strong>
+            {running && <LiveSpinner title="工具运行中" />}
+          </span>
           <CopyButton text={formatToolCopyText(tool)} title="复制工具调用" />
           <button
             className="thinking-toggle tool-toggle"

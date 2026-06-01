@@ -231,6 +231,26 @@ describe("buildFocusTranscriptItems", () => {
     expect(items[2]).toMatchObject({ type: "node", node: { id: "agent-1" } });
   });
 
+  it("uses the full run duration for completed focus fold summaries", () => {
+    const items = buildFocusTranscriptItems([
+      { id: "user-1", kind: "user", content: "question" },
+      { id: "thinking-1", kind: "thinking", content: "working", complete: true, streamDurationMs: 800 },
+      { id: "agent-1", kind: "agent", content: "final answer", complete: true, streamDurationMs: 500 },
+      { id: "divider-1", kind: "divider", content: "end_turn", streamDurationMs: 4300 },
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual(["node", "focus-fold", "node"]);
+    expect(items[1]).toMatchObject({
+      type: "focus-fold",
+      group: {
+        summary: {
+          activity: "耗时4.3秒",
+          label: "已运行0个工具, 耗时4.3秒"
+        }
+      }
+    });
+  });
+
   it("creates an active focus fold for initial processing before agent output starts", () => {
     const items = buildFocusTranscriptItems([
       { id: "user-1", kind: "user", content: "question" },
