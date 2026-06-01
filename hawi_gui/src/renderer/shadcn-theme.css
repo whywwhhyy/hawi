@@ -402,8 +402,9 @@ body {
 
 .context-meter {
   height: 10px;
-  border-color: hsl(var(--border));
-  background: hsl(var(--muted));
+  border-color: hsl(215 20.2% 78%);
+  background: hsl(var(--background));
+  box-shadow: inset 0 1px 2px hsl(222.2 47.4% 11.2% / 0.08);
 }
 
 .context-meter-fill {
