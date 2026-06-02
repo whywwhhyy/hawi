@@ -133,6 +133,55 @@
   padding-bottom: calc(10px + var(--code-horizontal-scroll-extra, 14px));
 }
 
+.markdown .source-code-disclosure {
+  margin: 8px 0 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.markdown .source-code-summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: #59666c;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.markdown .source-code-summary:hover,
+.markdown .source-code-summary:focus-visible {
+  background: #eef3f1;
+  color: #2f3d43;
+  outline: none;
+}
+
+.markdown .source-code-summary::-webkit-details-marker {
+  display: none;
+}
+
+.markdown .source-code-summary::marker {
+  content: "";
+}
+
+.markdown .source-code-label-expanded,
+.markdown .source-code-disclosure[open] .source-code-label-collapsed {
+  display: none;
+}
+
+.markdown .source-code-disclosure[open] .source-code-label-expanded {
+  display: inline;
+}
+
+.markdown .source-code-disclosure > .code-block-shell {
+  margin-top: 4px;
+}
+
 .markdown .svg-preview-shell {
   display: flex;
   justify-content: center;

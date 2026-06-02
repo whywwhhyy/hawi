@@ -6969,7 +6969,7 @@ function MarkdownView({ html, className = "" }: { html: string; className?: stri
         window.clearTimeout(timeoutId);
       }
     };
-  }, [html]);
+  });
 
   async function handleClick(event: ReactMouseEvent<HTMLDivElement>) {
     if (hasActiveTextSelection()) return;
@@ -9694,7 +9694,7 @@ function renderMermaidFence(value: string): string {
     `<div class="mermaid-preview-shell" data-mermaid-source="${escapeHtmlAttributeValue(source)}">`,
     "<span class=\"mermaid-preview-status\">Rendering diagram...</span>",
     "</div>",
-    codeBlock(escapeHtml(value), "mermaid")
+    sourceCodeDisclosure(codeBlock(escapeHtml(value), "mermaid"))
   ].join("");
 }
 
@@ -9808,7 +9808,19 @@ function mermaidErrorMessage(error: unknown): string {
 function renderSvgFence(value: string): string {
   const preview = renderSvgPreview(value);
   const highlighted = highlightedCode(value, "svg");
-  return `${preview}${codeBlock(highlighted.html, highlighted.language)}`;
+  return `${preview}${sourceCodeDisclosure(codeBlock(highlighted.html, highlighted.language))}`;
+}
+
+function sourceCodeDisclosure(content: string): string {
+  return [
+    "<details class=\"source-code-disclosure\">",
+    "<summary class=\"source-code-summary\">",
+    "<span class=\"source-code-label source-code-label-collapsed\">&gt; 代码</span>",
+    "<span class=\"source-code-label source-code-label-expanded\">v 代码</span>",
+    "</summary>",
+    content,
+    "</details>",
+  ].join("");
 }
 
 function sanitizeRenderedHtml(value: string): string {
