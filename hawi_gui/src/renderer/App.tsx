@@ -3176,7 +3176,14 @@ export default function App() {
           <div className="brand-lockup" aria-label="Model">
             <span className="brand-copy">
               <strong>Model</strong>
-              <span>{config.modelName || "No model selected"}</span>
+              <button
+                type="button"
+                className="brand-link"
+                title="切换模型"
+                onClick={() => setModelDialogOpen(true)}
+              >
+                {config.modelName || "No model selected"}
+              </button>
             </span>
           </div>
           <div className="brand-usage">
