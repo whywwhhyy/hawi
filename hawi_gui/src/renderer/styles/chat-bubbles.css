@@ -261,6 +261,57 @@
   overflow: hidden;
 }
 
+.focus-fold-visible-text {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin-top: 6px;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    grid-template-rows 140ms ease,
+    margin-top 140ms ease,
+    opacity 100ms ease,
+    transform 140ms ease,
+    visibility 0s linear 0s;
+}
+
+.focus-fold-visible-text.is-visible {
+  animation: focus-fold-visible-text-in 120ms ease-out;
+}
+
+.focus-fold-visible-text.is-hidden {
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateY(-3px);
+  visibility: hidden;
+  transition:
+    grid-template-rows 140ms ease,
+    margin-top 140ms ease,
+    opacity 90ms ease,
+    transform 140ms ease,
+    visibility 0s linear 140ms;
+}
+
+.focus-fold-visible-text-inner {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@keyframes focus-fold-visible-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .bubble.tool.success {
   border-color: #b8d7c9;
 }

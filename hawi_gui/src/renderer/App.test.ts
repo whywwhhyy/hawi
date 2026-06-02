@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -274,6 +274,38 @@ describe("buildFocusTranscriptItems", () => {
         }
       }
     });
+  });
+});
+
+describe("latestFocusTextNode", () => {
+  it("returns the latest agent node from folded focus content", () => {
+    const latest = latestFocusTextNode([
+      { id: "thinking-1", kind: "thinking", content: "working", complete: true },
+      { id: "agent-1", kind: "agent", content: "interim", complete: true },
+      {
+        id: "tool-1",
+        kind: "tool",
+        content: "",
+        tool: {
+          runId: "run-1",
+          toolCallId: "tool-1",
+          name: "read_file",
+          status: "running",
+          argsRaw: "{}",
+          argsState: "complete",
+          resultPreview: ""
+        }
+      },
+      { id: "agent-2", kind: "agent", content: "latest", complete: false },
+    ]);
+
+    expect(latest).toMatchObject({ id: "agent-2" });
+  });
+
+  it("returns undefined when folded focus content has no text node", () => {
+    expect(latestFocusTextNode([
+      { id: "thinking-1", kind: "thinking", content: "working", complete: false },
+    ])).toBeUndefined();
   });
 });
 

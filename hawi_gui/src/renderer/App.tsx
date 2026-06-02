@@ -5051,7 +5051,6 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
 }));
 
 interface FocusFoldGroup {
-  id: string;
   roundId: string;
   nodes: ChatNode[];
   summary: FocusFoldSummary;
@@ -5090,11 +5089,9 @@ export function buildFocusTranscriptItems(nodes: ChatNode[], processing?: Proces
     const roundActive = roundProcessing !== undefined || round.some(isActiveFocusNode);
     if (roundActive) {
       if (round.length > 0 || roundProcessing) {
-        const lastRoundNode = round[round.length - 1];
         items.push({
           type: "focus-fold",
           group: {
-            id: `focus-fold:${node.id}:active:${lastRoundNode?.id ?? roundProcessing?.id ?? "processing"}`,
             roundId: node.id,
             nodes: round,
             summary: focusFoldSummary(round, roundProcessing, round)
@@ -5108,11 +5105,9 @@ export function buildFocusTranscriptItems(nodes: ChatNode[], processing?: Proces
     const finalAgentOffset = lastFormalReplyOffset(round);
     if (finalAgentOffset < 0) {
       if (round.length > 0) {
-        const lastRoundNode = round[round.length - 1];
         items.push({
           type: "focus-fold",
           group: {
-            id: `focus-fold:${node.id}:${lastRoundNode?.id ?? "work"}`,
             roundId: node.id,
             nodes: round,
             summary: focusFoldSummary(round, undefined, round)
@@ -5129,7 +5124,6 @@ export function buildFocusTranscriptItems(nodes: ChatNode[], processing?: Proces
       items.push({
         type: "focus-fold",
         group: {
-          id: `focus-fold:${node.id}:${finalAgent.id}`,
           roundId: node.id,
           nodes: foldedNodes,
           summary: focusFoldSummary(foldedNodes, undefined, round)
@@ -5149,6 +5143,11 @@ function lastFormalReplyOffset(nodes: ChatNode[]): number {
     }
   }
   return -1;
+}
+
+export function latestFocusTextNode(nodes: ChatNode[]): ChatNode | undefined {
+  const offset = lastFormalReplyOffset(nodes);
+  return offset >= 0 ? nodes[offset] : undefined;
 }
 
 function focusFoldSummary(
@@ -5319,6 +5318,9 @@ function FocusFold({
   renderNodeFrame: (node: ChatNode, key?: string) => ReactNode;
   onToggle: () => void;
 }) {
+  const visibleTextNode = group.summary.active ? latestFocusTextNode(group.nodes) : undefined;
+  const showVisibleTextNode = !expanded && visibleTextNode !== undefined;
+
   return (
     <div className={`focus-fold ${expanded ? "expanded" : "collapsed"}`}>
       <button
@@ -5339,9 +5341,20 @@ function FocusFold({
       </button>
       <div className="focus-fold-content-shell" aria-hidden={!expanded}>
         <div className="focus-fold-content">
-          {group.nodes.map((node) => renderNodeFrame(node, `${group.id}:${node.id}`))}
+          {group.nodes.map((node) => renderNodeFrame(node, `${group.roundId}:${node.id}`))}
         </div>
       </div>
+      {visibleTextNode && (
+        <div
+          className={`focus-fold-visible-text ${showVisibleTextNode ? "is-visible" : "is-hidden"}`}
+          key={visibleTextNode.id}
+          aria-hidden={!showVisibleTextNode}
+        >
+          <div className="focus-fold-visible-text-inner">
+            {renderNodeFrame(visibleTextNode, `${group.roundId}:visible:${visibleTextNode.id}`)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
