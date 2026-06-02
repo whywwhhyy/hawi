@@ -242,6 +242,49 @@ interface PendingAttachment {
   blobSource?: BlobSource;
 }
 
+interface ExistingEditableAttachment {
+  id: string;
+  kind: "existing";
+  part: ContentPart;
+  source?: MediaSource;
+  filename: string;
+  mimeType: string;
+  partType: AttachmentPartType;
+  size?: number;
+}
+
+interface PendingEditableAttachment {
+  id: string;
+  kind: "pending";
+  attachment: PendingAttachment;
+}
+
+type EditableAttachment = ExistingEditableAttachment | PendingEditableAttachment;
+
+interface MessageEditState {
+  nodeId: string;
+  role: "user" | "agent";
+  contextMessageId?: string;
+  contextMessageIndex?: number;
+  draft: string;
+  attachments: EditableAttachment[];
+  busy: boolean;
+  error: string | null;
+}
+
+interface MessageEditController {
+  active: MessageEditState | null;
+  canEdit: boolean;
+  maxHeight?: number;
+  onStart: (node: ChatNode) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onResend: () => void;
+  onDraftChange: (value: string) => void;
+  onAddFiles: (files: Iterable<File>) => void;
+  onRemoveAttachment: (id: string) => void;
+}
+
 interface BlobFinalizePayload {
   blob_id: string;
   uri?: string;
@@ -367,6 +410,7 @@ type EscapeDismissTarget =
   | "subagentObserver"
   | "projectPopover"
   | "contextPopover"
+  | "messageEdit"
   | "pluginDialog"
   | "modelDialog"
   | "settingsMenu"
@@ -385,6 +429,7 @@ interface EscapeDismissState {
   queuePopoverOpen: boolean;
   editingQueueTaskId: string | null;
   sessionDialogOpen: boolean;
+  editingMessageId: string | null;
 }
 
 export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDismissTarget | null {
@@ -399,6 +444,7 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
     return state.editingQueueTaskId ? "queueTaskEdit" : "queuePopover";
   }
   if (state.sessionDialogOpen) return "sessionDialog";
+  if (state.editingMessageId) return "messageEdit";
   return null;
 }
 
@@ -435,6 +481,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
       return ".queue-popover";
     case "sessionDialog":
       return ".session-popover";
+    case "messageEdit":
+      return null;
   }
 }
 
@@ -998,8 +1046,10 @@ export default function App() {
   const [inputAttachments, setInputAttachments] = useState<PendingAttachment[]>([]);
   const [inputAttachmentError, setInputAttachmentError] = useState<string | null>(null);
   const [inputUploading, setInputUploading] = useState(false);
+  const [editingMessage, setEditingMessage] = useState<MessageEditState | null>(null);
   const [inputDropActive, setInputDropActive] = useState(false);
   const [blobPreviewUrls, setBlobPreviewUrls] = useState<BlobPreviewUrls>({});
+  const [chatPanelHeight, setChatPanelHeight] = useState<number | undefined>(undefined);
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewState | null>(null);
   const [sessionStats, setSessionStats] = useState<SessionRuntimeStats>({
     running: 0,
@@ -1065,6 +1115,7 @@ export default function App() {
     draft: string;
   }>({ sessionKey: UNLOADED_INPUT_HISTORY_KEY, index: null, draft: "" });
   const inputAttachmentsRef = useRef<PendingAttachment[]>([]);
+  const editingMessageRef = useRef<MessageEditState | null>(null);
   const blobPreviewUrlsRef = useRef<BlobPreviewUrls>({});
   const pendingBlobPreviewFetchesRef = useRef<Map<string, PendingBlobPreviewFetch>>(new Map());
   const fetchingBlobPreviewIdsRef = useRef<Set<string>>(new Set());
@@ -1098,6 +1149,7 @@ export default function App() {
   const hasRightSidebar = hasArtifacts || hasSubagents;
   const observedSubagent = subagentObserverId ? state.subagents[subagentObserverId] : undefined;
   const canStopConversation = canStopRunnerState(state.runnerState);
+  const canEditMessages = Boolean(currentSessionId) && !canStopConversation;
   const showDebug = config?.showDebug ?? true;
   const focusModeEnabled = config?.focusModeEnabled ?? true;
   const visibleChatNodes = useMemo(
@@ -1249,8 +1301,51 @@ export default function App() {
   }, [inputAttachments]);
 
   useEffect(() => {
+    editingMessageRef.current = editingMessage;
+  }, [editingMessage]);
+
+  useEffect(() => {
+    const active = editingMessageRef.current;
+    if (canStopConversation && active && !active.busy) {
+      cancelEditingMessage();
+    }
+  }, [canStopConversation]);
+
+  useEffect(() => {
     blobPreviewUrlsRef.current = blobPreviewUrls;
   }, [blobPreviewUrls]);
+
+  useBrowserLayoutEffect(() => {
+    const element = chatRef.current;
+    if (!element || typeof window === "undefined") return;
+    let animationFrame: number | null = null;
+    const syncHeight = () => {
+      animationFrame = null;
+      const nextHeight = Math.max(240, Math.floor(element.clientHeight || element.getBoundingClientRect().height));
+      setChatPanelHeight((current) => current === nextHeight ? current : nextHeight);
+    };
+    const scheduleSync = () => {
+      if (typeof window.requestAnimationFrame !== "function") {
+        syncHeight();
+        return;
+      }
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(syncHeight);
+    };
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(scheduleSync);
+    observer?.observe(element);
+    window.addEventListener("resize", scheduleSync);
+    scheduleSync();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+      if (animationFrame !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(animationFrame);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!settingsMenuOpen) return;
@@ -1334,6 +1429,12 @@ export default function App() {
         revokeObjectUrl(attachment.previewUrl);
       }
     }
+    for (const item of editingMessageRef.current?.attachments ?? []) {
+      if (item.kind !== "pending") continue;
+      if (!retained.has(item.attachment.previewUrl)) {
+        revokeObjectUrl(item.attachment.previewUrl);
+      }
+    }
     for (const previewUrl of retained) {
       revokeObjectUrl(previewUrl);
     }
@@ -1360,7 +1461,8 @@ export default function App() {
         settingsMenuOpen,
         queuePopoverOpen,
         editingQueueTaskId,
-        sessionDialogOpen
+        sessionDialogOpen,
+        editingMessageId: editingMessageRef.current?.nodeId ?? null
       };
 
       if (event.key === "Escape") {
@@ -1406,6 +1508,9 @@ export default function App() {
             break;
           case "sessionDialog":
             setSessionDialogOpen(false);
+            break;
+          case "messageEdit":
+            cancelEditingMessage();
             break;
         }
         return;
@@ -2117,6 +2222,318 @@ export default function App() {
     void forkSessionRef.current(sessionId, node.contextMessageIndex, node.contextMessageId);
   }, []);
 
+  function setEditingMessageAndRef(
+    updater: MessageEditState | null | ((previous: MessageEditState | null) => MessageEditState | null),
+  ) {
+    setEditingMessage((previous) => {
+      const next = typeof updater === "function" ? updater(previous) : updater;
+      editingMessageRef.current = next;
+      return next;
+    });
+  }
+
+  function patchEditingMessage(
+    nodeId: string,
+    patch: Partial<MessageEditState> | ((previous: MessageEditState) => MessageEditState),
+  ) {
+    setEditingMessageAndRef((previous) => {
+      if (!previous || previous.nodeId !== nodeId) return previous;
+      return typeof patch === "function" ? patch(previous) : { ...previous, ...patch };
+    });
+  }
+
+  function cancelEditingMessage() {
+    const active = editingMessageRef.current;
+    if (active?.busy) return;
+    if (active) {
+      cleanupEditablePendingPreviews(active.attachments);
+    }
+    setEditingMessageAndRef(null);
+  }
+
+  async function startEditingMessage(node: ChatNode) {
+    if (!canEditMessages || !isEditableTextNode(node)) return;
+    if (!node.contextMessageId && typeof node.contextMessageIndex !== "number") return;
+    const current = editingMessageRef.current;
+    if (current?.nodeId === node.id) return;
+    if (current) {
+      const saved = await saveEditingMessage({ close: false });
+      if (!saved) return;
+    }
+    setEditingMessageAndRef(messageEditStateFromNode(node));
+  }
+
+  async function saveEditingMessage({ close = true }: { close?: boolean } = {}): Promise<boolean> {
+    const active = editingMessageRef.current;
+    if (!active) return true;
+    if (active.busy) return false;
+    const sessionId = currentSessionIdRef.current;
+    if (!sessionId) {
+      patchEditingMessage(active.nodeId, { error: "当前没有可编辑的 Session" });
+      return false;
+    }
+    const payload = messageEditTargetPayload(active);
+    if (!payload) {
+      patchEditingMessage(active.nodeId, { error: "这条消息缺少历史定位信息" });
+      return false;
+    }
+
+    patchEditingMessage(active.nodeId, { busy: true, error: null });
+    try {
+      const text = active.draft.trim();
+      if (active.role === "agent") {
+        if (!text) {
+          patchEditingMessage(active.nodeId, { busy: false, error: "Agent 消息不能为空" });
+          return false;
+        }
+        const frame = await sendCommand("session_message_edit", {
+          ...payload,
+          role: "assistant",
+          text,
+        }, sessionId);
+        if (!frame) {
+          patchEditingMessage(active.nodeId, { busy: false, error: "保存失败" });
+          return false;
+        }
+        applySessionHistoryFromFrame(frame);
+      } else {
+        const contentParts = await buildEditableUserContent(active, sessionId);
+        if (contentParts.length === 0) {
+          patchEditingMessage(active.nodeId, { busy: false, error: "用户消息需要文本或附件" });
+          return false;
+        }
+        const frame = await sendCommand("session_message_edit", {
+          ...payload,
+          role: "user",
+          text,
+          content_parts: contentParts,
+        }, sessionId);
+        if (!frame) {
+          patchEditingMessage(active.nodeId, { busy: false, error: "保存失败" });
+          return false;
+        }
+        applySessionHistoryFromFrame(frame);
+      }
+      cleanupEditablePendingPreviews(active.attachments);
+      if (close) {
+        setEditingMessageAndRef(null);
+      } else {
+        patchEditingMessage(active.nodeId, { busy: false, error: null });
+      }
+      return true;
+    } catch (error) {
+      patchEditingMessage(active.nodeId, {
+        busy: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  async function resendEditingMessage(): Promise<boolean> {
+    const active = editingMessageRef.current;
+    if (!active || active.role !== "user" || active.busy) return false;
+    const sessionId = currentSessionIdRef.current;
+    if (!sessionId) {
+      patchEditingMessage(active.nodeId, { error: "当前没有可重新发送的 Session" });
+      return false;
+    }
+    const payload = messageEditTargetPayload(active);
+    if (!payload) {
+      patchEditingMessage(active.nodeId, { error: "这条消息缺少历史定位信息" });
+      return false;
+    }
+
+    patchEditingMessage(active.nodeId, { busy: true, error: null });
+    try {
+      const text = active.draft.trim();
+      const contentParts = await buildEditableUserContent(active, sessionId);
+      if (contentParts.length === 0) {
+        patchEditingMessage(active.nodeId, { busy: false, error: "重新发送需要文本或附件" });
+        return false;
+      }
+
+      // Rewind restores persisted conversation history, but plugin runtime state is not rewound.
+      // File-change detection plugins may keep their current watchers/state after this point.
+      const rewindFrame = await sendCommand("session_rewind", payload, sessionId);
+      if (!rewindFrame) {
+        patchEditingMessage(active.nodeId, { busy: false, error: "回退历史失败" });
+        return false;
+      }
+      applySessionHistoryFromFrame(rewindFrame);
+
+      const content: string | ContentPart[] = active.attachments.length === 0 ? text : contentParts;
+      const enqueueFrame = await sendCommand(
+        "enqueue",
+        { content, queue: "high_prio", metadata: { intent: "user_resend", source: "gui_message_edit" } },
+        sessionId,
+      );
+      if (!enqueueFrame) {
+        patchEditingMessage(active.nodeId, { busy: false, error: "重新发送失败" });
+        return false;
+      }
+      cleanupEditablePendingPreviews(active.attachments);
+      setEditingMessageAndRef(null);
+      if (text) {
+        rememberInputHistory(text);
+      }
+      return true;
+    } catch (error) {
+      patchEditingMessage(active.nodeId, {
+        busy: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  function updateEditingMessageDraft(value: string) {
+    const active = editingMessageRef.current;
+    if (!active || active.busy) return;
+    patchEditingMessage(active.nodeId, { draft: value, error: null });
+  }
+
+  function addEditingAttachments(files: Iterable<File>) {
+    const active = editingMessageRef.current;
+    if (!active || active.role !== "user" || active.busy) return;
+    const incoming = Array.from(files);
+    if (incoming.length === 0) return;
+
+    const rejected: string[] = [];
+    const accepted = incoming.filter((file) => {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        rejected.push(file.name || "large file");
+        return false;
+      }
+      return true;
+    });
+    if (accepted.length === 0) {
+      patchEditingMessage(active.nodeId, { error: rejected.length ? "附件大小超过限制" : null });
+      return;
+    }
+
+    const remaining = MAX_ATTACHMENTS - active.attachments.length;
+    if (remaining <= 0) {
+      patchEditingMessage(active.nodeId, { error: `最多添加 ${MAX_ATTACHMENTS} 个附件` });
+      return;
+    }
+    const nextFiles = accepted.slice(0, remaining);
+    const nextAttachments = nextFiles.map((file): EditableAttachment => {
+      const attachment = createPendingAttachment(file);
+      return {
+        id: `edit-${attachment.id}`,
+        kind: "pending",
+        attachment,
+      };
+    });
+    patchEditingMessage(active.nodeId, (previous) => ({
+      ...previous,
+      attachments: [...previous.attachments, ...nextAttachments],
+      error: accepted.length > remaining || rejected.length > 0
+        ? `已添加 ${nextFiles.length} 个附件，其余未添加`
+        : null,
+    }));
+    for (const item of nextAttachments) {
+      if (item.kind === "pending" && item.attachment.partType === "image") {
+        void hydrateEditingAttachmentDataUrl(active.nodeId, item.attachment.id, item.attachment.file);
+      }
+    }
+  }
+
+  async function hydrateEditingAttachmentDataUrl(nodeId: string, id: string, file: File) {
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      updateEditingPendingAttachment(nodeId, id, {
+        dataUrl: bytesToDataUrl(bytes, attachmentMimeType(file)),
+      });
+    } catch {
+      // Object URLs remain as a fallback for preview-only failures.
+    }
+  }
+
+  function removeEditingAttachment(id: string) {
+    const active = editingMessageRef.current;
+    if (!active || active.busy) return;
+    const removed = active.attachments.find((item) => item.id === id);
+    if (removed?.kind === "pending") {
+      cleanupEditablePendingPreviews([removed]);
+    }
+    patchEditingMessage(active.nodeId, (previous) => ({
+      ...previous,
+      attachments: previous.attachments.filter((item) => item.id !== id),
+      error: null,
+    }));
+  }
+
+  function cleanupEditablePendingPreviews(items: EditableAttachment[]) {
+    const retainedPreviews = new Set(Object.values(blobPreviewUrlsRef.current));
+    for (const item of items) {
+      if (item.kind !== "pending") continue;
+      const previewUrl = item.attachment.previewUrl;
+      if (!retainedPreviews.has(previewUrl)) {
+        revokeObjectUrl(previewUrl);
+      }
+    }
+  }
+
+  function updateEditingPendingAttachment(
+    nodeId: string,
+    attachmentId: string,
+    patch: Partial<PendingAttachment>,
+  ) {
+    patchEditingMessage(nodeId, (previous) => ({
+      ...previous,
+      attachments: previous.attachments.map((item) => (
+        item.kind === "pending" && item.attachment.id === attachmentId
+          ? { ...item, attachment: { ...item.attachment, ...patch } }
+          : item
+      )),
+    }));
+  }
+
+  async function buildEditableUserContent(
+    edit: MessageEditState,
+    sessionId: string,
+  ): Promise<ContentPart[]> {
+    const parts: ContentPart[] = [];
+    const text = edit.draft.trim();
+    if (text) {
+      parts.push({ type: "text", text });
+    }
+    for (const item of edit.attachments) {
+      if (item.kind === "existing") {
+        parts.push(cloneContentPart(item.part));
+        continue;
+      }
+      const source = await uploadAttachment(
+        item.attachment,
+        sessionId,
+        (attachmentId, patch) => updateEditingPendingAttachment(edit.nodeId, attachmentId, patch),
+      );
+      parts.push(contentPartFromAttachment(item.attachment, source));
+    }
+    return parts;
+  }
+
+  const messageEditController: MessageEditController = {
+    active: editingMessage,
+    canEdit: canEditMessages,
+    maxHeight: chatPanelHeight,
+    onStart: (node) => {
+      void startEditingMessage(node);
+    },
+    onCancel: cancelEditingMessage,
+    onSave: () => {
+      void saveEditingMessage();
+    },
+    onResend: () => {
+      void resendEditingMessage();
+    },
+    onDraftChange: updateEditingMessageDraft,
+    onAddFiles: addEditingAttachments,
+    onRemoveAttachment: removeEditingAttachment,
+  };
+
   async function saveGlobalAndSet(nextConfig: PersistedConfig) {
     const saved = await window.hawi.saveConfig(nextConfig);
     configRef.current = saved;
@@ -2452,12 +2869,13 @@ export default function App() {
   async function uploadAttachment(
     attachment: PendingAttachment,
     sessionId: string,
+    updateAttachment: (id: string, patch: Partial<PendingAttachment>) => void = updateInputAttachment,
   ): Promise<BlobSource> {
     if (attachment.blobSource) {
       return attachment.blobSource;
     }
 
-    updateInputAttachment(attachment.id, { status: "uploading", progress: 0.02, error: undefined });
+    updateAttachment(attachment.id, { status: "uploading", progress: 0.02, error: undefined });
     try {
       const bytes = new Uint8Array(await attachment.file.arrayBuffer());
       const sha256 = await sha256Hex(bytes);
@@ -2465,9 +2883,9 @@ export default function App() {
         ? attachment.dataUrl ?? bytesToDataUrl(bytes, attachment.mimeType || "image/png")
         : undefined;
       if (dataUrl) {
-        updateInputAttachment(attachment.id, { dataUrl });
+        updateAttachment(attachment.id, { dataUrl });
       }
-      updateInputAttachment(attachment.id, { progress: 0.08 });
+      updateAttachment(attachment.id, { progress: 0.08 });
 
       const initFrame = await sendCommand("blob.upload_init", {
         direction: "inbound",
@@ -2494,7 +2912,7 @@ export default function App() {
         if (!chunkFrame) {
           throw new Error("blob.upload_chunk failed");
         }
-        updateInputAttachment(attachment.id, {
+        updateAttachment(attachment.id, {
           progress: 0.08 + ((seq + 1) / totalChunks) * 0.84,
         });
       }
@@ -2515,7 +2933,7 @@ export default function App() {
         direction: payload.direction ?? "inbound",
       };
 
-      updateInputAttachment(attachment.id, {
+      updateAttachment(attachment.id, {
         status: "uploaded",
         progress: 1,
         blobSource: source,
@@ -2524,7 +2942,7 @@ export default function App() {
       rememberBlobPreview(source, attachment.previewUrl, dataUrl);
       return source;
     } catch (error) {
-      updateInputAttachment(attachment.id, {
+      updateAttachment(attachment.id, {
         status: "error",
         progress: 0,
         error: error instanceof Error ? error.message : String(error),
@@ -3282,6 +3700,7 @@ export default function App() {
           highlightContextMessageId={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageId : undefined}
           highlightContextMessageIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageIndex : undefined}
           onForkMessage={forkMessage}
+          messageEdit={messageEditController}
           onScroll={updateFollowTail}
           onWheel={handleChatWheel}
           onTouchStart={markChatUserScrollIntent}
@@ -4680,6 +5099,258 @@ function AttachmentThumbnail({ attachment }: { attachment: PendingAttachment }) 
   );
 }
 
+function MessageEditBubble({
+  edit,
+  blobPreviewUrls,
+  maxHeight,
+  onDraftChange,
+  onAddFiles,
+  onRemoveAttachment,
+  onCancel,
+  onSave,
+  onResend,
+}: {
+  edit: MessageEditState;
+  blobPreviewUrls: BlobPreviewUrls;
+  maxHeight?: number;
+  onDraftChange: (value: string) => void;
+  onAddFiles: (files: Iterable<File>) => void;
+  onRemoveAttachment: (id: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onResend: () => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const composingRef = useRef(false);
+  const isUser = edit.role === "user";
+  const canSubmit = isUser
+    ? Boolean(edit.draft.trim() || edit.attachments.length > 0)
+    : Boolean(edit.draft.trim());
+  const style = maxHeight
+    ? ({ "--message-edit-max-height": `${maxHeight}px` } as CSSProperties)
+    : undefined;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }, [edit.nodeId]);
+
+  useEffect(() => {
+    resizeMessageEditTextarea(textareaRef.current);
+  }, [edit.draft, maxHeight]);
+
+  const handleFiles = (files: FileList | null) => {
+    if (!isUser || edit.busy) return;
+    onAddFiles(attachmentFilesFromFileList(files));
+  };
+
+  const triggerPrimaryAction = () => {
+    if (!canSubmit || edit.busy) return;
+    if (isUser) {
+      onResend();
+    } else {
+      onSave();
+    }
+  };
+
+  return (
+    <div className="message-edit-body" style={style}>
+      <textarea
+        ref={textareaRef}
+        className="message-edit-textarea"
+        value={edit.draft}
+        rows={Math.min(14, Math.max(4, edit.draft.split("\n").length + 1))}
+        disabled={edit.busy}
+        spellCheck
+        onChange={(event) => {
+          onDraftChange(event.target.value);
+          resizeMessageEditTextarea(event.currentTarget);
+        }}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          window.setTimeout(() => {
+            composingRef.current = false;
+          }, 0);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCancel();
+            return;
+          }
+          if (shouldSubmitInputFromKeyEvent(event, composingRef.current)) {
+            event.preventDefault();
+            event.stopPropagation();
+            triggerPrimaryAction();
+          }
+        }}
+      />
+      {isUser && (
+        <>
+          <input
+            ref={fileInputRef}
+            className="hidden-file-input"
+            type="file"
+            multiple
+            tabIndex={-1}
+            onChange={(event) => {
+              handleFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+          {edit.attachments.length > 0 && (
+            <EditableAttachmentStrip
+              attachments={edit.attachments}
+              blobPreviewUrls={blobPreviewUrls}
+              busy={edit.busy}
+              onRemove={onRemoveAttachment}
+            />
+          )}
+        </>
+      )}
+      {edit.error && <div className="message-edit-error">{edit.error}</div>}
+      <div className="message-edit-footer">
+        {isUser ? (
+          <button
+            type="button"
+            className="message-edit-attachment-button"
+            title="添加附件"
+            aria-label="添加附件"
+            disabled={edit.busy}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Paperclip size={15} />
+          </button>
+        ) : (
+          <span />
+        )}
+        <div className="message-edit-actions">
+          <button
+            type="button"
+            className="message-edit-button cancel"
+            disabled={edit.busy}
+            onClick={onCancel}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className="message-edit-button save"
+            disabled={edit.busy || !canSubmit}
+            onClick={onSave}
+          >
+            {edit.busy ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />}
+            保存
+          </button>
+          {isUser && (
+            <button
+              type="button"
+              className="message-edit-button resend"
+              disabled={edit.busy || !canSubmit}
+              onClick={onResend}
+            >
+              <Send size={14} />
+              重新发送
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditableAttachmentStrip({
+  attachments,
+  blobPreviewUrls,
+  busy,
+  onRemove,
+}: {
+  attachments: EditableAttachment[];
+  blobPreviewUrls: BlobPreviewUrls;
+  busy: boolean;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="attachment-strip message-edit-attachments">
+      {attachments.map((item) => (
+        <figure className={`attachment-chip ${editableAttachmentStatusClass(item)}`} key={item.id}>
+          <EditableAttachmentThumbnail item={item} blobPreviewUrls={blobPreviewUrls} />
+          <figcaption>
+            <span title={editableAttachmentFilename(item)}>{editableAttachmentFilename(item)}</span>
+            <small>{editableAttachmentStatusText(item)}</small>
+          </figcaption>
+          {item.kind === "pending" && item.attachment.status === "uploading" && (
+            <progress value={item.attachment.progress} max={1} aria-label="上传进度" />
+          )}
+          {item.kind === "pending" && item.attachment.status === "error" && item.attachment.error && (
+            <small className="attachment-error" title={item.attachment.error}>{item.attachment.error}</small>
+          )}
+          <button
+            type="button"
+            title="移除附件"
+            aria-label="移除附件"
+            disabled={busy}
+            onClick={() => onRemove(item.id)}
+          >
+            <X size={12} />
+          </button>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+function EditableAttachmentThumbnail({
+  item,
+  blobPreviewUrls,
+}: {
+  item: EditableAttachment;
+  blobPreviewUrls: BlobPreviewUrls;
+}) {
+  if (item.kind === "pending") {
+    return <AttachmentThumbnail attachment={item.attachment} />;
+  }
+  if (item.partType === "image") {
+    const src = mediaDisplayUrl(item.source, blobPreviewUrls);
+    if (src) {
+      return (
+        <img
+          className="attachment-thumbnail"
+          src={src}
+          alt={item.filename}
+        />
+      );
+    }
+  }
+  return (
+    <div className={`attachment-thumbnail attachment-thumbnail-${item.partType}`} title={item.mimeType}>
+      {item.partType === "image" ? <ImageIcon size={20} /> : <FileText size={20} />}
+    </div>
+  );
+}
+
+function editableAttachmentFilename(item: EditableAttachment): string {
+  return item.kind === "pending" ? item.attachment.filename : item.filename;
+}
+
+function editableAttachmentStatusClass(item: EditableAttachment): string {
+  return item.kind === "pending" ? item.attachment.status : "uploaded";
+}
+
+function editableAttachmentStatusText(item: EditableAttachment): string {
+  if (item.kind === "pending") {
+    return attachmentStatusText(item.attachment);
+  }
+  const size = typeof item.size === "number" ? formatByteCount(item.size) : "";
+  return ["历史附件", item.mimeType, size].filter(Boolean).join(" - ");
+}
+
 function QueueMessageContent({
   message,
   blobPreviewUrls,
@@ -4935,6 +5606,7 @@ interface ChatTranscriptProps {
   focusMode?: boolean;
   onForkMessage?: (node: ChatNode) => void;
   allowFork?: boolean;
+  messageEdit?: MessageEditController;
   emptyLabel?: string;
   highlightHistoryIndex?: number;
   highlightContextMessageId?: string;
@@ -4953,6 +5625,7 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   focusMode = false,
   onForkMessage,
   allowFork = true,
+  messageEdit,
   emptyLabel,
   highlightHistoryIndex,
   highlightContextMessageId,
@@ -5013,6 +5686,7 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
           onOpenMediaPreview={onOpenMediaPreview}
           allowFork={allowFork}
           onForkMessage={onForkMessage}
+          messageEdit={messageEdit}
         />
       </div>
     );
@@ -5452,13 +6126,15 @@ const ChatBubble = memo(function ChatBubble({
   blobPreviewUrls,
   onOpenMediaPreview,
   allowFork,
-  onForkMessage
+  onForkMessage,
+  messageEdit
 }: {
   node: ChatNode;
   blobPreviewUrls: BlobPreviewUrls;
   onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   allowFork: boolean;
   onForkMessage?: (node: ChatNode) => void;
+  messageEdit?: MessageEditController;
 }) {
   if (node.kind === "divider") {
     return (
@@ -5501,6 +6177,7 @@ const ChatBubble = memo(function ChatBubble({
       onOpenMediaPreview={onOpenMediaPreview}
       allowFork={allowFork}
       onForkMessage={onForkMessage}
+      messageEdit={messageEdit}
     />
   );
 });
@@ -5645,30 +6322,38 @@ const MessageBubble = memo(function MessageBubble({
   blobPreviewUrls,
   onOpenMediaPreview,
   allowFork,
-  onForkMessage
+  onForkMessage,
+  messageEdit
 }: {
   node: ChatNode;
   blobPreviewUrls: BlobPreviewUrls;
   onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   allowFork: boolean;
   onForkMessage?: (node: ChatNode) => void;
+  messageEdit?: MessageEditController;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
   const hasStructuredContent = hasRenderableContentParts(node.contentParts);
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
+  const editing = messageEdit?.active?.nodeId === node.id;
   const toggleCollapsed = () => setCollapsed((value) => !value);
   const canFork = allowFork
     && node.canFork === true
     && onForkMessage
     && (Boolean(node.contextMessageId) || typeof node.contextMessageIndex === "number");
+  const canEdit = messageEdit?.canEdit === true && isEditableTextNode(node);
+  const showEditButton = Boolean(messageEdit && (node.kind === "user" || node.kind === "agent"));
   const beforeInjections = (node.injections ?? []).filter((item) => item.mergePosition === "before");
   const afterInjections = (node.injections ?? []).filter((item) => item.mergePosition !== "before");
 
   return (
-    <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""}`}>
-      <div className="bubble-head collapsible-head" onClick={() => guardedToggle(toggleCollapsed)}>
+    <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""} ${editing ? "message-editing" : ""}`.trim()}>
+      <div
+        className={`bubble-head ${editing ? "" : "collapsible-head"}`.trim()}
+        onClick={editing ? undefined : () => guardedToggle(toggleCollapsed)}
+      >
         <span className="bubble-title">
           {label}
           <BlockStreamStatus
@@ -5692,18 +6377,36 @@ const MessageBubble = memo(function MessageBubble({
               <GitFork size={14} />
             </button>
           )}
+          {showEditButton && messageEdit && (
+            <button
+              className="thinking-toggle message-edit"
+              title={canEdit ? "编辑消息" : "当前不能编辑消息"}
+              aria-label="编辑消息"
+              disabled={!canEdit}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (canEdit) {
+                  messageEdit.onStart(node);
+                }
+              }}
+            >
+              <Pencil size={14} />
+            </button>
+          )}
           <CopyButton text={node.content} title="复制消息" />
-          <button
-            className="thinking-toggle message-toggle"
-            title={collapsed ? "展开消息" : "折叠消息"}
-            aria-expanded={!collapsed}
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleCollapsed();
-            }}
-          >
-            {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-          </button>
+          {!editing && (
+            <button
+              className="thinking-toggle message-toggle"
+              title={collapsed ? "展开消息" : "折叠消息"}
+              aria-expanded={!collapsed}
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleCollapsed();
+              }}
+            >
+              {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+            </button>
+          )}
         </span>
       </div>
       {beforeInjections.length > 0 && (
@@ -5715,23 +6418,37 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         </div>
       )}
-      <AnimatedMessageBody
-        collapsed={collapsed}
-        expandTitle="点击展开消息"
-        onExpand={(event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))}
-      >
-        {hasStructuredContent ? (
-          <ContentPartsView
-            parts={node.contentParts ?? []}
-            fallbackText={node.content}
-            markdown={node.kind === "agent"}
-            blobPreviewUrls={blobPreviewUrls}
-            onOpenMediaPreview={onOpenMediaPreview}
-          />
-        ) : (
-          <MarkdownView html={html} />
-        )}
-      </AnimatedMessageBody>
+      {editing && messageEdit?.active ? (
+        <MessageEditBubble
+          edit={messageEdit.active}
+          blobPreviewUrls={blobPreviewUrls}
+          maxHeight={messageEdit.maxHeight}
+          onDraftChange={messageEdit.onDraftChange}
+          onAddFiles={messageEdit.onAddFiles}
+          onRemoveAttachment={messageEdit.onRemoveAttachment}
+          onCancel={messageEdit.onCancel}
+          onSave={messageEdit.onSave}
+          onResend={messageEdit.onResend}
+        />
+      ) : (
+        <AnimatedMessageBody
+          collapsed={collapsed}
+          expandTitle="点击展开消息"
+          onExpand={(event) => expandCollapsedBubbleContent(event, () => setCollapsed(false))}
+        >
+          {hasStructuredContent ? (
+            <ContentPartsView
+              parts={node.contentParts ?? []}
+              fallbackText={node.content}
+              markdown={node.kind === "agent"}
+              blobPreviewUrls={blobPreviewUrls}
+              onOpenMediaPreview={onOpenMediaPreview}
+            />
+          ) : (
+            <MarkdownView html={html} />
+          )}
+        </AnimatedMessageBody>
+      )}
       {afterInjections.length > 0 && (
         <div className="message-injections after">
           <div className="message-injections-inner">
@@ -7933,6 +8650,74 @@ function resumePayloadFromContent(content: string | ContentPart[]): Record<strin
   return content.length > 0 ? { message: content } : {};
 }
 
+export function isEditableTextNode(node: ChatNode): boolean {
+  return (node.kind === "user" || node.kind === "agent")
+    && node.complete !== false
+    && (Boolean(node.contextMessageId) || typeof node.contextMessageIndex === "number");
+}
+
+export function messageEditStateFromNode(node: ChatNode): MessageEditState {
+  const role = node.kind === "agent" ? "agent" : "user";
+  return {
+    nodeId: node.id,
+    role,
+    contextMessageId: node.contextMessageId,
+    contextMessageIndex: node.contextMessageIndex,
+    draft: node.content,
+    attachments: role === "user" ? editableAttachmentsFromContentParts(node.contentParts) : [],
+    busy: false,
+    error: null,
+  };
+}
+
+export function messageEditTargetPayload(edit: MessageEditState): Record<string, unknown> | null {
+  if (edit.contextMessageId) {
+    return { context_message_id: edit.contextMessageId };
+  }
+  if (typeof edit.contextMessageIndex === "number") {
+    return { message_index: edit.contextMessageIndex };
+  }
+  return null;
+}
+
+export function editableAttachmentsFromContentParts(parts?: ContentPart[]): EditableAttachment[] {
+  if (!Array.isArray(parts)) return [];
+  return parts
+    .filter(isMediaPart)
+    .map((part, index): ExistingEditableAttachment => {
+      const source = isRecord(part.source) ? part.source as MediaSource : undefined;
+      const blobId = optionalRecordString(source?.blob_id) ?? blobIdFromUri(source?.uri) ?? blobIdFromUri(source?.url);
+      const partType = attachmentPartTypeFromContentType(String(part.type));
+      const filename = mediaDisplayName(part, source);
+      const mimeType = optionalRecordString(source?.mime_type)
+        ?? optionalRecordString(source?.mimeType)
+        ?? optionalRecordString(source?.mime)
+        ?? mimeTypeFromFilename(filename)
+        ?? "application/octet-stream";
+      return {
+        id: `existing-${index}-${blobId ?? filename}`,
+        kind: "existing",
+        part: cloneContentPart(part),
+        source,
+        filename,
+        mimeType,
+        partType,
+        size: typeof source?.size === "number" ? source.size : undefined,
+      };
+    });
+}
+
+function attachmentPartTypeFromContentType(type: string): AttachmentPartType {
+  if (type === "image" || type === "document" || type === "audio" || type === "video" || type === "file") {
+    return type;
+  }
+  return "file";
+}
+
+function cloneContentPart(part: ContentPart): ContentPart {
+  return JSON.parse(JSON.stringify(part)) as ContentPart;
+}
+
 function createPendingAttachment(file: File): PendingAttachment {
   const mimeType = attachmentMimeType(file);
   const partType = attachmentPartType(file, mimeType);
@@ -8731,6 +9516,18 @@ function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: num
 
   textarea.style.height = `${nextHeight}px`;
   textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+function resizeMessageEditTextarea(textarea: HTMLTextAreaElement | null) {
+  if (!textarea) return;
+  textarea.style.height = "auto";
+  const style = window.getComputedStyle(textarea);
+  const maxHeight = Number.parseFloat(style.maxHeight);
+  const minHeight = Number.parseFloat(style.minHeight) || 0;
+  const boundedMaxHeight = Number.isFinite(maxHeight) && maxHeight > 0 ? maxHeight : textarea.scrollHeight;
+  const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), boundedMaxHeight);
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = textarea.scrollHeight > boundedMaxHeight ? "auto" : "hidden";
 }
 
 type InputKeyEvent = {

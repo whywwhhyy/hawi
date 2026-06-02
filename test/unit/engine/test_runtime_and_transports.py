@@ -347,6 +347,42 @@ class DummySessionManager:
             boundary_index=3,
         )
 
+    def edit_session_message(
+        self,
+        *,
+        role: str,
+        text: str,
+        content_parts: list[dict[str, Any]] | None = None,
+        context_message_id: str | None = None,
+        message_index: int | None = None,
+    ) -> dict[str, Any]:
+        self.edited_message = {
+            "role": role,
+            "text": text,
+            "content_parts": content_parts,
+            "context_message_id": context_message_id,
+            "message_index": message_index,
+        }
+        target_context_message_id = context_message_id or "ctx-edited"
+        target_message_index = 0 if message_index is None else message_index
+        content = content_parts or [{"type": "text", "text": text}]
+        self.histories[self.current_session_id] = [
+            {
+                "version": 1,
+                "run_id": "run-current",
+                "role": role,
+                "content": content,
+                "metadata": None,
+                "context_message_id": target_context_message_id,
+            }
+        ]
+        return {
+            "session_id": self.current_session_id,
+            "context_message_id": target_context_message_id,
+            "message_index": target_message_index,
+            "role": role,
+        }
+
     def save_now(self) -> None:
         self.saved_now = True
 
@@ -1020,6 +1056,77 @@ async def test_session_rewind_command_accepts_context_message_id() -> None:
     assert payload["target_role"] == "assistant"
     assert sm.rewound_after_context_message_id == "ctxmsg-b"
     assert sm.saved_now is True
+
+
+@pytest.mark.asyncio
+async def test_session_message_edit_command_updates_history() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    sm = DummySessionManager()
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_message_edit","id":"edit",'
+            '"payload":{"context_message_id":"ctxmsg-u","role":"user","text":"edited",'
+            '"content_parts":[{"type":"text","text":"edited"},{"type":"image","source":{"kind":"blob","blob_id":"b1","uri":"hawi-blob://b1"}}]}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "session_message_edit"
+    assert payload["session_id"] == "current-session"
+    assert payload["context_message_id"] == "ctxmsg-u"
+    assert payload["message_index"] == 0
+    assert payload["role"] == "user"
+    assert payload["message_history"][0]["content"][0]["text"] == "edited"
+    assert payload["message_history"][0]["content"][1]["type"] == "image"
+    assert sm.edited_message == {
+        "role": "user",
+        "text": "edited",
+        "content_parts": [
+            {"type": "text", "text": "edited"},
+            {
+                "type": "image",
+                "source": {
+                    "kind": "blob",
+                    "blob_id": "b1",
+                    "uri": "hawi-blob://b1",
+                },
+            },
+        ],
+        "context_message_id": "ctxmsg-u",
+        "message_index": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_session_message_edit_command_rejects_busy_runner() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    runner = DummyAgentRunner()
+    runner._executor.is_idle = False
+    sm = DummySessionManager()
+    runtime._runner = runner  # type: ignore[assignment]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"session_message_edit","id":"edit",'
+            '"payload":{"message_index":0,"role":"assistant","text":"edited"}}'
+        )
+        % VERSION,
+    )
+
+    assert client.sent[-1]["type"] == "error"
+    assert client.sent[-1]["payload"]["code"] == "busy"
+    assert not hasattr(sm, "edited_message")
 
 
 @pytest.mark.asyncio

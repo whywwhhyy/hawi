@@ -131,6 +131,7 @@ export type CoreCommandType =
   | "session_delete"
   | "session_rename"
   | "session_save_now"
+  | "session_message_edit"
   | "session_history"
   | "session_search"
   | "session_export_markdown";

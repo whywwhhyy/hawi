@@ -824,6 +824,114 @@ class SessionManager:
         )
         return result
 
+    def edit_session_message(
+        self,
+        *,
+        role: str,
+        text: str,
+        content_parts: list[dict[str, Any]] | None = None,
+        context_message_id: str | None = None,
+        message_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Edit the content of a persisted user/assistant context message."""
+        if self._session_id is None:
+            raise RuntimeError("No active session to edit")
+        if self._agent is None:
+            raise RuntimeError("SessionManager.edit_session_message requires attach() first")
+        if role not in {"user", "assistant"}:
+            raise ValueError("role must be 'user' or 'assistant'")
+        if not isinstance(text, str):
+            raise ValueError("text must be a string")
+        if context_message_id is None and message_index is None:
+            raise ValueError("context_message_id or message_index is required")
+
+        self.save_now()
+        session_id = self._session_id
+        session_dir = layout.session_dir(self._root, session_id)
+        if not layout.manifest_path(session_dir).exists():
+            raise FileNotFoundError(f"session not found: {session_id}")
+
+        self._ensure_current_session_lock()
+        context = self._agent.context
+        messages = getattr(context, "messages", None)
+        if not isinstance(messages, list):
+            raise RuntimeError("active agent context has no editable messages")
+
+        original_messages = deepcopy(messages)
+        target_index = self._resolve_edit_context_index(
+            original_messages,
+            context_message_id=context_message_id,
+            message_index=message_index,
+        )
+        target = messages[target_index]
+        if not isinstance(target, dict):
+            raise ValueError("target message is not editable")
+        target_role = target.get("role")
+        if target_role != role:
+            raise ValueError(f"target role is {target_role!r}, expected {role!r}")
+        if target_role not in {"user", "assistant"}:
+            raise ValueError("only user and assistant messages can be edited")
+
+        target_context_message_id = self._message_context_id(target)
+        history_path = layout.message_history_path(session_dir)
+        history = layout.read_jsonl(history_path)
+        history_index = self._find_history_entry_for_context_message(
+            history,
+            original_messages,
+            target_index=target_index,
+            context_message_id=target_context_message_id,
+            role=role,
+        )
+        if history_index is None:
+            raise ValueError("matching message history entry not found")
+
+        next_content = self._edited_message_content(
+            target,
+            role=role,
+            text=text,
+            content_parts=content_parts,
+        )
+        target["content"] = next_content
+        target["context_message_id"] = target_context_message_id
+        if hasattr(context, "context_usage"):
+            context.context_usage = None
+        clear_pending = getattr(context, "clear_pending_tool_calls", None)
+        if callable(clear_pending):
+            clear_pending()
+
+        history_entry = dict(history[history_index])
+        history_entry["role"] = role
+        history_entry["content"] = deepcopy(next_content)
+        history_entry["context_message_id"] = target_context_message_id
+        history[history_index] = history_entry
+
+        layout.atomic_write_text(
+            layout.context_path(session_dir),
+            json.dumps(context.snapshot(), ensure_ascii=False, indent=2),
+            fsync=True,
+        )
+        layout.write_jsonl(history_path, history, fsync=True)
+        self._patch_manifest(
+            session_dir,
+            {
+                "last_checkpoint_event": "session_message_edit",
+                "edited_context_message_id": target_context_message_id,
+                "edited_message_index": target_index,
+                "edited_message_role": role,
+            },
+            components=[
+                layout.COMPONENT_CONTEXT,
+                layout.COMPONENT_MESSAGE_HISTORY,
+            ],
+        )
+        self._session_has_visible_messages = True
+        return {
+            "session_id": session_id,
+            "context_message_id": target_context_message_id,
+            "message_index": target_index,
+            "role": role,
+        }
+
     def delete_session(self, session_id: str) -> None:
         """Permanently delete a session directory.
 
@@ -1331,6 +1439,125 @@ class SessionManager:
                     cursor = match + 1
             annotated.append(record)
         return annotated
+
+    @classmethod
+    def _find_history_entry_for_context_message(
+        cls,
+        entries: list[dict[str, Any]],
+        messages: list[Any],
+        *,
+        target_index: int,
+        context_message_id: str,
+        role: str,
+    ) -> int | None:
+        annotated = cls._history_with_context_indices(entries, messages)
+        for pos, entry in enumerate(annotated):
+            if entry.get("role") != role:
+                continue
+            if entry.get("context_message_id") == context_message_id:
+                return pos
+            if entry.get("context_message_index") == target_index:
+                return pos
+        return None
+
+    @staticmethod
+    def _resolve_edit_context_index(
+        messages: list[Any],
+        *,
+        context_message_id: str | None,
+        message_index: int | None,
+    ) -> int:
+        if context_message_id is not None:
+            if not context_message_id:
+                raise ValueError("context_message_id must be non-empty")
+            for index, message in enumerate(messages):
+                if (
+                    isinstance(message, dict)
+                    and message.get("context_message_id") == context_message_id
+                ):
+                    return index
+            raise KeyError(f"context_message_id not found: {context_message_id}")
+        if isinstance(message_index, bool) or not isinstance(message_index, int):
+            raise ValueError("message_index must be an integer")
+        if message_index < 0 or message_index >= len(messages):
+            raise IndexError(f"message_index out of range: {message_index}")
+        return message_index
+
+    @staticmethod
+    def _message_context_id(message: dict[str, Any]) -> str:
+        from hawi.agent.context import ensure_context_message_id
+
+        return ensure_context_message_id(message)  # type: ignore[arg-type]
+
+    @classmethod
+    def _edited_message_content(
+        cls,
+        message: dict[str, Any],
+        *,
+        role: str,
+        text: str,
+        content_parts: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        if role == "user":
+            if content_parts is None:
+                content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+            else:
+                content = cls._normalize_edit_content_parts(content_parts)
+            if not cls._has_visible_user_content(content):
+                raise ValueError("user message edit must include text or an attachment")
+            return content
+
+        if not text.strip():
+            raise ValueError("assistant message edit text must be non-empty")
+        existing = message.get("content")
+        return cls._replace_assistant_text(
+            existing if isinstance(existing, list) else [],
+            text,
+        )
+
+    @staticmethod
+    def _normalize_edit_content_parts(
+        parts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                raise ValueError("content_parts entries must be objects")
+            part_type = part.get("type")
+            if not isinstance(part_type, str) or not part_type:
+                raise ValueError("content_parts entries must include a type")
+            normalized.append(deepcopy(part))
+        return normalized
+
+    @staticmethod
+    def _has_visible_user_content(content: list[dict[str, Any]]) -> bool:
+        for part in content:
+            part_type = part.get("type")
+            if part_type == "text" and str(part.get("text") or "").strip():
+                return True
+            if part_type in {"image", "document", "audio", "video", "file"}:
+                return True
+        return False
+
+    @staticmethod
+    def _replace_assistant_text(content: list[Any], text: str) -> list[dict[str, Any]]:
+        replaced = False
+        next_content: list[dict[str, Any]] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                if replaced:
+                    continue
+                replacement = deepcopy(part)
+                replacement["text"] = text
+                next_content.append(replacement)
+                replaced = True
+                continue
+            next_content.append(deepcopy(part))
+        if not replaced:
+            next_content.append({"type": "text", "text": text})
+        return next_content
 
     @classmethod
     def _find_matching_context_message_by_id(

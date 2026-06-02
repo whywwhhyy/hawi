@@ -211,6 +211,25 @@ tool_message: Message = {
 }
 ```
 
+## 历史消息编辑与重新发送
+
+GUI 支持在 runner 空闲时编辑主聊天区的历史 `user` / `assistant`
+文本气泡。
+
+- 原地保存使用 engine 命令 `session_message_edit`。`user` 消息保存时替换整条
+  user content parts；`assistant` 消息保存时只替换 visible text，并保留
+  reasoning、tool_call 等非文本结构。
+- `user` 消息的“重新发送”不新增协议命令。GUI 固定先调用 `session_rewind`
+  定位到被编辑的 user 消息，使该 user 自身及之后历史被删除；随后调用
+  `enqueue`，把编辑器里的文本和附件作为一条全新的 user 消息发送，并在
+  metadata 中标记 `intent: "user_resend"`、`source: "gui_message_edit"`。
+- 历史图片、音频、视频等附件通过原消息的 `ContentPart.source` 作为 existing
+  attachment 回显；新增附件继续走 blob upload 后再写入 content parts。
+
+已知限制：`session_rewind` 只回滚持久化的 context 和 message history，不恢复插件
+运行时状态。特别是“检测文件变化”这类插件可能继续使用当前 watcher/state，而不是历史
+消息所在时刻的状态。这个差异当前作为实现限制保留。
+
 ## MessageRequest
 
 发送给模型的请求。

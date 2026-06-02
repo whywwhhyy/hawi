@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import type { GuiMetadata } from "../shared/protocol";
+import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -306,6 +306,94 @@ describe("latestFocusTextNode", () => {
     expect(latestFocusTextNode([
       { id: "thinking-1", kind: "thinking", content: "working", complete: false },
     ])).toBeUndefined();
+  });
+});
+
+describe("message edit helpers", () => {
+  it("allows completed user and agent text nodes with context identity", () => {
+    expect(isEditableTextNode({
+      id: "user-1",
+      kind: "user",
+      content: "hello",
+      contextMessageId: "ctx-user"
+    })).toBe(true);
+    expect(isEditableTextNode({
+      id: "agent-1",
+      kind: "agent",
+      content: "hello",
+      contextMessageIndex: 2
+    })).toBe(true);
+    expect(isEditableTextNode({
+      id: "agent-live",
+      kind: "agent",
+      content: "streaming",
+      complete: false,
+      contextMessageId: "ctx-agent"
+    })).toBe(false);
+    expect(isEditableTextNode({
+      id: "thinking-1",
+      kind: "thinking",
+      content: "thinking",
+      contextMessageId: "ctx-thinking"
+    })).toBe(false);
+  });
+
+  it("extracts existing user attachments from historical content parts", () => {
+    const parts: ContentPart[] = [
+      { type: "text", text: "**raw markdown**" },
+      {
+        type: "image",
+        source: {
+          kind: "blob",
+          blob_id: "blob-1",
+          uri: "hawi-blob://blob-1",
+          mime_type: "image/png",
+          filename: "screen.png",
+          size: 42
+        }
+      }
+    ];
+    const edit = messageEditStateFromNode({
+      id: "user-1",
+      kind: "user",
+      content: "**raw markdown**",
+      contentParts: parts,
+      contextMessageId: "ctx-user",
+      contextMessageIndex: 3
+    });
+
+    expect(edit).toMatchObject({
+      role: "user",
+      draft: "**raw markdown**",
+      attachments: [
+        {
+          kind: "existing",
+          filename: "screen.png",
+          mimeType: "image/png",
+          partType: "image",
+          size: 42
+        }
+      ]
+    });
+    expect(messageEditTargetPayload(edit)).toEqual({ context_message_id: "ctx-user" });
+    expect(editableAttachmentsFromContentParts(parts)).toHaveLength(1);
+  });
+
+  it("keeps agent edit state text-only and falls back to context index targeting", () => {
+    const edit = messageEditStateFromNode({
+      id: "agent-1",
+      kind: "agent",
+      content: "answer",
+      contentParts: [{ type: "text", text: "answer" }],
+      contextMessageIndex: 4
+    });
+
+    expect(edit).toMatchObject({
+      role: "agent",
+      draft: "answer",
+      attachments: []
+    });
+    expect(messageEditTargetPayload(edit)).toEqual({ message_index: 4 });
   });
 });
 
@@ -632,7 +720,8 @@ describe("resolveEscapeDismissTarget", () => {
     settingsMenuOpen: false,
     queuePopoverOpen: false,
     editingQueueTaskId: null,
-    sessionDialogOpen: false
+    sessionDialogOpen: false,
+    editingMessageId: null
   };
 
   it("dismisses media previews before stopping the agent or other dialogs", () => {
@@ -688,6 +777,13 @@ describe("resolveEscapeDismissTarget", () => {
       queuePopoverOpen: true,
       editingQueueTaskId: "task-1"
     })).toBe("queueTaskEdit");
+  });
+
+  it("cancels message editing when no higher priority overlay is open", () => {
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      editingMessageId: "agent-1"
+    })).toBe("messageEdit");
   });
 });
 

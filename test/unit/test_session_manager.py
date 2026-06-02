@@ -1128,6 +1128,221 @@ class TestSessionManager:
             "tool",
         ]
 
+    def test_edit_session_message_updates_user_text_and_keeps_later_history(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("first")
+        agent.context.add_assistant_message([{"type": "text", "text": "reply"}])
+        target_id = agent.context.add_user_message("old user text")
+        agent.context.add_assistant_message([{"type": "text", "text": "later reply"}])
+        sid = sm.new_session(name="source")
+        sm.save_now()
+        layout.write_jsonl(
+            layout.message_history_path(layout.session_dir(sm._root, sid)),
+            [
+                {
+                    "version": 1,
+                    "run_id": "r1",
+                    "role": message["role"],
+                    "content": message["content"],
+                    "metadata": message.get("metadata"),
+                    "context_message_id": message.get("context_message_id"),
+                }
+                for message in agent.context.messages
+            ],
+            fsync=True,
+        )
+
+        result = sm.edit_session_message(
+            role="user",
+            context_message_id=target_id,
+            text="edited user text",
+        )
+
+        assert result["session_id"] == sid
+        assert result["context_message_id"] == target_id
+        assert result["message_index"] == 2
+        assert agent.context.messages[2]["content"] == [
+            {"type": "text", "text": "edited user text"}
+        ]
+        assert agent.context.messages[3]["content"][0]["text"] == "later reply"
+        history = sm.read_message_history(sid)
+        assert [entry["content"][0]["text"] for entry in history] == [
+            "first",
+            "reply",
+            "edited user text",
+            "later reply",
+        ]
+
+    def test_edit_session_message_replaces_user_text_and_attachments(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        target_id = agent.context.add_user_message([
+            {"type": "text", "text": "old"},
+            {
+                "type": "image",
+                "source": {
+                    "kind": "blob",
+                    "blob_id": "old-blob",
+                    "uri": "hawi-blob://old-blob",
+                    "mime_type": "image/png",
+                    "filename": "old.png",
+                },
+            },
+        ])
+        sid = sm.new_session(name="attachments")
+        sm.save_now()
+        layout.write_jsonl(
+            layout.message_history_path(layout.session_dir(sm._root, sid)),
+            [
+                {
+                    "version": 1,
+                    "run_id": "r1",
+                    "role": message["role"],
+                    "content": message["content"],
+                    "metadata": message.get("metadata"),
+                    "context_message_id": message.get("context_message_id"),
+                }
+                for message in agent.context.messages
+            ],
+            fsync=True,
+        )
+        next_parts = [
+            {"type": "text", "text": "new"},
+            {
+                "type": "image",
+                "source": {
+                    "kind": "blob",
+                    "blob_id": "new-blob",
+                    "uri": "hawi-blob://new-blob",
+                    "mime_type": "image/png",
+                    "filename": "new.png",
+                },
+            },
+        ]
+
+        sm.edit_session_message(
+            role="user",
+            context_message_id=target_id,
+            text="new",
+            content_parts=next_parts,
+        )
+
+        assert agent.context.messages[0]["content"] == next_parts
+        history = sm.read_message_history(sid)
+        assert history[0]["content"] == next_parts
+
+    def test_edit_session_message_updates_assistant_text_preserving_structure(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("do work")
+        assistant_id = agent.context.add_assistant_message([
+            {"type": "reasoning", "reasoning": "private chain"},
+            {"type": "text", "text": "old visible"},
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "read_file",
+                "arguments": {"path": "a.txt"},
+            },
+        ])
+        sid = sm.new_session(name="assistant-edit")
+        sm.save_now()
+        layout.write_jsonl(
+            layout.message_history_path(layout.session_dir(sm._root, sid)),
+            [
+                {
+                    "version": 1,
+                    "run_id": "r1",
+                    "role": message["role"],
+                    "content": message["content"],
+                    "metadata": message.get("metadata"),
+                    "context_message_id": message.get("context_message_id"),
+                }
+                for message in agent.context.messages
+            ],
+            fsync=True,
+        )
+
+        sm.edit_session_message(
+            role="assistant",
+            context_message_id=assistant_id,
+            text="new visible",
+        )
+
+        content = agent.context.messages[1]["content"]
+        assert content == [
+            {"type": "reasoning", "reasoning": "private chain"},
+            {"type": "text", "text": "new visible"},
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "read_file",
+                "arguments": {"path": "a.txt"},
+            },
+        ]
+        history = sm.read_message_history(sid)
+        assert history[1]["content"] == content
+
+    def test_edit_session_message_rejects_bad_targets(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        user_id = agent.context.add_user_message("user")
+        assistant_id = agent.context.add_assistant_message([
+            {"type": "text", "text": "assistant"}
+        ])
+        sid = sm.new_session(name="bad-targets")
+        sm.save_now()
+        layout.write_jsonl(
+            layout.message_history_path(layout.session_dir(sm._root, sid)),
+            [
+                {
+                    "version": 1,
+                    "run_id": "r1",
+                    "role": message["role"],
+                    "content": message["content"],
+                    "metadata": message.get("metadata"),
+                    "context_message_id": message.get("context_message_id"),
+                }
+                for message in agent.context.messages
+            ],
+            fsync=True,
+        )
+
+        with pytest.raises(KeyError):
+            sm.edit_session_message(
+                role="user",
+                context_message_id="missing",
+                text="nope",
+            )
+        with pytest.raises(ValueError, match="target role"):
+            sm.edit_session_message(
+                role="user",
+                context_message_id=assistant_id,
+                text="nope",
+            )
+        with pytest.raises(ValueError, match="user message edit must include"):
+            sm.edit_session_message(
+                role="user",
+                context_message_id=user_id,
+                text="",
+                content_parts=[],
+            )
+        with pytest.raises(ValueError, match="assistant message edit text must be non-empty"):
+            sm.edit_session_message(
+                role="assistant",
+                context_message_id=assistant_id,
+                text="",
+            )
+
     def test_delete_removes_directory(self, stub_setup) -> None:
         sm, agent, _ = stub_setup
         agent.context.add_user_message("delete me")

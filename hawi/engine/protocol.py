@@ -55,6 +55,7 @@ COMMAND_TYPES = {
     "session_new",
     "session_fork",
     "session_rewind",
+    "session_message_edit",
     "session_load",
     "session_switch",
     "session_delete",

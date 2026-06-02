@@ -965,7 +965,13 @@ function commandTimeout(type: CoreCommandType): number {
   if (type === "compact_context") {
     return COMPACT_COMMAND_TIMEOUT_MS;
   }
-  if (type === "session_export_markdown" || type === "session_history" || type === "session_list" || type === "session_search") {
+  if (
+    type === "session_export_markdown"
+    || type === "session_history"
+    || type === "session_list"
+    || type === "session_search"
+    || type === "session_message_edit"
+  ) {
     return SESSION_COMMAND_TIMEOUT_MS;
   }
   return DEFAULT_COMMAND_TIMEOUT_MS;

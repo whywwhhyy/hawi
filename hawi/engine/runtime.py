@@ -513,6 +513,8 @@ class CoreRuntime:
                 await self._handle_session_rename(client, command)
             elif command.type == "session_save_now":
                 await self._handle_session_save_now(client, command)
+            elif command.type == "session_message_edit":
+                await self._handle_session_message_edit(client, command)
             elif command.type == "session_history":
                 await self._handle_session_history(client, command)
             elif command.type == "session_export_markdown":
@@ -1638,6 +1640,62 @@ class CoreRuntime:
                     "message_history": message_history,
                     "context_usage": context_usage,
                     **self._context_branch_payload(branch_result),
+                },
+            )
+        )
+
+    async def _handle_session_message_edit(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        runner = self._require_runner()
+        if not runner.is_idle:
+            await client.send(
+                make_error(
+                    "Agent is running. Edit a session message when the runner is idle.",
+                    request_id=command.id,
+                    code="busy",
+                )
+            )
+            return
+        requested_session_id = self._optional_session_id(command)
+        if (
+            requested_session_id is not None
+            and requested_session_id != sm.current_session_id
+        ):
+            raise ValueError("session_message_edit can only edit the active session")
+        role = command.payload.get("role")
+        if role not in {"user", "assistant"}:
+            raise ValueError("'session_message_edit.payload.role' must be 'user' or 'assistant'")
+        text = command.payload.get("text")
+        if not isinstance(text, str):
+            raise ValueError("'session_message_edit.payload.text' must be a string")
+        raw_content_parts = command.payload.get("content_parts")
+        if raw_content_parts is not None and not isinstance(raw_content_parts, list):
+            raise ValueError("'session_message_edit.payload.content_parts' must be a list when present")
+        context_message_id = self._optional_context_message_id(command)
+        message_index = (
+            None if context_message_id is not None else self._optional_message_index(command)
+        )
+        result = sm.edit_session_message(
+            role=role,
+            text=text,
+            content_parts=raw_content_parts,
+            context_message_id=context_message_id,
+            message_index=message_index,
+        )
+        message_history = sm.read_message_history(result["session_id"])
+        context_usage = self._agent_context_usage()
+        await client.send(
+            make_ack(
+                "session_message_edit",
+                request_id=command.id,
+                payload={
+                    **result,
+                    "message_history": message_history,
+                    "context_usage": context_usage,
                 },
             )
         )
