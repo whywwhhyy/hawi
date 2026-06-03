@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -57,6 +57,34 @@ describe("thinkingExcerpt", () => {
 
   it("adds an ellipsis only when content is truncated", () => {
     expect(thinkingExcerpt("too long", 3)).toBe("too...");
+  });
+});
+
+describe("page find helpers", () => {
+  it("finds case-insensitive keyword offsets", () => {
+    expect(pageFindTextMatchOffsets("Agent answer, agent draft", "agent")).toEqual([
+      { start: 0, end: 5 },
+      { start: 14, end: 19 },
+    ]);
+  });
+
+  it("can require whole English word boundaries", () => {
+    expect(pageFindTextMatchOffsets("cat scatter cat", "cat", { wholeWord: true })).toEqual([
+      { start: 0, end: 3 },
+      { start: 12, end: 15 },
+    ]);
+  });
+
+  it("can require exact casing", () => {
+    expect(pageFindTextMatchOffsets("agent Agent", "Agent", { caseSensitive: true })).toEqual([
+      { start: 6, end: 11 },
+    ]);
+  });
+
+  it("wraps previous and next result indexes", () => {
+    expect(resolvePageFindStep(0, 3, -1)).toBe(2);
+    expect(resolvePageFindStep(2, 3, 1)).toBe(0);
+    expect(resolvePageFindStep(0, 0, 1)).toBe(0);
   });
 });
 

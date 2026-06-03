@@ -16,6 +16,7 @@
 }
 
 .chat-panel {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -25,6 +26,100 @@
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   user-select: text;
+}
+
+::highlight(hawi-page-find-match),
+::highlight(hawi-history-find-match) {
+  background: rgba(250, 204, 21, 0.46);
+  color: inherit;
+}
+
+::highlight(hawi-page-find-active),
+::highlight(hawi-history-find-active) {
+  background: #f59e0b;
+  color: #101820;
+}
+
+.page-find-overlay {
+  position: sticky;
+  top: 8px;
+  z-index: 25;
+  display: flex;
+  justify-content: flex-end;
+  height: 0;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.page-find-widget {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: min(360px, calc(100% - 12px));
+  min-height: 34px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 8px 24px rgba(27, 45, 54, 0.16);
+  pointer-events: auto;
+}
+
+.page-find-widget > svg {
+  flex: 0 0 auto;
+  color: #687a7f;
+}
+
+.page-find-widget input {
+  flex: 1 1 auto;
+  min-width: 80px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.page-find-count {
+  flex: 0 0 auto;
+  min-width: 44px;
+  color: #6f7d82;
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.page-find-count.empty {
+  color: #9a4d4d;
+}
+
+.page-find-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: #4e5f65;
+  cursor: pointer;
+}
+
+.page-find-button:hover:not(:disabled),
+.page-find-button:focus-visible {
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+  outline: none;
+}
+
+.page-find-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .chat-node-frame {

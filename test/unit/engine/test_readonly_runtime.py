@@ -87,6 +87,23 @@ def text_record(text: str, *, role: str = "user", timestamp: float = 0.0) -> dic
     }
 
 
+def system_prompt_record(text: str, *, timestamp: float = 0.0) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "timestamp": timestamp,
+        "run_id": f"run-{timestamp}",
+        "role": "event",
+        "content": [{"type": "text", "text": text}],
+        "metadata": {
+            "display_message_type": "core_event",
+            "event_type": "agent.system_prompt",
+            "event_payload": {"text": text},
+            "persist_session": True,
+            "replay": True,
+        },
+    }
+
+
 def test_readonly_browser_searches_messages_from_newest_to_oldest(tmp_path: Path) -> None:
     old_history = [text_record("alpha old match", timestamp=10)]
     new_history = [
@@ -116,6 +133,26 @@ def test_readonly_browser_searches_messages_from_newest_to_oldest(tmp_path: Path
     assert [item["session_id"] for item in result["results"]] == ["new", "old"]
     assert result["results"][0]["message_index"] == 1
     assert result["results"][0]["context_message_id"] == "ctx-new-1"
+
+
+def test_readonly_browser_search_ignores_system_prompt_records(tmp_path: Path) -> None:
+    write_session(
+        tmp_path,
+        "system-prompt-session",
+        name="System Prompt",
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:01:00",
+        history=[
+            system_prompt_record("needle from system prompt", timestamp=10),
+            text_record("needle from user", timestamp=20),
+        ],
+    )
+
+    result = ReadOnlySessionBrowser(tmp_path).search("needle", limit=10)
+
+    assert result["total_matches"] == 1
+    assert result["results"][0]["text"] == "needle from user"
+    assert result["results"][0]["role"] == "user"
 
 
 def test_readonly_browser_search_respects_case_sensitive(tmp_path: Path) -> None:

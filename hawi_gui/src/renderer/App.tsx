@@ -97,6 +97,25 @@ const STATUS_CONTEXT_MIN_WIDTH_PX = 180;
 const STATUS_MESSAGE_WIDTH_PX = 168;
 const STATUS_POPOVER_VIEWPORT_MARGIN = 8;
 const STATUS_POPOVER_GAP_PX = 6;
+const PAGE_FIND_MATCH_HIGHLIGHT = "hawi-page-find-match";
+const PAGE_FIND_ACTIVE_HIGHLIGHT = "hawi-page-find-active";
+const HISTORY_FIND_MATCH_HIGHLIGHT = "hawi-history-find-match";
+const HISTORY_FIND_ACTIVE_HIGHLIGHT = "hawi-history-find-active";
+const PAGE_FIND_EXCLUDE_SELECTOR = [
+  ".page-find-overlay",
+  "script",
+  "style",
+  "noscript",
+  "input",
+  "textarea",
+  "select",
+  "option",
+  "button",
+  "svg",
+  "[aria-hidden='true']",
+  ".message-body.is-collapsed",
+  ".collapsible-body.is-collapsed"
+].join(",");
 const imageAttachmentExtensions = new Set(["avif", "bmp", "gif", "jpg", "jpeg", "png", "svg", "webp"]);
 const audioAttachmentExtensions = new Set(["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
 const videoAttachmentExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ogv", "webm"]);
@@ -1929,11 +1948,12 @@ export default function App() {
 
   useEffect(() => {
     if (!historyPreviewLocateTarget) return;
+    if (historySearchQuery.trim()) return;
     const frame = window.requestAnimationFrame(() => {
       scrollToHistoryTarget(historyPreviewRef.current, historyPreviewLocateTarget);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [historyPreviewLocateTarget, historyPreviewNodes]);
+  }, [historyPreviewLocateTarget, historyPreviewNodes, historySearchQuery]);
 
   useEffect(() => {
     if (!mainLocateTarget || mainLocateTarget.sessionId !== currentSessionId) return;
@@ -3501,14 +3521,6 @@ export default function App() {
             <Plug size={18} />
             <span>Plugins</span>
           </button>
-          <button type="button" className="rail-button" title="聊天记录搜索" onClick={() => setHistorySearchOpen(true)}>
-            <Search size={18} />
-            <span>Search</span>
-          </button>
-          <button type="button" className="rail-button" title="新会话" onClick={() => void newSession()}>
-            <Plus size={18} />
-            <span>New</span>
-          </button>
           <div className="rail-settings-anchor" ref={settingsMenuAnchorRef}>
             <button
               type="button"
@@ -4506,7 +4518,12 @@ function HistorySearchModal({
               ref={previewRef}
               nodes={previewNodes}
               allowFork={false}
+              enablePageFind={false}
               emptyLabel={query.trim() ? "无预览" : "输入关键词"}
+              searchHighlightQuery={query}
+              searchHighlightCaseSensitive={caseSensitive}
+              searchHighlightWholeWord={wholeWord}
+              searchHighlightTarget={locateTarget}
               highlightHistoryIndex={locateTarget?.messageIndex}
               highlightContextMessageId={locateTarget?.contextMessageId}
               highlightContextMessageIndex={locateTarget?.contextMessageIndex}
@@ -5646,6 +5663,11 @@ interface ChatTranscriptProps {
   allowFork?: boolean;
   messageEdit?: MessageEditController;
   emptyLabel?: string;
+  enablePageFind?: boolean;
+  searchHighlightQuery?: string;
+  searchHighlightCaseSensitive?: boolean;
+  searchHighlightWholeWord?: boolean;
+  searchHighlightTarget?: HistoryLocateTarget | null;
   highlightHistoryIndex?: number;
   highlightContextMessageId?: string;
   highlightContextMessageIndex?: number;
@@ -5653,6 +5675,44 @@ interface ChatTranscriptProps {
   onWheel?: (event: WheelEvent<HTMLElement>) => void;
   onTouchStart?: () => void;
   onMouseDown?: (event: ReactMouseEvent<HTMLElement>) => void;
+}
+
+interface PageFindMatchOffset {
+  start: number;
+  end: number;
+}
+
+interface PageFindMatchOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+}
+
+export function pageFindTextMatchOffsets(
+  text: string,
+  query: string,
+  options: PageFindMatchOptions = {}
+): PageFindMatchOffset[] {
+  const needle = query.trim();
+  if (!needle) return [];
+  const haystack = options.caseSensitive ? text : text.toLowerCase();
+  const normalizedNeedle = options.caseSensitive ? needle : needle.toLowerCase();
+  const matches: PageFindMatchOffset[] = [];
+  let offset = 0;
+  while (offset <= haystack.length - normalizedNeedle.length) {
+    const index = haystack.indexOf(normalizedNeedle, offset);
+    if (index < 0) break;
+    const end = index + normalizedNeedle.length;
+    if (!options.wholeWord || hasNonEnglishLetterBoundaries(text, index, end)) {
+      matches.push({ start: index, end });
+    }
+    offset = index + Math.max(1, normalizedNeedle.length);
+  }
+  return matches;
+}
+
+export function resolvePageFindStep(currentIndex: number, count: number, direction: -1 | 1): number {
+  if (count <= 0) return 0;
+  return (currentIndex + direction + count) % count;
 }
 
 const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(function ChatTranscript({
@@ -5665,6 +5725,11 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   allowFork = true,
   messageEdit,
   emptyLabel,
+  enablePageFind = true,
+  searchHighlightQuery = "",
+  searchHighlightCaseSensitive = false,
+  searchHighlightWholeWord = false,
+  searchHighlightTarget = null,
   highlightHistoryIndex,
   highlightContextMessageId,
   highlightContextMessageIndex,
@@ -5673,6 +5738,12 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   onTouchStart,
   onMouseDown,
 }, ref) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const pageFindInputRef = useRef<HTMLInputElement | null>(null);
+  const [pageFindOpen, setPageFindOpen] = useState(false);
+  const [pageFindQuery, setPageFindQuery] = useState("");
+  const [pageFindMatchCount, setPageFindMatchCount] = useState(0);
+  const [pageFindActiveIndex, setPageFindActiveIndex] = useState(0);
   const [expandedFocusRounds, setExpandedFocusRounds] = useState<Record<string, boolean>>({});
   const transcriptItems = focusMode
     ? buildFocusTranscriptItems(nodes, processing)
@@ -5703,6 +5774,75 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
       [group.roundId]: !current[group.roundId]
     }));
   };
+  const setPanelRef = useCallback((element: HTMLDivElement | null) => {
+    panelRef.current = element;
+    if (typeof ref === "function") {
+      ref(element);
+    } else if (ref) {
+      ref.current = element;
+    }
+  }, [ref]);
+  const openPageFind = useCallback(() => {
+    setPageFindOpen(true);
+    window.requestAnimationFrame(() => {
+      pageFindInputRef.current?.focus();
+      pageFindInputRef.current?.select();
+    });
+  }, []);
+  const closePageFind = useCallback(() => {
+    setPageFindOpen(false);
+  }, []);
+  const updatePageFindQuery = (query: string) => {
+    setPageFindQuery(query);
+    setPageFindActiveIndex(0);
+  };
+  const stepPageFind = (direction: -1 | 1) => {
+    setPageFindActiveIndex((current) => resolvePageFindStep(current, pageFindMatchCount, direction));
+  };
+
+  useEffect(() => {
+    if (!enablePageFind) return;
+    function handlePageFindShortcut(event: KeyboardEvent) {
+      if (event.isComposing || event.altKey) return;
+      if (document.querySelector(".modal-backdrop")) return;
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        event.stopPropagation();
+        openPageFind();
+        return;
+      }
+      if (pageFindOpen && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePageFind();
+      }
+    }
+
+    document.addEventListener("keydown", handlePageFindShortcut, true);
+    return () => {
+      document.removeEventListener("keydown", handlePageFindShortcut, true);
+    };
+  }, [closePageFind, enablePageFind, openPageFind, pageFindOpen]);
+
+  const internalPageFindActive = enablePageFind && pageFindOpen;
+  const externalSearchHighlightActive = !internalPageFindActive && searchHighlightQuery.trim().length > 0;
+
+  usePageFindHighlights(
+    panelRef,
+    internalPageFindActive ? pageFindQuery : searchHighlightQuery,
+    pageFindActiveIndex,
+    setPageFindMatchCount,
+    setPageFindActiveIndex,
+    {
+      caseSensitive: internalPageFindActive ? false : searchHighlightCaseSensitive,
+      wholeWord: internalPageFindActive ? false : searchHighlightWholeWord,
+      target: internalPageFindActive ? null : searchHighlightTarget,
+      matchHighlightName: externalSearchHighlightActive ? HISTORY_FIND_MATCH_HIGHLIGHT : PAGE_FIND_MATCH_HIGHLIGHT,
+      activeHighlightName: externalSearchHighlightActive ? HISTORY_FIND_ACTIVE_HIGHLIGHT : PAGE_FIND_ACTIVE_HIGHLIGHT,
+    },
+    [nodes, processing, focusMode, expandedFocusRounds]
+  );
+
   const renderNodeFrame = (node: ChatNode, key = node.id) => {
     const highlighted = isHighlightedChatNode(
       node,
@@ -5732,13 +5872,68 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
 
   return (
     <main
-      className="chat-panel"
-      ref={ref}
+      className={`chat-panel ${internalPageFindActive ? "has-page-find" : ""}`.trim()}
+      ref={setPanelRef}
       onScroll={onScroll}
       onWheel={onWheel}
       onTouchStart={onTouchStart}
       onMouseDown={onMouseDown}
     >
+      {internalPageFindActive && (
+        <div className="page-find-overlay">
+          <div className="page-find-widget" role="search" aria-label="当前页面搜索">
+            <Search size={15} />
+            <input
+              ref={pageFindInputRef}
+              value={pageFindQuery}
+              placeholder="搜索当前页面"
+              aria-label="搜索当前页面"
+              onChange={(event) => updatePageFindQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  stepPageFind(event.shiftKey ? -1 : 1);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  closePageFind();
+                }
+              }}
+            />
+            <span className={`page-find-count ${pageFindQuery.trim() && pageFindMatchCount === 0 ? "empty" : ""}`.trim()}>
+              {formatPageFindCount(pageFindQuery, pageFindMatchCount, pageFindActiveIndex)}
+            </span>
+            <button
+              type="button"
+              className="page-find-button"
+              title="上一个"
+              aria-label="上一个搜索结果"
+              disabled={pageFindMatchCount === 0}
+              onClick={() => stepPageFind(-1)}
+            >
+              <ArrowUp size={14} />
+            </button>
+            <button
+              type="button"
+              className="page-find-button"
+              title="下一个"
+              aria-label="下一个搜索结果"
+              disabled={pageFindMatchCount === 0}
+              onClick={() => stepPageFind(1)}
+            >
+              <ArrowDown size={14} />
+            </button>
+            <button
+              type="button"
+              className="page-find-button"
+              title="关闭"
+              aria-label="关闭当前页面搜索"
+              onClick={closePageFind}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
       {nodes.length === 0 && !processing && emptyLabel && (
         <div className="preview-empty">{emptyLabel}</div>
       )}
@@ -5761,6 +5956,173 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
     </main>
   );
 }));
+
+function usePageFindHighlights(
+  rootRef: { current: HTMLElement | null },
+  query: string,
+  activeIndex: number,
+  setMatchCount: (updater: (current: number) => number) => void,
+  setActiveIndex: (updater: (current: number) => number) => void,
+  options: PageFindMatchOptions & {
+    target?: HistoryLocateTarget | null;
+    matchHighlightName: string;
+    activeHighlightName: string;
+  },
+  dependencies: DependencyList
+) {
+  useBrowserLayoutEffect(() => {
+    const root = rootRef.current;
+    let scrollFrame: number | null = null;
+    clearPageFindHighlights(options.matchHighlightName, options.activeHighlightName);
+
+    if (!root || !query.trim()) {
+      setMatchCount((current) => current === 0 ? current : 0);
+      setActiveIndex((current) => current === 0 ? current : 0);
+      return () => {
+        clearPageFindHighlights(options.matchHighlightName, options.activeHighlightName);
+      };
+    }
+
+    const ranges = collectPageFindRanges(root, query, options);
+    const count = ranges.length;
+    setMatchCount((current) => current === count ? current : count);
+
+    if (count === 0) {
+      setActiveIndex((current) => current === 0 ? current : 0);
+      return () => {
+        clearPageFindHighlights(options.matchHighlightName, options.activeHighlightName);
+      };
+    }
+
+    const targetActiveIndex = options.target
+      ? ranges.findIndex((range) => pageFindRangeMatchesHistoryTarget(range, options.target))
+      : -1;
+    const clampedActiveIndex = targetActiveIndex >= 0
+      ? targetActiveIndex
+      : Math.min(Math.max(0, activeIndex), count - 1);
+    if (clampedActiveIndex !== activeIndex) {
+      setActiveIndex(() => clampedActiveIndex);
+    }
+
+    setPageFindHighlight(options.matchHighlightName, ranges);
+    const activeRange = ranges[clampedActiveIndex];
+    setPageFindHighlight(options.activeHighlightName, [activeRange]);
+    scrollFrame = window.requestAnimationFrame(() => {
+      scrollPageFindRangeIntoView(root, activeRange);
+      scrollFrame = null;
+    });
+
+    return () => {
+      if (scrollFrame !== null) {
+        window.cancelAnimationFrame(scrollFrame);
+      }
+      clearPageFindHighlights(options.matchHighlightName, options.activeHighlightName);
+    };
+    // The caller passes render-shape dependencies so new transcript text gets searched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    rootRef,
+    query,
+    activeIndex,
+    options.caseSensitive,
+    options.wholeWord,
+    options.target,
+    options.matchHighlightName,
+    options.activeHighlightName,
+    ...dependencies
+  ]);
+}
+
+function collectPageFindRanges(
+  root: HTMLElement,
+  query: string,
+  options: PageFindMatchOptions = {}
+): Range[] {
+  const ranges: Range[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return isPageFindTextNodeSearchable(root, node)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    }
+  });
+  let node = walker.nextNode();
+  while (node) {
+    const text = node.textContent ?? "";
+    for (const match of pageFindTextMatchOffsets(text, query, options)) {
+      const range = document.createRange();
+      range.setStart(node, match.start);
+      range.setEnd(node, match.end);
+      ranges.push(range);
+    }
+    node = walker.nextNode();
+  }
+  return ranges;
+}
+
+function pageFindRangeMatchesHistoryTarget(range: Range, target: HistoryLocateTarget): boolean {
+  const startElement = range.startContainer.parentElement;
+  const frame = startElement?.closest<HTMLElement>(".chat-node-frame");
+  return frame ? historyTargetMatchesElement(frame, target) : false;
+}
+
+function isPageFindTextNodeSearchable(root: HTMLElement, node: Node): boolean {
+  const text = node.textContent;
+  if (!text || text.trim() === "") return false;
+  const element = node.parentElement;
+  if (!element || !root.contains(element)) return false;
+  const excluded = element.closest(PAGE_FIND_EXCLUDE_SELECTOR);
+  if (excluded && root.contains(excluded)) return false;
+  const style = window.getComputedStyle(element);
+  return style.display !== "none" && style.visibility !== "hidden";
+}
+
+function setPageFindHighlight(name: string, ranges: Range[]): void {
+  const registry = pageFindHighlightRegistry();
+  if (!registry) return;
+  registry.highlights.set(name, new registry.Highlight(...ranges));
+}
+
+function clearPageFindHighlights(
+  matchHighlightName = PAGE_FIND_MATCH_HIGHLIGHT,
+  activeHighlightName = PAGE_FIND_ACTIVE_HIGHLIGHT
+): void {
+  const registry = pageFindHighlightRegistry();
+  registry?.highlights.delete(matchHighlightName);
+  registry?.highlights.delete(activeHighlightName);
+}
+
+function pageFindHighlightRegistry(): {
+  highlights: { set: (name: string, highlight: unknown) => void; delete: (name: string) => void };
+  Highlight: new (...ranges: Range[]) => unknown;
+} | null {
+  if (typeof window === "undefined") return null;
+  const highlights = (window.CSS as unknown as {
+    highlights?: { set: (name: string, highlight: unknown) => void; delete: (name: string) => void };
+  }).highlights;
+  const Highlight = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+  if (!highlights || !Highlight) return null;
+  return { highlights, Highlight };
+}
+
+function scrollPageFindRangeIntoView(root: HTMLElement, range: Range): void {
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return;
+  const rootRect = root.getBoundingClientRect();
+  const desiredTop = root.scrollTop + rect.top - rootRect.top - Math.round(root.clientHeight * 0.32);
+  const desiredLeft = root.scrollLeft + rect.left - rootRect.left - 24;
+  root.scrollTo({
+    top: Math.max(0, desiredTop),
+    left: Math.max(0, desiredLeft),
+    behavior: "smooth"
+  });
+}
+
+function formatPageFindCount(query: string, count: number, activeIndex: number): string {
+  if (!query.trim()) return "";
+  if (count === 0) return "无结果";
+  return `${Math.min(activeIndex, count - 1) + 1}/${count}`;
+}
 
 interface FocusFoldGroup {
   roundId: string;
@@ -8951,18 +9313,32 @@ function historyResultToLocateTarget(result: HistorySearchResult): HistoryLocate
 
 function scrollToHistoryTarget(container: HTMLElement | null, target: HistoryLocateTarget): void {
   if (!container) return;
-  const selectors = [
-    typeof target.messageIndex === "number" ? `[data-history-index="${target.messageIndex}"]` : "",
-    target.contextMessageId ? `[data-context-message-id="${cssAttrEscape(target.contextMessageId)}"]` : "",
-    typeof target.contextMessageIndex === "number" ? `[data-context-message-index="${target.contextMessageIndex}"]` : "",
-  ].filter(Boolean);
-  for (const selector of selectors) {
+  for (const selector of historyTargetSelectors(target)) {
     const element = container.querySelector<HTMLElement>(selector);
     if (element) {
       element.scrollIntoView({ block: "center" });
       return;
     }
   }
+}
+
+function historyTargetSelectors(target: HistoryLocateTarget): string[] {
+  return [
+    typeof target.messageIndex === "number" ? `[data-history-index="${target.messageIndex}"]` : "",
+    target.contextMessageId ? `[data-context-message-id="${cssAttrEscape(target.contextMessageId)}"]` : "",
+    typeof target.contextMessageIndex === "number" ? `[data-context-message-index="${target.contextMessageIndex}"]` : "",
+  ].filter(Boolean);
+}
+
+function historyTargetMatchesElement(element: HTMLElement, target: HistoryLocateTarget): boolean {
+  if (typeof target.messageIndex === "number" && element.dataset.historyIndex === String(target.messageIndex)) {
+    return true;
+  }
+  if (target.contextMessageId && element.dataset.contextMessageId === target.contextMessageId) {
+    return true;
+  }
+  return typeof target.contextMessageIndex === "number"
+    && element.dataset.contextMessageIndex === String(target.contextMessageIndex);
 }
 
 function isHighlightedChatNode(

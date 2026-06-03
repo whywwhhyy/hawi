@@ -118,6 +118,8 @@ class ReadOnlySessionBrowser:
                 continue
             for message_index in range(len(history) - 1, -1, -1):
                 record = history[message_index]
+                if _is_system_prompt_record(record):
+                    continue
                 text = message_record_text(record)
                 if not text:
                     continue
@@ -211,6 +213,13 @@ def message_record_text(record: dict[str, Any]) -> str:
     if role:
         return str(role)
     return ""
+
+
+def _is_system_prompt_record(record: dict[str, Any]) -> bool:
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    return metadata.get("event_type") == "agent.system_prompt"
 
 
 def _message_is_visible_entry(message: Any) -> bool:
