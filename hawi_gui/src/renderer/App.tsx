@@ -2034,7 +2034,9 @@ export default function App() {
       return;
     }
     const target = sessions.find((session) => session.session_id === sessionId);
-    if (target?.load_state === "running") {
+    const isCurrentRunning = sessionId === currentSessionIdRef.current && canStopRunnerState(state.runnerState);
+    if (target?.load_state === "running" || isCurrentRunning) {
+      dispatch(errorFrame("运行中的 Session 不能删除，请先停止当前任务。"));
       return;
     }
     if (!window.confirm(`删除 Session ${shortSessionId(sessionId)}？`)) {
@@ -2087,9 +2089,6 @@ export default function App() {
   async function newSession() {
     setSessionBusy(true);
     try {
-      if (state.sessionMessageCount > 0) {
-        await sendCommand("session_save_now", {});
-      }
       const profile = configRef.current ? launchProfileFromConfig(configRef.current) : undefined;
       const frame = await sendCommand("session_new", profile ? { gui_launch_profile: profile } : {});
       const payload = framePayload(frame);

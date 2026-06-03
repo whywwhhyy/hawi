@@ -225,6 +225,26 @@ describe("SessionEngineManager", () => {
     expect(internals.currentSessionId).toBeNull();
   });
 
+  it("does not save a running current session before creating a new one", async () => {
+    const manager = makeManager([]);
+    const internals = manager as unknown as ManagerInternals;
+    const running = fakeRecord("session-running", 1);
+    running.agentState = "RUNNING";
+    running.runnerState = "RUNNING";
+    running.hasVisibleMessages = true;
+    internals.currentSessionId = running.sessionId;
+    internals.loaded.set(running.sessionId, running);
+    internals.startRecord = (sessionId, launchProfile) => {
+      const record = fakeRecord(sessionId, 2, new FakeCore(), launchProfile);
+      internals.loaded.set(sessionId, record);
+      return record;
+    };
+
+    await manager.sendCommand("session_new", {});
+
+    expect(running.core.commands.some((command) => command.type === "session_save_now")).toBe(false);
+  });
+
   it("routes commands to the targeted loaded session", async () => {
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;

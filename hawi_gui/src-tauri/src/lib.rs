@@ -2035,7 +2035,7 @@ impl SessionEngineManager {
             return;
         }
         record.stopping = true;
-        if record.core.is_running() {
+        if record.core.is_running() && !is_running_agent_state(&record.agent_state) {
             let _ =
                 record
                     .core
@@ -2050,7 +2050,7 @@ impl SessionEngineManager {
         let Some(record) = self.loaded.get_mut(session_id) else {
             return;
         };
-        if record.core.is_running() {
+        if record.core.is_running() && !is_running_agent_state(&record.agent_state) {
             let _ =
                 record
                     .core

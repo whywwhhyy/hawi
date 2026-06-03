@@ -512,7 +512,7 @@ export class SessionEngineManager {
     }
     record.stopping = true;
     try {
-      if (record.core.isRunning()) {
+      if (record.core.isRunning() && !isRunningAgentState(record.agentState)) {
         await record.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS).catch(() => undefined);
       }
       await record.core.stop(reason);
@@ -525,7 +525,7 @@ export class SessionEngineManager {
   }
 
   private async saveSessionProfile(record: EngineRecord): Promise<void> {
-    if (!record.core.isRunning()) {
+    if (!record.core.isRunning() || isRunningAgentState(record.agentState)) {
       return;
     }
     await record.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS).catch(() => undefined);
@@ -533,7 +533,7 @@ export class SessionEngineManager {
 
   private async saveCurrentSession(): Promise<void> {
     const current = this.currentRecord();
-    if (!current?.core.isRunning()) {
+    if (!current?.core.isRunning() || isRunningAgentState(current.agentState)) {
       return;
     }
     await current.core.sendCommand("session_save_now", {}, SESSION_COMMAND_TIMEOUT_MS).catch(() => undefined);
