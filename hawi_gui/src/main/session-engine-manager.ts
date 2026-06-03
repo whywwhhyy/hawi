@@ -148,6 +148,8 @@ export class SessionEngineManager {
         return this.renameSession(payload);
       case "change_cwd":
         return this.changeWorkspace(payload);
+      case "save_model_provider_config":
+        return this.sendCurrentCoreCommand(type, payload);
       default:
         if (isReadOnlyCommand(type, payload)) {
           return this.readonlyCommand(type, payload);
@@ -162,6 +164,14 @@ export class SessionEngineManager {
       return null;
     }
     return record.core.sendCommand("refresh_models", { provider }, 60_000);
+  }
+
+  private async sendCurrentCoreCommand(type: CoreCommandType, payload: Record<string, unknown>): Promise<CoreFrame> {
+    const record = this.currentRecord() ?? [...this.loaded.values()][0];
+    if (!record) {
+      throw new Error("No active session");
+    }
+    return record.core.sendCommand(type, payload, commandTimeout(type));
   }
 
   private async routeCommand(type: CoreCommandType, payload: Record<string, unknown>, targetSessionId?: string | null): Promise<CoreFrame> {
@@ -823,6 +833,7 @@ export function profileFromConfig(config: PersistedConfig): SessionLaunchProfile
   const profile = {
     version: 1,
     modelName: config.modelName,
+    modelProviderConfigs: clonePluginConfigs(config.modelProviderConfigs ?? {}),
     systemPrompt: config.systemPrompt,
     selectedPlugins: [...config.selectedPlugins],
     pluginConfigs: clonePluginConfigs(config.pluginConfigs),
@@ -841,6 +852,7 @@ export function configFromProfile(
     {
       ...defaultConfig,
       modelName: profile.modelName || defaultConfig.modelName,
+      modelProviderConfigs: clonePluginConfigs(profile.modelProviderConfigs ?? {}),
       systemPrompt: profile.systemPrompt || defaultConfig.systemPrompt,
       selectedPlugins: [...profile.selectedPlugins],
       pluginConfigs: clonePluginConfigs(profile.pluginConfigs),
@@ -863,6 +875,7 @@ export function launchProfileFromUnknown(value: unknown): SessionLaunchProfile |
   return {
     version: 1,
     modelName,
+    modelProviderConfigs: pluginConfigRecord(value.modelProviderConfigs),
     systemPrompt,
     selectedPlugins: stringList(value.selectedPlugins),
     pluginConfigs: pluginConfigRecord(value.pluginConfigs),

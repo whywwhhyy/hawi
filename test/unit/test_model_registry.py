@@ -17,6 +17,7 @@ from hawi.models.registry import (
     UnknownModelError,
     model_registry,
 )
+from hawi.models.config_persistence import persist_provider_properties
 from hawi.models import (
     OpenAIModel,
     Model,
@@ -209,6 +210,105 @@ class TestProviderRegistration:
 
         with pytest.raises(Exception, match="Provider 'missing' not found"):
             registry.refresh_provider_models("missing")
+
+    def test_provider_config_overrides_update_provider_properties(self):
+        registry = ModelRegistry()
+        registry.clear()
+        registry.register_provider(
+            "editable",
+            "OpenAIModel",
+            ["local-a"],
+            {"api_key": "old-key", "base_url": "https://old.test"},
+            quiet=True,
+        )
+
+        registry.apply_provider_config_overrides({
+            "editable": {
+                "api_key": "new-key",
+                "timeout": 30,
+            }
+        })
+
+        config = registry.get_model_config("editable/local-a")
+
+        assert config is not None
+        assert config.properties == {
+            "api_key": "new-key",
+            "base_url": "https://old.test",
+            "timeout": 30,
+        }
+
+    def test_persist_provider_properties_preserves_yaml_order(self, tmp_path):
+        config_path = tmp_path / "models.yaml"
+        config_path.write_text(
+            "# keep header\n"
+            "providers:\n"
+            "  - name: first\n"
+            "    adapter: OpenAIModel\n"
+            "    model_ids:\n"
+            "      - a\n"
+            "    properties:\n"
+            "      api_key: old-first\n"
+            "  - name: editable\n"
+            "    adapter: OpenAIModel\n"
+            "    model_ids:\n"
+            "      - b\n"
+            "    properties:\n"
+            "      api_key: old-key\n"
+            "      base_url: https://old.test\n"
+            "  - name: last\n"
+            "    adapter: OpenAIModel\n"
+            "    model_ids:\n"
+            "      - c\n"
+            "    properties:\n"
+            "      api_key: old-last\n",
+            encoding="utf-8",
+        )
+
+        written = persist_provider_properties(
+            "editable",
+            {"api_key": "new-key", "timeout": 30},
+            [config_path],
+        )
+
+        text = config_path.read_text(encoding="utf-8")
+        assert written == config_path
+        assert text.startswith("# keep header\n")
+        assert text.index("name: first") < text.index("name: editable") < text.index("name: last")
+        assert text.index("api_key: new-key") < text.index("base_url: https://old.test") < text.index("timeout: 30")
+        assert "api_key: old-key" not in text
+
+    def test_persist_provider_properties_uses_first_config_containing_provider(self, tmp_path):
+        missing_path = tmp_path / "workspace.yaml"
+        target_path = tmp_path / "home.yaml"
+        missing_path.write_text(
+            "providers:\n"
+            "  - name: other\n"
+            "    adapter: OpenAIModel\n"
+            "    model_ids: [a]\n"
+            "    properties:\n"
+            "      base_url: https://old.test\n",
+            encoding="utf-8",
+        )
+        target_path.write_text(
+            "providers:\n"
+            "  - name: editable\n"
+            "    adapter: OpenAIModel\n"
+            "    model_ids: [b]\n"
+            "    properties:\n"
+            "      base_url: https://old.test\n",
+            encoding="utf-8",
+        )
+
+        written = persist_provider_properties(
+            "editable",
+            {"base_url": "https://new.test"},
+            [missing_path, target_path],
+        )
+
+        assert written == target_path
+        assert "base_url: https://old.test" in missing_path.read_text(encoding="utf-8")
+        assert "base_url: https://new.test" in target_path.read_text(encoding="utf-8")
 
 
 class TestModelConfigOverride:

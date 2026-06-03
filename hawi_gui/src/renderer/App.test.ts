@@ -24,6 +24,7 @@ function makeMetadata(coreRunning: boolean): GuiMetadata {
     config: {
       version: 1,
       modelName: "",
+      modelProviderConfigs: {},
       systemPrompt: "你是Hawi，一个通用agent",
       selectedPlugins: [],
       pluginConfigs: {},
@@ -522,6 +523,25 @@ describe("modelProviderConfigPreviewLines", () => {
       "adapter: OpenAIModel, AnthropicModel",
       "models: 4",
       "base_url: http://localhost:1234/v1 | https://example.test"
+    ]);
+  });
+
+  it("shows temporary provider overrides", () => {
+    expect(modelProviderConfigPreviewLines({
+      adapter: "OpenAIModel",
+      model_count: 2,
+      properties: { base_url: "https://default.test" }
+    }, {
+      base_url: "https://override.test",
+      api_key: "sk-secret-value",
+      timeout: 30
+    })).toEqual([
+      "adapter: OpenAIModel",
+      "models: 2",
+      "base_url: https://default.test",
+      "override base_url: https://override.test",
+      "override api_key: sk-...alue",
+      "override timeout: 30"
     ]);
   });
 });

@@ -48,6 +48,7 @@ __all__ = [
     "list_models",
     "list_providers",
     "refresh_provider_models",
+    "apply_provider_config_overrides",
     "ModelConfig",
     "ModelOverrideConfig",
     "CircularDependencyError",
@@ -274,6 +275,19 @@ class ModelRegistry:
     def get_provider(self, name: str) -> list[ModelProviderConfig] | None:
         """获取 Template 配置"""
         return self._provider_groups.get(name)
+
+    def apply_provider_config_overrides(
+        self,
+        overrides: dict[str, dict[str, Any]],
+    ) -> None:
+        """Apply in-memory property overrides to loaded provider configs."""
+        self._ensure_auto_load()
+        for name, properties in overrides.items():
+            providers = self._provider_groups.get(name)
+            if not providers:
+                continue
+            for provider in providers:
+                provider.properties.update(dict(properties))
 
     def list_providers(self) -> list[str]:
         """列出所有已注册的 provider 名称"""
@@ -808,3 +822,10 @@ def list_providers() -> list[str]:
 def refresh_provider_models(provider: str) -> list[str]:
     """Refresh one provider's model list using the global registry."""
     return model_registry.refresh_provider_models(provider)
+
+
+def apply_provider_config_overrides(
+    overrides: dict[str, dict[str, Any]],
+) -> None:
+    """Apply temporary provider property overrides using the global registry."""
+    model_registry.apply_provider_config_overrides(overrides)

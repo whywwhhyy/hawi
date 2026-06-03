@@ -152,6 +152,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extra models.yaml path. May be passed more than once.",
     )
     parser.add_argument(
+        "--model-provider-config",
+        action="append",
+        default=[],
+        help=(
+            "JSON/YAML/TOML file containing temporary provider property "
+            "overrides keyed by provider name. May be passed more than once."
+        ),
+    )
+    parser.add_argument(
         "--refresh-provider",
         action="append",
         default=[],
@@ -322,6 +331,7 @@ async def async_main(args: argparse.Namespace) -> None:
             )))
             return
         load_model_configs(args.models_config, include_user=not args.no_user_models)
+        apply_model_provider_config_overrides(args.model_provider_config)
         refresh_model_providers(args.refresh_provider)
         print(json_dumps(build_inspect_payload()))
         return
@@ -342,6 +352,7 @@ async def async_main(args: argparse.Namespace) -> None:
         return
 
     loaded = load_model_configs(args.models_config, include_user=not args.no_user_models)
+    apply_model_provider_config_overrides(args.model_provider_config)
     refresh_model_providers(args.refresh_provider)
     available = model_registry.list_models()
 
@@ -394,6 +405,7 @@ async def async_main(args: argparse.Namespace) -> None:
         gui_launch_profile=parse_gui_launch_profile(args.gui_launch_profile),
         initial_session_id=args.initial_session_id,
         initial_session_name=args.initial_session_name,
+        model_config_paths=loaded,
         token=token_from_arg_or_env(args.token),
         status_interval=args.status_interval,
         blob_store=blob_store,
@@ -574,6 +586,41 @@ def load_plugin_config(path: str | None) -> dict[str, dict[str, Any]]:
         str(name): dict(cfg) if isinstance(cfg, dict) else {}
         for name, cfg in data.items()
     }
+
+
+def apply_model_provider_config_overrides(paths: list[str] | None) -> None:
+    overrides: dict[str, dict[str, Any]] = {}
+    for raw_path in paths or []:
+        data = load_config_file(Path(raw_path))
+        if not isinstance(data, dict):
+            raise RuntimeError("--model-provider-config must point to a config object")
+        for provider, cfg in _iter_model_provider_config_overrides(data):
+            current = overrides.setdefault(provider, {})
+            current.update(cfg)
+    if overrides:
+        model_registry.apply_provider_config_overrides(overrides)
+
+
+def _iter_model_provider_config_overrides(
+    data: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    providers = data.get("providers")
+    if isinstance(providers, dict):
+        for name, cfg in providers.items():
+            if not isinstance(cfg, dict):
+                continue
+            properties = cfg.get("properties") if "properties" in cfg else cfg
+            if isinstance(properties, dict):
+                yield str(name), dict(properties)
+        return
+
+    for name, cfg in data.items():
+        if name == "providers":
+            continue
+        if isinstance(cfg, dict):
+            properties = cfg.get("properties") if "properties" in cfg else cfg
+            if isinstance(properties, dict):
+                yield str(name), dict(properties)
 
 
 def parse_gui_launch_profile(raw: str | None) -> dict[str, Any] | None:

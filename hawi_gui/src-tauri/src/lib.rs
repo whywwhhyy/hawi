@@ -181,6 +181,21 @@ impl CoreProcess {
             .map_err(|error| error.to_string())?,
         )
         .map_err(|error| format!("failed to write plugin config: {error}"))?;
+        let model_provider_config_path = env::temp_dir().join(format!(
+            "hawi-gui-model-providers-{}-{}.json",
+            std::process::id(),
+            self.instance_id
+        ));
+        fs::write(
+            &model_provider_config_path,
+            serde_json::to_vec_pretty(
+                next_config
+                    .get("modelProviderConfigs")
+                    .unwrap_or(&Value::Object(Map::new())),
+            )
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("failed to write model provider config: {error}"))?;
 
         let mut engine_args = Vec::new();
         engine_args.extend([
@@ -203,6 +218,10 @@ impl CoreProcess {
         engine_args.extend([
             "--plugin-config".to_string(),
             plugin_config_path.to_string_lossy().into_owned(),
+        ]);
+        engine_args.extend([
+            "--model-provider-config".to_string(),
+            model_provider_config_path.to_string_lossy().into_owned(),
         ]);
         if let Some(profile) = options.launch_profile {
             engine_args.extend(["--gui-launch-profile".to_string(), profile.to_string()]);
@@ -996,6 +1015,7 @@ fn default_config(metadata: &Value) -> Value {
     json!({
         "version": 1,
         "modelName": metadata_models(metadata).first().cloned().unwrap_or_default(),
+        "modelProviderConfigs": {},
         "systemPrompt": value_string(metadata, "default_system_prompt"),
         "selectedPlugins": default_plugins,
         "pluginConfigs": {},
@@ -1013,6 +1033,35 @@ fn sanitize_config(raw: &Value, metadata: Option<&Value>) -> Value {
     } else {
         models.first().cloned().unwrap_or_default()
     };
+
+    let mut provider_keys = HashSet::new();
+    if let Some(value) = metadata {
+        if let Some(configs) = value.get("model_provider_configs").and_then(Value::as_object) {
+            provider_keys.extend(configs.keys().cloned());
+        }
+        provider_keys.extend(metadata_models(value).into_iter().map(|model| model_provider(&model)).filter(|provider| !provider.is_empty()));
+    }
+    let model_provider_configs = raw
+        .get("modelProviderConfigs")
+        .and_then(Value::as_object)
+        .map(|configs| {
+            configs
+                .iter()
+                .filter_map(|(key, value)| {
+                    if (provider_keys.is_empty() || provider_keys.contains(key)) && value.is_object() {
+                        let object = value.as_object().cloned().unwrap_or_default();
+                        if object.is_empty() {
+                            None
+                        } else {
+                            Some((key.clone(), Value::Object(object)))
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Map<_, _>>()
+        })
+        .unwrap_or_default();
 
     let plugin_keys = metadata
         .and_then(|value| value.get("plugin_catalog"))
@@ -1053,6 +1102,7 @@ fn sanitize_config(raw: &Value, metadata: Option<&Value>) -> Value {
     json!({
         "version": 1,
         "modelName": model_name,
+        "modelProviderConfigs": model_provider_configs,
         "systemPrompt": system_prompt,
         "selectedPlugins": selected_plugins,
         "pluginConfigs": plugin_configs,
@@ -1072,6 +1122,41 @@ fn save_config_file(config_path: &Path, next_config: &Value) -> Result<(), Strin
         serde_json::to_vec_pretty(next_config).map_err(|error| error.to_string())?,
     )
     .map_err(|error| format!("failed to save config: {error}"))
+}
+
+fn write_temporary_model_provider_config(config: &Value) -> Result<Option<PathBuf>, String> {
+    let configs = config
+        .get("modelProviderConfigs")
+        .and_then(Value::as_object)
+        .filter(|object| !object.is_empty());
+    let Some(configs) = configs else {
+        return Ok(None);
+    };
+    let path = env::temp_dir().join(format!(
+        "hawi-gui-model-provider-inspect-{}-{}.json",
+        std::process::id(),
+        unix_timestamp_millis()
+    ));
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&Value::Object(configs.clone()))
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("failed to write model provider config: {error}"))?;
+    Ok(Some(path))
+}
+
+fn cleanup_temporary_config(path: Option<&Path>) {
+    if let Some(path) = path {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn unix_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
 }
 
 fn preserve_provider_order(previous_models: Vec<String>, next_models: Vec<String>) -> Vec<String> {
@@ -1337,6 +1422,9 @@ impl SessionEngineManager {
             "session_delete" => self.delete_session(payload),
             "session_rename" => self.rename_session(payload),
             "change_cwd" => self.change_workspace(payload),
+            "save_model_provider_config" => {
+                self.send_current_core_command(command_type, payload)
+            }
             _ if is_readonly_command(command_type, &payload) => {
                 self.readonly_command(command_type, payload)
             }
@@ -1360,6 +1448,26 @@ impl SessionEngineManager {
             .core
             .send_command("refresh_models", json!({ "provider": provider }), 60_000)
             .map(Some)
+            .map_err(|error| error.message)
+    }
+
+    fn send_current_core_command(
+        &mut self,
+        command_type: &str,
+        payload: Value,
+    ) -> Result<Value, String> {
+        let session_id = self
+            .current_session_id
+            .clone()
+            .or_else(|| self.loaded.keys().next().cloned())
+            .ok_or_else(|| "No active session".to_string())?;
+        let record = self
+            .loaded
+            .get_mut(&session_id)
+            .ok_or_else(|| format!("Session is not loaded: {session_id}"))?;
+        record
+            .core
+            .send_command(command_type, payload, command_timeout(command_type))
             .map_err(|error| error.message)
     }
 
@@ -2466,11 +2574,60 @@ fn send_command(
     session_id: Option<String>,
     state: State<'_, GuiState>,
 ) -> Result<Value, String> {
+    let frame = state
+        .manager
+        .lock()
+        .map_err(|_| "manager lock poisoned".to_string())?
+        .send_command(&r#type, payload, session_id)?;
+    if r#type == "save_model_provider_config" {
+        apply_provider_config_inspect_payload(&frame, &state)?;
+    }
+    Ok(frame)
+}
+
+fn apply_provider_config_inspect_payload(
+    frame: &Value,
+    state: &State<'_, GuiState>,
+) -> Result<(), String> {
+    let payload = frame.get("payload").unwrap_or(&Value::Null);
+    let mut inspect = state
+        .inspect
+        .lock()
+        .map_err(|_| "inspect lock poisoned".to_string())?;
+    if let Some(models) = payload.get("models").and_then(Value::as_array) {
+        set_value_field(
+            &mut inspect,
+            "models",
+            Value::Array(
+                models
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|value| Value::String(value.to_string()))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(configs) = payload.get("model_provider_configs").filter(|value| value.is_object()) {
+        set_value_field(&mut inspect, "model_provider_configs", configs.clone());
+    }
+    let inspect_snapshot = inspect.clone();
+    drop(inspect);
+    let config = state
+        .config
+        .lock()
+        .map_err(|_| "config lock poisoned".to_string())?
+        .clone();
+    let refreshed = state
+        .refreshed_providers
+        .lock()
+        .map_err(|_| "refreshed providers lock poisoned".to_string())?
+        .clone();
     state
         .manager
         .lock()
         .map_err(|_| "manager lock poisoned".to_string())?
-        .send_command(&r#type, payload, session_id)
+        .configure(inspect_snapshot, config, &refreshed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2517,13 +2674,24 @@ async fn refresh_provider_models(
                     .collect::<Vec<_>>()
             })
     } else {
+        let model_provider_config_path = write_temporary_model_provider_config(&ready_config)?;
+        let mut inspect_args = Vec::new();
+        if let Some(path) = model_provider_config_path.as_ref() {
+            inspect_args.extend([
+                "--model-provider-config".to_string(),
+                path.to_string_lossy().into_owned(),
+            ]);
+        }
+        inspect_args.extend(["--refresh-provider".to_string(), provider_name.clone()]);
         let refreshed = load_inspect_payload_async(
             state.env.repo_root.clone(),
             state.env.workspace_root.clone(),
             state.env.engine_launcher.clone(),
-            vec!["--refresh-provider".to_string(), provider_name.clone()],
+            inspect_args,
         )
-        .await?;
+        .await;
+        cleanup_temporary_config(model_provider_config_path.as_deref());
+        let refreshed = refreshed?;
         let models = metadata_models(&refreshed);
         next_inspect = refreshed;
         Some(models)
@@ -2813,7 +2981,7 @@ pub fn run() {
                 .map_err(|error| Box::<dyn std::error::Error>::from(error))?;
             ensure_engine_workspace(&env_paths)
                 .map_err(|error| Box::<dyn std::error::Error>::from(error))?;
-            let inspect = load_inspect_payload(
+            let mut inspect = load_inspect_payload(
                 &env_paths.repo_root,
                 &env_paths.workspace_root,
                 &env_paths.engine_launcher,
@@ -2821,6 +2989,23 @@ pub fn run() {
             )
             .map_err(|error| Box::<dyn std::error::Error>::from(error))?;
             let mut config = load_config(&env_paths.config_path, &inspect);
+            if let Some(config_path) = write_temporary_model_provider_config(&config)
+                .map_err(|error| Box::<dyn std::error::Error>::from(error))?
+            {
+                let args = vec![
+                    "--model-provider-config".to_string(),
+                    config_path.to_string_lossy().into_owned(),
+                ];
+                let refreshed = load_inspect_payload(
+                    &env_paths.repo_root,
+                    &env_paths.workspace_root,
+                    &env_paths.engine_launcher,
+                    &args,
+                );
+                cleanup_temporary_config(Some(config_path.as_path()));
+                inspect = refreshed.map_err(|error| Box::<dyn std::error::Error>::from(error))?;
+                config = sanitize_config(&config, Some(&inspect));
+            }
             if let Some(argv_model) = parse_arg_value("--model") {
                 if metadata_models(&inspect).contains(&argv_model) {
                     set_value_field(&mut config, "modelName", Value::String(argv_model));
@@ -2893,6 +3078,7 @@ fn profile_from_config(config: &Value) -> Value {
     json!({
         "version": 1,
         "modelName": value_string(config, "modelName"),
+        "modelProviderConfigs": config.get("modelProviderConfigs").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
         "systemPrompt": value_string(config, "systemPrompt"),
         "selectedPlugins": string_list(config.get("selectedPlugins")),
         "pluginConfigs": config.get("pluginConfigs").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
@@ -2906,6 +3092,7 @@ fn config_from_profile(profile: &Value, default_config: &Value, metadata: &Value
         &json!({
             "version": 1,
             "modelName": non_empty_string(profile.get("modelName")).unwrap_or_else(|| value_string(default_config, "modelName")),
+            "modelProviderConfigs": profile.get("modelProviderConfigs").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
             "systemPrompt": non_empty_string(profile.get("systemPrompt")).unwrap_or_else(|| value_string(default_config, "systemPrompt")),
             "selectedPlugins": string_list(profile.get("selectedPlugins")),
             "pluginConfigs": profile.get("pluginConfigs").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
@@ -2927,6 +3114,7 @@ fn launch_profile_from_unknown(value: Option<&Value>) -> Option<Value> {
     Some(json!({
         "version": 1,
         "modelName": model_name,
+        "modelProviderConfigs": value.get("modelProviderConfigs").filter(|item| item.is_object()).cloned().unwrap_or_else(|| json!({})),
         "systemPrompt": system_prompt,
         "selectedPlugins": string_list(value.get("selectedPlugins")),
         "pluginConfigs": value.get("pluginConfigs").filter(|item| item.is_object()).cloned().unwrap_or_else(|| json!({})),

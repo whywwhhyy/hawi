@@ -66,6 +66,7 @@ interface ManagerInternals {
 const baseConfig: PersistedConfig = {
   version: 1,
   modelName: "deepseek-chat",
+  modelProviderConfigs: {},
   systemPrompt: "system",
   selectedPlugins: ["hawi/filesystem"],
   pluginConfigs: { "hawi/filesystem": { root: "." } },
@@ -90,6 +91,7 @@ describe("session launch profiles", () => {
 
     expect(profile).toMatchObject({
       modelName: "deepseek-chat",
+      modelProviderConfigs: {},
       systemPrompt: "system",
       selectedPlugins: ["hawi/filesystem"],
       pluginConfigs: { "hawi/filesystem": { root: "." } },
@@ -107,6 +109,7 @@ describe("session launch profiles", () => {
       launchProfileFromUnknown({
         version: 1,
         modelName: "kimi",
+        modelProviderConfigs: { kimi: { base_url: "https://kimi.test" }, bad: "x" },
         systemPrompt: "saved",
         selectedPlugins: ["hawi/shell", 42],
         pluginConfigs: { "hawi/shell": { cwd: "." }, bad: "x" },
@@ -115,6 +118,7 @@ describe("session launch profiles", () => {
       }),
     ).toMatchObject({
       modelName: "kimi",
+      modelProviderConfigs: { kimi: { base_url: "https://kimi.test" }, bad: {} },
       systemPrompt: "saved",
       selectedPlugins: ["hawi/shell"],
       pluginConfigs: { "hawi/shell": { cwd: "." }, bad: {} },

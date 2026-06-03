@@ -46,6 +46,7 @@ COMMAND_TYPES = {
     "set_system_prompt",
     "switch_model",
     "refresh_models",
+    "save_model_provider_config",
     "apply_plugins",
     "plugin_action",
     "get_status",

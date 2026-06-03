@@ -116,6 +116,7 @@ export type CoreCommandType =
   | "set_system_prompt"
   | "switch_model"
   | "refresh_models"
+  | "save_model_provider_config"
   | "change_cwd"
   | "apply_plugins"
   | "plugin_action"
@@ -269,6 +270,7 @@ export interface JsonSchemaObject {
 export interface PersistedConfig {
   version: 1;
   modelName: string;
+  modelProviderConfigs: Record<string, Record<string, unknown>>;
   systemPrompt: string;
   selectedPlugins: string[];
   pluginConfigs: Record<string, Record<string, unknown>>;
@@ -280,6 +282,7 @@ export interface PersistedConfig {
 export interface SessionLaunchProfile {
   version: 1;
   modelName: string;
+  modelProviderConfigs: Record<string, Record<string, unknown>>;
   systemPrompt: string;
   selectedPlugins: string[];
   pluginConfigs: Record<string, Record<string, unknown>>;

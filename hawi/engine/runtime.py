@@ -18,7 +18,7 @@ from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.agent.agent import SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY
 from hawi.events import Event
-from hawi.models import model_registry
+from hawi.models import model_registry, persist_provider_properties
 from hawi.review import RuntimeReviewBroker, RuntimeReviewDecision
 from hawi.session import SessionLockedError, SessionManager
 from hawi.tool import ToolParameterInjection, ToolResult
@@ -261,6 +261,7 @@ class CoreRuntime:
         gui_launch_profile: dict[str, Any] | None = None,
         initial_session_id: str | None = None,
         initial_session_name: str | None = None,
+        model_config_paths: Sequence[str | Path] | None = None,
         token: str | None = None,
         status_interval: float = 0.3,
         broadcast_queue_size: int = 1000,
@@ -281,6 +282,7 @@ class CoreRuntime:
         )
         self._initial_session_id = initial_session_id
         self._initial_session_name = initial_session_name
+        self._model_config_paths = [Path(path) for path in (model_config_paths or [])]
         self._token = token
         self._blob_store: BlobStore | None = blob_store
         self._status_interval = status_interval
@@ -483,6 +485,8 @@ class CoreRuntime:
                 await self._handle_switch_model(client, command)
             elif command.type == "refresh_models":
                 await self._handle_refresh_models(client, command)
+            elif command.type == "save_model_provider_config":
+                await self._handle_save_model_provider_config(client, command)
             elif command.type == "apply_plugins":
                 await self._handle_apply_plugins(client, command)
             elif command.type == "plugin_action":
@@ -1137,6 +1141,55 @@ class CoreRuntime:
                     "provider": provider,
                     "models": models,
                     "all_models": model_registry.list_models(),
+                },
+            )
+        )
+
+    async def _handle_save_model_provider_config(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        runner = self._require_runner()
+        if not runner.is_idle:
+            await client.send(
+                make_error(
+                    "Agent is running. Save provider config when the runner is idle.",
+                    request_id=command.id,
+                    code="busy",
+                )
+            )
+            return
+
+        provider = command.payload.get("provider")
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("'save_model_provider_config.payload.provider' must be a non-empty string")
+        provider = provider.strip()
+        properties = command.payload.get("properties")
+        if not isinstance(properties, dict):
+            raise ValueError("'save_model_provider_config.payload.properties' must be an object")
+
+        loop = asyncio.get_running_loop()
+        path = await loop.run_in_executor(
+            None,
+            persist_provider_properties,
+            provider,
+            properties,
+            self._model_config_paths,
+        )
+        model_registry.apply_provider_config_overrides({provider: properties})
+        from .inspect import build_inspect_payload
+
+        inspect_payload = build_inspect_payload()
+        await client.send(
+            make_ack(
+                "save_model_provider_config",
+                request_id=command.id,
+                payload={
+                    "provider": provider,
+                    "config_path": str(path),
+                    "models": inspect_payload["models"],
+                    "model_provider_configs": inspect_payload["model_provider_configs"],
                 },
             )
         )

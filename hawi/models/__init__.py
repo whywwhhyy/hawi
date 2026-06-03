@@ -108,8 +108,13 @@ from .registry import (
     ModelRegistry,
     UnknownModelError,
     UnknownTemplateError,
+    apply_provider_config_overrides,
     model_registry,
     refresh_provider_models,
+)
+from .config_persistence import (
+    ModelProviderConfigPersistenceError,
+    persist_provider_properties,
 )
 
 # Convenience functions
@@ -140,6 +145,14 @@ def list_providers():
 def refresh_models(provider: str):
     """Refresh one provider's model list using the global registry."""
     return model_registry.refresh_provider_models(provider)
+
+def apply_provider_overrides(overrides: dict[str, dict]):
+    """Apply temporary provider property overrides using the global registry."""
+    return model_registry.apply_provider_config_overrides(overrides)
+
+def persist_provider_config(provider: str, properties: dict, config_paths):
+    """Persist provider property updates to models.yaml."""
+    return persist_provider_properties(provider, properties, config_paths)
 
 __all__ = [
     # Base classes
@@ -233,6 +246,11 @@ __all__ = [
     "load_config",
     "list_models",
     "list_providers",
+    "apply_provider_config_overrides",
+    "apply_provider_overrides",
+    "persist_provider_config",
+    "persist_provider_properties",
+    "ModelProviderConfigPersistenceError",
     "refresh_provider_models",
     "refresh_models",
 ]

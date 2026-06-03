@@ -355,6 +355,7 @@ export function defaultConfig(metadata: InspectPayload): PersistedConfig {
   return {
     version: 1,
     modelName: metadata.models[0] ?? "",
+    modelProviderConfigs: {},
     systemPrompt: metadata.default_system_prompt,
     selectedPlugins: defaultPlugins,
     pluginConfigs: {},
@@ -366,6 +367,20 @@ export function defaultConfig(metadata: InspectPayload): PersistedConfig {
 
 export function sanitizeConfig(raw: PersistedConfig, metadata: InspectPayload | null): PersistedConfig {
   const modelName = metadata?.models.includes(raw.modelName) ? raw.modelName : (metadata?.models[0] ?? "");
+  const providerKeys = new Set(metadata ? [
+    ...Object.keys(metadata.model_provider_configs ?? {}),
+    ...metadata.models.map(modelProviderName).filter(Boolean),
+  ] : []);
+  const rawModelProviderConfigs = raw.modelProviderConfigs && typeof raw.modelProviderConfigs === "object" ? raw.modelProviderConfigs : {};
+  const modelProviderConfigs = Object.fromEntries(
+    Object.entries(rawModelProviderConfigs).filter(([key, value]) => (
+      (providerKeys.size === 0 || providerKeys.has(key))
+      && value != null
+      && typeof value === "object"
+      && !Array.isArray(value)
+      && Object.keys(value).length > 0
+    )).map(([key, value]) => [key, { ...(value as Record<string, unknown>) }])
+  );
   const pluginKeys = new Set(metadata?.plugin_catalog.map((item) => item.key) ?? []);
   const selectedPlugins = Array.isArray(raw.selectedPlugins) ? raw.selectedPlugins.filter((key) => pluginKeys.has(key)) : [];
   const rawPluginConfigs = raw.pluginConfigs && typeof raw.pluginConfigs === "object" ? raw.pluginConfigs : {};
@@ -380,6 +395,7 @@ export function sanitizeConfig(raw: PersistedConfig, metadata: InspectPayload | 
   return {
     version: 1,
     modelName,
+    modelProviderConfigs,
     systemPrompt:
       typeof raw.systemPrompt === "string" && raw.systemPrompt.trim() ? raw.systemPrompt : (metadata?.default_system_prompt ?? ""),
     selectedPlugins,
@@ -388,6 +404,10 @@ export function sanitizeConfig(raw: PersistedConfig, metadata: InspectPayload | 
     showDebug: Boolean(raw.showDebug),
     focusModeEnabled: raw.focusModeEnabled !== false,
   };
+}
+
+function modelProviderName(modelName: string): string {
+  return modelName.includes("/") ? modelName.split("/", 1)[0] : "";
 }
 
 export function saveConfig(configPath: string, nextConfig: PersistedConfig): void {

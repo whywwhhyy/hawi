@@ -2545,11 +2545,15 @@ export default function App() {
   async function restartWith(nextConfig: PersistedConfig) {
     setConfig(nextConfig);
     try {
-      await window.hawi.restartCore(nextConfig);
-      setMetadata((current) => current ? { ...current, config: nextConfig, coreRunning: true } : current);
+      await restartCoreAndSet(nextConfig);
     } catch (error) {
       dispatch(errorFrame(error));
     }
+  }
+
+  async function restartCoreAndSet(nextConfig: PersistedConfig) {
+    await window.hawi.restartCore(nextConfig);
+    setMetadata((current) => current ? { ...current, config: nextConfig, coreRunning: true } : current);
   }
 
   function inputHistorySessionKey(sessionId = currentSessionIdRef.current) {
@@ -3314,6 +3318,38 @@ export default function App() {
     dispatch(metaFrame(`已刷新 ${provider} 的模型列表`));
   }
 
+  async function applyModelProviderConfig(provider: string, providerConfig: Record<string, unknown>) {
+    if (!config) return;
+    const baseConfig = configRef.current ?? config;
+    if (Object.keys(providerConfig).length > 0) {
+      const frame = await window.hawi.sendCommand("save_model_provider_config", {
+        provider,
+        properties: providerConfig,
+      }, currentSessionIdRef.current);
+      const payload = frame.payload as Record<string, unknown>;
+      setMetadata((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          inspect: {
+            ...current.inspect,
+            models: Array.isArray(payload.models)
+              ? payload.models.filter((item): item is string => typeof item === "string")
+              : current.inspect.models,
+            model_provider_configs: isRecord(payload.model_provider_configs)
+              ? payload.model_provider_configs as Record<string, ModelProviderConfigPreview>
+              : current.inspect.model_provider_configs,
+          },
+        };
+      });
+    }
+    const nextProviderConfigs = { ...(baseConfig.modelProviderConfigs ?? {}) };
+    delete nextProviderConfigs[provider];
+    const nextConfig = { ...baseConfig, modelProviderConfigs: nextProviderConfigs };
+    await saveGlobalAndSet(nextConfig);
+    dispatch(metaFrame(`已保存 ${provider} 的模型配置`));
+  }
+
   async function previewPluginTools(pluginKey: string, pluginConfig: Record<string, unknown>) {
     return window.hawi.previewPluginTools(pluginKey, pluginConfig);
   }
@@ -3806,10 +3842,13 @@ export default function App() {
         <ModelDialog
           models={metadata.inspect.models}
           providerConfigs={metadata.inspect.model_provider_configs ?? {}}
+          modelProviderConfigs={config.modelProviderConfigs ?? {}}
           current={config.modelName}
+          providerConfigLocked={canStopConversation}
           onClose={() => setModelDialogOpen(false)}
           onSelect={selectModel}
           onRefresh={refreshProviderModels}
+          onApplyProviderConfig={applyModelProviderConfig}
         />
       )}
       {pluginDialogOpen && (
@@ -7990,21 +8029,30 @@ function autoCompactThresholdTokens(
 function ModelDialog({
   models,
   providerConfigs,
+  modelProviderConfigs,
   current,
+  providerConfigLocked,
   onClose,
   onSelect,
-  onRefresh
+  onRefresh,
+  onApplyProviderConfig
 }: {
   models: string[];
   providerConfigs: Record<string, ModelProviderConfigPreview>;
+  modelProviderConfigs: Record<string, Record<string, unknown>>;
   current: string;
+  providerConfigLocked: boolean;
   onClose: () => void;
   onSelect: (model: string) => void;
   onRefresh: (provider: string) => Promise<void>;
+  onApplyProviderConfig: (provider: string, providerConfig: Record<string, unknown>) => Promise<void>;
 }) {
   const [filter, setFilter] = useState("");
   const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [savingProvider, setSavingProvider] = useState<string | null>(null);
+  const [providerConfigError, setProviderConfigError] = useState<string | null>(null);
   const grouped = useMemo(() => {
     const groups = new Map<string, string[]>();
     for (const model of models.filter((item) => item.toLowerCase().includes(filter.toLowerCase()))) {
@@ -8028,27 +8076,45 @@ function ModelDialog({
     }
   }
 
+  async function applyProviderConfig(provider: string, providerConfig: Record<string, unknown>) {
+    if (savingProvider || providerConfigLocked) return;
+    setSavingProvider(provider);
+    setProviderConfigError(null);
+    try {
+      await waitForNextPaint();
+      await onApplyProviderConfig(provider, providerConfig);
+      setEditingProvider(null);
+    } catch (error) {
+      setProviderConfigError(formatDialogError(error));
+    } finally {
+      setSavingProvider(null);
+    }
+  }
+
   return (
     <Modal title="切换模型" className="model-modal" onClose={onClose}>
       <div className="modal-toolbar">
         <input className="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索模型" />
       </div>
       {refreshError && <div className="model-refresh-error" role="alert">{refreshError}</div>}
+      {providerConfigError && <div className="model-refresh-error" role="alert">{providerConfigError}</div>}
       <div className="model-grid">
         {grouped.map(([provider, entries]) => (
           <section className="model-provider" key={provider}>
             <div className="model-provider-main">
               <header className="model-provider-header">
                 <h3>{provider}</h3>
-                <button
-                  className="icon-button model-refresh"
-                  title={refreshingProvider === provider ? `正在刷新 ${provider} 模型列表` : `刷新 ${provider} 模型列表`}
-                  aria-label={refreshingProvider === provider ? `正在刷新 ${provider} 模型列表` : `刷新 ${provider} 模型列表`}
-                  disabled={Boolean(refreshingProvider)}
-                  onClick={() => void refresh(provider)}
-                >
-                  <RotateCcw size={15} className={refreshingProvider === provider ? "spin" : ""} />
-                </button>
+                <span className="model-provider-actions">
+                  <button
+                    className="icon-button model-refresh"
+                    title={refreshingProvider === provider ? `正在刷新 ${provider} 模型列表` : `刷新 ${provider} 模型列表`}
+                    aria-label={refreshingProvider === provider ? `正在刷新 ${provider} 模型列表` : `刷新 ${provider} 模型列表`}
+                    disabled={Boolean(refreshingProvider)}
+                    onClick={() => void refresh(provider)}
+                  >
+                    <RotateCcw size={15} className={refreshingProvider === provider ? "spin" : ""} />
+                  </button>
+                </span>
               </header>
               {entries.map((model) => (
                 <button className={model === current ? "model active" : "model"} key={model} onClick={() => onSelect(model)}>
@@ -8056,10 +8122,28 @@ function ModelDialog({
                 </button>
               ))}
             </div>
-            <ModelProviderConfigPreviewPanel
-              provider={provider}
-              config={providerConfigs[provider]}
-            />
+            {editingProvider === provider ? (
+              <ModelProviderConfigEditorPanel
+                provider={provider}
+                config={providerConfigs[provider]}
+                overrides={modelProviderConfigs[provider] ?? {}}
+                busy={savingProvider === provider}
+                onCancel={() => setEditingProvider(null)}
+                onSave={(nextConfig) => void applyProviderConfig(provider, nextConfig)}
+              />
+            ) : (
+              <ModelProviderConfigPreviewPanel
+                provider={provider}
+                config={providerConfigs[provider]}
+                overrides={modelProviderConfigs[provider] ?? {}}
+                editDisabled={providerConfigLocked || Boolean(savingProvider)}
+                editTitle={providerConfigLocked ? "运行中不能编辑 provider 配置" : `编辑 ${provider} provider 配置`}
+                onEdit={() => {
+                  setProviderConfigError(null);
+                  setEditingProvider(provider);
+                }}
+              />
+            )}
           </section>
         ))}
       </div>
@@ -8069,24 +8153,197 @@ function ModelDialog({
 
 function ModelProviderConfigPreviewPanel({
   provider,
-  config
+  config,
+  overrides = {},
+  editDisabled,
+  editTitle,
+  onEdit
 }: {
   provider: string;
   config?: ModelProviderConfigPreview;
+  overrides?: Record<string, unknown>;
+  editDisabled: boolean;
+  editTitle: string;
+  onEdit: () => void;
 }) {
-  const lines = modelProviderConfigPreviewLines(config);
+  const lines = modelProviderConfigPreviewLines(config, overrides);
   return (
     <aside className="model-provider-config-preview" aria-label={`${provider} 配置预览`}>
-      {lines.map((line, index) => (
-        <div className="model-provider-config-line" key={`${line}-${index}`} title={line}>
-          {line}
-        </div>
-      ))}
+      <div className="model-provider-config-preview-head">
+        <span className="model-provider-config-title">配置</span>
+        <button
+          className="icon-button model-provider-config-edit"
+          type="button"
+          title={editTitle}
+          aria-label={`编辑 ${provider} provider 配置`}
+          disabled={editDisabled}
+          onClick={onEdit}
+        >
+          <Pencil size={15} />
+        </button>
+      </div>
+      <div className="model-provider-config-lines">
+        {lines.map((line, index) => (
+          <div className="model-provider-config-line" key={`${line}-${index}`} title={line}>
+            {line}
+          </div>
+        ))}
+      </div>
     </aside>
   );
 }
 
-export function modelProviderConfigPreviewLines(config?: ModelProviderConfigPreview): string[] {
+type ProviderConfigValueType = "string" | "number" | "boolean" | "json";
+
+interface ProviderConfigDraftField {
+  id: string;
+  key: string;
+  value: string;
+  valueType: ProviderConfigValueType;
+  enabled: boolean;
+  fixedKey: boolean;
+  previewValue?: unknown;
+}
+
+function ModelProviderConfigEditorPanel({
+  provider,
+  config,
+  overrides,
+  busy,
+  onCancel,
+  onSave
+}: {
+  provider: string;
+  config?: ModelProviderConfigPreview;
+  overrides: Record<string, unknown>;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (providerConfig: Record<string, unknown>) => void;
+}) {
+  const [fields, setFields] = useState<ProviderConfigDraftField[]>(() => (
+    createProviderConfigDraftFields(config, overrides)
+  ));
+  const [error, setError] = useState<string | null>(null);
+
+  function updateField(id: string, patch: Partial<ProviderConfigDraftField>) {
+    setFields((current) => current.map((field) => field.id === id ? { ...field, ...patch } : field));
+    setError(null);
+  }
+
+  function removeField(id: string) {
+    setFields((current) => current.filter((field) => field.id !== id));
+    setError(null);
+  }
+
+  function addField() {
+    setFields((current) => [
+      ...current,
+      {
+        id: `manual-${Date.now()}-${current.length}`,
+        key: "",
+        value: "",
+        valueType: "string",
+        enabled: true,
+        fixedKey: false,
+      },
+    ]);
+    setError(null);
+  }
+
+  function save() {
+    const result = providerConfigDraftToObject(fields);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    onSave(result.value);
+  }
+
+  return (
+    <aside className="model-provider-config-editor" aria-label={`${provider} provider 配置编辑`}>
+      <div className="provider-config-editor-head">
+        <strong>临时配置</strong>
+        <button className="tool-button compact" type="button" onClick={addField}>
+          <Plus size={14} /> 字段
+        </button>
+      </div>
+      <div className="provider-config-fields">
+        {fields.map((field) => (
+          <div className="provider-config-field" key={field.id}>
+            <label className="provider-config-override">
+              <input
+                type="checkbox"
+                checked={field.enabled}
+                disabled={busy}
+                onChange={(event) => updateField(field.id, { enabled: event.target.checked })}
+              />
+            </label>
+            <input
+              className="provider-config-key"
+              value={field.key}
+              readOnly={field.fixedKey}
+              disabled={busy}
+              placeholder="field"
+              onChange={(event) => updateField(field.id, { key: event.target.value, enabled: true })}
+            />
+            <select
+              className="provider-config-type"
+              value={field.valueType}
+              disabled={busy}
+              onChange={(event) => updateField(field.id, { valueType: event.target.value as ProviderConfigValueType, enabled: true })}
+            >
+              <option value="string">text</option>
+              <option value="number">number</option>
+              <option value="boolean">bool</option>
+              <option value="json">json</option>
+            </select>
+            {field.valueType === "boolean" ? (
+              <select
+                className="provider-config-value"
+                value={field.value || "true"}
+                disabled={busy}
+                onChange={(event) => updateField(field.id, { value: event.target.value, enabled: true })}
+              >
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            ) : (
+              <input
+                className="provider-config-value"
+                value={field.value}
+                disabled={busy}
+                placeholder={providerConfigPreviewPlaceholder(field.previewValue)}
+                onChange={(event) => updateField(field.id, { value: event.target.value, enabled: true })}
+              />
+            )}
+            <button
+              className="icon-button provider-config-remove"
+              type="button"
+              title="移除字段"
+              disabled={busy}
+              onClick={() => removeField(field.id)}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+      {error && <div className="provider-config-error" role="alert">{error}</div>}
+      <div className="provider-config-actions">
+        <button className="tool-button" type="button" disabled={busy} onClick={onCancel}>取消</button>
+        <button className="primary-button" type="button" disabled={busy} onClick={save}>
+          {busy ? <LoaderCircle className="inline-spinner" size={15} /> : <Check size={15} />}
+          保存
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+export function modelProviderConfigPreviewLines(
+  config?: ModelProviderConfigPreview,
+  overrides: Record<string, unknown> = {},
+): string[] {
   if (!config) return ["config: not loaded"];
   const lines = [
     `adapter: ${formatProviderConfigValue(config.adapter)}`,
@@ -8095,7 +8352,132 @@ export function modelProviderConfigPreviewLines(config?: ModelProviderConfigPrev
   for (const [key, value] of Object.entries(config.properties ?? {})) {
     lines.push(`${key}: ${formatProviderConfigValue(value)}`);
   }
+  for (const [key, value] of Object.entries(overrides)) {
+    lines.push(`override ${key}: ${formatProviderConfigPreviewValue(key, value)}`);
+  }
   return lines;
+}
+
+function createProviderConfigDraftFields(
+  config: ModelProviderConfigPreview | undefined,
+  overrides: Record<string, unknown>,
+): ProviderConfigDraftField[] {
+  const keys = new Set([
+    ...Object.keys(config?.properties ?? {}),
+    ...Object.keys(overrides),
+  ]);
+  return [...keys].map((key) => {
+    const hasOverride = Object.prototype.hasOwnProperty.call(overrides, key);
+    const value = hasOverride ? overrides[key] : undefined;
+    const previewValue = config?.properties?.[key];
+    return {
+      id: `field-${key}`,
+      key,
+      value: providerConfigDraftValue(hasOverride ? value : previewValue),
+      valueType: inferProviderConfigValueType(hasOverride ? value : previewValue),
+      enabled: hasOverride,
+      fixedKey: true,
+      previewValue,
+    };
+  });
+}
+
+type ProviderConfigDraftResult =
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; error: string };
+
+function providerConfigDraftToObject(fields: ProviderConfigDraftField[]): ProviderConfigDraftResult {
+  const result: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (!field.enabled) continue;
+    const key = field.key.trim();
+    if (!key) {
+      return { ok: false, error: "字段名不能为空" };
+    }
+    if (Object.prototype.hasOwnProperty.call(result, key)) {
+      return { ok: false, error: `字段重复：${key}` };
+    }
+    if (shouldSkipMaskedSensitiveDraft(field)) {
+      continue;
+    }
+    const converted = providerConfigDraftFieldValue(field);
+    if (!converted.ok) return converted;
+    result[key] = converted.value;
+  }
+  return { ok: true, value: result };
+}
+
+function shouldSkipMaskedSensitiveDraft(field: ProviderConfigDraftField): boolean {
+  return isSensitiveProviderConfigKey(field.key)
+    && isMaskedProviderConfigValue(field.previewValue)
+    && field.value === providerConfigDraftValue(field.previewValue);
+}
+
+type ProviderConfigValueResult =
+  | { ok: true; value: unknown }
+  | { ok: false; error: string };
+
+function providerConfigDraftFieldValue(field: ProviderConfigDraftField): ProviderConfigValueResult {
+  const raw = field.value;
+  if (field.valueType === "number") {
+    const value = Number(raw);
+    return Number.isFinite(value)
+      ? { ok: true, value }
+      : { ok: false, error: `${field.key || "字段"} 需要是数字` };
+  }
+  if (field.valueType === "boolean") {
+    return { ok: true, value: raw !== "false" };
+  }
+  if (field.valueType === "json") {
+    try {
+      return { ok: true, value: JSON.parse(raw) };
+    } catch {
+      return { ok: false, error: `${field.key || "字段"} 不是合法 JSON` };
+    }
+  }
+  return { ok: true, value: raw };
+}
+
+function providerConfigDraftValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function inferProviderConfigValueType(value: unknown): ProviderConfigValueType {
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
+  if (value != null && typeof value === "object") return "json";
+  return "string";
+}
+
+function providerConfigPreviewPlaceholder(value: unknown): string {
+  if (value === undefined) return "value";
+  return `当前：${formatProviderConfigValue(value)}`;
+}
+
+function formatProviderConfigPreviewValue(key: string, value: unknown): string {
+  if (!isSensitiveProviderConfigKey(key)) {
+    return formatProviderConfigValue(value);
+  }
+  const text = formatProviderConfigValue(value);
+  if (!text || text === "null") return text;
+  if (text.length <= 8) return "****";
+  return `${text.slice(0, 3)}...${text.slice(-4)}`;
+}
+
+function isSensitiveProviderConfigKey(key: string): boolean {
+  return /(?:api[_-]?key|token|secret|password|credential)/i.test(key);
+}
+
+function isMaskedProviderConfigValue(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return value === "****" || /^[^\s.]{1,8}\.\.\.[^\s.]{1,8}$/.test(value);
 }
 
 function formatProviderConfigValue(value: unknown): string {
@@ -9160,6 +9542,7 @@ function normalizeLaunchProfile(value: unknown): SessionLaunchProfile | null {
   return {
     version: 1,
     modelName,
+    modelProviderConfigs: normalizePluginConfigs(value.modelProviderConfigs),
     systemPrompt,
     selectedPlugins: Array.isArray(value.selectedPlugins)
       ? value.selectedPlugins.filter((item): item is string => typeof item === "string")
@@ -9189,6 +9572,7 @@ function configFromLaunchProfile(
   return {
     ...baseConfig,
     modelName: profile.modelName,
+    modelProviderConfigs: normalizePluginConfigs(profile.modelProviderConfigs),
     systemPrompt: profile.systemPrompt,
     selectedPlugins: [...profile.selectedPlugins],
     pluginConfigs: normalizePluginConfigs(profile.pluginConfigs),
@@ -9200,6 +9584,7 @@ function launchProfileFromConfig(config: PersistedConfig): SessionLaunchProfile 
   return {
     version: 1,
     modelName: config.modelName,
+    modelProviderConfigs: normalizePluginConfigs(config.modelProviderConfigs),
     systemPrompt: config.systemPrompt,
     selectedPlugins: [...config.selectedPlugins],
     pluginConfigs: normalizePluginConfigs(config.pluginConfigs),

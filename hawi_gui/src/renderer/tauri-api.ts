@@ -120,6 +120,7 @@ if (!isTauriRuntime() && isDevRuntime() && !window.hawi) {
     config: {
       version: 1,
       modelName: "preview/model",
+      modelProviderConfigs: {},
       systemPrompt: "You are Hawi.",
       selectedPlugins: [],
       pluginConfigs: {},

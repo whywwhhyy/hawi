@@ -74,6 +74,8 @@ export class CoreProcess {
     writeFileSync(this.backendLogPath, "", "utf-8"); // 每次启动清空日志
     const pluginConfigPath = path.join(tmpdir(), `hawi-gui-plugins-${process.pid}-${this.instanceId}.json`);
     writeFileSync(pluginConfigPath, JSON.stringify(nextConfig.pluginConfigs, null, 2), "utf-8");
+    const modelProviderConfigPath = path.join(tmpdir(), `hawi-gui-model-providers-${process.pid}-${this.instanceId}.json`);
+    writeFileSync(modelProviderConfigPath, JSON.stringify(nextConfig.modelProviderConfigs ?? {}, null, 2), "utf-8");
 
     const refreshArgs = [...refreshedProviders].flatMap((provider) => ["--refresh-provider", provider]);
     const launchProfileArgs = options.launchProfile ? ["--gui-launch-profile", JSON.stringify(options.launchProfile)] : [];
@@ -95,6 +97,8 @@ export class CoreProcess {
         nextConfig.selectedPlugins.join(","),
         "--plugin-config",
         pluginConfigPath,
+        "--model-provider-config",
+        modelProviderConfigPath,
         ...launchProfileArgs,
         ...initialSessionArgs,
         ...toolCallPurposeEngineArgs(nextConfig.toolCallPurposeEnabled),

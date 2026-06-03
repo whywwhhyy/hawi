@@ -80,6 +80,8 @@ app.whenReady().then(async () => {
   ensureEngineWorkspace(readyEnv);
   inspectPayload = loadInspectPayload(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher);
   config = loadConfig(readyEnv.configPath, inspectPayload);
+  inspectPayload = loadInspectPayloadWithModelProviderConfig(readyEnv, config) ?? inspectPayload;
+  config = sanitizeConfig(config, inspectPayload);
   const argvModel = parseArgValue("--model");
   if (argvModel && inspectPayload.models.includes(argvModel)) {
     config = { ...config, modelName: argvModel };
@@ -148,7 +150,11 @@ function registerIpc(): void {
     if (!engineManager) {
       throw new Error("hawi-engine is not initialized");
     }
-    return engineManager.sendCommand(type, payload, sessionId);
+    const frame = await engineManager.sendCommand(type, payload, sessionId);
+    if (type === "save_model_provider_config") {
+      applyProviderConfigInspectPayload(frame.payload as Record<string, unknown>);
+    }
+    return frame;
   });
 
   ipcMain.handle("gui:save-markdown-export", async (_event, payload: MarkdownExportPayload): Promise<SaveMarkdownExportResult> => {
@@ -201,6 +207,26 @@ function applyMinimumContentSize(window: BrowserWindow, contentSize?: Partial<La
   }
 }
 
+function applyProviderConfigInspectPayload(payload: Record<string, unknown>): void {
+  if (!inspectPayload || !config) return;
+  const currentInspect = inspectPayload;
+  const currentConfig = config;
+  const nextInspect = {
+    ...currentInspect,
+    models: Array.isArray(payload.models)
+      ? payload.models.filter((item): item is string => typeof item === "string")
+      : currentInspect.models,
+    model_provider_configs:
+      payload.model_provider_configs && typeof payload.model_provider_configs === "object" && !Array.isArray(payload.model_provider_configs)
+        ? payload.model_provider_configs as InspectPayload["model_provider_configs"]
+        : currentInspect.model_provider_configs,
+  } satisfies InspectPayload;
+  inspectPayload = nextInspect;
+  if (engineManager) {
+    engineManager.configure(nextInspect, currentConfig, refreshedProviders);
+  }
+}
+
 async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
   const providerName = provider.trim();
   if (!providerName) {
@@ -219,12 +245,21 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
       allModels = payload.all_models.filter((item): item is string => typeof item === "string");
     }
   } else {
-    const refreshed = await loadInspectPayloadAsync(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher, [
-      "--refresh-provider",
-      providerName,
-    ]);
-    nextInspect = refreshed;
-    allModels = refreshed.models;
+    const modelProviderConfigPath = writeTemporaryModelProviderConfig(ready.config);
+    try {
+      const modelProviderConfigArgs = modelProviderConfigPath
+        ? ["--model-provider-config", modelProviderConfigPath]
+        : [];
+      const refreshed = await loadInspectPayloadAsync(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher, [
+        ...modelProviderConfigArgs,
+        "--refresh-provider",
+        providerName,
+      ]);
+      nextInspect = refreshed;
+      allModels = refreshed.models;
+    } finally {
+      cleanupTemporaryConfig(modelProviderConfigPath);
+    }
   }
 
   if (!allModels) {
@@ -244,6 +279,42 @@ async function refreshProviderModels(provider: string): Promise<GuiMetadata> {
     config,
     ...currentManagerSnapshot(),
   };
+}
+
+function loadInspectPayloadWithModelProviderConfig(
+  readyEnv: EnvPaths,
+  readyConfig: PersistedConfig,
+): InspectPayload | null {
+  const modelProviderConfigPath = writeTemporaryModelProviderConfig(readyConfig);
+  if (!modelProviderConfigPath) return null;
+  try {
+    return loadInspectPayload(readyEnv.repoRoot, readyEnv.workspaceRoot, readyEnv.engineLauncher, [
+      "--model-provider-config",
+      modelProviderConfigPath,
+    ]);
+  } finally {
+    cleanupTemporaryConfig(modelProviderConfigPath);
+  }
+}
+
+function writeTemporaryModelProviderConfig(configValue: PersistedConfig): string | null {
+  const configs = configValue.modelProviderConfigs ?? {};
+  if (Object.keys(configs).length === 0) return null;
+  const configPath = path.join(
+    tmpdir(),
+    `hawi-gui-model-provider-inspect-${process.pid}-${Date.now()}.json`,
+  );
+  writeFileSync(configPath, JSON.stringify(configs, null, 2), "utf-8");
+  return configPath;
+}
+
+function cleanupTemporaryConfig(configPath: string | null): void {
+  if (!configPath) return;
+  try {
+    unlinkSync(configPath);
+  } catch {
+    // Temporary config cleanup is best-effort.
+  }
 }
 
 async function previewPluginTools(
