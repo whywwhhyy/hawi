@@ -786,7 +786,7 @@ body {
 }
 
 .modal-body {
-  background: hsl(var(--background));
+  background: hsl(var(--surface-canvas));
 }
 
 .model-provider,
