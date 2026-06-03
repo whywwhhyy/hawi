@@ -6080,9 +6080,11 @@ function useMeasuredContentHeight() {
       ? null
       : new ResizeObserver(syncHeight);
     observer?.observe(element);
+    element.addEventListener("hawi:markdown-content-resized", syncHeight);
     window.addEventListener("resize", syncHeight);
     return () => {
       observer?.disconnect();
+      element.removeEventListener("hawi:markdown-content-resized", syncHeight);
       window.removeEventListener("resize", syncHeight);
     };
   }, [syncHeight]);
@@ -6927,9 +6929,29 @@ function LiveSpinner({ title }: { title: string }) {
   );
 }
 
-function MarkdownView({ html, className = "" }: { html: string; className?: string }) {
+const MarkdownView = memo(function MarkdownView({ html, className = "" }: { html: string; className?: string }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   useCodeBlockOverflowState(rootRef, [html]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const disclosures = Array.from(root.querySelectorAll<HTMLElement>("details.source-code-disclosure"));
+    const handleToggle = (event: Event) => {
+      const disclosure = event.currentTarget;
+      if (disclosure instanceof HTMLElement) {
+        notifyMarkdownContentResized(disclosure);
+      }
+    };
+    for (const disclosure of disclosures) {
+      disclosure.addEventListener("toggle", handleToggle);
+    }
+    return () => {
+      for (const disclosure of disclosures) {
+        disclosure.removeEventListener("toggle", handleToggle);
+      }
+    };
+  }, [html]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -6969,7 +6991,7 @@ function MarkdownView({ html, className = "" }: { html: string; className?: stri
         window.clearTimeout(timeoutId);
       }
     };
-  });
+  }, [html]);
 
   async function handleClick(event: ReactMouseEvent<HTMLDivElement>) {
     if (hasActiveTextSelection()) return;
@@ -6992,7 +7014,7 @@ function MarkdownView({ html, className = "" }: { html: string; className?: stri
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
-}
+});
 
 function useCodeBlockOverflowState(
   rootRef: { current: HTMLElement | null },
@@ -9727,14 +9749,26 @@ async function renderMermaidDiagrams(
       container.innerHTML = sanitizeRenderedMermaidHtml(rendered.svg);
       container.dataset.mermaidRendered = "true";
       delete container.dataset.mermaidSource;
+      notifyMarkdownContentResized(container);
     } catch (error) {
       container.dataset.mermaidRendered = "true";
       container.classList.add("mermaid-preview-error");
       container.textContent = mermaidErrorMessage(error);
+      notifyMarkdownContentResized(container);
     } finally {
       delete container.dataset.mermaidRendering;
     }
   }
+}
+
+function notifyMarkdownContentResized(container: HTMLElement) {
+  const dispatch = () => {
+    container.dispatchEvent(new CustomEvent("hawi:markdown-content-resized", {
+      bubbles: true,
+    }));
+  };
+  dispatch();
+  window.requestAnimationFrame(dispatch);
 }
 
 function pendingMermaidContainers(root: HTMLElement): HTMLElement[] {
@@ -9815,8 +9849,8 @@ function sourceCodeDisclosure(content: string): string {
   return [
     "<details class=\"source-code-disclosure\">",
     "<summary class=\"source-code-summary\">",
-    "<span class=\"source-code-label source-code-label-collapsed\">&gt; 代码</span>",
-    "<span class=\"source-code-label source-code-label-expanded\">v 代码</span>",
+    "<span class=\"source-code-chevron\" aria-hidden=\"true\"></span>",
+    "<span class=\"source-code-label\">代码</span>",
     "</summary>",
     content,
     "</details>",

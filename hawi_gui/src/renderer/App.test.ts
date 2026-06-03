@@ -995,8 +995,8 @@ describe("renderMarkdown", () => {
     expect(html).toContain("data:image/svg+xml;charset=utf-8,");
     expect(html).toContain("<details class=\"source-code-disclosure\">");
     expect(html).not.toContain("<details class=\"source-code-disclosure\" open");
-    expect(html).toContain("&gt; 代码");
-    expect(html).toContain("v 代码");
+    expect(html).toContain("class=\"source-code-chevron\"");
+    expect(html).toContain("<span class=\"source-code-label\">代码</span>");
     expect(html).toContain("class=\"code-copy-button\"");
     expect(html).toContain("class=\"hljs language-xml\"");
   });
@@ -1010,8 +1010,8 @@ describe("renderMarkdown", () => {
     expect(html).toContain("Rendering diagram...");
     expect(html).toContain("<details class=\"source-code-disclosure\">");
     expect(html).not.toContain("<details class=\"source-code-disclosure\" open");
-    expect(html).toContain("&gt; 代码");
-    expect(html).toContain("v 代码");
+    expect(html).toContain("class=\"source-code-chevron\"");
+    expect(html).toContain("<span class=\"source-code-label\">代码</span>");
     expect(html).toContain("class=\"code-copy-button\"");
     expect(html).toContain("language-mermaid");
   });

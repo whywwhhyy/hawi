@@ -134,6 +134,7 @@
 }
 
 .markdown .source-code-disclosure {
+  max-width: 100%;
   margin: 8px 0 0 0;
   padding: 0;
   border: 0;
@@ -143,21 +144,27 @@
 .markdown .source-code-summary {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
+  gap: 6px;
+  min-height: 22px;
+  max-width: 100%;
   padding: 0 4px;
-  border-radius: 4px;
-  color: #59666c;
+  border: 0;
+  background: transparent;
+  color: #718086;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.35;
   cursor: pointer;
+  list-style: none;
   user-select: none;
 }
 
 .markdown .source-code-summary:hover,
 .markdown .source-code-summary:focus-visible {
-  background: #eef3f1;
-  color: #2f3d43;
+  color: #3f5158;
+  text-decoration: underline;
+  text-underline-offset: 3px;
   outline: none;
 }
 
@@ -169,13 +176,19 @@
   content: "";
 }
 
-.markdown .source-code-label-expanded,
-.markdown .source-code-disclosure[open] .source-code-label-collapsed {
-  display: none;
+.markdown .source-code-chevron {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
 }
 
-.markdown .source-code-disclosure[open] .source-code-label-expanded {
-  display: inline;
+.markdown .source-code-disclosure[open] .source-code-chevron {
+  transform: rotate(45deg);
 }
 
 .markdown .source-code-disclosure > .code-block-shell {
@@ -184,6 +197,11 @@
 
 .markdown .svg-preview-shell {
   display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  align-items: flex-start;
   justify-content: center;
   margin: 8px 0 0 0;
   padding: 12px;
@@ -204,10 +222,16 @@
   display: block;
   max-width: 100%;
   max-height: 420px;
+  height: auto;
 }
 
 .markdown .mermaid-preview-shell {
   display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  align-items: flex-start;
   justify-content: center;
   margin: 8px 0 0 0;
   padding: 12px;
@@ -219,6 +243,7 @@
 
 .markdown .mermaid-preview-shell svg {
   display: block;
+  flex: 0 1 auto;
   max-width: 100%;
   height: auto;
 }
