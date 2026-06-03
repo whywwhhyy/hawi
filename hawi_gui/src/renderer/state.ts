@@ -678,6 +678,22 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         }, eventAt);
       });
 
+    case "tool.interrupted":
+      return updateTool(state, String(payload.tool_call_id ?? ""), (tool) => {
+        const eventAt = frameTime(frame);
+        const reason = String(payload.reason ?? "interrupted");
+        const text = `Tool call interrupted before completion (reason: ${reason}).`;
+        return completeToolStream({
+          ...tool,
+          status: "fail",
+          name: String(payload.tool_name || tool.name),
+          description: optionalToolPurpose(payload) ?? tool.description,
+          argsState: "complete",
+          resultPreview: tool.resultPreview || text,
+          resultData: tool.resultData ?? text,
+        }, eventAt);
+      });
+
     case "tool.result": {
       const eventAt = frameTime(frame);
       const toolCallId = String(payload.tool_call_id ?? "");
@@ -842,6 +858,11 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
 
     case "agent.interrupt":
       return addSystem(state, `Agent 中断: ${String(payload.interrupt_type ?? "")}`);
+
+    case "model.interrupted": {
+      const runId = String(payload.run_id ?? state.activeRunId ?? "");
+      return runId ? completeOpenRunNodesForRun(state, runId, frameTime(frame)) : state;
+    }
 
     case "debug.info":
       return {
@@ -1851,7 +1872,7 @@ function toolResultNeedsContextIndex(
   toolCallId: string,
   payload: Record<string, unknown>,
 ): boolean {
-  if (!toolCallId || payload.is_part === true) {
+  if (!toolCallId || payload.is_part === true || payload.interrupted === true) {
     return false;
   }
   const nodeIdForTool = state.toolNodeByCallId[toolCallId];

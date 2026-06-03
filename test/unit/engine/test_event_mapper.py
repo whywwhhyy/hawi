@@ -17,6 +17,7 @@ from hawi.events import (
     ModelErrorEvent,
     ModelMetadataEvent,
     ModelStreamStartEvent,
+    ModelStreamStopEvent,
     ModelToolCallBlockDeltaEvent,
     ModelToolCallBlockStartEvent,
     ModelToolCallBlockStopEvent,
@@ -576,6 +577,23 @@ def test_mapper_drops_block_start_without_tool_call_id() -> None:
     assert result[0]["payload"]["tool_call_id"] == "tc-real"
     assert result[0]["payload"]["tool_name"] == "WebPlugin__fetch"
     assert result[0]["payload"]["success"] is False
+    assert result[0]["payload"]["interrupted"] is False
+
+    interrupted = mapper.map(
+        AgentToolResultEvent.create(
+            "run-pending-tool",
+            "tc-interrupted",
+            False,
+            "Tool call interrupted before completion (reason: user).",
+            0.0,
+            ToolResult(
+                success=False,
+                error="Tool call interrupted before completion (reason: user).",
+            ),
+            interrupted=True,
+        )
+    )
+    assert interrupted[0]["payload"]["interrupted"] is True
 
 
 def test_stream_accumulator_defers_start_until_tool_call_id_known() -> None:
@@ -741,8 +759,90 @@ def test_mapper_emits_model_metadata_and_runner_interrupt() -> None:
     assert len(metadata) == 1
 
     interrupted = mapper.map(AgentRunnerInterruptEvent.create("user", ["tc-9"]))
-    assert interrupted[0]["type"] == "runner.interrupt"
+    assert [frame["type"] for frame in interrupted] == [
+        "runner.interrupt",
+        "tool.interrupted",
+    ]
     assert interrupted[0]["payload"]["interrupted_tool_calls"] == ["tc-9"]
+    assert interrupted[1]["payload"]["tool_call_id"] == "tc-9"
+    assert interrupted[1]["payload"]["reason"] == "user"
+
+
+def test_mapper_emits_interrupted_for_active_tool_calls() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-interrupt"))
+    mapper.map(ModelStreamStartEvent.create("req-interrupt"))
+    mapper.map(
+        ModelToolCallBlockStartEvent.create(
+            "req-interrupt",
+            0,
+            "tc-pending",
+            "search",
+        )
+    )
+    mapper.map(
+        AgentToolCallEvent.create(
+            "run-interrupt",
+            "search",
+            {"query": "hawi"},
+            "tc-running",
+        )
+    )
+
+    frames = mapper.map(AgentRunnerInterruptEvent.create("user", ["tc-running"]))
+
+    assert [frame["type"] for frame in frames] == [
+        "runner.interrupt",
+        "tool.interrupted",
+        "tool.interrupted",
+        "model.interrupted",
+        "debug.info",
+    ]
+    interrupted_tools = [
+        frame["payload"]["tool_call_id"]
+        for frame in frames
+        if frame["type"] == "tool.interrupted"
+    ]
+    assert interrupted_tools == ["tc-pending", "tc-running"]
+    model_interrupted = [
+        frame["payload"]
+        for frame in frames
+        if frame["type"] == "model.interrupted"
+    ]
+    assert model_interrupted == [
+        {
+            "run_id": "run-interrupt",
+            "request_id": "req-interrupt",
+            "reason": "user",
+            "stop_reason": "interrupted",
+        }
+    ]
+    assert frames[-1]["payload"]["event_type"] == "model.stream_stop"
+    assert frames[-1]["payload"]["stop_reason"] == "interrupted"
+
+    later_stop = mapper.map(ModelStreamStopEvent.create("req-interrupt", "interrupted"))
+    assert [frame["type"] for frame in later_stop] == ["debug.info"]
+
+
+def test_mapper_emits_model_interrupted_from_stream_stop() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-stream-interrupt"))
+    mapper.map(ModelStreamStartEvent.create("req-stream-interrupt"))
+
+    frames = mapper.map(
+        ModelStreamStopEvent.create("req-stream-interrupt", "interrupted")
+    )
+
+    assert [frame["type"] for frame in frames] == [
+        "debug.info",
+        "model.interrupted",
+    ]
+    assert frames[1]["payload"] == {
+        "run_id": "run-stream-interrupt",
+        "request_id": "req-stream-interrupt",
+        "reason": "interrupted",
+        "stop_reason": "interrupted",
+    }
 
 
 def test_mapper_forwards_agent_compact_events() -> None:

@@ -1668,6 +1668,7 @@ class HawiAgent:
         inflight_text_handler: StreamBlockAccumulator | None = None
         inflight_thinking_handler: StreamBlockAccumulator | None = None
         inflight_assistant_message_added = False
+        inflight_model_request_id: str | None = None
 
         user_content: list[ContentPart] | None = None
         message_metadata = dict(message_metadata) if message_metadata else None
@@ -1832,6 +1833,7 @@ class HawiAgent:
                     ModelStreamStartEvent.create(request_id=request_id),
                     event_bus,
                 )
+                inflight_model_request_id = request_id
 
                 # Call model with streaming
                 content_parts: list[ContentPart] = []
@@ -1970,6 +1972,7 @@ class HawiAgent:
                     ),
                     event_bus,
                 )
+                inflight_model_request_id = None
 
                 # Model metadata (usage + per-call latency)
                 usage_output_tokens = (
@@ -2251,6 +2254,15 @@ class HawiAgent:
 
         except asyncio.CancelledError:
             reason = self._last_interrupt_reason or "cancelled"
+            if inflight_model_request_id is not None:
+                await self._emit_event(
+                    ModelStreamStopEvent.create(
+                        request_id=inflight_model_request_id,
+                        stop_reason="interrupted",
+                    ),
+                    event_bus,
+                )
+                inflight_model_request_id = None
             if not inflight_assistant_message_added:
                 inflight_assistant_message_added = await self._persist_interrupted_assistant_message(
                     run_id=run_id,

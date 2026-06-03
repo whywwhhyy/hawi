@@ -1117,6 +1117,24 @@ describe("core event reducer", () => {
     expect(state.nodes[1].complete).toBe(true);
   });
 
+  it("marks agent messages complete when model decoding is interrupted", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-model-interrupt", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-model-interrupt", delta: "partial" }, 10));
+
+    state = reduceCoreEvent(state, frame("model.interrupted", {
+      run_id: "run-model-interrupt",
+      request_id: "req-model-interrupt",
+      reason: "user",
+      stop_reason: "interrupted"
+    }, 11));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
+    expect(state.nodes[1].complete).toBe(true);
+    expect(state.nodes[1].streamDurationMs).toBe(1000);
+    expect(state.processing).toBeUndefined();
+  });
+
   it("replaces full tool argument snapshots instead of appending them", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-args", tool_call_id: "tc-args", tool_name: "calc" }));
@@ -1217,6 +1235,46 @@ describe("core event reducer", () => {
 
     expect(state.nodes[0].tool?.status).toBe("fail");
     expect(state.nodes[0].tool?.resultPreview).toBe("Error: Parameter validation failed");
+  });
+
+  it("marks active tools interrupted without assigning history indexes", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-interrupt",
+      tool_call_id: "tc-interrupt",
+      tool_name: "shell"
+    }, 11));
+    const beforeIndex = state.nextContextMessageIndex;
+
+    state = reduceCoreEvent(state, frame("tool.interrupted", {
+      run_id: "run-interrupt",
+      tool_call_id: "tc-interrupt",
+      tool_name: "shell",
+      reason: "user"
+    }, 12));
+
+    const tool = state.nodes[0].tool;
+    expect(tool?.status).toBe("fail");
+    expect(tool?.argsState).toBe("complete");
+    expect(tool?.resultPreview).toBe("Tool call interrupted before completion (reason: user).");
+    expect(tool?.resultData).toBe("Tool call interrupted before completion (reason: user).");
+    expect(tool?.contextMessageIndex).toBeUndefined();
+    expect(tool?.streamDurationMs).toBe(1000);
+    expect(state.nextContextMessageIndex).toBe(beforeIndex);
+
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-interrupt",
+      tool_call_id: "tc-interrupt",
+      tool_name: "shell",
+      success: false,
+      output: "Tool call interrupted before completion (reason: user).",
+      interrupted: true,
+      context_message_id: "ctx-tool-interrupt"
+    }, 13));
+
+    expect(state.nodes[0].tool?.contextMessageId).toBe("ctx-tool-interrupt");
+    expect(state.nodes[0].tool?.contextMessageIndex).toBeUndefined();
+    expect(state.nextContextMessageIndex).toBe(beforeIndex);
   });
 
   it("shows workspace switch notices as metadata bubbles", () => {

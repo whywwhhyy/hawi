@@ -54,6 +54,41 @@ class ToolCallModel(Model):
         }
 
 
+class SlowTextModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
+    @property
+    def model_id(self) -> str:
+        return "slow-text-model"
+
+    def _prepare_request_impl(self, request: MessageRequest) -> dict[str, Any]:
+        return {}
+
+    def _parse_response_impl(self, response: dict[str, Any]) -> MessageResponse:
+        return MessageResponse(
+            id="response",
+            content=[],
+            stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+        )
+
+    def _invoke_impl(self, request: MessageRequest) -> MessageResponse:
+        return self._parse_response_impl({})
+
+    async def _astream_impl(
+        self,
+        request: MessageRequest,
+    ) -> AsyncGenerator[DeltaPart, None]:
+        yield {
+            "type": "text_delta",
+            "index": 0,
+            "delta": "partial",
+            "is_start": True,
+            "is_end": False,
+        }
+        await asyncio.sleep(60)
+
+
 class SlowTool(AgentTool):
     @property
     def name(self) -> str:
@@ -103,6 +138,8 @@ def test_context_inserts_missing_tool_results_before_later_messages() -> None:
 async def test_cancelled_tool_call_adds_error_tool_result_to_context() -> None:
     agent = HawiAgent(model=ToolCallModel(), streaming=True)
     agent._plugin_manager.add_tool(SlowTool())
+    events: list[Any] = []
+    agent.subscribe_blocking(events.append, ["agent.tool_result"])
 
     task = asyncio.create_task(agent.arun("run slow tool"))
     for _ in range(100):
@@ -130,3 +167,39 @@ async def test_cancelled_tool_call_adds_error_tool_result_to_context() -> None:
     nested_text = tool_result["content"][0]
     assert nested_text["type"] == "text"
     assert "reason: urgent" in nested_text["text"]
+    tool_result_events = [
+        event for event in events
+        if event.type == "agent.tool_result"
+    ]
+    assert tool_result_events
+    assert tool_result_events[-1].interrupted is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_decoding_emits_interrupted_stream_stop() -> None:
+    agent = HawiAgent(model=SlowTextModel(), streaming=True)
+    events: list[Any] = []
+    agent.subscribe_blocking(
+        events.append,
+        ["model.content_block_delta", "model.stream_stop"],
+    )
+
+    task = asyncio.create_task(agent.arun("write slowly"))
+    for _ in range(100):
+        if any(event.type == "model.content_block_delta" for event in events):
+            break
+        await asyncio.sleep(0.01)
+
+    assert any(event.type == "model.content_block_delta" for event in events)
+    agent.interrupt("user")
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    stream_stops = [
+        event for event in events
+        if event.type == "model.stream_stop"
+    ]
+    assert stream_stops
+    assert stream_stops[-1].stop_reason == "interrupted"

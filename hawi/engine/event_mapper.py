@@ -24,6 +24,7 @@ class SemanticEventMapper:
         self._pending_model_input_started_at: float | None = None
         self._active_model_request_id: str | None = None
         self._active_model_stream_started_at: float | None = None
+        self._reported_model_interrupt_request_ids: set[str] = set()
         self._reported_ttft_request_ids: set[str] = set()
 
     def map(self, event: Event) -> list[dict[str, Any]]:
@@ -84,15 +85,40 @@ class SemanticEventMapper:
             ]
 
         if etype == "runner.interrupt":
-            return [
+            reason = str(getattr(event, "reason", ""))
+            interrupted_tool_calls = [
+                str(tool_call_id)
+                for tool_call_id in getattr(event, "interrupted_tool_calls", [])
+                if str(tool_call_id)
+            ]
+            frames = [
                 make_frame(
                     "runner.interrupt",
                     {
-                        "reason": getattr(event, "reason", ""),
-                        "interrupted_tool_calls": getattr(event, "interrupted_tool_calls", []),
+                        "reason": reason,
+                        "interrupted_tool_calls": interrupted_tool_calls,
                     },
                 )
             ]
+            frames.extend(self._interrupted_tool_frames(reason, interrupted_tool_calls))
+            if self._active_model_request_id:
+                request_id = self._active_model_request_id
+                frames.append(self._model_interrupted_frame(request_id, reason))
+                self._reported_model_interrupt_request_ids.add(request_id)
+                frames.append(
+                    make_frame(
+                        "debug.info",
+                        {
+                            "message": "Model stream stopped: interrupted",
+                            "event_type": "model.stream_stop",
+                            "request_id": request_id,
+                            "stop_reason": "interrupted",
+                        },
+                    )
+                )
+                self._active_model_request_id = None
+                self._active_model_stream_started_at = None
+            return frames
 
         if etype == "runner.paused":
             return [
@@ -578,6 +604,7 @@ class SemanticEventMapper:
                             "context_message_id",
                             None,
                         ),
+                        "interrupted": bool(getattr(event, "interrupted", False)),
                         "is_part": False,
                     },
                 )
@@ -621,12 +648,8 @@ class SemanticEventMapper:
             "model.content_block_stop",
             "model.content_metadata",
         }:
-            if etype == "model.stream_start":
-                self._active_model_request_id = str(getattr(event, "request_id", ""))
-                self._active_model_stream_started_at = self._float_timestamp(
-                    getattr(event, "timestamp", None)
-                )
-            return [
+            request_id = str(getattr(event, "request_id", ""))
+            frames = [
                 make_frame(
                     "debug.info",
                     {
@@ -635,8 +658,75 @@ class SemanticEventMapper:
                     },
                 )
             ]
+            if etype == "model.stream_start":
+                self._active_model_request_id = request_id
+                self._active_model_stream_started_at = self._float_timestamp(
+                    getattr(event, "timestamp", None)
+                )
+            elif etype == "model.stream_stop":
+                stop_reason = str(getattr(event, "stop_reason", ""))
+                if (
+                    stop_reason == "interrupted"
+                    and request_id
+                    and request_id not in self._reported_model_interrupt_request_ids
+                ):
+                    frames.append(self._model_interrupted_frame(request_id, "interrupted"))
+                    self._reported_model_interrupt_request_ids.add(request_id)
+                self._active_model_request_id = None
+                self._active_model_stream_started_at = None
+            return frames
 
         return []
+
+    def _interrupted_tool_frames(
+        self,
+        reason: str,
+        interrupted_tool_call_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        frames: list[dict[str, Any]] = []
+        emitted_tool_call_ids: set[str] = set()
+        for tool_call_id, call_info in list(self._active_tool_calls.items()):
+            emitted_tool_call_ids.add(tool_call_id)
+            frames.append(
+                make_frame(
+                    "tool.interrupted",
+                    {
+                        "run_id": call_info.get("run_id", self._active_run_id or ""),
+                        "tool_call_id": tool_call_id,
+                        "tool_name": call_info.get("tool_name", ""),
+                        "tool_call_purpose": call_info.get("tool_call_purpose", ""),
+                        "reason": reason,
+                    },
+                )
+            )
+            self._active_tool_calls.pop(tool_call_id, None)
+        for tool_call_id in interrupted_tool_call_ids:
+            if tool_call_id in emitted_tool_call_ids:
+                continue
+            frames.append(
+                make_frame(
+                    "tool.interrupted",
+                    {
+                        "run_id": self._active_run_id or "",
+                        "tool_call_id": tool_call_id,
+                        "tool_name": "",
+                        "tool_call_purpose": "",
+                        "reason": reason,
+                    },
+                )
+            )
+        return frames
+
+    def _model_interrupted_frame(self, request_id: str, reason: str) -> dict[str, Any]:
+        return make_frame(
+            "model.interrupted",
+            {
+                "run_id": self._active_run_id or "",
+                "request_id": request_id,
+                "reason": reason,
+                "stop_reason": "interrupted",
+            },
+        )
 
     @staticmethod
     def _float_timestamp(value: Any) -> float | None:

@@ -101,6 +101,7 @@ class AgentRuntime:
                     duration_ms=0.0,
                     result_obj=ToolResult(success=False, error=content),
                     context_message_id=item.context_message_id,
+                    interrupted=True,
                 ),
                 event_bus,
             )

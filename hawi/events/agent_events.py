@@ -128,6 +128,7 @@ class AgentToolResultEvent(Event):
     success: bool
     duration_ms: float
     context_message_id: str | None = None
+    interrupted: bool = False
 
     @classmethod
     def create(
@@ -139,6 +140,7 @@ class AgentToolResultEvent(Event):
         duration_ms: float,
         result_obj: "ToolResult | None" = None,
         context_message_id: str | None = None,
+        interrupted: bool = False,
     ) -> AgentToolResultEvent:
         return cls(
             type="agent.tool_result",
@@ -150,6 +152,7 @@ class AgentToolResultEvent(Event):
             success=success,
             duration_ms=duration_ms,
             context_message_id=context_message_id,
+            interrupted=interrupted,
         )
 
     @field_serializer('result')
