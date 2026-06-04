@@ -30,6 +30,7 @@ ModelEventType = Literal[
     "model.tool_call_block_delta",
     "model.tool_call_block_stop",
     "model.content_metadata",
+    "model.profile",
     "model.metadata",
     "model.retry",
     "model.stream_stop",

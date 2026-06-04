@@ -152,6 +152,7 @@ class ModelRegistry:
             DeepSeekOpenAIModel,
         )
         from hawi.models.kimi import KimiAnthropicModel, KimiModel, KimiOpenAIModel
+        from hawi.models.llama_cpp import LlamaCppModel
         from hawi.models.minimax import (
             MiniMaxAnthropicModel,
             MiniMaxModel,
@@ -169,6 +170,7 @@ class ModelRegistry:
             KimiModel,
             KimiOpenAIModel,
             KimiAnthropicModel,
+            LlamaCppModel,
             MiniMaxModel,
             MiniMaxOpenAIModel,
             MiniMaxAnthropicModel,

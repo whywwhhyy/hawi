@@ -114,6 +114,7 @@ export type CoreCommandType =
   | "blob.release"
   | "blob.request_retransmit"
   | "set_system_prompt"
+  | "set_profiling"
   | "switch_model"
   | "refresh_models"
   | "save_model_provider_config"
@@ -275,6 +276,7 @@ export interface PersistedConfig {
   selectedPlugins: string[];
   pluginConfigs: Record<string, Record<string, unknown>>;
   toolCallPurposeEnabled: boolean;
+  profilingEnabled: boolean;
   showDebug: boolean;
   focusModeEnabled: boolean;
 }
@@ -287,6 +289,7 @@ export interface SessionLaunchProfile {
   selectedPlugins: string[];
   pluginConfigs: Record<string, Record<string, unknown>>;
   toolCallPurposeEnabled: boolean;
+  profilingEnabled: boolean;
   engineArgs?: string[];
 }
 

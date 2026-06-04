@@ -60,6 +60,7 @@ from hawi.events import (
     ModelStreamStartEvent,
     ModelStreamStopEvent,
     ModelMetadataEvent,
+    ModelProfileEvent,
     DumpManager,
 )
 from .context import (
@@ -147,6 +148,7 @@ class HawiAgent:
         auto_cache_static_prefix: CachePoint | dict[str, Any] | bool | None = True,
         permission_set: "PermissionSet | FrozenPermissionSet | dict[str, str] | None" = None,
         model_input_resolver: ModelInputResolver | None = None,
+        profiling: bool = True,
     ):
         """Initialize HawiAgent.
 
@@ -194,6 +196,7 @@ class HawiAgent:
         self._default_model = model
         self._max_iterations = max_iterations
         self._streaming = streaming
+        self._profiling_enabled = profiling
         self._event_bus = event_bus or EventBus()
         self._auto_compact = self._normalize_auto_compact(auto_compact, model)
         self._model_input_resolver = model_input_resolver
@@ -387,6 +390,10 @@ class HawiAgent:
     def set_system_prompt(self, system_prompt: str | list[ContentPart] | None) -> None:
         """Replace the agent system prompt and keep clone defaults in sync."""
         self._context.set_system_prompt(system_prompt)
+
+    def set_profiling(self, enabled: bool) -> None:
+        """Control whether model calls request provider profiling data."""
+        self._profiling_enabled = enabled
 
     def suppress_system_prompt_hooks(self, suppress: bool = True) -> None:
         """Control whether declared system-prompt injection hooks are skipped."""
@@ -774,6 +781,7 @@ class HawiAgent:
             "first_token_at": first_token_at,
             "completed_at": completed_at,
             "ttft_ms": ttft_ms,
+            "prefill_ms": ttft_ms,
             "decode_ms": decode_ms,
             "prefill_tokens": prefill_tokens,
             "decode_tokens": decode_tokens,
@@ -786,6 +794,35 @@ class HawiAgent:
                 decode_ms,
             ),
         }
+
+    @staticmethod
+    def _model_profile_timing_metadata(
+        profile: Any,
+    ) -> dict[str, float | int | None]:
+        """Return provider-supplied timing fields accepted by ModelMetadataEvent."""
+        if not isinstance(profile, dict):
+            return {}
+
+        result: dict[str, float | int | None] = {}
+        for key in (
+            "cache_tokens",
+            "ttft_ms",
+            "prefill_ms",
+            "decode_ms",
+            "prefill_tokens",
+            "decode_tokens",
+            "prefill_tokens_per_second",
+            "decode_tokens_per_second",
+            "peak_decode_tokens_per_second",
+        ):
+            value = profile.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                result[key] = value
+            elif isinstance(value, float):
+                result[key] = value if value == value else None
+        return result
 
     def interrupt(self, reason: str = "user") -> list[str]:
         return self._runtime.interrupt(reason)
@@ -1849,6 +1886,7 @@ class HawiAgent:
                 )
                 first_token_at: float | None = None
                 response_content: list[ContentPart] = []
+                model_profile_timing_metadata: dict[str, float | int | None] | None = None
 
                 # Content block handlers for processing different chunk types
                 text_handler = StreamBlockAccumulator.create_text_handler()
@@ -1900,12 +1938,37 @@ class HawiAgent:
                             handler = thinking_handler
                         elif chunk_type == "tool_call_delta":
                             handler = tool_handler
+                        elif chunk_type == "profile_delta":
+                            profile_timing = self._model_profile_timing_metadata(
+                                chunk.get("profile")
+                            )
+                            if profile_timing:
+                                model_profile_timing_metadata = {
+                                    **(model_profile_timing_metadata or {}),
+                                    **profile_timing,
+                                }
+                                await self._emit_event(
+                                    ModelProfileEvent.create(
+                                        request_id=request_id,
+                                        **profile_timing,
+                                    ),
+                                    event_bus,
+                                )
+                            continue
                         elif chunk_type == "finish":
                             stop_reason = chunk.get("stop_reason") or "end_turn"
                             usage_data = chunk.get("usage")
                             if usage_data:
                                 usage = normalize_token_usage(usage_data)
                                 cumulative_usage = merge_token_usage(cumulative_usage, usage)
+                            profile_timing = self._model_profile_timing_metadata(
+                                chunk.get("profile")
+                            )
+                            if profile_timing:
+                                model_profile_timing_metadata = {
+                                    **(model_profile_timing_metadata or {}),
+                                    **profile_timing,
+                                }
                             continue
                         else:
                             continue  # Unknown chunk type
@@ -2031,6 +2094,14 @@ class HawiAgent:
                     ),
                     decode_tokens=decode_tokens,
                 )
+                if model_profile_timing_metadata:
+                    timing_metadata.update(
+                        {
+                            key: value
+                            for key, value in model_profile_timing_metadata.items()
+                            if value is not None and key != "cache_tokens"
+                        }
+                    )
                 await self._emit_event(
                     ModelMetadataEvent.create(
                         request_id=request_id,
@@ -2449,6 +2520,11 @@ class HawiAgent:
                     tools=request.tools,
                     cache_point=request.cache_point,
                     cache_tool_definitions=request.cache_tool_definitions,
+                    profiling=(
+                        self._profiling_enabled
+                        if model.supports_profiling()
+                        else False
+                    ),
                 ):
                     yield event
                 self._last_unsent_tool_results = []

@@ -1640,6 +1640,80 @@ describe("core event reducer", () => {
     });
   });
 
+  it("attaches model profile metadata to the current user and assistant bubbles", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-profile", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-profile", delta: "hello" }));
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      run_id: "run-profile",
+      input_tokens: 20,
+      output_tokens: 5,
+      cache_read_tokens: 8,
+      prefill_tokens: 12,
+      prefill_ms: 246,
+      prefill_tokens_per_second: 48.8,
+      ttft_ms: 698,
+      decode_tokens: 5,
+      decode_ms: 123,
+      decode_tokens_per_second: 40.7,
+      peak_decode_tokens_per_second: 52.1
+    }));
+
+    const user = state.nodes.find((node) => node.kind === "user");
+    const agent = state.nodes.find((node) => node.kind === "agent");
+
+    expect(user?.profile).toEqual({
+      cacheTokens: 8,
+      prefillTokens: 12,
+      prefillMs: 246,
+      prefillTokensPerSecond: 48.8
+    });
+    expect(agent?.profile).toEqual({
+      ttftMs: 698,
+      decodeTokens: 5,
+      decodeMs: 123,
+      decodeTokensPerSecond: 40.7,
+      peakDecodeTokensPerSecond: 52.1
+    });
+  });
+
+  it("attaches streaming model profile before the assistant bubble exists", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-live-profile", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("model.profile", {
+      run_id: "run-live-profile",
+      cache_tokens: 8,
+      prefill_tokens: 12,
+      prefill_ms: 246,
+      prefill_tokens_per_second: 48.8,
+      ttft_ms: 698,
+      decode_tokens: 5,
+      decode_ms: 123,
+      decode_tokens_per_second: 40.7,
+      peak_decode_tokens_per_second: 52.1
+    }));
+
+    const userBeforeText = state.nodes.find((node) => node.kind === "user");
+    expect(userBeforeText?.profile).toEqual({
+      cacheTokens: 8,
+      prefillTokens: 12,
+      prefillMs: 246,
+      prefillTokensPerSecond: 48.8
+    });
+    expect(state.nodes.find((node) => node.kind === "agent")).toBeUndefined();
+
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-live-profile", delta: "hello" }));
+
+    const agent = state.nodes.find((node) => node.kind === "agent");
+    expect(agent?.profile).toEqual({
+      ttftMs: 698,
+      decodeTokens: 5,
+      decodeMs: 123,
+      decodeTokensPerSecond: 40.7,
+      peakDecodeTokensPerSecond: 52.1
+    });
+  });
+
   it("replays persisted model metadata into model usage state", () => {
     const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
       message_history: [

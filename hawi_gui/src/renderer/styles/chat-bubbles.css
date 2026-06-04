@@ -43,6 +43,34 @@
   z-index: 1;
 }
 
+.bubble.message.has-profile {
+  margin-bottom: 30px;
+}
+
+.message-profile-line {
+  position: absolute;
+  right: auto;
+  bottom: -25px;
+  left: 10px;
+  z-index: 0;
+  max-width: min(100%, 860px);
+  overflow: hidden;
+  color: #9aa1aa;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.bubble.user .message-profile-line {
+  right: 10px;
+  left: auto;
+  max-width: calc(100% - 20px);
+  text-align: right;
+}
+
 .bubble.message-collapsed .bubble-head {
   border-bottom-color: #edf0f1;
 }

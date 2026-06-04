@@ -224,6 +224,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--profiling",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Request provider profiling data from models that support it.",
+    )
+    parser.add_argument(
         "--gui-launch-profile",
         default=None,
         help="JSON object with GUI session launch profile metadata to persist in session manifests.",
@@ -402,6 +408,7 @@ async def async_main(args: argparse.Namespace) -> None:
         extra_tool_parameters=extra_tool_parameters,
         max_context_tokens=args.max_context_tokens,
         keep_session_system_prompt=args.keep_session_system_prompt,
+        profiling=args.profiling,
         gui_launch_profile=parse_gui_launch_profile(args.gui_launch_profile),
         initial_session_id=args.initial_session_id,
         initial_session_name=args.initial_session_name,
@@ -448,6 +455,7 @@ async def run_chat_cli(args: argparse.Namespace) -> None:
         max_iterations=None,
         streaming=True,
         auto_compact=auto_compact,
+        profiling=args.profiling,
     )
     printer = ChatRichPrinter(
         show_reasoning=False,

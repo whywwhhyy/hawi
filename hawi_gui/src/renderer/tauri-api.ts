@@ -125,6 +125,7 @@ if (!isTauriRuntime() && isDevRuntime() && !window.hawi) {
       selectedPlugins: [],
       pluginConfigs: {},
       toolCallPurposeEnabled: true,
+      profilingEnabled: true,
       showDebug: true,
       focusModeEnabled: true,
     },

@@ -29,6 +29,7 @@ function makeMetadata(coreRunning: boolean): GuiMetadata {
       selectedPlugins: [],
       pluginConfigs: {},
       toolCallPurposeEnabled: true,
+      profilingEnabled: true,
       showDebug: true,
       focusModeEnabled: true
     },

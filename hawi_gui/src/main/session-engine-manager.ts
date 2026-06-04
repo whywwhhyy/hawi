@@ -200,6 +200,12 @@ export class SessionEngineManager {
         this.syncDefaultConfigFromProfile(record.launchProfile);
         await this.saveSessionProfile(record);
       }
+    } else if (type === "set_profiling") {
+      if (typeof payload.profiling_enabled === "boolean") {
+        record.launchProfile = { ...record.launchProfile, profilingEnabled: payload.profiling_enabled };
+        this.syncDefaultConfigFromProfile(record.launchProfile);
+        await this.saveSessionProfile(record);
+      }
     } else if (type === "switch_model") {
       const modelName = stringOrNull(payload.model_name);
       if (modelName !== null) {
@@ -838,6 +844,7 @@ export function profileFromConfig(config: PersistedConfig): SessionLaunchProfile
     selectedPlugins: [...config.selectedPlugins],
     pluginConfigs: clonePluginConfigs(config.pluginConfigs),
     toolCallPurposeEnabled: config.toolCallPurposeEnabled,
+    profilingEnabled: config.profilingEnabled !== false,
     engineArgs: stableEngineArgs(config),
   } satisfies SessionLaunchProfile;
   return profile;
@@ -857,6 +864,7 @@ export function configFromProfile(
       selectedPlugins: [...profile.selectedPlugins],
       pluginConfigs: clonePluginConfigs(profile.pluginConfigs),
       toolCallPurposeEnabled: profile.toolCallPurposeEnabled !== false,
+      profilingEnabled: profile.profilingEnabled !== false,
       showDebug: defaultConfig.showDebug,
     },
     metadata,
@@ -880,6 +888,7 @@ export function launchProfileFromUnknown(value: unknown): SessionLaunchProfile |
     selectedPlugins: stringList(value.selectedPlugins),
     pluginConfigs: pluginConfigRecord(value.pluginConfigs),
     toolCallPurposeEnabled: value.toolCallPurposeEnabled !== false,
+    profilingEnabled: value.profilingEnabled !== false,
     engineArgs: Array.isArray(value.engineArgs) ? value.engineArgs.filter((item): item is string => typeof item === "string") : undefined,
   };
 }
@@ -894,6 +903,7 @@ function stableEngineArgs(config: PersistedConfig): string[] {
     config.systemPrompt,
     "--plugins",
     config.selectedPlugins.join(","),
+    config.profilingEnabled === false ? "--no-profiling" : "--profiling",
     ...toolCallPurposeEngineArgs(config.toolCallPurposeEnabled),
   ];
 }

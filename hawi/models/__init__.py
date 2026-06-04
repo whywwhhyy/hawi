@@ -49,6 +49,7 @@ from .message import (
     DeltaMetadataPart,
     DeltaPart,
     DeltaPartType,
+    DeltaProfilePart,
     DeltaSignaturePart,
     DeltaTextPart,
     DeltaThinkingPart,
@@ -63,6 +64,7 @@ from .message import (
     MediaSource,
     Message,
     MessageMetadata,
+    ModelProfileInfo,
     MessageRequest,
     MessageResponse,
     ReasoningPart,
@@ -97,6 +99,7 @@ from .openai import OpenAIModel
 from .anthropic import AnthropicModel
 from .deepseek import DeepSeekModel
 from .kimi import KimiModel
+from .llama_cpp import LlamaCppModel
 from .minimax import MiniMaxModel
 from .strands import StrandsModel
 from .registry import (
@@ -170,6 +173,7 @@ __all__ = [
     "Message",
     "MessageRequest",
     "MessageResponse",
+    "ModelProfileInfo",
     "ContentPartType",
     "DeltaPartType",
     "TokenUsage",
@@ -210,6 +214,7 @@ __all__ = [
     "DeltaThinkingPart",
     "DeltaSignaturePart",
     "DeltaMetadataPart",
+    "DeltaProfilePart",
     "DeltaToolCallPart",
     "DeltaFinishPart",
     "MessageMetadata",
@@ -229,6 +234,7 @@ __all__ = [
     "AnthropicModel",
     "DeepSeekModel",
     "KimiModel",
+    "LlamaCppModel",
     "MiniMaxModel",
     "StrandsModel",
     # Registry

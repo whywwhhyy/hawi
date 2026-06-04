@@ -18,6 +18,7 @@ from typing import Any, AsyncGenerator, ClassVar, Iterator, List, Literal, cast,
 from hawi.models.message import (
     ContentPart,
     Message,
+    ModelProfileInfo,
     MessageRequest,
     MessageResponse,
     STEER_MERGE_MODES,
@@ -54,6 +55,7 @@ __all__ = [
     "TokenEstimate",
     "TokenEstimateMethod",
     "TokenEstimateConfidence",
+    "ModelProfileInfo",
     "ModelError",
 ]
 
@@ -296,6 +298,10 @@ class Model(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support model list query"
         )
+
+    def supports_profiling(self) -> bool:
+        """Return whether this adapter can request provider profiling data."""
+        return False
 
     # ==========================================================================
     # 公共 API - 异步方法
@@ -575,6 +581,7 @@ class Model(ABC):
             thinking_type=merged.get("thinking_type"),
             thinking_effort=merged.get("thinking_effort"),
             output_config=merged.get("output_config"),
+            profiling=merged.get("profiling"),
         )
 
     def _get_params(self) -> ModelParams:

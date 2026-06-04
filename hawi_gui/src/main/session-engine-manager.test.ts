@@ -71,6 +71,7 @@ const baseConfig: PersistedConfig = {
   selectedPlugins: ["hawi/filesystem"],
   pluginConfigs: { "hawi/filesystem": { root: "." } },
   toolCallPurposeEnabled: true,
+  profilingEnabled: true,
   showDebug: true,
   focusModeEnabled: true,
 };
@@ -96,7 +97,9 @@ describe("session launch profiles", () => {
       selectedPlugins: ["hawi/filesystem"],
       pluginConfigs: { "hawi/filesystem": { root: "." } },
       toolCallPurposeEnabled: true,
+      profilingEnabled: true,
     });
+    expect(profile.engineArgs).toContain("--profiling");
     expect(profile.engineArgs).toContain("--extra-tool-parameter-json");
     expect(profile).not.toHaveProperty("showDebug");
     expect(profile).not.toHaveProperty("focusModeEnabled");
@@ -114,6 +117,7 @@ describe("session launch profiles", () => {
         selectedPlugins: ["hawi/shell", 42],
         pluginConfigs: { "hawi/shell": { cwd: "." }, bad: "x" },
         toolCallPurposeEnabled: false,
+        profilingEnabled: false,
         engineArgs: ["--model", "kimi", 7],
       }),
     ).toMatchObject({
@@ -123,14 +127,20 @@ describe("session launch profiles", () => {
       selectedPlugins: ["hawi/shell"],
       pluginConfigs: { "hawi/shell": { cwd: "." }, bad: {} },
       toolCallPurposeEnabled: false,
+      profilingEnabled: false,
       engineArgs: ["--model", "kimi"],
     });
   });
 
   it("omits the tool purpose injection args when disabled", () => {
-    const profile = profileFromConfig({ ...baseConfig, toolCallPurposeEnabled: false });
+    const profile = profileFromConfig({
+      ...baseConfig,
+      toolCallPurposeEnabled: false,
+      profilingEnabled: false,
+    });
 
     expect(profile.engineArgs).not.toContain("--extra-tool-parameter-json");
+    expect(profile.engineArgs).toContain("--no-profiling");
   });
 });
 

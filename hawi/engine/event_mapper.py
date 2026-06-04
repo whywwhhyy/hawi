@@ -376,6 +376,7 @@ class SemanticEventMapper:
                         "first_token_at": getattr(event, "first_token_at", None),
                         "completed_at": getattr(event, "completed_at", None),
                         "ttft_ms": ttft_ms,
+                        "prefill_ms": getattr(event, "prefill_ms", None),
                         "decode_ms": getattr(event, "decode_ms", None),
                         "prefill_tokens": getattr(event, "prefill_tokens", None),
                         "decode_tokens": getattr(event, "decode_tokens", None),
@@ -389,10 +390,47 @@ class SemanticEventMapper:
                             "decode_tokens_per_second",
                             None,
                         ),
+                        "peak_decode_tokens_per_second": getattr(
+                            event,
+                            "peak_decode_tokens_per_second",
+                            None,
+                        ),
                         "context_tokens": getattr(event, "context_tokens", None),
                         "max_context_tokens": getattr(event, "max_context_tokens", None),
                         "context_ratio": getattr(event, "context_ratio", None),
                         "context_source": getattr(event, "context_source", None),
+                    },
+                )
+            ]
+
+        if etype == "model.profile":
+            return [
+                make_frame(
+                    "model.profile",
+                    {
+                        "run_id": self._active_run_id or "",
+                        "request_id": getattr(event, "request_id", ""),
+                        "cache_tokens": getattr(event, "cache_tokens", None),
+                        "ttft_ms": getattr(event, "ttft_ms", None),
+                        "prefill_ms": getattr(event, "prefill_ms", None),
+                        "decode_ms": getattr(event, "decode_ms", None),
+                        "prefill_tokens": getattr(event, "prefill_tokens", None),
+                        "decode_tokens": getattr(event, "decode_tokens", None),
+                        "prefill_tokens_per_second": getattr(
+                            event,
+                            "prefill_tokens_per_second",
+                            None,
+                        ),
+                        "decode_tokens_per_second": getattr(
+                            event,
+                            "decode_tokens_per_second",
+                            None,
+                        ),
+                        "peak_decode_tokens_per_second": getattr(
+                            event,
+                            "peak_decode_tokens_per_second",
+                            None,
+                        ),
                     },
                 )
             ]

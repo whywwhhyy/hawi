@@ -17,7 +17,7 @@ import { VERSION } from "../shared/protocol";
 import { MIN_CONTENT_SIZE, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import { StatusCell, StatusCellDisplay, StatusCellTrigger, StatusPopoverHeader } from "./StatusCell";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
+import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelProfileState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -1171,6 +1171,7 @@ export default function App() {
   const canEditMessages = Boolean(currentSessionId) && !canStopConversation;
   const showDebug = config?.showDebug ?? true;
   const focusModeEnabled = config?.focusModeEnabled ?? true;
+  const profilingEnabled = config?.profilingEnabled ?? true;
   const visibleChatNodes = useMemo(
     () => state.nodes.filter((node) => showDebug || node.kind !== "debug"),
     [showDebug, state.nodes]
@@ -3496,6 +3497,26 @@ export default function App() {
     void saveGlobalAndSet(next);
   }
 
+  function updateProfilingEnabled(enabled: boolean) {
+    const baseConfig = configRef.current ?? config;
+    if (!baseConfig) return;
+    const next = { ...baseConfig, profilingEnabled: enabled };
+    configRef.current = next;
+    setConfig(next);
+    void (async () => {
+      try {
+        if (currentSessionIdRef.current) {
+          await sendCommand("set_profiling", { profiling_enabled: enabled });
+        }
+        await saveGlobalAndSet(next);
+      } catch (error) {
+        configRef.current = baseConfig;
+        setConfig(baseConfig);
+        dispatch(errorFrame(error));
+      }
+    })();
+  }
+
   if (!metadata || !config) {
     return <div className="boot">Loading Hawi metadata...</div>;
   }
@@ -3600,6 +3621,14 @@ export default function App() {
                       onChange={(event) => updateShowDebug(event.target.checked)}
                     />
                     调试信息
+                  </label>
+                  <label className="menu-item checkbox-menu-item">
+                    <input
+                      type="checkbox"
+                      checked={profilingEnabled}
+                      onChange={(event) => updateProfilingEnabled(event.target.checked)}
+                    />
+                    Profiling
                   </label>
                   <label
                     className="menu-item checkbox-menu-item"
@@ -3743,6 +3772,7 @@ export default function App() {
           onOpenMediaPreview={setMediaPreview}
           processing={state.processing}
           focusMode={focusModeEnabled}
+          profilingEnabled={profilingEnabled}
           highlightHistoryIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.messageIndex : undefined}
           highlightContextMessageId={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageId : undefined}
           highlightContextMessageIndex={mainLocateTarget?.sessionId === currentSessionId ? mainLocateTarget.contextMessageIndex : undefined}
@@ -4518,6 +4548,7 @@ function HistorySearchModal({
               ref={previewRef}
               nodes={previewNodes}
               allowFork={false}
+              profilingEnabled={profilingEnabled}
               enablePageFind={false}
               emptyLabel={query.trim() ? "无预览" : "输入关键词"}
               searchHighlightQuery={query}
@@ -5659,6 +5690,7 @@ interface ChatTranscriptProps {
   onOpenMediaPreview?: (preview: MediaPreviewState) => void;
   processing?: ProcessingState;
   focusMode?: boolean;
+  profilingEnabled?: boolean;
   onForkMessage?: (node: ChatNode) => void;
   allowFork?: boolean;
   messageEdit?: MessageEditController;
@@ -5721,6 +5753,7 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
   onOpenMediaPreview,
   processing,
   focusMode = false,
+  profilingEnabled = true,
   onForkMessage,
   allowFork = true,
   messageEdit,
@@ -5865,6 +5898,7 @@ const ChatTranscript = memo(forwardRef<HTMLDivElement, ChatTranscriptProps>(func
           allowFork={allowFork}
           onForkMessage={onForkMessage}
           messageEdit={messageEdit}
+          profilingEnabled={profilingEnabled}
         />
       </div>
     );
@@ -6529,7 +6563,8 @@ const ChatBubble = memo(function ChatBubble({
   onOpenMediaPreview,
   allowFork,
   onForkMessage,
-  messageEdit
+  messageEdit,
+  profilingEnabled
 }: {
   node: ChatNode;
   blobPreviewUrls: BlobPreviewUrls;
@@ -6537,6 +6572,7 @@ const ChatBubble = memo(function ChatBubble({
   allowFork: boolean;
   onForkMessage?: (node: ChatNode) => void;
   messageEdit?: MessageEditController;
+  profilingEnabled: boolean;
 }) {
   if (node.kind === "divider") {
     return (
@@ -6580,6 +6616,7 @@ const ChatBubble = memo(function ChatBubble({
       allowFork={allowFork}
       onForkMessage={onForkMessage}
       messageEdit={messageEdit}
+      profilingEnabled={profilingEnabled}
     />
   );
 });
@@ -6725,7 +6762,8 @@ const MessageBubble = memo(function MessageBubble({
   onOpenMediaPreview,
   allowFork,
   onForkMessage,
-  messageEdit
+  messageEdit,
+  profilingEnabled
 }: {
   node: ChatNode;
   blobPreviewUrls: BlobPreviewUrls;
@@ -6733,6 +6771,7 @@ const MessageBubble = memo(function MessageBubble({
   allowFork: boolean;
   onForkMessage?: (node: ChatNode) => void;
   messageEdit?: MessageEditController;
+  profilingEnabled: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
@@ -6749,9 +6788,10 @@ const MessageBubble = memo(function MessageBubble({
   const showEditButton = Boolean(messageEdit && (node.kind === "user" || node.kind === "agent"));
   const beforeInjections = (node.injections ?? []).filter((item) => item.mergePosition === "before");
   const afterInjections = (node.injections ?? []).filter((item) => item.mergePosition !== "before");
+  const profileLine = profilingEnabled ? formatMessageProfileLine(node) : null;
 
   return (
-    <article className={`bubble ${node.kind} message ${collapsed ? "message-collapsed" : ""} ${editing ? "message-editing" : ""}`.trim()}>
+    <article className={`bubble ${node.kind} message ${profileLine ? "has-profile" : ""} ${collapsed ? "message-collapsed" : ""} ${editing ? "message-editing" : ""}`.trim()}>
       <div
         className={`bubble-head ${editing ? "" : "collapsible-head"}`.trim()}
         onClick={editing ? undefined : () => guardedToggle(toggleCollapsed)}
@@ -6860,9 +6900,87 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         </div>
       )}
+      {profileLine && <div className="message-profile-line">{profileLine}</div>}
     </article>
   );
 });
+
+function formatMessageProfileLine(node: ChatNode): string | null {
+  const profile = node.profile;
+  if (!profile) return null;
+  if (node.kind === "user") {
+    return formatUserProfileLine(profile);
+  }
+  if (node.kind === "agent") {
+    return formatAssistantProfileLine(profile);
+  }
+  return null;
+}
+
+function formatUserProfileLine(profile: ModelProfileState): string | null {
+  const parts: string[] = [];
+  if (isProfileNumber(profile.cacheTokens)) {
+    parts.push(`Cache: ${formatProfileTokenCount(profile.cacheTokens)} tok`);
+  }
+  const prefillParts: string[] = [];
+  if (isProfileNumber(profile.prefillTokens)) {
+    prefillParts.push(`${formatProfileTokenCount(profile.prefillTokens)} tok`);
+  }
+  if (isPositiveProfileNumber(profile.prefillTokensPerSecond)) {
+    prefillParts.push(`@ ${formatProfileRate(profile.prefillTokensPerSecond)}`);
+  }
+  if (isProfileNumber(profile.prefillMs)) {
+    prefillParts.push(formatProfileMs(profile.prefillMs));
+  }
+  if (prefillParts.length > 0) {
+    parts.push(`Prefill: ${prefillParts.join(" ")}`);
+  }
+  return parts.length > 0 ? parts.join("  ") : null;
+}
+
+function formatAssistantProfileLine(profile: ModelProfileState): string | null {
+  const parts: string[] = [];
+  if (isProfileNumber(profile.ttftMs)) {
+    parts.push(`TTFT: ${formatProfileMs(profile.ttftMs)}`);
+  }
+  const decodeParts: string[] = [];
+  if (isProfileNumber(profile.decodeTokens)) {
+    decodeParts.push(`${formatProfileTokenCount(profile.decodeTokens)} tok`);
+  }
+  if (isPositiveProfileNumber(profile.decodeTokensPerSecond)) {
+    decodeParts.push(`@ ${formatProfileRate(profile.decodeTokensPerSecond)}`);
+  }
+  if (decodeParts.length > 0) {
+    parts.push(`Decode: ${decodeParts.join(" ")}`);
+  }
+  if (isPositiveProfileNumber(profile.peakDecodeTokensPerSecond)) {
+    parts.push(`Peak: ${formatProfileRate(profile.peakDecodeTokensPerSecond)}`);
+  }
+  if (isProfileNumber(profile.decodeMs)) {
+    parts.push(formatProfileMs(profile.decodeMs));
+  }
+  return parts.length > 0 ? parts.join("  ") : null;
+}
+
+function isProfileNumber(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isPositiveProfileNumber(value: number | undefined): value is number {
+  return isProfileNumber(value) && value > 0;
+}
+
+function formatProfileMs(value: number): string {
+  return `${Math.max(0, Math.round(value))}ms`;
+}
+
+function formatProfileTokenCount(value: number): string {
+  return Math.max(0, Math.round(value)).toLocaleString();
+}
+
+function formatProfileRate(value: number): string {
+  return `${value.toFixed(1)} tok/s`;
+}
 
 function labelForUserMessage(node: ChatNode): string {
   if (node.displayMessageType) {
@@ -9924,6 +10042,7 @@ function normalizeLaunchProfile(value: unknown): SessionLaunchProfile | null {
       : [],
     pluginConfigs: normalizePluginConfigs(value.pluginConfigs),
     toolCallPurposeEnabled: value.toolCallPurposeEnabled !== false,
+    profilingEnabled: value.profilingEnabled !== false,
     engineArgs: Array.isArray(value.engineArgs)
       ? value.engineArgs.filter((item): item is string => typeof item === "string")
       : undefined
@@ -9951,7 +10070,8 @@ function configFromLaunchProfile(
     systemPrompt: profile.systemPrompt,
     selectedPlugins: [...profile.selectedPlugins],
     pluginConfigs: normalizePluginConfigs(profile.pluginConfigs),
-    toolCallPurposeEnabled: profile.toolCallPurposeEnabled !== false
+    toolCallPurposeEnabled: profile.toolCallPurposeEnabled !== false,
+    profilingEnabled: profile.profilingEnabled !== false
   };
 }
 
@@ -9963,7 +10083,8 @@ function launchProfileFromConfig(config: PersistedConfig): SessionLaunchProfile 
     systemPrompt: config.systemPrompt,
     selectedPlugins: [...config.selectedPlugins],
     pluginConfigs: normalizePluginConfigs(config.pluginConfigs),
-    toolCallPurposeEnabled: config.toolCallPurposeEnabled
+    toolCallPurposeEnabled: config.toolCallPurposeEnabled,
+    profilingEnabled: config.profilingEnabled !== false
   };
 }
 

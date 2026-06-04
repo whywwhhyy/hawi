@@ -258,6 +258,7 @@ class CoreRuntime:
         extra_tool_parameters: list[ExtraToolParameter] | None = None,
         max_context_tokens: int | None = None,
         keep_session_system_prompt: bool = True,
+        profiling: bool = True,
         gui_launch_profile: dict[str, Any] | None = None,
         initial_session_id: str | None = None,
         initial_session_name: str | None = None,
@@ -277,6 +278,7 @@ class CoreRuntime:
         self._extra_tool_parameters = list(extra_tool_parameters or [])
         self._max_context_tokens = max_context_tokens
         self._keep_session_system_prompt = keep_session_system_prompt
+        self._profiling_enabled = profiling
         self._gui_launch_profile = (
             dict(gui_launch_profile) if isinstance(gui_launch_profile, dict) else None
         )
@@ -481,6 +483,8 @@ class CoreRuntime:
                 await self._handle_clear_queue(client, command)
             elif command.type == "set_system_prompt":
                 await self._handle_set_system_prompt(client, command)
+            elif command.type == "set_profiling":
+                await self._handle_set_profiling(client, command)
             elif command.type == "switch_model":
                 await self._handle_switch_model(client, command)
             elif command.type == "refresh_models":
@@ -1097,6 +1101,25 @@ class CoreRuntime:
         self._require_runner().agent.set_system_prompt(system_prompt)
         self._update_gui_launch_profile(system_prompt=system_prompt)
         await client.send(make_ack("set_system_prompt", request_id=command.id))
+
+    async def _handle_set_profiling(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        profiling_enabled = command.payload.get("profiling_enabled")
+        if not isinstance(profiling_enabled, bool):
+            raise ValueError("'set_profiling.payload.profiling_enabled' must be a boolean")
+        self._profiling_enabled = profiling_enabled
+        self._require_runner().agent.set_profiling(profiling_enabled)
+        self._update_gui_launch_profile(profilingEnabled=profiling_enabled)
+        await client.send(
+            make_ack(
+                "set_profiling",
+                request_id=command.id,
+                payload={"profiling_enabled": profiling_enabled},
+            )
+        )
 
     async def _handle_switch_model(
         self,
@@ -2065,6 +2088,7 @@ class CoreRuntime:
             max_iterations=None,
             streaming=True,
             auto_compact=auto_compact,
+            profiling=self._profiling_enabled,
             model_input_resolver=(
                 (lambda request: resolve_blob_references_for_model(request, blob_store))
                 if blob_store is not None
@@ -2512,6 +2536,7 @@ class CoreRuntime:
             "systemPrompt": self.system_prompt,
             "selectedPlugins": list(self._selected_plugins),
             "pluginConfigs": to_json_safe(self._plugin_configs),
+            "profilingEnabled": self._profiling_enabled,
         }
 
     def _update_gui_launch_profile(self, **updates: Any) -> None:
@@ -2534,6 +2559,7 @@ class CoreRuntime:
         profile.setdefault("systemPrompt", self.system_prompt)
         profile.setdefault("selectedPlugins", list(self._selected_plugins))
         profile.setdefault("pluginConfigs", to_json_safe(self._plugin_configs))
+        profile.setdefault("profilingEnabled", self._profiling_enabled)
         self._gui_launch_profile = profile
 
     def _agent_context_usage(self) -> dict[str, Any] | None:

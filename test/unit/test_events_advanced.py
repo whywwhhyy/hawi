@@ -17,6 +17,7 @@ from hawi.events import (
     ModelContentBlockDeltaEvent,
     ModelContentBlockStopEvent,
     ModelMetadataEvent,
+    ModelProfileEvent,
     # Agent events
     AgentRunStartEvent,
     AgentRunStopEvent,
@@ -214,6 +215,25 @@ class TestModelEventClasses:
         assert event.ttft_ms == 120.0
         assert event.prefill_tokens_per_second == 83.3
         assert event.decode_tokens_per_second == 52.6
+
+    def test_model_profile_event(self):
+        """Test ModelProfileEvent.create()."""
+        event = ModelProfileEvent.create(
+            request_id="req-123",
+            cache_tokens=10,
+            prefill_ms=246.0,
+            prefill_tokens=20,
+            decode_tokens=5,
+            decode_tokens_per_second=42.5,
+        )
+        assert event.type == "model.profile"
+        assert event.source == "model"
+        assert event.request_id == "req-123"
+        assert event.cache_tokens == 10
+        assert event.prefill_ms == 246.0
+        assert event.prefill_tokens == 20
+        assert event.decode_tokens == 5
+        assert event.decode_tokens_per_second == 42.5
 
 
 class TestAgentEventClasses:

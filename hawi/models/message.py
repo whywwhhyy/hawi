@@ -31,6 +31,24 @@ class TokenUsage(TypedDict):
 
 
 # =============================================================================
+# Model Profiling 类型
+# =============================================================================
+
+class ModelProfileInfo(TypedDict, total=False):
+    """Provider-neutral model profiling information."""
+
+    ttft_ms: float | int | None
+    prefill_ms: float | int | None
+    decode_ms: float | int | None
+    cache_tokens: float | int | None
+    prefill_tokens: float | int | None
+    decode_tokens: float | int | None
+    prefill_tokens_per_second: float | int | None
+    decode_tokens_per_second: float | int | None
+    peak_decode_tokens_per_second: float | int | None
+
+
+# =============================================================================
 # ContentPart 类型 - 消息内容的最小单元
 # =============================================================================
 
@@ -584,12 +602,20 @@ class DeltaMetadataPart(TypedDict):
     is_end: bool
 
 
+class DeltaProfilePart(TypedDict):
+    """Provider-neutral profiling update emitted during model streaming."""
+
+    type: Literal["profile_delta"]
+    profile: ModelProfileInfo
+
+
 class DeltaFinishPart(TypedDict):
     """流式响应结束标记"""
 
     type: Literal["finish"]
     stop_reason: str
     usage: TokenUsage | dict[str, int] | None  # {"input_tokens": 100, "output_tokens": 50}
+    profile: NotRequired[ModelProfileInfo | None]
 
 
 # DeltaPart 联合类型
@@ -603,6 +629,7 @@ DeltaPart: TypeAlias = (
     DeltaSignaturePart |
     DeltaToolCallPart | 
     DeltaMetadataPart |
+    DeltaProfilePart |
     DeltaFinishPart
 )
 
@@ -843,6 +870,7 @@ class MessageRequest(BaseModel):
     thinking_type: Literal["auto", "enabled", "adaptive", "disabled"] | None = None
     thinking_effort: Literal["low", "medium", "high", "max"] | None = None
     output_config: dict[str, Any] | None = None
+    profiling: bool | None = None  # Request provider profiling data when supported
 
     @field_validator("cache_point", "cache_tool_definitions", mode="before")
     @classmethod

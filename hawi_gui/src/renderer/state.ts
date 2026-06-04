@@ -70,6 +70,7 @@ export interface ChatNode {
   streamStartedAt?: number;
   streamFinishedAt?: number;
   streamDurationMs?: number;
+  profile?: ModelProfileState;
   queue?: QueueKind;
   displayMessageType?: DisplayMessageType;
   tool?: ToolState;
@@ -155,6 +156,18 @@ export interface ContextUsageState {
   maxContextTokens?: number;
   ratio?: number;
   source?: "estimate" | "provider_usage";
+}
+
+export interface ModelProfileState {
+  cacheTokens?: number;
+  prefillTokens?: number;
+  prefillMs?: number;
+  prefillTokensPerSecond?: number;
+  ttftMs?: number;
+  decodeTokens?: number;
+  decodeMs?: number;
+  decodeTokensPerSecond?: number;
+  peakDecodeTokensPerSecond?: number;
 }
 
 export interface ModelUsageState {
@@ -262,6 +275,7 @@ export interface SubAgentRuntimeState {
 }
 
 interface RunState {
+  userNodeId?: string;
   agentNodeId?: string;
   thinkingNodeId?: string;
   processingId?: string;
@@ -270,6 +284,7 @@ interface RunState {
   assistantMessageCounted?: boolean;
   assistantContextMessageIndex?: number;
   toolCallAssistantContextIndexed?: boolean;
+  profile?: ModelProfileState;
 }
 
 export interface AppState {
@@ -469,6 +484,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
           ...withUser.runs,
           [runId]: {
             ...(withUser.runs[runId] ?? {}),
+            userNodeId,
             startedAt: withUser.runs[runId]?.startedAt ?? eventAt,
             processingId: processing.id
           }
@@ -739,8 +755,11 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         modelUsage: addModelUsage(state.modelUsage, parseModelUsage(payload)),
         contextUsage: parseContextUsage(payload) ?? state.contextUsage
       };
-      return addMeta(nextState, formatModelMetadata(payload));
+      return addMeta(attachModelProfileToRun(nextState, payload), formatModelMetadata(payload));
     }
+
+    case "model.profile":
+      return attachModelProfileToRun(state, payload);
 
     case "agent.system_prompt":
       return mergeSystemPromptInjection(
@@ -1041,12 +1060,28 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
   // node's status + resultPreview rather than producing a new node.
   const toolNodesByCallId = new Map<string, ChatNode>();
   const compactNodesByRunId = new Map<string, ChatNode[]>();
+  const userNodesByRunId = new Map<string, ChatNode>();
+  const agentNodesByRunId = new Map<string, ChatNode>();
+  const pendingProfilesByRunId = new Map<string, ModelProfileState>();
 
   history.forEach((record, index) => {
     const baseId = `${record.runId}-${index}`;
     if (record.role === "event") {
       const replayFrame = sessionHistoryEventFrame(record, index);
       if (replayFrame && applyHistoryChatEvent(nodes, replayFrame, index)) {
+        return;
+      }
+      if (replayFrame?.type === "model.metadata") {
+        const profile = parseModelProfile((replayFrame.payload ?? {}) as Record<string, unknown>);
+        if (profile) {
+          const merged = mergeModelProfile(pendingProfilesByRunId.get(record.runId), profile);
+          pendingProfilesByRunId.set(record.runId, merged);
+          applyHistoryModelProfile(
+            userNodesByRunId.get(record.runId),
+            agentNodesByRunId.get(record.runId),
+            merged,
+          );
+        }
         return;
       }
       if (replayFrame && isSessionHistoryReplayOnlyEvent(replayFrame.type)) {
@@ -1105,7 +1140,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
     if (record.role === "user") {
       const queue = normalizeQueue(record.metadata?.queue ?? "normal");
       const contentParts = visibleMessageContentParts(record.content);
-      nodes.push({
+      const node: ChatNode = {
         id: userMessageNodeId(optionalString(record.metadata?.message_id) ?? `history-${baseId}`),
         kind: "user",
         historyIndex: index,
@@ -1119,7 +1154,13 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         canFork: record.contextMessageId !== undefined || record.contextMessageIndex !== undefined,
         content: historyContentText(record.content),
         contentParts
-      });
+      };
+      const pendingProfile = pendingProfilesByRunId.get(record.runId);
+      if (pendingProfile) {
+        applyHistoryModelProfile(node, undefined, pendingProfile);
+      }
+      nodes.push(node);
+      userNodesByRunId.set(record.runId, node);
       return;
     }
     if (record.role === "assistant") {
@@ -1138,7 +1179,7 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
         });
       }
       if (answer || contentParts) {
-        nodes.push({
+        const node: ChatNode = {
           id: nodeId("agent-history", baseId),
           kind: "agent",
           historyIndex: index,
@@ -1148,7 +1189,13 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
           contextMessageIndex: record.contextMessageIndex,
           canFork: record.contextMessageId !== undefined || record.contextMessageIndex !== undefined,
           complete: true
-        });
+        };
+        const pendingProfile = pendingProfilesByRunId.get(record.runId);
+        if (pendingProfile) {
+          applyHistoryModelProfile(undefined, node, pendingProfile);
+        }
+        nodes.push(node);
+        agentNodesByRunId.set(record.runId, node);
       }
       // Emit one tool node per tool_call in the assistant's content.
       // Status starts as "running" — replaced by "success"/"fail" when the
@@ -1228,6 +1275,21 @@ function sessionHistoryNodes(history: SessionHistoryRecord[]): ChatNode[] {
     });
   });
   return nodes;
+}
+
+function applyHistoryModelProfile(
+  userNode: ChatNode | undefined,
+  agentNode: ChatNode | undefined,
+  profile: ModelProfileState,
+): void {
+  const userProfile = userModelProfile(profile);
+  if (userNode && userProfile) {
+    userNode.profile = mergeModelProfile(userNode.profile, userProfile);
+  }
+  const agentProfile = assistantModelProfile(profile);
+  if (agentNode && agentProfile) {
+    agentNode.profile = mergeModelProfile(agentNode.profile, agentProfile);
+  }
 }
 
 function nextContextMessageIndexFromHistory(history: SessionHistoryRecord[]): number {
@@ -1593,6 +1655,105 @@ function addModelUsage(
   };
 }
 
+function parseModelProfile(payload: Record<string, unknown>): ModelProfileState | undefined {
+  const nestedUsage = isRecord(payload.usage) ? payload.usage : {};
+  const readUsageNumber = (key: string) => optionalNumber(payload[key]) ?? optionalNumber(nestedUsage[key]);
+  const profile: ModelProfileState = {};
+  putProfileNumber(profile, "cacheTokens", readUsageNumber("cache_read_tokens") ?? optionalNumber(payload.cache_tokens));
+  putProfileNumber(profile, "prefillTokens", optionalNumber(payload.prefill_tokens));
+  putProfileNumber(profile, "prefillMs", optionalNumber(payload.prefill_ms) ?? optionalNumber(payload.ttft_ms));
+  putProfileNumber(profile, "prefillTokensPerSecond", optionalNumber(payload.prefill_tokens_per_second));
+  putProfileNumber(profile, "ttftMs", optionalNumber(payload.ttft_ms));
+  putProfileNumber(profile, "decodeTokens", optionalNumber(payload.decode_tokens));
+  putProfileNumber(profile, "decodeMs", optionalNumber(payload.decode_ms));
+  putProfileNumber(profile, "decodeTokensPerSecond", optionalNumber(payload.decode_tokens_per_second));
+  putProfileNumber(profile, "peakDecodeTokensPerSecond", optionalNumber(payload.peak_decode_tokens_per_second));
+  return hasProfileValues(profile) ? profile : undefined;
+}
+
+function putProfileNumber<T extends keyof ModelProfileState>(
+  profile: ModelProfileState,
+  key: T,
+  value: number | undefined,
+): void {
+  if (value !== undefined) {
+    profile[key] = value;
+  }
+}
+
+function hasProfileValues(profile: ModelProfileState): boolean {
+  return Object.values(profile).some((value) => typeof value === "number" && Number.isFinite(value));
+}
+
+function userModelProfile(profile: ModelProfileState): ModelProfileState | undefined {
+  const userProfile: ModelProfileState = {};
+  putProfileNumber(userProfile, "cacheTokens", profile.cacheTokens);
+  putProfileNumber(userProfile, "prefillTokens", profile.prefillTokens);
+  putProfileNumber(userProfile, "prefillMs", profile.prefillMs);
+  putProfileNumber(userProfile, "prefillTokensPerSecond", profile.prefillTokensPerSecond);
+  return hasProfileValues(userProfile) ? userProfile : undefined;
+}
+
+function assistantModelProfile(profile: ModelProfileState): ModelProfileState | undefined {
+  const assistantProfile: ModelProfileState = {};
+  putProfileNumber(assistantProfile, "ttftMs", profile.ttftMs);
+  putProfileNumber(assistantProfile, "decodeTokens", profile.decodeTokens);
+  putProfileNumber(assistantProfile, "decodeMs", profile.decodeMs);
+  putProfileNumber(assistantProfile, "decodeTokensPerSecond", profile.decodeTokensPerSecond);
+  putProfileNumber(assistantProfile, "peakDecodeTokensPerSecond", profile.peakDecodeTokensPerSecond);
+  return hasProfileValues(assistantProfile) ? assistantProfile : undefined;
+}
+
+function mergeModelProfile(
+  current: ModelProfileState | undefined,
+  incoming: ModelProfileState,
+): ModelProfileState {
+  return { ...(current ?? {}), ...incoming };
+}
+
+function attachModelProfileToRun(state: AppState, payload: Record<string, unknown>): AppState {
+  const profile = parseModelProfile(payload);
+  if (!profile) return state;
+
+  const runId = String(payload.run_id ?? state.activeRunId ?? "");
+  const run = runId ? state.runs[runId] : undefined;
+  const mergedRunProfile = runId ? mergeModelProfile(run?.profile, profile) : undefined;
+  const userNodeId = run?.userNodeId;
+  const assistantNodeId = run?.agentNodeId ?? run?.assistantCommitNodeId;
+  const userProfile = userModelProfile(profile);
+  const assistantProfile = assistantModelProfile(profile);
+  if (!userProfile && !assistantProfile) return state;
+
+  let nodesChanged = false;
+  const nodes = state.nodes.map((node) => {
+    if (userProfile && node.id === userNodeId && node.kind === "user") {
+      nodesChanged = true;
+      return { ...node, profile: mergeModelProfile(node.profile, userProfile) };
+    }
+    if (assistantProfile && node.id === assistantNodeId && node.kind === "agent") {
+      nodesChanged = true;
+      return { ...node, profile: mergeModelProfile(node.profile, assistantProfile) };
+    }
+    return node;
+  });
+
+  if (!mergedRunProfile || !runId) {
+    return nodesChanged ? { ...state, nodes } : state;
+  }
+
+  return {
+    ...state,
+    nodes: nodesChanged ? nodes : state.nodes,
+    runs: {
+      ...state.runs,
+      [runId]: {
+        ...(run ?? {}),
+        profile: mergedRunProfile
+      }
+    }
+  };
+}
+
 function contextUsageSource(value: unknown): ContextUsageState["source"] | undefined {
   if (value === "estimate" || value === "provider_usage") return value;
   return undefined;
@@ -1671,6 +1832,9 @@ function appendRunDelta(
   const run = state.runs[runId] ?? {};
   const key = kind === "agent" ? "agentNodeId" : "thinkingNodeId";
   const existingId = run[key];
+  const pendingAssistantProfile = kind === "agent"
+    ? assistantModelProfile(run.profile ?? {})
+    : undefined;
   if (existingId) {
     return updateChatNode(state, existingId, (node) => ({
       ...node,
@@ -1696,7 +1860,8 @@ function appendRunDelta(
       contextMessageIndex,
       canFork: contextMessageIndex !== undefined,
       complete: false,
-      streamStartedAt: eventAt
+      streamStartedAt: eventAt,
+      ...(pendingAssistantProfile ? { profile: pendingAssistantProfile } : {})
     });
     return {
       ...next,
@@ -1734,7 +1899,8 @@ function appendRunDelta(
     contextMessageIndex,
     canFork: contextMessageIndex !== undefined,
     complete: false,
-    streamStartedAt: eventAt
+    streamStartedAt: eventAt,
+    ...(pendingAssistantProfile ? { profile: pendingAssistantProfile } : {})
   });
   return {
     ...next,
@@ -1807,6 +1973,7 @@ function appendCommittedAssistantNode(
   const shouldIndexAssistant = run.assistantContextMessageIndex === undefined;
   const shouldCountAssistant = run.assistantMessageCounted !== true;
   const id = nodeId("agent", `${runId}-${withoutProcessing.nodes.length}`);
+  const pendingAssistantProfile = assistantModelProfile(run.profile ?? {});
   const next = appendChatNode(withoutProcessing, {
     id,
     kind: "agent",
@@ -1818,7 +1985,8 @@ function appendCommittedAssistantNode(
     complete: true,
     streamStartedAt: eventAt,
     streamFinishedAt: eventAt,
-    streamDurationMs: 0
+    streamDurationMs: 0,
+    ...(pendingAssistantProfile ? { profile: pendingAssistantProfile } : {})
   });
   return {
     ...next,

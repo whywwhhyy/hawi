@@ -99,6 +99,7 @@ export class CoreProcess {
         pluginConfigPath,
         "--model-provider-config",
         modelProviderConfigPath,
+        nextConfig.profilingEnabled === false ? "--no-profiling" : "--profiling",
         ...launchProfileArgs,
         ...initialSessionArgs,
         ...toolCallPurposeEngineArgs(nextConfig.toolCallPurposeEnabled),

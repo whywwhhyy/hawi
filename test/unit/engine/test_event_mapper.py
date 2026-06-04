@@ -16,6 +16,7 @@ from hawi.events import (
     ModelContentBlockDeltaEvent,
     ModelErrorEvent,
     ModelMetadataEvent,
+    ModelProfileEvent,
     ModelStreamStartEvent,
     ModelStreamStopEvent,
     ModelToolCallBlockDeltaEvent,
@@ -766,6 +767,40 @@ def test_mapper_emits_model_metadata_and_runner_interrupt() -> None:
     assert interrupted[0]["payload"]["interrupted_tool_calls"] == ["tc-9"]
     assert interrupted[1]["payload"]["tool_call_id"] == "tc-9"
     assert interrupted[1]["payload"]["reason"] == "user"
+
+
+def test_mapper_emits_model_profile_update() -> None:
+    mapper = SemanticEventMapper()
+    mapper.map(AgentRunStartEvent.create("run-profile"))
+
+    frames = mapper.map(
+        ModelProfileEvent.create(
+            "req-profile",
+            cache_tokens=8,
+            prefill_ms=246.0,
+            prefill_tokens=12,
+            prefill_tokens_per_second=48.8,
+            ttft_ms=698.0,
+            decode_ms=123.0,
+            decode_tokens=5,
+            decode_tokens_per_second=40.7,
+            peak_decode_tokens_per_second=52.1,
+        )
+    )
+
+    assert [frame["type"] for frame in frames] == ["model.profile"]
+    payload = frames[0]["payload"]
+    assert payload["run_id"] == "run-profile"
+    assert payload["request_id"] == "req-profile"
+    assert payload["cache_tokens"] == 8
+    assert payload["prefill_ms"] == 246.0
+    assert payload["prefill_tokens"] == 12
+    assert payload["prefill_tokens_per_second"] == 48.8
+    assert payload["ttft_ms"] == 698.0
+    assert payload["decode_ms"] == 123.0
+    assert payload["decode_tokens"] == 5
+    assert payload["decode_tokens_per_second"] == 40.7
+    assert payload["peak_decode_tokens_per_second"] == 52.1
 
 
 def test_mapper_emits_interrupted_for_active_tool_calls() -> None:
