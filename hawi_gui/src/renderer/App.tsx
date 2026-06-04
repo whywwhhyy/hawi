@@ -6775,7 +6775,7 @@ const MessageBubble = memo(function MessageBubble({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const html = node.kind === "agent" ? renderMarkdown(node.content) : escapeText(node.content);
-  const hasStructuredContent = hasRenderableContentParts(node.contentParts);
+  const hasStructuredContent = shouldUseContentPartsView(node.contentParts);
   const label = node.kind === "user" ? labelForUserMessage(node) : labelForKind(node.kind);
   const receiving = node.kind === "agent" && node.complete === false;
   const editing = messageEdit?.active?.nodeId === node.id;
@@ -9776,6 +9776,11 @@ function attachmentTypeLabel(attachment: PendingAttachment): string {
     return attachment.mimeType;
   }
   return attachment.partType;
+}
+
+export function shouldUseContentPartsView(parts?: ContentPart[]): boolean {
+  return Array.isArray(parts)
+    && parts.some((part) => part.type !== "text" && isRenderableContentPart(part));
 }
 
 function hasRenderableContentParts(parts?: ContentPart[]): boolean {

@@ -3,13 +3,35 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
 describe("App", () => {
   it("renders the boot screen without crashing", () => {
     expect(renderToString(createElement(App))).toContain("Loading Hawi metadata");
+  });
+});
+
+describe("shouldUseContentPartsView", () => {
+  it("keeps plain text messages on the regular text rendering path", () => {
+    expect(shouldUseContentPartsView([{ type: "text", text: "hello" }])).toBe(false);
+  });
+
+  it("uses structured rendering when media parts are present", () => {
+    expect(shouldUseContentPartsView([
+      { type: "text", text: "look" },
+      {
+        type: "image",
+        source: {
+          kind: "blob",
+          blob_id: "a".repeat(64),
+          uri: `hawi-blob://${"a".repeat(64)}`,
+          mime_type: "image/png",
+          filename: "screen.png"
+        }
+      }
+    ])).toBe(true);
   });
 });
 
