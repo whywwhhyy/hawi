@@ -29,6 +29,7 @@ class LlamaCppStreamProcessor(StreamProcessor):
         self._timings: dict[str, float | int] | None = None
         self._prompt_progress: dict[str, float | int] | None = None
         self._peak_decode_tokens_per_second: float | int | None = None
+        self._last_decode_sample: tuple[float | int, float | int] | None = None
         self._last_emitted_profile: dict[str, float | int | None] | None = None
 
     @property
@@ -43,13 +44,7 @@ class LlamaCppStreamProcessor(StreamProcessor):
         timings = normalize_llama_cpp_timings(chunk_dict.get("timings"))
         if timings is not None:
             self._timings = timings
-            predicted_per_second = timings.get("predicted_per_second")
-            if isinstance(predicted_per_second, (int, float)) and predicted_per_second > 0:
-                if (
-                    self._peak_decode_tokens_per_second is None
-                    or predicted_per_second > self._peak_decode_tokens_per_second
-                ):
-                    self._peak_decode_tokens_per_second = predicted_per_second
+            self._update_peak_decode_tokens_per_second(timings)
 
         prompt_progress = normalize_prompt_progress(
             chunk_dict.get("prompt_progress")
@@ -106,3 +101,33 @@ class LlamaCppStreamProcessor(StreamProcessor):
             return None
         self._last_emitted_profile = current
         return DeltaProfilePart(type="profile_delta", profile=profile)
+
+    def _update_peak_decode_tokens_per_second(
+        self,
+        timings: dict[str, float | int],
+    ) -> None:
+        decoded = timings.get("predicted_n")
+        decode_ms = timings.get("predicted_ms")
+        if not isinstance(decoded, (int, float)) or not isinstance(decode_ms, (int, float)):
+            return
+        if decoded <= 0 or decode_ms <= 0:
+            return
+
+        current = (decoded, decode_ms)
+        previous = self._last_decode_sample
+        self._last_decode_sample = current
+        if previous is None:
+            return
+
+        previous_decoded, previous_decode_ms = previous
+        delta_tokens = decoded - previous_decoded
+        delta_ms = decode_ms - previous_decode_ms
+        if delta_tokens <= 0 or delta_ms <= 0:
+            return
+
+        tokens_per_second = delta_tokens / delta_ms * 1000
+        if (
+            self._peak_decode_tokens_per_second is None
+            or tokens_per_second > self._peak_decode_tokens_per_second
+        ):
+            self._peak_decode_tokens_per_second = tokens_per_second

@@ -405,6 +405,12 @@ class HawiAgent:
         self._system_prompt_part_variability_rank.clear()
         self._last_emitted_system_prompt = None
 
+    def mark_current_system_prompt_emitted(self) -> None:
+        """Treat the currently loaded system prompt as already surfaced to observers."""
+        self._last_emitted_system_prompt = deepcopy(
+            list(self._context.get_system_prompt() or [])
+        )
+
     def _system_prompt_hook_has_run(
         self,
         hook_type: str,

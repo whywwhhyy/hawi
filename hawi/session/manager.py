@@ -554,6 +554,8 @@ class SessionManager:
                 self._set_agent_system_prompt_hooks_suppressed(
                     suppress_system_prompt_hooks
                 )
+                if suppress_system_prompt_hooks:
+                    self._mark_agent_current_system_prompt_emitted()
                 if self._event_bus is not None:
                     self._event_bus.publish(
                         SessionLoadedEvent.create(
@@ -1900,6 +1902,13 @@ class SessionManager:
         resetter = getattr(self._agent, "reset_system_prompt_injection_hooks", None)
         if callable(resetter):
             resetter()
+
+    def _mark_agent_current_system_prompt_emitted(self) -> None:
+        if self._agent is None:
+            return
+        marker = getattr(self._agent, "mark_current_system_prompt_emitted", None)
+        if callable(marker):
+            marker()
 
     def _configure_subagent_storage(self) -> None:
         subagents = getattr(self._agent, "subagents", None)

@@ -1022,9 +1022,33 @@ model_configs:
             model.invoke([message])
             model.invoke([message])
 
-        assert [call[0] for call in calls] == ["ember --app-launch --start"]
-        assert calls[0][1]["shell"] is True
+        assert [call[0][2] for call in calls] == ["ember --app-launch --start"]
+        assert calls[0][0][1:] == ["-lc", "ember --app-launch --start"]
         assert calls[0][1]["capture_output"] is True
+        assert "/usr/local/bin" in calls[0][1]["env"]["PATH"]
+
+    def test_before_connect_hook_augments_app_launch_path(self):
+        """Dock-launched apps get a short PATH; hooks should still find common CLIs."""
+        model = HookedInvokeModel(model_id="gpt-4")
+        model.configure_hooks({"before_connect": "ember --app-launch --start"})
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with (
+            patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "SHELL": "/bin/zsh"}),
+            patch("hawi.models.model.subprocess.run", side_effect=fake_run),
+        ):
+            model.run_before_connect_hook()
+
+        args, kwargs = calls[0]
+        assert args == ["/bin/zsh", "-lc", "ember --app-launch --start"]
+        path = kwargs["env"]["PATH"].split(os.pathsep)
+        assert "/opt/homebrew/bin" in path
+        assert "/usr/local/bin" in path
+        assert os.path.expanduser("~/.local/bin") in path
 
     def test_provider_before_connect_hook_runs_before_refresh(self):
         """Provider hooks should run before querying remote model lists."""
@@ -1048,7 +1072,7 @@ model_configs:
         with patch("hawi.models.model.subprocess.run", side_effect=fake_run):
             models = registry.refresh_provider_models("my-provider")
 
-        assert calls[0][0] == "ember --app-launch --start"
+        assert calls[0][0][2] == "ember --app-launch --start"
         assert models == ["my-provider/seed", "my-provider/remote-a", "my-provider/remote-b"]
 
     def test_load_config_with_wildcard_model_configs(self, tmp_path):

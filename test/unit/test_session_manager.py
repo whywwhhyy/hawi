@@ -27,6 +27,7 @@ from hawi.events import (
     AgentErrorEvent,
     AgentCompactStartEvent,
     AgentCompactStopEvent,
+    Event,
     AgentInterruptEvent,
     AgentMessageAddedEvent,
     AgentSystemPromptEvent,
@@ -610,12 +611,28 @@ class TestSessionManager:
         sm2.attach(agent2, runner2, event_bus=agent2.event_bus)
         try:
             sm2.load_session(sid)
+            system_prompt_events: list[AgentSystemPromptEvent] = []
+
+            def collect_system_prompt_event(event: Event) -> None:
+                assert isinstance(event, AgentSystemPromptEvent)
+                system_prompt_events.append(event)
+
+            agent2.event_bus.subscribe_blocking(
+                collect_system_prompt_event,
+                event_types=["agent.system_prompt"],
+            )
+            await agent2._emit_system_prompt_event_if_changed(
+                run_id="r1",
+                origin="session_start",
+                event_bus=agent2.event_bus,
+            )
             await agent2._invoke_session_hook(
                 "before_conversation",
                 HookContext(run_id="r1", iteration=0),
             )
 
             assert plugin2.calls == 0
+            assert system_prompt_events == []
             assert agent2.context.system_prompt == [
                 {"type": "text", "text": "saved prompt"}
             ]

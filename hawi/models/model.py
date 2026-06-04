@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import json
 import math
+import os
 import subprocess
 
 from typing import Any, AsyncGenerator, ClassVar, Iterator, List, Literal, Mapping, cast, overload
@@ -651,10 +652,10 @@ class Model(ABC):
             return
 
         completed = subprocess.run(
-            command,
-            shell=True,
+            self._before_connect_hook_argv(command),
             text=True,
             capture_output=True,
+            env=self._before_connect_hook_env(),
         )
         if completed.returncode != 0:
             raise self._before_connect_hook_error(
@@ -671,10 +672,11 @@ class Model(ABC):
         if command is None or getattr(self, "_before_connect_hook_ran", False):
             return
 
-        process = await asyncio.create_subprocess_shell(
-            command,
+        process = await asyncio.create_subprocess_exec(
+            *self._before_connect_hook_argv(command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._before_connect_hook_env(),
         )
         stdout_bytes, stderr_bytes = await process.communicate()
         returncode = process.returncode or 0
@@ -694,6 +696,46 @@ class Model(ABC):
             return None
         command = str(command).strip()
         return command or None
+
+    def _before_connect_hook_argv(self, command: str) -> list[str]:
+        return [self._before_connect_hook_shell(), "-lc", command]
+
+    def _before_connect_hook_shell(self) -> str:
+        shell = os.environ.get("SHELL")
+        if shell and os.path.isabs(shell) and os.path.exists(shell):
+            return shell
+        if os.path.exists("/bin/zsh"):
+            return "/bin/zsh"
+        return "/bin/sh"
+
+    def _before_connect_hook_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        path_entries = [
+            os.path.expanduser("~/bin"),
+            os.path.expanduser("~/.local/bin"),
+            os.path.expanduser("~/.cargo/bin"),
+            os.path.expanduser("~/.npm-global/bin"),
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+        current_path = env.get("PATH", "")
+        path_entries.extend(part for part in current_path.split(os.pathsep) if part)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for entry in path_entries:
+            if not entry or entry in seen:
+                continue
+            deduped.append(entry)
+            seen.add(entry)
+        env["PATH"] = os.pathsep.join(deduped)
+        return env
 
     def _before_connect_hook_error(
         self,

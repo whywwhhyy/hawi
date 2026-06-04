@@ -140,7 +140,7 @@ def test_llama_cpp_stream_processor_attaches_profile_and_usage_fallbacks() -> No
     )
 
     assert parts[0]["type"] == "profile_delta"
-    assert parts[0]["profile"].get("peak_decode_tokens_per_second") == 50.0
+    assert "peak_decode_tokens_per_second" not in parts[0]["profile"]
     finish = parts[-1]
     assert finish["type"] == "finish"
     usage = finish["usage"]
@@ -160,8 +160,48 @@ def test_llama_cpp_stream_processor_attaches_profile_and_usage_fallbacks() -> No
         "decode_tokens": 100,
         "prefill_tokens_per_second": 369.5,
         "decode_tokens_per_second": 50.0,
-        "peak_decode_tokens_per_second": 50.0,
     }
+
+
+def test_llama_cpp_stream_processor_ignores_first_decode_sample_for_peak() -> None:
+    processor = LlamaCppStreamProcessor(expect_usage=True)
+
+    first_parts = list(
+        processor.process_chunk(
+            {
+                "choices": [{"index": 0, "delta": {"content": "a"}}],
+                "timings": {
+                    "prompt_n": 10,
+                    "prompt_ms": 100.0,
+                    "prompt_per_second": 100.0,
+                    "predicted_n": 1,
+                    "predicted_ms": 0.001,
+                    "predicted_per_second": 1_000_000.0,
+                },
+            }
+        )
+    )
+    first_profile = next(part for part in first_parts if part["type"] == "profile_delta")
+    assert first_profile["profile"].get("decode_tokens_per_second") == 1_000_000.0
+    assert "peak_decode_tokens_per_second" not in first_profile["profile"]
+
+    second_parts = list(
+        processor.process_chunk(
+            {
+                "choices": [{"index": 0, "delta": {"content": "b"}}],
+                "timings": {
+                    "prompt_n": 10,
+                    "prompt_ms": 100.0,
+                    "prompt_per_second": 100.0,
+                    "predicted_n": 2,
+                    "predicted_ms": 20.001,
+                    "predicted_per_second": 99.995,
+                },
+            }
+        )
+    )
+    second_profile = next(part for part in second_parts if part["type"] == "profile_delta")
+    assert second_profile["profile"].get("peak_decode_tokens_per_second") == pytest.approx(50.0)
 
 
 def test_llama_cpp_model_is_registered_builtin_adapter() -> None:
