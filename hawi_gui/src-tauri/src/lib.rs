@@ -223,6 +223,17 @@ impl CoreProcess {
             "--model-provider-config".to_string(),
             model_provider_config_path.to_string_lossy().into_owned(),
         ]);
+        engine_args.push(
+            if next_config
+                .get("profilingEnabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+            {
+                "--profiling".to_string()
+            } else {
+                "--no-profiling".to_string()
+            },
+        );
         if let Some(profile) = options.launch_profile {
             engine_args.extend(["--gui-launch-profile".to_string(), profile.to_string()]);
         }
@@ -1020,6 +1031,7 @@ fn default_config(metadata: &Value) -> Value {
         "selectedPlugins": default_plugins,
         "pluginConfigs": {},
         "toolCallPurposeEnabled": true,
+        "profilingEnabled": true,
         "showDebug": true,
         "focusModeEnabled": true,
     })
@@ -1107,6 +1119,7 @@ fn sanitize_config(raw: &Value, metadata: Option<&Value>) -> Value {
         "selectedPlugins": selected_plugins,
         "pluginConfigs": plugin_configs,
         "toolCallPurposeEnabled": raw.get("toolCallPurposeEnabled").and_then(Value::as_bool).unwrap_or(true),
+        "profilingEnabled": raw.get("profilingEnabled").and_then(Value::as_bool).unwrap_or(true),
         "showDebug": raw.get("showDebug").and_then(Value::as_bool).unwrap_or(false),
         "focusModeEnabled": raw.get("focusModeEnabled").and_then(Value::as_bool).unwrap_or(true),
     })
@@ -3083,6 +3096,7 @@ fn profile_from_config(config: &Value) -> Value {
         "selectedPlugins": string_list(config.get("selectedPlugins")),
         "pluginConfigs": config.get("pluginConfigs").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
         "toolCallPurposeEnabled": config.get("toolCallPurposeEnabled").and_then(Value::as_bool).unwrap_or(true),
+        "profilingEnabled": config.get("profilingEnabled").and_then(Value::as_bool).unwrap_or(true),
         "engineArgs": stable_engine_args(config),
     })
 }
@@ -3097,6 +3111,7 @@ fn config_from_profile(profile: &Value, default_config: &Value, metadata: &Value
             "selectedPlugins": string_list(profile.get("selectedPlugins")),
             "pluginConfigs": profile.get("pluginConfigs").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
             "toolCallPurposeEnabled": profile.get("toolCallPurposeEnabled").and_then(Value::as_bool).unwrap_or(true),
+            "profilingEnabled": profile.get("profilingEnabled").and_then(Value::as_bool).unwrap_or(true),
             "showDebug": default_config.get("showDebug").and_then(Value::as_bool).unwrap_or(false),
             "focusModeEnabled": default_config.get("focusModeEnabled").and_then(Value::as_bool).unwrap_or(true),
         }),
@@ -3119,6 +3134,7 @@ fn launch_profile_from_unknown(value: Option<&Value>) -> Option<Value> {
         "selectedPlugins": string_list(value.get("selectedPlugins")),
         "pluginConfigs": value.get("pluginConfigs").filter(|item| item.is_object()).cloned().unwrap_or_else(|| json!({})),
         "toolCallPurposeEnabled": value.get("toolCallPurposeEnabled").and_then(Value::as_bool).unwrap_or(true),
+        "profilingEnabled": value.get("profilingEnabled").and_then(Value::as_bool).unwrap_or(true),
         "engineArgs": value.get("engineArgs").and_then(Value::as_array).map(|items| {
             items.iter().filter_map(Value::as_str).map(str::to_string).map(Value::String).collect::<Vec<_>>()
         }),
@@ -3136,6 +3152,17 @@ fn stable_engine_args(config: &Value) -> Vec<String> {
         "--plugins".to_string(),
         string_list(config.get("selectedPlugins")).join(","),
     ];
+    args.push(
+        if config
+            .get("profilingEnabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        {
+            "--profiling".to_string()
+        } else {
+            "--no-profiling".to_string()
+        },
+    );
     args.extend(tool_call_purpose_engine_args(
         config
             .get("toolCallPurposeEnabled")
@@ -3432,6 +3459,94 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_metadata() -> Value {
+        json!({
+            "models": ["local/model"],
+            "default_system_prompt": "default prompt",
+            "model_provider_configs": {},
+            "plugin_catalog": [
+                {"key": "hawi/environ-prompt"}
+            ],
+        })
+    }
+
+    #[test]
+    fn sanitize_config_preserves_profiling_disabled() {
+        let metadata = sample_metadata();
+        let config = sanitize_config(
+            &json!({
+                "version": 1,
+                "modelName": "local/model",
+                "modelProviderConfigs": {},
+                "systemPrompt": "custom prompt",
+                "selectedPlugins": [],
+                "pluginConfigs": {},
+                "toolCallPurposeEnabled": true,
+                "profilingEnabled": false,
+                "showDebug": true,
+                "focusModeEnabled": true,
+            }),
+            Some(&metadata),
+        );
+
+        assert_eq!(
+            config.get("profilingEnabled").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn session_profile_round_trips_profiling_disabled() {
+        let metadata = sample_metadata();
+        let default_config = default_config(&metadata);
+        let config = sanitize_config(
+            &json!({
+                "version": 1,
+                "modelName": "local/model",
+                "modelProviderConfigs": {},
+                "systemPrompt": "custom prompt",
+                "selectedPlugins": [],
+                "pluginConfigs": {},
+                "toolCallPurposeEnabled": true,
+                "profilingEnabled": false,
+                "showDebug": true,
+                "focusModeEnabled": true,
+            }),
+            Some(&metadata),
+        );
+
+        let profile = profile_from_config(&config);
+        assert_eq!(
+            profile.get("profilingEnabled").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(profile
+            .get("engineArgs")
+            .and_then(Value::as_array)
+            .is_some_and(|args| args.contains(&Value::String("--no-profiling".to_string()))));
+
+        let restored_config = config_from_profile(&profile, &default_config, &metadata);
+        assert_eq!(
+            restored_config
+                .get("profilingEnabled")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let launch_profile = launch_profile_from_unknown(Some(&profile)).expect("profile");
+        assert_eq!(
+            launch_profile
+                .get("profilingEnabled")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
 }
 
 fn normalize_minimum_content_dimension(value: Option<f64>, fallback: f64) -> f64 {
