@@ -629,6 +629,7 @@ class OpenAIModel(Model):
 
     def list_models(self) -> list[str]:
         """Query the OpenAI-compatible ``/models`` endpoint."""
+        self.run_before_connect_hook()
         try:
             response = self.client.models.list()
         except Exception as e:
@@ -640,6 +641,7 @@ class OpenAIModel(Model):
 
     async def alist_models(self) -> list[str]:
         """Async model-list query for OpenAI-compatible providers."""
+        await self.arun_before_connect_hook()
         try:
             response = await self.async_client.models.list()
         except Exception as e:

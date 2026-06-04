@@ -5,6 +5,7 @@ model configuration overrides, and model creation.
 """
 
 import os
+import subprocess
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -19,8 +20,11 @@ from hawi.models.registry import (
 )
 from hawi.models.config_persistence import persist_provider_properties
 from hawi.models import (
+    Message,
+    MessageResponse,
     OpenAIModel,
     Model,
+    TextPart,
     create_model,
     get_model_adapter,
     get_model_config,
@@ -53,6 +57,33 @@ class RefreshableModel(Model):
 
     def list_models(self) -> list[str]:
         return list(self.refreshed_ids)
+
+
+class HookedInvokeModel(Model):
+    default_steer_merge_mode = "tool_result_assistant_template_and_user_message"
+
+    def __init__(self, *, model_id: str, **params):
+        super().__init__()
+        self._model_id = model_id
+        self.params = params
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    def _prepare_request_impl(self, request):
+        return {}
+
+    def _parse_response_impl(self, response):
+        raise NotImplementedError
+
+    def _invoke_impl(self, request):
+        return MessageResponse(
+            id="hooked",
+            content=[TextPart(type="text", text="ok")],
+            stop_reason="end_turn",
+            usage=None,
+        )
 
 
 class TestSingletonPattern:
@@ -732,10 +763,15 @@ class TestCreateModel:
             def _prepare_request_impl(self, request):
                 return {}
 
-            def _parse_response_impl(self, response):
-                return response
+            def _parse_response_impl(self, response) -> MessageResponse:
+                return MessageResponse(
+                    id="undeclared",
+                    content=[TextPart(type="text", text="ok")],
+                    stop_reason="end_turn",
+                    usage=None,
+                )
 
-            def _invoke_impl(self, request):
+            def _invoke_impl(self, request) -> MessageResponse:
                 return self._parse_response_impl({})
 
         registry = ModelRegistry()
@@ -911,6 +947,109 @@ model_configs:
         assert isinstance(model, OpenAIModel)
         assert model.get_max_context_tokens() == 64_000
         assert "max_context_tokens" not in model.params
+
+    def test_load_config_with_model_before_connect_hook(self, tmp_path):
+        """Model lifecycle hooks should be Hawi metadata, not provider params."""
+        registry = ModelRegistry()
+        registry.clear()
+        registry.register_adapter("HookedInvokeModel", HookedInvokeModel, quiet=True)
+
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: my-provider
+    adapter: HookedInvokeModel
+    model_ids:
+      - gpt-4
+    properties:
+      temperature: 0.5
+
+model_configs:
+  "my-provider/*":
+    temperature: 0.9
+    hooks:
+      before_connect: "ember --app-launch --start"
+""")
+
+        registry.load_config(config_file, quiet=True)
+
+        config = registry.get_model_config("my-provider/gpt-4")
+        assert config is not None
+        assert config.properties["temperature"] == 0.9
+        assert config.hooks == {
+            "before_connect": "ember --app-launch --start",
+        }
+
+        model = registry.create_model("my-provider/gpt-4")
+        assert isinstance(model, HookedInvokeModel)
+        assert "hooks" not in model.params
+
+    def test_before_connect_hook_runs_once_per_model_instance(self, tmp_path):
+        """before_connect should run before the first model call only."""
+        registry = ModelRegistry()
+        registry.clear()
+        registry.register_adapter("HookedInvokeModel", HookedInvokeModel, quiet=True)
+
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+providers:
+  - name: my-provider
+    adapter: HookedInvokeModel
+    model_ids:
+      - gpt-4
+    properties: {}
+
+model_configs:
+  my-provider/gpt-4:
+    hooks:
+      before_connect: "ember --app-launch --start"
+""")
+        registry.load_config(config_file, quiet=True)
+        model = registry.create_model("my-provider/gpt-4")
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        message: Message = {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}],
+            "name": None,
+            "metadata": None,
+        }
+        with patch("hawi.models.model.subprocess.run", side_effect=fake_run):
+            model.invoke([message])
+            model.invoke([message])
+
+        assert [call[0] for call in calls] == ["ember --app-launch --start"]
+        assert calls[0][1]["shell"] is True
+        assert calls[0][1]["capture_output"] is True
+
+    def test_provider_before_connect_hook_runs_before_refresh(self):
+        """Provider hooks should run before querying remote model lists."""
+        registry = ModelRegistry()
+        registry.clear()
+        registry.register_adapter("RefreshableModel", RefreshableModel, quiet=True)
+        registry.register_provider(
+            "my-provider",
+            "RefreshableModel",
+            ["seed"],
+            {},
+            hooks={"before_connect": "ember --app-launch --start"},
+            quiet=True,
+        )
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch("hawi.models.model.subprocess.run", side_effect=fake_run):
+            models = registry.refresh_provider_models("my-provider")
+
+        assert calls[0][0] == "ember --app-launch --start"
+        assert models == ["my-provider/seed", "my-provider/remote-a", "my-provider/remote-b"]
 
     def test_load_config_with_wildcard_model_configs(self, tmp_path):
         """Test loading wildcard model_configs from YAML in declaration order."""

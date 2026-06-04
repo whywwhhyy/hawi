@@ -18,6 +18,7 @@ from .model import (
     BalanceInfo,
     DelegateModel,
     Model,
+    ModelHooks,
     ModelParams,
     ProviderRequest,
     ProviderResponse,
@@ -160,6 +161,7 @@ def persist_provider_config(provider: str, properties: dict, config_paths):
 __all__ = [
     # Base classes
     "Model",
+    "ModelHooks",
     "DelegateModel",
     "BalanceInfo",
     "ProviderRequest",

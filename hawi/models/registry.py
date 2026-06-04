@@ -32,9 +32,9 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from hawi.models.model import Model
+from hawi.models.model import Model, ModelHooks
 from hawi.utils.config_loader import ConfigLoaderError, load_config_file
 from hawi.utils.workspace import find_git_root
 
@@ -83,6 +83,7 @@ class ModelProviderConfig(BaseModel):
     adapter: str
     model_ids: list[str]
     properties: dict[str,Any]
+    hooks: ModelHooks = Field(default_factory=dict)
 
 class ModelOverrideConfig(BaseModel):
     provider: str
@@ -90,12 +91,14 @@ class ModelOverrideConfig(BaseModel):
     properties: dict[str,Any]
     steer_merge_mode: str | None = None
     max_context_tokens: int | None = None
+    hooks: ModelHooks = Field(default_factory=dict)
 
 class ModelConfig(BaseModel):
     adapter: str
     properties: dict[str, Any]
     steer_merge_mode: str | None = None
     max_context_tokens: int | None = None
+    hooks: ModelHooks = Field(default_factory=dict)
 
 class ModelRegistry:
     """Model Registry 单例类
@@ -223,6 +226,7 @@ class ModelRegistry:
         adapter: str,
         model_ids: list[str],
         properties: dict[str,Any],
+        hooks: ModelHooks | None = None,
         quiet: bool = False,
     ) -> None:
         """注册 Template
@@ -240,6 +244,7 @@ class ModelRegistry:
             adapter=adapter,
             model_ids=model_ids,
             properties=properties,
+            hooks=dict(hooks or {}),
         )
         self._register_provider(provider)
     
@@ -323,7 +328,9 @@ class ModelRegistry:
         if not is_wildcard and name in self._model_config_overrides and not quiet:
             print(f"[ModelRegistry] Model '{name}' overridden")
 
-        normalized_properties, steer_merge_mode, max_context_tokens = self._normalize_model_override(properties)
+        normalized_properties, steer_merge_mode, max_context_tokens, hooks = (
+            self._normalize_model_override(properties)
+        )
 
         override = ModelOverrideConfig(
             provider=provider,
@@ -331,6 +338,7 @@ class ModelRegistry:
             properties=normalized_properties,
             steer_merge_mode=steer_merge_mode,
             max_context_tokens=max_context_tokens,
+            hooks=hooks,
         )
         if is_wildcard:
             self._model_config_wildcard_overrides.append(override)
@@ -355,16 +363,17 @@ class ModelRegistry:
     def _normalize_model_override(
         self,
         override: dict[str, Any],
-    ) -> tuple[dict[str, Any], str | None, int | None]:
+    ) -> tuple[dict[str, Any], str | None, int | None, ModelHooks]:
         """Split a model override into provider params and Hawi metadata."""
         if (
             "properties" not in override
             and "steer_merge_mode" not in override
             and "max_context_tokens" not in override
+            and "hooks" not in override
         ):
             properties = dict(override)
             max_context_tokens = self._pop_max_context_tokens(properties)
-            return properties, None, max_context_tokens
+            return properties, None, max_context_tokens, {}
 
         properties = dict(override.get("properties") or {})
         steer_merge_mode = Model.coerce_steer_merge_mode(
@@ -374,12 +383,38 @@ class ModelRegistry:
         max_context_tokens = self._coerce_max_context_tokens(
             override.get("max_context_tokens")
         )
+        hooks = self._normalize_model_hooks(override.get("hooks"))
         for key, value in override.items():
-            if key not in {"properties", "steer_merge_mode", "max_context_tokens"}:
+            if key not in {
+                "properties",
+                "steer_merge_mode",
+                "max_context_tokens",
+                "hooks",
+            }:
                 properties[key] = value
         if max_context_tokens is None:
             max_context_tokens = self._pop_max_context_tokens(properties)
-        return properties, steer_merge_mode, max_context_tokens
+        return properties, steer_merge_mode, max_context_tokens, hooks
+
+    @staticmethod
+    def _normalize_model_hooks(value: Any) -> ModelHooks:
+        """Validate and normalize Hawi-level model lifecycle hooks."""
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("model hooks must be a mapping")
+
+        allowed = {"before_connect"}
+        unknown = sorted(str(key) for key in value if key not in allowed)
+        if unknown:
+            raise ValueError(f"unsupported model hook(s): {', '.join(unknown)}")
+
+        before_connect = value.get("before_connect")
+        if before_connect is None:
+            return {"before_connect": None}
+        if not isinstance(before_connect, str) or not before_connect.strip():
+            raise ValueError("model hooks.before_connect must be a non-empty string")
+        return {"before_connect": before_connect.strip()}
 
     @staticmethod
     def _coerce_max_context_tokens(value: Any) -> int | None:
@@ -481,6 +516,8 @@ class ModelRegistry:
         properties["model_id"] = provider.model_ids[0] if provider.model_ids else ""
 
         model = adapter_class(**properties)
+        model.configure_hooks(provider.hooks)
+        model.run_before_connect_hook()
         try:
             return model.list_models()
         finally:
@@ -533,30 +570,34 @@ class ModelRegistry:
         adapter = ""
         properties = {}
         max_context_tokens = None
+        hooks: ModelHooks = {}
         for p in self._provider_groups.get(provider, []):
             if model_id in p.model_ids:
                 adapter = p.adapter
                 properties = dict(p.properties)  # Make a copy
                 max_context_tokens = self._pop_max_context_tokens(properties)
+                hooks = dict(p.hooks)
                 break
         else:
             return None
     
         steer_merge_mode = None
         for override in self._matching_wildcard_overrides(name):
-            properties, steer_merge_mode, max_context_tokens = self._merge_model_override(
+            properties, steer_merge_mode, max_context_tokens, hooks = self._merge_model_override(
                 properties,
                 steer_merge_mode,
                 max_context_tokens,
+                hooks,
                 override,
             )
 
         if name in self._model_config_overrides:
             override = self._model_config_overrides[name]
-            properties, steer_merge_mode, max_context_tokens = self._merge_model_override(
+            properties, steer_merge_mode, max_context_tokens, hooks = self._merge_model_override(
                 properties,
                 steer_merge_mode,
                 max_context_tokens,
+                hooks,
                 override,
             )
 
@@ -565,6 +606,7 @@ class ModelRegistry:
             properties=properties,
             steer_merge_mode=steer_merge_mode,
             max_context_tokens=max_context_tokens,
+            hooks=hooks,
         )
 
     @staticmethod
@@ -585,11 +627,13 @@ class ModelRegistry:
         properties: dict[str, Any],
         steer_merge_mode: str | None,
         max_context_tokens: int | None,
+        hooks: ModelHooks,
         override: ModelOverrideConfig,
-    ) -> tuple[dict[str, Any], str | None, int | None]:
+    ) -> tuple[dict[str, Any], str | None, int | None, ModelHooks]:
         """Apply one normalized override over the accumulated config."""
         merged_properties = dict(properties)
         merged_properties.update(override.properties)
+        merged_hooks = {**hooks, **override.hooks}
 
         merged_steer_merge_mode = steer_merge_mode
         if override.steer_merge_mode is not None:
@@ -603,7 +647,12 @@ class ModelRegistry:
             if property_max_context_tokens is not None:
                 merged_max_context_tokens = property_max_context_tokens
 
-        return merged_properties, merged_steer_merge_mode, merged_max_context_tokens
+        return (
+            merged_properties,
+            merged_steer_merge_mode,
+            merged_max_context_tokens,
+            merged_hooks,
+        )
 
     # ========================================================================
     # 模型创建
@@ -646,6 +695,7 @@ class ModelRegistry:
         override_max_context_tokens = self._coerce_max_context_tokens(
             overrides.pop("max_context_tokens", None)
         )
+        override_hooks = self._normalize_model_hooks(overrides.pop("hooks", None))
         properties = dict(model_config.properties)
         property_max_context_tokens = self._pop_max_context_tokens(properties)
         properties['model_id'] = model_id
@@ -653,6 +703,7 @@ class ModelRegistry:
         override_property_max_context_tokens = self._pop_max_context_tokens(properties)
         
         model = adapter_class(**properties)
+        model.configure_hooks({**model_config.hooks, **override_hooks})
         model.configure_steer_merge_mode(
             override_steer_merge_mode or model_config.steer_merge_mode
         )
@@ -770,6 +821,10 @@ class ModelRegistry:
         data = self._substitute_env_vars(data)
 
         for provider_data in data.get('providers', []):
+            provider_data = dict(provider_data)
+            provider_data["hooks"] = self._normalize_model_hooks(
+                provider_data.get("hooks")
+            )
             provider = ModelProviderConfig.model_validate(provider_data)
             self._register_provider(provider, quiet)
         

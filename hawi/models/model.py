@@ -10,10 +10,12 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
+import asyncio
 import json
 import math
+import subprocess
 
-from typing import Any, AsyncGenerator, ClassVar, Iterator, List, Literal, cast, overload
+from typing import Any, AsyncGenerator, ClassVar, Iterator, List, Literal, Mapping, cast, overload
 
 from hawi.models.message import (
     ContentPart,
@@ -42,6 +44,7 @@ TokenEstimateMethod = Literal[
     "unsupported",
 ]
 TokenEstimateConfidence = Literal["exact", "approximate", "unsupported"]
+ModelHooks = dict[str, str | None]
 
 __all__ = [
     "Model",
@@ -55,6 +58,7 @@ __all__ = [
     "TokenEstimate",
     "TokenEstimateMethod",
     "TokenEstimateConfidence",
+    "ModelHooks",
     "ModelProfileInfo",
     "ModelError",
 ]
@@ -184,6 +188,8 @@ class Model(ABC):
         # 此时同步调用 invoke/stream 会被阻止，以避免阻塞事件循环
         self._async_only: bool = False
         self._configured_steer_merge_mode: SteerMergeMode | None = None
+        self._hooks: ModelHooks = {}
+        self._before_connect_hook_ran: bool = False
 
     def reset(self) -> None:
         """重置模型状态。
@@ -193,7 +199,7 @@ class Model(ABC):
 
         子类应覆盖此方法以清理特定资源，并调用 super().reset()。
         """
-        pass  # 基类无资源需要清理
+        self._before_connect_hook_ran = False
 
     @property
     @abstractmethod
@@ -260,6 +266,7 @@ class Model(ABC):
                 "Please use ainvoke() instead of invoke(), or obtain the model with async_only=False."
             )
 
+        self.run_before_connect_hook()
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         if streaming:
             return self._stream_impl(request)
@@ -286,6 +293,7 @@ class Model(ABC):
                 "Please use aestimate_tokens(), or obtain the model with async_only=False."
             )
 
+        self.run_before_connect_hook()
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         return self._estimate_tokens_impl(request)
 
@@ -332,6 +340,7 @@ class Model(ABC):
             - streaming=True: 实时转发 LLM API 的流式响应
             - streaming=False: 将完整响应拆分为 DeltaPart 序列
         """
+        await self.arun_before_connect_hook()
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         if streaming:
             async for delta in self._astream_impl(request):
@@ -350,11 +359,13 @@ class Model(ABC):
         **kwargs,
     ) -> TokenEstimate:
         """Async version of :meth:`estimate_tokens`."""
+        await self.arun_before_connect_hook()
         request = self._build_request(messages, system, tools, tool_choice, kwargs)
         return await self._aestimate_tokens_impl(request)
 
     async def alist_models(self) -> list[str]:
         """Async version of :meth:`list_models`."""
+        await self.arun_before_connect_hook()
         return self.list_models()
 
     @staticmethod
@@ -627,6 +638,79 @@ class Model(ABC):
             self._max_context_tokens = max_context_tokens
         else:
             self._max_context_tokens = None
+
+    def configure_hooks(self, hooks: Mapping[str, str | None] | None) -> None:
+        """Attach Hawi-level model lifecycle hooks to this model instance."""
+        self._hooks = dict(hooks or {})
+        self._before_connect_hook_ran = False
+
+    def run_before_connect_hook(self) -> None:
+        """Run the configured before-connect command once for this model instance."""
+        command = self._before_connect_hook_command()
+        if command is None or getattr(self, "_before_connect_hook_ran", False):
+            return
+
+        completed = subprocess.run(
+            command,
+            shell=True,
+            text=True,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            raise self._before_connect_hook_error(
+                command,
+                completed.returncode,
+                completed.stdout,
+                completed.stderr,
+            )
+        self._before_connect_hook_ran = True
+
+    async def arun_before_connect_hook(self) -> None:
+        """Async variant of :meth:`run_before_connect_hook`."""
+        command = self._before_connect_hook_command()
+        if command is None or getattr(self, "_before_connect_hook_ran", False):
+            return
+
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await process.communicate()
+        returncode = process.returncode or 0
+        if returncode != 0:
+            raise self._before_connect_hook_error(
+                command,
+                returncode,
+                stdout_bytes.decode(errors="replace"),
+                stderr_bytes.decode(errors="replace"),
+            )
+        self._before_connect_hook_ran = True
+
+    def _before_connect_hook_command(self) -> str | None:
+        hooks = getattr(self, "_hooks", {})
+        command = hooks.get("before_connect") if isinstance(hooks, dict) else None
+        if command is None:
+            return None
+        command = str(command).strip()
+        return command or None
+
+    def _before_connect_hook_error(
+        self,
+        command: str,
+        returncode: int,
+        stdout: str | None,
+        stderr: str | None,
+    ) -> ConfigurationError:
+        detail = (stderr or stdout or "").strip()
+        if len(detail) > 400:
+            detail = detail[:397] + "..."
+        suffix = f": {detail}" if detail else ""
+        return ConfigurationError(
+            f"before_connect hook failed for "
+            f"{self.__class__.__name__}({self.model_id!r}) with exit code "
+            f"{returncode}: {command!r}{suffix}"
+        )
 
     def get_max_context_tokens(self) -> int | None:
         """Return configured context window size for this model, if known."""
