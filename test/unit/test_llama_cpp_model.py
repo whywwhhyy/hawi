@@ -108,6 +108,7 @@ def test_llama_cpp_stream_processor_attaches_profile_and_usage_fallbacks() -> No
     assert progress_parts[0]["type"] == "profile_delta"
     assert progress_parts[0]["profile"].get("cache_tokens") == 123
     assert progress_parts[0]["profile"].get("prefill_tokens") == 333
+    assert progress_parts[0]["profile"].get("prefill_total_tokens") == 456
 
     parts = list(
         processor.process_chunk(
@@ -157,6 +158,7 @@ def test_llama_cpp_stream_processor_attaches_profile_and_usage_fallbacks() -> No
         "decode_ms": 2000.0,
         "cache_tokens": 123,
         "prefill_tokens": 456,
+        "prefill_total_tokens": 456,
         "decode_tokens": 100,
         "prefill_tokens_per_second": 369.5,
         "decode_tokens_per_second": 50.0,
@@ -261,6 +263,7 @@ class ProfileFinishModel(Model):
                     "cache_tokens": 123,
                     "prefill_ms": 246.0,
                     "prefill_tokens": 456,
+                    "prefill_total_tokens": 789,
                     "prefill_tokens_per_second": 369.5,
                 },
             },
@@ -286,6 +289,7 @@ class ProfileFinishModel(Model):
                     "prefill_ms": 1234.0,
                     "decode_ms": 2000.0,
                     "prefill_tokens": 456,
+                    "prefill_total_tokens": 789,
                     "decode_tokens": 100,
                     "prefill_tokens_per_second": 369.5,
                     "decode_tokens_per_second": 50.0,
@@ -312,6 +316,7 @@ async def test_agent_metadata_uses_finish_profile_timing_fields() -> None:
     assert profile_event.cache_tokens == 123
     assert profile_event.prefill_ms == 246.0
     assert profile_event.prefill_tokens == 456
+    assert profile_event.prefill_total_tokens == 789
     assert profile_event.prefill_tokens_per_second == 369.5
 
     metadata = events[-1]
@@ -320,6 +325,7 @@ async def test_agent_metadata_uses_finish_profile_timing_fields() -> None:
     assert metadata.prefill_ms == 1234.0
     assert metadata.decode_ms == 2000.0
     assert metadata.prefill_tokens == 456
+    assert metadata.prefill_total_tokens == 789
     assert metadata.decode_tokens == 100
     assert metadata.prefill_tokens_per_second == 369.5
     assert metadata.decode_tokens_per_second == 50.0

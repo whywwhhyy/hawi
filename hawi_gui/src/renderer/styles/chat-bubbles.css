@@ -32,15 +32,61 @@
   content: "";
   position: absolute;
   inset: -1px;
-  z-index: 2;
+  z-index: 3;
   border: 1px solid var(--bubble-border-color);
   border-radius: inherit;
   pointer-events: none;
 }
 
+.bubble.user.message.prefill-overlay::before {
+  content: "";
+  position: absolute;
+  top: var(--prefill-reveal-progress, 0%);
+  right: -1px;
+  bottom: -1px;
+  left: -1px;
+  z-index: 2;
+  border-radius: inherit;
+  background: rgba(216, 221, 224, 0.68);
+  pointer-events: none;
+  transition: top 160ms linear;
+}
+
 .bubble.message > * {
   position: relative;
   z-index: 1;
+}
+
+.bubble.message > .message-prefill-progress-bar {
+  position: absolute;
+  right: 10px;
+  bottom: 5px;
+  left: 10px;
+  z-index: 4;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(159, 168, 178, 0.22);
+  pointer-events: none;
+}
+
+.message-prefill-progress-cache,
+.message-prefill-progress-prefill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.message-prefill-progress-cache {
+  left: 0;
+  width: var(--prefill-cache-progress, 0%);
+  background: #5f8fd8;
+}
+
+.message-prefill-progress-prefill {
+  left: var(--prefill-cache-progress, 0%);
+  width: var(--prefill-filled-progress, 0%);
+  background: #4fbf7b;
 }
 
 .bubble.message.has-profile {

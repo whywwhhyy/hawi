@@ -732,6 +732,7 @@ def test_mapper_emits_model_metadata_and_runner_interrupt() -> None:
             ttft_ms=200.0,
             decode_ms=800.0,
             prefill_tokens=2,
+            prefill_total_tokens=4,
             decode_tokens=5,
             prefill_tokens_per_second=10.0,
             decode_tokens_per_second=6.25,
@@ -754,6 +755,7 @@ def test_mapper_emits_model_metadata_and_runner_interrupt() -> None:
     assert metadata[0]["payload"]["ttft_ms"] == 200.0
     assert metadata[0]["payload"]["decode_ms"] == 800.0
     assert metadata[0]["payload"]["prefill_tokens"] == 2
+    assert metadata[0]["payload"]["prefill_total_tokens"] == 4
     assert metadata[0]["payload"]["decode_tokens"] == 5
     assert metadata[0]["payload"]["prefill_tokens_per_second"] == 10.0
     assert metadata[0]["payload"]["decode_tokens_per_second"] == 6.25
@@ -779,6 +781,7 @@ def test_mapper_emits_model_profile_update() -> None:
             cache_tokens=8,
             prefill_ms=246.0,
             prefill_tokens=12,
+            prefill_total_tokens=48,
             prefill_tokens_per_second=48.8,
             ttft_ms=698.0,
             decode_ms=123.0,
@@ -795,6 +798,7 @@ def test_mapper_emits_model_profile_update() -> None:
     assert payload["cache_tokens"] == 8
     assert payload["prefill_ms"] == 246.0
     assert payload["prefill_tokens"] == 12
+    assert payload["prefill_total_tokens"] == 48
     assert payload["prefill_tokens_per_second"] == 48.8
     assert payload["ttft_ms"] == 698.0
     assert payload["decode_ms"] == 123.0

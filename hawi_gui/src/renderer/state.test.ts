@@ -1650,6 +1650,7 @@ describe("core event reducer", () => {
       output_tokens: 5,
       cache_read_tokens: 8,
       prefill_tokens: 12,
+      prefill_total_tokens: 48,
       prefill_ms: 246,
       prefill_tokens_per_second: 48.8,
       ttft_ms: 698,
@@ -1665,6 +1666,7 @@ describe("core event reducer", () => {
     expect(user?.profile).toEqual({
       cacheTokens: 8,
       prefillTokens: 12,
+      prefillTotalTokens: 48,
       prefillMs: 246,
       prefillTokensPerSecond: 48.8
     });
@@ -1684,6 +1686,7 @@ describe("core event reducer", () => {
       run_id: "run-live-profile",
       cache_tokens: 8,
       prefill_tokens: 12,
+      prefill_total_tokens: 48,
       prefill_ms: 246,
       prefill_tokens_per_second: 48.8,
       ttft_ms: 698,
@@ -1697,6 +1700,7 @@ describe("core event reducer", () => {
     expect(userBeforeText?.profile).toEqual({
       cacheTokens: 8,
       prefillTokens: 12,
+      prefillTotalTokens: 48,
       prefillMs: 246,
       prefillTokensPerSecond: 48.8
     });

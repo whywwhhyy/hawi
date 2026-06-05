@@ -6789,9 +6789,23 @@ const MessageBubble = memo(function MessageBubble({
   const beforeInjections = (node.injections ?? []).filter((item) => item.mergePosition === "before");
   const afterInjections = (node.injections ?? []).filter((item) => item.mergePosition !== "before");
   const profileLine = profilingEnabled ? formatMessageProfileLine(node) : null;
+  const prefillProgress = profilingEnabled && node.kind === "user" && !editing
+    ? resolvePrefillProgressSegments(node.profile)
+    : null;
+  const showPrefillOverlay = prefillProgress !== null && !collapsed;
+  const bubbleStyle = prefillProgress === null
+    ? undefined
+    : ({
+        "--prefill-reveal-progress": `${(prefillProgress.revealProgress * 100).toFixed(2)}%`,
+        "--prefill-cache-progress": `${(prefillProgress.cacheProgress * 100).toFixed(2)}%`,
+        "--prefill-filled-progress": `${(prefillProgress.prefillProgress * 100).toFixed(2)}%`
+      } as CSSProperties);
 
   return (
-    <article className={`bubble ${node.kind} message ${profileLine ? "has-profile" : ""} ${collapsed ? "message-collapsed" : ""} ${editing ? "message-editing" : ""}`.trim()}>
+    <article
+      className={`bubble ${node.kind} message ${profileLine ? "has-profile" : ""} ${prefillProgress !== null ? "prefill-progress" : ""} ${showPrefillOverlay ? "prefill-overlay" : ""} ${collapsed ? "message-collapsed" : ""} ${editing ? "message-editing" : ""}`.trim()}
+      style={bubbleStyle}
+    >
       <div
         className={`bubble-head ${editing ? "" : "collapsible-head"}`.trim()}
         onClick={editing ? undefined : () => guardedToggle(toggleCollapsed)}
@@ -6900,10 +6914,48 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         </div>
       )}
+      {prefillProgress && (
+        <div className="message-prefill-progress-bar" aria-hidden="true">
+          <span className="message-prefill-progress-cache" />
+          <span className="message-prefill-progress-prefill" />
+        </div>
+      )}
       {profileLine && <div className="message-profile-line">{profileLine}</div>}
     </article>
   );
 });
+
+export function resolvePrefillRevealProgress(profile?: ModelProfileState): number | null {
+  return resolvePrefillProgressSegments(profile)?.revealProgress ?? null;
+}
+
+export interface PrefillProgressSegments {
+  revealProgress: number;
+  cacheProgress: number;
+  prefillProgress: number;
+}
+
+export function resolvePrefillProgressSegments(profile?: ModelProfileState): PrefillProgressSegments | null {
+  if (!profile || !isProfileNumber(profile.prefillTokens) || !isPositiveProfileNumber(profile.prefillTotalTokens)) {
+    return null;
+  }
+  const prefillTotalTokens = Math.max(0, profile.prefillTotalTokens);
+  const prefillTokens = Math.min(prefillTotalTokens, Math.max(0, profile.prefillTokens));
+  const revealProgress = prefillTokens / prefillTotalTokens;
+  if (revealProgress >= 1) {
+    return null;
+  }
+  const cacheTokens = isPositiveProfileNumber(profile.cacheTokens) ? profile.cacheTokens : 0;
+  const totalTokens = cacheTokens + prefillTotalTokens;
+  if (totalTokens <= 0) {
+    return null;
+  }
+  return {
+    revealProgress,
+    cacheProgress: cacheTokens / totalTokens,
+    prefillProgress: prefillTokens / totalTokens
+  };
+}
 
 function formatMessageProfileLine(node: ChatNode): string | null {
   const profile = node.profile;

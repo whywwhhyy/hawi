@@ -316,6 +316,7 @@ def _model_metadata_payload(data: dict[str, Any]) -> dict[str, Any]:
         "prefill_ms": data.get("prefill_ms"),
         "decode_ms": data.get("decode_ms"),
         "prefill_tokens": data.get("prefill_tokens"),
+        "prefill_total_tokens": data.get("prefill_total_tokens"),
         "decode_tokens": data.get("decode_tokens"),
         "prefill_tokens_per_second": data.get("prefill_tokens_per_second"),
         "decode_tokens_per_second": data.get("decode_tokens_per_second"),

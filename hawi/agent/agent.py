@@ -816,6 +816,7 @@ class HawiAgent:
             "prefill_ms",
             "decode_ms",
             "prefill_tokens",
+            "prefill_total_tokens",
             "decode_tokens",
             "prefill_tokens_per_second",
             "decode_tokens_per_second",

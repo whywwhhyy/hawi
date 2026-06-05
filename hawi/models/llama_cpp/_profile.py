@@ -106,6 +106,7 @@ def llama_cpp_profile_info(
 ) -> ModelProfileInfo | None:
     """Map llama.cpp profile fields to Hawi's provider-neutral profile shape."""
     timing_data = normalize_llama_cpp_timings(timings)
+    progress = normalize_prompt_progress(prompt_progress)
     if timing_data:
         result: ModelProfileInfo = {}
         _put_number(result, "ttft_ms", timing_data.get("prompt_ms"))
@@ -113,6 +114,11 @@ def llama_cpp_profile_info(
         _put_number(result, "decode_ms", timing_data.get("predicted_ms"))
         _put_number(result, "cache_tokens", timing_data.get("cache_n"))
         _put_number(result, "prefill_tokens", timing_data.get("prompt_n"))
+        _put_number(
+            result,
+            "prefill_total_tokens",
+            _prefill_total_tokens(progress, fallback=timing_data.get("prompt_n")),
+        )
         _put_number(result, "decode_tokens", timing_data.get("predicted_n"))
         _put_number(
             result,
@@ -131,7 +137,6 @@ def llama_cpp_profile_info(
         )
         return result or None
 
-    progress = normalize_prompt_progress(prompt_progress)
     if not progress:
         return None
 
@@ -139,8 +144,12 @@ def llama_cpp_profile_info(
     processed = _number_or_none(progress.get("processed")) or 0
     time_ms = _number_or_none(progress.get("time_ms")) or 0
     prefill_tokens = max(0, processed - cache)
+    prefill_total_tokens = _prefill_total_tokens(progress, fallback=prefill_tokens)
 
-    result: ModelProfileInfo = {"prefill_tokens": prefill_tokens}
+    result: ModelProfileInfo = {
+        "prefill_tokens": prefill_tokens,
+        "prefill_total_tokens": prefill_total_tokens,
+    }
     _put_number(result, "cache_tokens", cache)
     _put_number(result, "prefill_ms", time_ms)
     _put_number(result, "ttft_ms", time_ms)
@@ -161,6 +170,19 @@ def llama_cpp_profile_metadata(
         prompt_progress=prompt_progress,
         peak_decode_tokens_per_second=peak_decode_tokens_per_second,
     )
+
+
+def _prefill_total_tokens(
+    progress: dict[str, float | int] | None,
+    *,
+    fallback: Any = None,
+) -> float | int | None:
+    if progress:
+        total = _number_or_none(progress.get("total"))
+        cache = _number_or_none(progress.get("cache")) or 0
+        if total is not None:
+            return max(0, total - cache)
+    return _number_or_none(fallback)
 
 
 def _put_number(

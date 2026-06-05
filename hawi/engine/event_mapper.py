@@ -379,6 +379,11 @@ class SemanticEventMapper:
                         "prefill_ms": getattr(event, "prefill_ms", None),
                         "decode_ms": getattr(event, "decode_ms", None),
                         "prefill_tokens": getattr(event, "prefill_tokens", None),
+                        "prefill_total_tokens": getattr(
+                            event,
+                            "prefill_total_tokens",
+                            None,
+                        ),
                         "decode_tokens": getattr(event, "decode_tokens", None),
                         "prefill_tokens_per_second": getattr(
                             event,
@@ -415,6 +420,11 @@ class SemanticEventMapper:
                         "prefill_ms": getattr(event, "prefill_ms", None),
                         "decode_ms": getattr(event, "decode_ms", None),
                         "prefill_tokens": getattr(event, "prefill_tokens", None),
+                        "prefill_total_tokens": getattr(
+                            event,
+                            "prefill_total_tokens",
+                            None,
+                        ),
                         "decode_tokens": getattr(event, "decode_tokens", None),
                         "prefill_tokens_per_second": getattr(
                             event,

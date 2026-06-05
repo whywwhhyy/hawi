@@ -161,6 +161,7 @@ export interface ContextUsageState {
 export interface ModelProfileState {
   cacheTokens?: number;
   prefillTokens?: number;
+  prefillTotalTokens?: number;
   prefillMs?: number;
   prefillTokensPerSecond?: number;
   ttftMs?: number;
@@ -1661,6 +1662,7 @@ function parseModelProfile(payload: Record<string, unknown>): ModelProfileState 
   const profile: ModelProfileState = {};
   putProfileNumber(profile, "cacheTokens", readUsageNumber("cache_read_tokens") ?? optionalNumber(payload.cache_tokens));
   putProfileNumber(profile, "prefillTokens", optionalNumber(payload.prefill_tokens));
+  putProfileNumber(profile, "prefillTotalTokens", optionalNumber(payload.prefill_total_tokens));
   putProfileNumber(profile, "prefillMs", optionalNumber(payload.prefill_ms) ?? optionalNumber(payload.ttft_ms));
   putProfileNumber(profile, "prefillTokensPerSecond", optionalNumber(payload.prefill_tokens_per_second));
   putProfileNumber(profile, "ttftMs", optionalNumber(payload.ttft_ms));
@@ -1689,6 +1691,7 @@ function userModelProfile(profile: ModelProfileState): ModelProfileState | undef
   const userProfile: ModelProfileState = {};
   putProfileNumber(userProfile, "cacheTokens", profile.cacheTokens);
   putProfileNumber(userProfile, "prefillTokens", profile.prefillTokens);
+  putProfileNumber(userProfile, "prefillTotalTokens", profile.prefillTotalTokens);
   putProfileNumber(userProfile, "prefillMs", profile.prefillMs);
   putProfileNumber(userProfile, "prefillTokensPerSecond", profile.prefillTokensPerSecond);
   return hasProfileValues(userProfile) ? userProfile : undefined;

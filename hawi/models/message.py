@@ -42,6 +42,7 @@ class ModelProfileInfo(TypedDict, total=False):
     decode_ms: float | int | None
     cache_tokens: float | int | None
     prefill_tokens: float | int | None
+    prefill_total_tokens: float | int | None
     decode_tokens: float | int | None
     prefill_tokens_per_second: float | int | None
     decode_tokens_per_second: float | int | None

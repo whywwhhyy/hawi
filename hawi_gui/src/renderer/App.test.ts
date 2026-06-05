@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -32,6 +32,33 @@ describe("shouldUseContentPartsView", () => {
         }
       }
     ])).toBe(true);
+  });
+});
+
+describe("resolvePrefillRevealProgress", () => {
+  it("returns the unfinished prefill fraction", () => {
+    expect(resolvePrefillRevealProgress({ prefillTokens: 25, prefillTotalTokens: 100 })).toBe(0.25);
+    expect(resolvePrefillRevealProgress({ prefillTokens: 0, prefillTotalTokens: 100 })).toBe(0);
+  });
+
+  it("splits the temporary progress bar into cache and prefill portions", () => {
+    expect(resolvePrefillProgressSegments({
+      cacheTokens: 50,
+      prefillTokens: 25,
+      prefillTotalTokens: 100
+    })).toEqual({
+      revealProgress: 0.25,
+      cacheProgress: 50 / 150,
+      prefillProgress: 25 / 150
+    });
+  });
+
+  it("hides the reveal overlay when progress is complete or unavailable", () => {
+    expect(resolvePrefillRevealProgress({ prefillTokens: 100, prefillTotalTokens: 100 })).toBeNull();
+    expect(resolvePrefillRevealProgress({ prefillTokens: 120, prefillTotalTokens: 100 })).toBeNull();
+    expect(resolvePrefillProgressSegments({ cacheTokens: 50, prefillTokens: 100, prefillTotalTokens: 100 })).toBeNull();
+    expect(resolvePrefillRevealProgress({ prefillTokens: 12 })).toBeNull();
+    expect(resolvePrefillRevealProgress({ prefillTokens: 12, prefillTotalTokens: 0 })).toBeNull();
   });
 });
 

@@ -411,6 +411,7 @@ class ModelMetadataEvent(Event):
     prefill_ms: float | None = None
     decode_ms: float | None = None
     prefill_tokens: float | int | None = None
+    prefill_total_tokens: float | int | None = None
     decode_tokens: float | int | None = None
     prefill_tokens_per_second: float | None = None
     decode_tokens_per_second: float | None = None
@@ -433,6 +434,7 @@ class ModelMetadataEvent(Event):
         prefill_ms: float | None = None,
         decode_ms: float | None = None,
         prefill_tokens: float | int | None = None,
+        prefill_total_tokens: float | int | None = None,
         decode_tokens: float | int | None = None,
         prefill_tokens_per_second: float | None = None,
         decode_tokens_per_second: float | None = None,
@@ -455,6 +457,7 @@ class ModelMetadataEvent(Event):
             prefill_ms=prefill_ms,
             decode_ms=decode_ms,
             prefill_tokens=prefill_tokens,
+            prefill_total_tokens=prefill_total_tokens,
             decode_tokens=decode_tokens,
             prefill_tokens_per_second=prefill_tokens_per_second,
             decode_tokens_per_second=decode_tokens_per_second,
@@ -475,6 +478,7 @@ class ModelProfileEvent(Event):
     prefill_ms: float | None = None
     decode_ms: float | None = None
     prefill_tokens: float | int | None = None
+    prefill_total_tokens: float | int | None = None
     decode_tokens: float | int | None = None
     prefill_tokens_per_second: float | None = None
     decode_tokens_per_second: float | None = None
@@ -489,6 +493,7 @@ class ModelProfileEvent(Event):
         prefill_ms: float | None = None,
         decode_ms: float | None = None,
         prefill_tokens: float | int | None = None,
+        prefill_total_tokens: float | int | None = None,
         decode_tokens: float | int | None = None,
         prefill_tokens_per_second: float | None = None,
         decode_tokens_per_second: float | None = None,
@@ -503,6 +508,7 @@ class ModelProfileEvent(Event):
             prefill_ms=prefill_ms,
             decode_ms=decode_ms,
             prefill_tokens=prefill_tokens,
+            prefill_total_tokens=prefill_total_tokens,
             decode_tokens=decode_tokens,
             prefill_tokens_per_second=prefill_tokens_per_second,
             decode_tokens_per_second=decode_tokens_per_second,
