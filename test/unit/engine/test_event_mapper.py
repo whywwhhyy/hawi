@@ -87,6 +87,23 @@ def test_mapper_emits_run_start_with_queue_kind() -> None:
     assert frames[0]["payload"]["content"] == [{"type": "text", "text": "hello"}]
 
 
+def test_mapper_ignores_empty_user_content_parts() -> None:
+    mapper = SemanticEventMapper()
+
+    mapper.map(AgentRunStartEvent.create("run-empty"))
+    frames = mapper.map(
+        AgentMessageAddedEvent.create(
+            "run-empty",
+            "user",
+            [{"type": "text", "text": "  \n"}],
+            metadata={"message_id": "msg-empty", "queue": "normal"},
+            context_message_id="ctxmsg_empty",
+        )
+    )
+
+    assert frames == []
+
+
 def test_mapper_emits_run_start_for_media_only_user_message() -> None:
     mapper = SemanticEventMapper()
     image_part = {

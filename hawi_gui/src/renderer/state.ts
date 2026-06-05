@@ -1474,8 +1474,10 @@ function visibleMessageContentParts(value: unknown): ContentPart[] | undefined {
 }
 
 function isVisibleMessageContentPart(part: ContentPart): boolean {
-  return part.type === "text"
-    || part.type === "image"
+  if (part.type === "text") {
+    return typeof part.text === "string" && part.text.trim().length > 0;
+  }
+  return part.type === "image"
     || part.type === "document"
     || part.type === "audio"
     || part.type === "video"

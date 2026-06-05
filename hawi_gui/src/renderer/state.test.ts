@@ -215,6 +215,27 @@ describe("core event reducer", () => {
     expect(state.nextContextMessageIndex).toBe(2);
   });
 
+  it("does not treat empty committed assistant text parts as visible content", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("run.start", {
+      run_id: "run-empty-commit",
+      message_id: "msg-empty-commit",
+      user_content: "hi",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("run.message_committed", {
+      run_id: "run-empty-commit",
+      role: "assistant",
+      context_message_id: "ctxmsg-empty-commit",
+      content: [{ type: "text", text: "  \n" }]
+    }));
+
+    expect(state.nodes.map((node) => node.kind)).toEqual(["user"]);
+    expect(state.processing).toMatchObject({ runId: "run-empty-commit" });
+    expect(state.sessionMessageCount).toBe(1);
+  });
+
   it("enables fork controls for live user and assistant messages", () => {
     let state = createInitialState();
 
@@ -577,6 +598,22 @@ describe("core event reducer", () => {
       contentParts: [assistantImage],
       contextMessageId: "ctxmsg-media-assistant"
     });
+  });
+
+  it("does not replay empty assistant text parts as chat bubbles", () => {
+    const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
+      message_history: [
+        {
+          run_id: "run-empty-history",
+          role: "assistant",
+          content: [{ type: "text", text: "  \n" }],
+          context_message_id: "ctxmsg-empty-history",
+          context_message_index: 0
+        }
+      ]
+    }));
+
+    expect(state.nodes).toEqual([]);
   });
 
   it("replays persisted injection and plugin events from session history", () => {

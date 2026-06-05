@@ -93,7 +93,7 @@
   margin-bottom: 30px;
 }
 
-.message-profile-line {
+.bubble.message > .message-profile-line {
   position: absolute;
   right: auto;
   bottom: -25px;

@@ -302,7 +302,7 @@ class SemanticEventMapper:
             run_id = str(getattr(event, "run_id", self._active_run_id or ""))
             text = self._extract_text(content_list)
             visible_content = text or preview
-            if not visible_content and not content_list:
+            if not visible_content.strip() and not self._has_visible_content(content_list):
                 return []
             queue = self._queue_for_user_message(event, run_id)
             message_id = self._message_id_for_user_message(event, run_id)
@@ -845,6 +845,24 @@ class SemanticEventMapper:
                 elif isinstance(part, dict) and part.get("type") == "steer":
                     chunks.append(cls._extract_text(part.get("content", [])))
         return "".join(chunk for chunk in chunks if chunk)
+
+    @classmethod
+    def _has_visible_content(cls, content: Any) -> bool:
+        if isinstance(content, str):
+            return bool(content.strip())
+        if not isinstance(content, list):
+            return False
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type == "text" and str(part.get("text", "")).strip():
+                return True
+            if part_type == "steer" and cls._has_visible_content(part.get("content", [])):
+                return True
+            if part_type in {"image", "document", "audio", "video", "file"}:
+                return True
+        return False
 
     @classmethod
     def _content_preview(cls, content: Any, max_chars: int = 160) -> str:

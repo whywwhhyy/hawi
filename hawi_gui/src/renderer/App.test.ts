@@ -18,6 +18,11 @@ describe("shouldUseContentPartsView", () => {
     expect(shouldUseContentPartsView([{ type: "text", text: "hello" }])).toBe(false);
   });
 
+  it("ignores empty text parts when choosing the structured rendering path", () => {
+    expect(shouldUseContentPartsView([{ type: "text", text: "" }])).toBe(false);
+    expect(shouldUseContentPartsView([{ type: "text", text: "  \n\t" }])).toBe(false);
+  });
+
   it("uses structured rendering when media parts are present", () => {
     expect(shouldUseContentPartsView([
       { type: "text", text: "look" },

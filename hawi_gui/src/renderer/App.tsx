@@ -9841,7 +9841,7 @@ function hasRenderableContentParts(parts?: ContentPart[]): boolean {
 
 function isRenderableContentPart(part: ContentPart): boolean {
   if (part.type === "text") {
-    return typeof part.text === "string" && part.text.length > 0;
+    return typeof part.text === "string" && part.text.trim().length > 0;
   }
   return isMediaPart(part);
 }
