@@ -6597,7 +6597,7 @@ const ChatBubble = memo(function ChatBubble({
     );
   }
   if (node.kind === "tool" && node.tool) {
-    return <ToolBubble node={node} />;
+    return <ToolBubble node={node} profilingEnabled={profilingEnabled} />;
   }
   if (node.kind === "framework" && node.framework) {
     return <FrameworkNodeBubble node={node} />;
@@ -6793,13 +6793,7 @@ const MessageBubble = memo(function MessageBubble({
     ? resolvePrefillProgressSegments(node.profile)
     : null;
   const showPrefillOverlay = prefillProgress !== null && !collapsed;
-  const bubbleStyle = prefillProgress === null
-    ? undefined
-    : ({
-        "--prefill-reveal-progress": `${(prefillProgress.revealProgress * 100).toFixed(2)}%`,
-        "--prefill-cache-progress": `${(prefillProgress.cacheProgress * 100).toFixed(2)}%`,
-        "--prefill-filled-progress": `${(prefillProgress.prefillProgress * 100).toFixed(2)}%`
-      } as CSSProperties);
+  const bubbleStyle = prefillProgressStyle(prefillProgress);
 
   return (
     <article
@@ -6927,6 +6921,16 @@ const MessageBubble = memo(function MessageBubble({
 
 export function resolvePrefillRevealProgress(profile?: ModelProfileState): number | null {
   return resolvePrefillProgressSegments(profile)?.revealProgress ?? null;
+}
+
+function prefillProgressStyle(progress: PrefillProgressSegments | null): CSSProperties | undefined {
+  return progress === null
+    ? undefined
+    : ({
+        "--prefill-reveal-progress": `${(progress.revealProgress * 100).toFixed(2)}%`,
+        "--prefill-cache-progress": `${(progress.cacheProgress * 100).toFixed(2)}%`,
+        "--prefill-filled-progress": `${(progress.prefillProgress * 100).toFixed(2)}%`
+      } as CSSProperties);
 }
 
 export interface PrefillProgressSegments {
@@ -7111,16 +7115,30 @@ const ThinkingBubble = memo(function ThinkingBubble({ node }: { node: ChatNode }
   );
 });
 
-const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
+const ToolBubble = memo(function ToolBubble({
+  node,
+  profilingEnabled
+}: {
+  node: ChatNode;
+  profilingEnabled: boolean;
+}) {
   const tool = node.tool!;
   const running = tool.status === "running";
   const receivingArguments = tool.argsState !== "complete";
   const [collapsed, setCollapsed] = useState(true);
   const presentation = toolPresentation(tool);
   const toggleCollapsed = () => setCollapsed((value) => !value);
+  const prefillProgress = profilingEnabled
+    ? resolvePrefillProgressSegments(node.profile)
+    : null;
+  const showPrefillOverlay = prefillProgress !== null && !collapsed;
+  const bubbleStyle = prefillProgressStyle(prefillProgress);
 
   return (
-    <article className={`bubble tool ${tool.status} ${collapsed ? "collapsed" : ""}`}>
+    <article
+      className={`bubble tool ${tool.status} ${prefillProgress !== null ? "prefill-progress" : ""} ${showPrefillOverlay ? "prefill-overlay" : ""} ${collapsed ? "collapsed" : ""}`.trim()}
+      style={bubbleStyle}
+    >
       <div className="bubble-head collapsible-head" onClick={() => guardedToggle(toggleCollapsed)}>
         <span className="tool-title">
           <span className="tool-name">
@@ -7175,6 +7193,12 @@ const ToolBubble = memo(function ToolBubble({ node }: { node: ChatNode }) {
           )}
         </div>
       </div>
+      {prefillProgress && (
+        <div className="message-prefill-progress-bar" aria-hidden="true">
+          <span className="message-prefill-progress-cache" />
+          <span className="message-prefill-progress-prefill" />
+        </div>
+      )}
     </article>
   );
 });

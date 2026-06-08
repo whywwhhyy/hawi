@@ -1755,6 +1755,71 @@ describe("core event reducer", () => {
     });
   });
 
+  it("attaches prefill profile metadata to the latest tool bubble after tool calls", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("run.start", { run_id: "run-tool-profile", user_content: "hi", queue: "normal" }));
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-tool-profile",
+      tool_call_id: "tc-a",
+      tool_name: "a"
+    }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-tool-profile",
+      tool_call_id: "tc-a",
+      tool_name: "a",
+      success: true,
+      output: "a"
+    }));
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-tool-profile",
+      tool_call_id: "tc-b",
+      tool_name: "b"
+    }));
+    state = reduceCoreEvent(state, frame("tool.result", {
+      run_id: "run-tool-profile",
+      tool_call_id: "tc-b",
+      tool_name: "b",
+      success: true,
+      output: "b"
+    }));
+    state = reduceCoreEvent(state, frame("model.profile", {
+      run_id: "run-tool-profile",
+      cache_tokens: 8,
+      prefill_tokens: 12,
+      prefill_total_tokens: 48,
+      prefill_ms: 246,
+      prefill_tokens_per_second: 48.8,
+      ttft_ms: 698,
+      decode_tokens: 5,
+      decode_ms: 123,
+      decode_tokens_per_second: 40.7,
+      peak_decode_tokens_per_second: 52.1
+    }));
+
+    const user = state.nodes.find((node) => node.kind === "user");
+    const toolA = state.nodes.find((node) => node.tool?.toolCallId === "tc-a");
+    const toolB = state.nodes.find((node) => node.tool?.toolCallId === "tc-b");
+    expect(user?.profile).toBeUndefined();
+    expect(toolA?.profile).toBeUndefined();
+    expect(toolB?.profile).toEqual({
+      cacheTokens: 8,
+      prefillTokens: 12,
+      prefillTotalTokens: 48,
+      prefillMs: 246,
+      prefillTokensPerSecond: 48.8
+    });
+
+    state = reduceCoreEvent(state, frame("run.text_delta", { run_id: "run-tool-profile", delta: "done" }));
+    const agent = state.nodes.find((node) => node.kind === "agent");
+    expect(agent?.profile).toEqual({
+      ttftMs: 698,
+      decodeTokens: 5,
+      decodeMs: 123,
+      decodeTokensPerSecond: 40.7,
+      peakDecodeTokensPerSecond: 52.1
+    });
+  });
+
   it("replays persisted model metadata into model usage state", () => {
     const state = reduceCoreEvent(createInitialState(), frame("gui.load_session_history", {
       message_history: [

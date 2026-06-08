@@ -1724,6 +1724,7 @@ function attachModelProfileToRun(state: AppState, payload: Record<string, unknow
   const run = runId ? state.runs[runId] : undefined;
   const mergedRunProfile = runId ? mergeModelProfile(run?.profile, profile) : undefined;
   const userNodeId = run?.userNodeId;
+  const prefillNodeId = runId ? latestToolNodeIdForRun(state, runId) ?? userNodeId : userNodeId;
   const assistantNodeId = run?.agentNodeId ?? run?.assistantCommitNodeId;
   const userProfile = userModelProfile(profile);
   const assistantProfile = assistantModelProfile(profile);
@@ -1731,7 +1732,11 @@ function attachModelProfileToRun(state: AppState, payload: Record<string, unknow
 
   let nodesChanged = false;
   const nodes = state.nodes.map((node) => {
-    if (userProfile && node.id === userNodeId && node.kind === "user") {
+    if (
+      userProfile
+      && node.id === prefillNodeId
+      && (node.kind === "user" || node.kind === "tool")
+    ) {
       nodesChanged = true;
       return { ...node, profile: mergeModelProfile(node.profile, userProfile) };
     }
@@ -1757,6 +1762,16 @@ function attachModelProfileToRun(state: AppState, payload: Record<string, unknow
       }
     }
   };
+}
+
+function latestToolNodeIdForRun(state: AppState, runId: string): string | undefined {
+  for (let index = state.nodes.length - 1; index >= 0; index -= 1) {
+    const node = state.nodes[index];
+    if (node.kind === "tool" && node.tool?.runId === runId) {
+      return node.id;
+    }
+  }
+  return undefined;
 }
 
 function contextUsageSource(value: unknown): ContextUsageState["source"] | undefined {

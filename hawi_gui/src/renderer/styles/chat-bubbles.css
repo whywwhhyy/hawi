@@ -38,7 +38,8 @@
   pointer-events: none;
 }
 
-.bubble.user.message.prefill-overlay::before {
+.bubble.user.message.prefill-overlay::before,
+.bubble.tool.prefill-overlay::before {
   content: "";
   position: absolute;
   top: var(--prefill-reveal-progress, 0%);
@@ -62,6 +63,23 @@
   right: 10px;
   bottom: 5px;
   left: 10px;
+  z-index: 4;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(159, 168, 178, 0.22);
+  pointer-events: none;
+}
+
+.bubble.tool.prefill-progress {
+  margin-bottom: 18px;
+}
+
+.bubble.tool > .message-prefill-progress-bar {
+  position: absolute;
+  right: 0;
+  bottom: -9px;
+  left: 0;
   z-index: 4;
   height: 4px;
   overflow: hidden;
