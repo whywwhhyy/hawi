@@ -517,6 +517,49 @@ class FileSystemPlugin(HawiPlugin):
 
         return hunks, git_diff
 
+    def _format_structure_output(
+        self,
+        *,
+        file_path: str,
+        language: str,
+        symbols: list[dict],
+        total_lines: int,
+    ) -> str:
+        lines = [
+            f"File structure: {file_path}",
+            f"language: {language}",
+            f"total lines: {total_lines}",
+            f"symbols: {len(symbols)}",
+        ]
+        if symbols:
+            lines.append("")
+            for symbol in symbols:
+                kind = symbol.get("type", "symbol")
+                name = symbol.get("name", "<unknown>")
+                line = symbol.get("line")
+                end_line = symbol.get("end_line")
+                if isinstance(line, int) and isinstance(end_line, int):
+                    lines.append(f"- {kind} {name}: lines {line}-{end_line + 1}")
+                elif isinstance(line, int):
+                    lines.append(f"- {kind} {name}: line {line}")
+                else:
+                    lines.append(f"- {kind} {name}")
+        return "\n".join(lines)
+
+    def _format_write_result(
+        self,
+        *,
+        file_path: str,
+        created: bool,
+        git_diff: str,
+    ) -> str:
+        action = "Created" if created else "Updated"
+        if created:
+            return f"{action} file: {file_path}"
+        if git_diff.strip():
+            return f"{action} file: {file_path}\n\n{git_diff}"
+        return f"{action} file: {file_path}"
+
     def _directory_entry_type(self, entry: os.DirEntry) -> str:
         if entry.is_symlink():
             return "symlink"
@@ -525,33 +568,6 @@ class FileSystemPlugin(HawiPlugin):
         if entry.is_file(follow_symlinks=False):
             return "file"
         return "other"
-
-    def _directory_entry_info(
-        self,
-        entry: os.DirEntry,
-        *,
-        root_path: str,
-        depth: int,
-    ) -> dict:
-        entry_type = self._directory_entry_type(entry)
-        try:
-            stat_result = entry.stat(follow_symlinks=False)
-            size = stat_result.st_size
-            mtime = stat_result.st_mtime
-        except OSError:
-            size = None
-            mtime = None
-
-        abs_path = os.path.abspath(entry.path)
-        return {
-            "name": entry.name,
-            "path": abs_path,
-            "relativePath": os.path.relpath(abs_path, root_path),
-            "type": entry_type,
-            "size": size,
-            "mtime": mtime,
-            "depth": depth,
-        }
 
     def _ls_format_line(self, entry: os.DirEntry) -> str:
         """Format a directory entry as an ``ls -la`` style line."""
@@ -655,14 +671,12 @@ class FileSystemPlugin(HawiPlugin):
             symbols = self._parse_structure(content, language)
             return ToolResult(
                 success=True,
-                output={
-                    "type": "structure",
-                    "file": abs_path,
-                    "language": language,
-                    "symbols": symbols,
-                    "numSymbols": len(symbols),
-                    "totalLines": len(content.splitlines()),
-                },
+                output=self._format_structure_output(
+                    file_path=abs_path,
+                    language=language,
+                    symbols=symbols,
+                    total_lines=len(content.splitlines()),
+                ),
             )
 
         try:
@@ -697,12 +711,7 @@ class FileSystemPlugin(HawiPlugin):
         ):
             return ToolResult(
                 success=True,
-                output={
-                    "type": "file_unchanged",
-                    "file": {
-                        "filePath": abs_path,
-                    },
-                },
+                output=f"File unchanged: {abs_path}",
             )
 
         end = (start + normalized_limit) if normalized_limit is not None else total_chars
@@ -712,7 +721,6 @@ class FileSystemPlugin(HawiPlugin):
 
         selected_content = content[start:end]
         selected_lines = selected_content.splitlines(keepends=True)
-        all_lines = content.splitlines(keepends=True)
         start_line = content[:start].count("\n")
         formatted = (
             self._format_lines(selected_lines, start_line)
@@ -720,7 +728,6 @@ class FileSystemPlugin(HawiPlugin):
             else selected_content
         )
         is_partial = (start > 0) or (end < total_chars)
-        returned_line_count = len(selected_lines)
         detected_language = self._detect_language(abs_path)
 
         # Build header with language annotation and line range
@@ -748,22 +755,7 @@ class FileSystemPlugin(HawiPlugin):
 
         return ToolResult(
             success=True,
-            output={
-                "type": "text",
-                "file": {
-                    "filePath": abs_path,
-                    "content": header + formatted,
-                    "numLines": returned_line_count,
-                    "startLine": start_line,
-                    "totalLines": len(all_lines),
-                    "numChars": len(selected_content),
-                    "startOffset": start,
-                    "nextOffset": end if end < total_chars else None,
-                    "totalChars": total_chars,
-                    "language": detected_language,
-                    "isTruncated": is_partial,
-                },
-            },
+            output=header + formatted,
         )
 
     @tool(name="read_file")
@@ -810,14 +802,12 @@ class FileSystemPlugin(HawiPlugin):
             symbols = self._parse_structure(content, language)
             return ToolResult(
                 success=True,
-                output={
-                    "type": "structure",
-                    "file": abs_path,
-                    "language": language,
-                    "symbols": symbols,
-                    "numSymbols": len(symbols),
-                    "totalLines": len(content.splitlines()),
-                },
+                output=self._format_structure_output(
+                    file_path=abs_path,
+                    language=language,
+                    symbols=symbols,
+                    total_lines=len(content.splitlines()),
+                ),
             )
 
         try:
@@ -847,12 +837,7 @@ class FileSystemPlugin(HawiPlugin):
         ):
             return ToolResult(
                 success=True,
-                output={
-                    "type": "file_unchanged",
-                    "file": {
-                        "filePath": abs_path,
-                    },
-                },
+                output=f"File unchanged: {abs_path}",
             )
 
         end = (start + limit) if limit is not None else total
@@ -867,7 +852,6 @@ class FileSystemPlugin(HawiPlugin):
             else "".join(selected)
         )
         is_partial = (start > 0) or (end < total)
-        returned_line_count = len(selected)
         detected_language = self._detect_language(abs_path)
 
         # Build header with language annotation and line range
@@ -895,19 +879,7 @@ class FileSystemPlugin(HawiPlugin):
 
         return ToolResult(
             success=True,
-            output={
-                "type": "text",
-                "file": {
-                    "filePath": abs_path,
-                    "content": header + formatted,
-                    "numLines": returned_line_count,
-                    "startLine": start,
-                    "nextStartLine": end + 1 if end < total else None,
-                    "totalLines": total,
-                    "language": detected_language,
-                    "isTruncated": is_partial,
-                },
-            },
+            output=header + formatted,
         )
 
     @tool(name="write_file")
@@ -915,7 +887,7 @@ class FileSystemPlugin(HawiPlugin):
         """
         覆盖写入文件内容。如果文件已存在，必须先使用 read_file 读取。
 
-        写入后自动更新内部缓存，并生成结构化 patch 和 git diff 用于审计。
+        写入后自动更新内部缓存；更新已有文件时返回 git diff 文本用于审计。
 
         规则：
         - 已存在文件必须先 read_file 再 write_file（乐观并发控制）
@@ -980,18 +952,16 @@ class FileSystemPlugin(HawiPlugin):
             show_line_numbers=True,
         )
 
-        hunks, git_diff = self._generate_structured_patch(
+        _, git_diff = self._generate_structured_patch(
             original_content or "", content, file_path=abs_path
         )
         return ToolResult(
             success=True,
-            output={
-                "type": "update" if file_exists else "create",
-                "file_path": abs_path,
-                "structured_patch": hunks,
-                "original_content": original_content,
-                "git_diff": git_diff,
-            },
+            output=self._format_write_result(
+                file_path=abs_path,
+                created=not file_exists,
+                git_diff=git_diff,
+            ),
         )
 
     @tool(name="edit_file")
@@ -1104,7 +1074,7 @@ class FileSystemPlugin(HawiPlugin):
         limit: int = 200,
     ) -> ToolResult:
         """
-        列出目录内容，返回结构化元数据并附带 ``ls -la`` 风格文本。
+        列出目录内容，返回 ``ls -la`` 风格文本。
 
         Args:
             path: 要列出的目录路径，默认为当前工作目录
@@ -1121,7 +1091,7 @@ class FileSystemPlugin(HawiPlugin):
 
         effective_depth = max(1, max_depth)
         effective_limit = max(0, limit)
-        entries: list[dict] = []
+        entry_count = 0
         lines: list[str] = []
         truncated = False
 
@@ -1145,7 +1115,7 @@ class FileSystemPlugin(HawiPlugin):
             )
 
         def visit(directory: str, depth: int) -> None:
-            nonlocal truncated
+            nonlocal entry_count, truncated
             if truncated:
                 return
 
@@ -1153,18 +1123,6 @@ class FileSystemPlugin(HawiPlugin):
                 children = sorted_children(directory)
             except OSError as e:
                 lines.append(f"?---------   ?  ?      ?            ? {os.path.basename(directory)}  [{e}]")
-                entries.append(
-                    {
-                        "name": os.path.basename(directory),
-                        "path": directory,
-                        "relativePath": os.path.relpath(directory, root_path),
-                        "type": "error",
-                        "size": None,
-                        "mtime": None,
-                        "depth": depth,
-                        "error": str(e),
-                    }
-                )
                 return
 
             dir_label = os.path.relpath(directory, root_path)
@@ -1190,18 +1148,14 @@ class FileSystemPlugin(HawiPlugin):
                 lines.append(f"total {total_blocks}")
 
             for entry in children:
-                if len(entries) >= effective_limit:
+                if entry_count >= effective_limit:
                     truncated = True
                     return
-                info = self._directory_entry_info(
-                    entry,
-                    root_path=root_path,
-                    depth=depth,
-                )
-                entries.append(info)
+                entry_count += 1
+                entry_type = self._directory_entry_type(entry)
                 lines.append(self._ls_format_line(entry))
 
-                if recursive and info["type"] == "directory" and depth < effective_depth:
+                if recursive and entry_type == "directory" and depth < effective_depth:
                     visit(entry.path, depth + 1)
 
         visit(root_path, 1)
@@ -1210,21 +1164,7 @@ class FileSystemPlugin(HawiPlugin):
         if truncated:
             output_text += f"... (truncated at {effective_limit} entries)\n"
 
-        return ToolResult(
-            success=True,
-            output={
-                "type": "directory",
-                "path": root_path,
-                "entries": entries,
-                "numEntries": len(entries),
-                "isTruncated": truncated,
-                "recursive": recursive,
-                "maxDepth": effective_depth,
-                "includeHidden": include_hidden,
-                "limit": effective_limit,
-                "text": output_text,
-            },
-        )
+        return ToolResult(success=True, output=output_text)
 
     @tool(name="glob")
     def glob(self, pattern: str, directory: Optional[str] = None) -> ToolResult:
@@ -1263,14 +1203,17 @@ class FileSystemPlugin(HawiPlugin):
             matches = sorted(results)
             returned_matches = matches[: self._GLOB_MAX_MATCHES]
             truncated = len(matches) > len(returned_matches)
+            output_text = "\n".join(returned_matches)
+            if not output_text:
+                output_text = "No matches."
+            if truncated:
+                output_text += (
+                    f"\n... (truncated: returned {len(returned_matches)} of "
+                    f"{len(matches)} matches; narrow the pattern or directory)"
+                )
             return ToolResult(
                 success=True,
-                output={
-                    "matches": returned_matches,
-                    "numMatches": len(matches),
-                    "isTruncated": truncated,
-                    "maxReturnedMatches": self._GLOB_MAX_MATCHES,
-                },
+                output=output_text,
             )
         except Exception as e:
             return ToolResult(success=False, error=f"Error: {e}")
@@ -1424,30 +1367,15 @@ class FileSystemPlugin(HawiPlugin):
             )
             content = f"{content}\n{footer}" if content else footer
 
-        output = {
-            "mode": "content",
-            "numFiles": len(filenames),
-            "filenames": returned_filenames,
-            "content": content,
-            "numLines": returned_matches,
-            "numMatches": total_matches,
-        }
-        if content_truncated:
-            output.update({
-                "isTruncated": True,
-                "maxReturnedBytes": self._GREP_MAX_CONTENT_BYTES,
-                "maxReturnedLines": self._GREP_MAX_RESULT_LINES,
-                "maxReturnedMatches": self._GREP_MAX_RESULT_LINES,
-                "omittedMatches": omitted_matches,
-            })
         if filenames_truncated and content_truncated:
-            output.update({
-                "filenamesIsTruncated": True,
-                "maxReturnedFilenames": self._GREP_MAX_FILENAMES,
-                "omittedFiles": max(len(filenames) - len(returned_filenames), 0),
-            })
+            omitted_files = max(len(filenames) - len(returned_filenames), 0)
+            content += (
+                f"\n... (matching file list truncated: returned "
+                f"{len(returned_filenames)} of {len(filenames)} files; "
+                f"omitted files: {omitted_files})"
+            )
 
-        return ToolResult(success=True, output=output)
+        return ToolResult(success=True, output=content or "No matches.")
 
     @staticmethod
     def _truncate_utf8(text: str, max_bytes: int) -> str:

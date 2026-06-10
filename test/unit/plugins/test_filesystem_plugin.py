@@ -6,6 +6,11 @@ import pytest
 from hawi.builtin_plugins.filesystem_plugin.plugin import FileSystemPlugin
 
 
+def output_text(result) -> str:
+    assert isinstance(result.output, str)
+    return result.output
+
+
 class TestFileSystemPlugin:
     @pytest.fixture
     def temp_dir(self):
@@ -27,8 +32,7 @@ class TestFileSystemPlugin:
         # Write new file
         result = plugin.write_file(file_path, content)
         assert result.success is True
-        assert result.output["type"] == "create"
-        assert result.output["file_path"] == os.path.abspath(file_path)
+        assert output_text(result).startswith(f"Created file: {os.path.abspath(file_path)}")
         assert os.path.exists(file_path)
 
         # Clear cache to simulate fresh read (write_file populates cache)
@@ -38,13 +42,8 @@ class TestFileSystemPlugin:
         # Read file
         read_result = plugin.read_file(file_path)
         assert read_result.success is True
-        assert read_result.output["type"] == "text"
-        assert read_result.output["file"]["filePath"] == os.path.abspath(file_path)
         # read_file now returns line-numbered content
-        assert "Hello, World!" in read_result.output["file"]["content"]
-        assert read_result.output["file"]["numLines"] == 1
-        assert read_result.output["file"]["totalLines"] == 1
-        assert read_result.output["file"]["isTruncated"] is False
+        assert "Hello, World!" in output_text(read_result)
 
     def test_read_file_with_start_line_line_count(self, plugin, temp_dir):
         """Test read_file with start_line and line_count."""
@@ -55,14 +54,12 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, start_line=2, line_count=2)
         assert result.success is True
-        assert result.output["type"] == "text"
-        content = result.output["file"]["content"]
+        content = output_text(result)
         assert "   2|line2" in content
         assert "   3|line3" in content
         assert "line1" not in content.replace("[Lines", "")
         assert "line4" not in content
-        assert result.output["file"]["numLines"] == 2
-        assert result.output["file"]["isTruncated"] is True
+        assert content.startswith("[Lines 2-3 of 5]")
 
     def test_read_file_clamps_start_line_and_line_count(self, plugin, temp_dir):
         """read_file should clamp invalid start_line and over-large line_count."""
@@ -72,11 +69,10 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, start_line=-10, line_count=50)
         assert result.success is True
-        assert result.output["file"]["startLine"] == 0
-        assert result.output["file"]["totalLines"] == 3
-        assert result.output["file"]["isTruncated"] is False
-        assert "   1|line1" in result.output["file"]["content"]
-        assert "   3|line3" in result.output["file"]["content"]
+        content = output_text(result)
+        assert "   1|line1" in content
+        assert "   3|line3" in content
+        assert "[Lines" not in content
 
     def test_read_file_defaults_to_limited_line_window(self, plugin, temp_dir, monkeypatch):
         """read_file should not return an entire large file by default."""
@@ -88,13 +84,10 @@ class TestFileSystemPlugin:
         result = plugin.read_file(file_path)
 
         assert result.success is True
-        file = result.output["file"]
-        assert file["numLines"] == 3
-        assert file["totalLines"] == 5
-        assert file["nextStartLine"] == 4
-        assert file["isTruncated"] is True
-        assert "line3" in file["content"]
-        assert "line4" not in file["content"]
+        content = output_text(result)
+        assert content.startswith("[Lines 1-3 of 5]")
+        assert "line3" in content
+        assert "line4" not in content
 
     def test_read_file_char_seek_with_offset_limit(self, temp_dir):
         """char seek style should expose offset/limit as character range."""
@@ -105,11 +98,7 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, offset=2, limit=4, show_line_numbers=False)
         assert result.success is True
-        file = result.output["file"]
-        assert file["content"] == "[Chars 2-6 of 8]\nc\nde"
-        assert file["startOffset"] == 2
-        assert file["numChars"] == 4
-        assert file["totalChars"] == 8
+        assert output_text(result) == "[Chars 2-6 of 8]\nc\nde"
 
     def test_read_file_defaults_to_limited_char_window(self, temp_dir, monkeypatch):
         """char seek style should not return an entire large file by default."""
@@ -122,11 +111,7 @@ class TestFileSystemPlugin:
         result = plugin.read_file(file_path, show_line_numbers=False)
 
         assert result.success is True
-        file = result.output["file"]
-        assert file["content"] == "[Chars 0-5 of 9]\nabcde"
-        assert file["numChars"] == 5
-        assert file["nextOffset"] == 5
-        assert file["isTruncated"] is True
+        assert output_text(result) == "[Chars 0-5 of 9]\nabcde"
 
     def test_read_file_tool_schema_follows_seek_style(self):
         """Only one read_file tool should be exposed for the configured seek style."""
@@ -156,8 +141,8 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, show_line_numbers=False)
         assert result.success is True
-        assert result.output["file"]["content"] == "line1\nline2\n"
-        assert "   1|" not in result.output["file"]["content"]
+        assert output_text(result) == "line1\nline2\n"
+        assert "   1|" not in output_text(result)
 
     def test_read_file_cache_respects_line_number_setting(self, plugin, temp_dir):
         """Different formatting options should not return file_unchanged."""
@@ -168,9 +153,8 @@ class TestFileSystemPlugin:
         first = plugin.read_file(file_path, show_line_numbers=False)
         second = plugin.read_file(file_path, show_line_numbers=True)
 
-        assert first.output["type"] == "text"
-        assert second.output["type"] == "text"
-        assert "   1|line1" in second.output["file"]["content"]
+        assert output_text(first) == "line1\n"
+        assert "   1|line1" in output_text(second)
 
     def test_read_file_reports_language(self, plugin, temp_dir):
         """read_file should include detected language metadata."""
@@ -180,7 +164,7 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path)
         assert result.success is True
-        assert result.output["file"]["language"] == "python"
+        assert "language: python" in output_text(result)
 
     def test_edit_file(self, plugin, temp_dir):
         """Test edit_file tool."""
@@ -196,7 +180,7 @@ class TestFileSystemPlugin:
         # Clear cache to read actual file content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
         read_result = plugin.read_file(file_path)
-        assert "foo qux baz" in read_result.output["file"]["content"]
+        assert "foo qux baz" in output_text(read_result)
 
     def test_edit_file_replace_all(self, plugin, temp_dir):
         """Test edit_file with replace_all."""
@@ -212,7 +196,7 @@ class TestFileSystemPlugin:
         # Clear cache to read actual file content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
         read_result = plugin.read_file(file_path)
-        assert "b b b" in read_result.output["file"]["content"]
+        assert "b b b" in output_text(read_result)
 
     def test_edit_file_no_match(self, plugin, temp_dir):
         """Test edit_file with no match."""
@@ -234,12 +218,12 @@ class TestFileSystemPlugin:
 
         result = plugin.glob("*.py", directory=temp_dir)
         assert result.success is True
-        matches = result.output["matches"]
+        matches = output_text(result).splitlines()
         assert any("a.py" in r for r in matches)
         assert not any("b.txt" in r for r in matches)
 
     def test_list_dir_non_recursive(self, plugin, temp_dir):
-        """list_dir should return direct children with structured metadata."""
+        """list_dir should return direct children as ls-style text."""
         open(os.path.join(temp_dir, "a.py"), "w").close()
         open(os.path.join(temp_dir, "b.txt"), "w").close()
         open(os.path.join(temp_dir, ".hidden"), "w").close()
@@ -250,23 +234,13 @@ class TestFileSystemPlugin:
         result = plugin.list_dir(temp_dir)
 
         assert result.success is True
-        assert result.output["type"] == "directory"
-        assert result.output["path"] == os.path.abspath(temp_dir)
-        assert result.output["recursive"] is False
-        assert result.output["isTruncated"] is False
-
-        entries = result.output["entries"]
-        names = [entry["name"] for entry in entries]
-        assert names == ["sub", "a.py", "b.txt"]
-        assert ".hidden" not in names
-        assert "nested.py" not in names
-
-        sub_entry = entries[0]
-        assert sub_entry["type"] == "directory"
-        assert sub_entry["relativePath"] == "sub"
-        assert sub_entry["depth"] == 1
-        assert "size" in sub_entry
-        assert "mtime" in sub_entry
+        content = output_text(result)
+        assert "total " in content
+        assert " sub" in content
+        assert " a.py" in content
+        assert " b.txt" in content
+        assert ".hidden" not in content
+        assert "nested.py" not in content
 
     def test_list_dir_recursive_respects_depth_and_hidden_flag(self, plugin, temp_dir):
         """list_dir recursion should obey max_depth and hidden filtering."""
@@ -287,16 +261,15 @@ class TestFileSystemPlugin:
         )
 
         assert result.success is True
-        paths = [entry["relativePath"] for entry in result.output["entries"]]
-        assert "visible" in paths
-        assert os.path.join("visible", "nested") in paths
-        assert os.path.join("visible", "one.txt") in paths
-        assert os.path.join("visible", "nested", "two.txt") not in paths
-        assert ".hidden" not in paths
+        content = output_text(result)
+        assert "visible:" in content
+        assert "nested" in content
+        assert "one.txt" in content
+        assert "two.txt" not in content
+        assert ".hidden" not in content
 
         with_hidden = plugin.list_dir(temp_dir, include_hidden=True)
-        hidden_paths = [entry["relativePath"] for entry in with_hidden.output["entries"]]
-        assert ".hidden" in hidden_paths
+        assert ".hidden" in output_text(with_hidden)
 
     def test_list_dir_limit_truncates_long_directories(self, plugin, temp_dir):
         """list_dir should cap large directory outputs."""
@@ -306,9 +279,9 @@ class TestFileSystemPlugin:
         result = plugin.list_dir(temp_dir, limit=2)
 
         assert result.success is True
-        assert result.output["numEntries"] == 2
-        assert len(result.output["entries"]) == 2
-        assert result.output["isTruncated"] is True
+        content = output_text(result)
+        assert content.count(".txt") == 2
+        assert "truncated at 2 entries" in content
 
     def test_list_dir_missing_or_file_path(self, plugin, temp_dir):
         """list_dir should fail cleanly for missing paths and files."""
@@ -329,14 +302,11 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("def .*\\(\\):", path=temp_dir)
         assert result.success is True
-        assert result.output["mode"] == "content"
-        assert result.output["numFiles"] == 1
-        assert result.output["numLines"] == 2
-        assert "test.py" in result.output["filenames"][0]
-        assert "hello" in result.output["content"]
-        assert "world" in result.output["content"]
-        assert "isTruncated" not in result.output
-        assert "truncated" not in result.output["content"]
+        content = output_text(result)
+        assert "test.py" in content
+        assert "hello" in content
+        assert "world" in content
+        assert "truncated" not in content
 
     def test_grep_with_file_glob(self, plugin, temp_dir):
         """Test grep with file_glob filter."""
@@ -345,8 +315,10 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("def .*\\(\\):", path=temp_dir, file_glob="*.py")
         assert result.success is True
-        assert result.output["numFiles"] == 1
-        assert "foo" in result.output["content"]
+        content = output_text(result)
+        assert "a.py" in content
+        assert "b.txt" not in content
+        assert "foo" in content
 
     def test_grep_with_glob_alias(self, plugin, temp_dir):
         """grep should accept ClaudeCode-style glob parameter."""
@@ -355,8 +327,9 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("def .*\\(\\):", path=temp_dir, glob="*.py")
         assert result.success is True
-        assert result.output["numFiles"] == 1
-        assert result.output["filenames"] == [os.path.join(temp_dir, "a.py")]
+        content = output_text(result)
+        assert os.path.join(temp_dir, "a.py") in content
+        assert os.path.join(temp_dir, "b.txt") not in content
 
     def test_grep_single_file_path(self, plugin, temp_dir):
         """grep should work when path points to a single file."""
@@ -365,10 +338,7 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("beta", path=file_path)
         assert result.success is True
-        assert result.output["filenames"] == [file_path]
-        assert result.output["numFiles"] == 1
-        assert result.output["numLines"] == 1
-        assert result.output["content"] == f"{file_path}:2: beta"
+        assert output_text(result) == f"{file_path}:2: beta"
 
     def test_grep_default_match_limit_returns_total_count(self, plugin, temp_dir):
         """grep should return the first 1000 matches and expose total matches."""
@@ -382,16 +352,11 @@ class TestFileSystemPlugin:
         result = plugin.grep("needle", path=temp_dir)
 
         assert result.success is True
-        assert result.output["numMatches"] == 1005
-        assert result.output["numLines"] == 1000
-        assert result.output["maxReturnedLines"] == 1000
-        assert result.output["maxReturnedMatches"] == 1000
-        assert result.output["omittedMatches"] == 5
-        assert result.output["isTruncated"] is True
-        assert "needle 999" in result.output["content"]
-        assert "needle 1000" not in result.output["content"]
-        assert "returned 1000 of 1005 matches" in result.output["content"]
-        assert "total matches: 1005" in result.output["content"]
+        content = output_text(result)
+        assert "needle 999" in content
+        assert "needle 1000" not in content
+        assert "returned 1000 of 1005 matches" in content
+        assert "total matches: 1005" in content
 
     def test_grep_returns_up_to_500_matches_without_byte_truncation(
         self,
@@ -409,11 +374,9 @@ class TestFileSystemPlugin:
         result = plugin.grep("needle", path=temp_dir)
 
         assert result.success is True
-        assert result.output["numMatches"] == 500
-        assert result.output["numLines"] == 500
-        assert "isTruncated" not in result.output
-        assert "needle 499" in result.output["content"]
-        assert "truncated" not in result.output["content"]
+        content = output_text(result)
+        assert "needle 499" in content
+        assert "truncated" not in content
 
     def test_grep_content_truncation_ignores_filename_list_truncation(
         self,
@@ -431,14 +394,10 @@ class TestFileSystemPlugin:
         result = plugin.grep("needle", path=temp_dir)
 
         assert result.success is True
-        assert result.output["numMatches"] == 2
-        assert result.output["numLines"] == 2
-        assert len(result.output["filenames"]) == 1
-        assert "isTruncated" not in result.output
-        assert "filenamesIsTruncated" not in result.output
-        assert "truncated:" not in result.output["content"]
-        assert "needle 0" in result.output["content"]
-        assert "needle 1" in result.output["content"]
+        content = output_text(result)
+        assert "truncated:" not in content
+        assert "needle 0" in content
+        assert "needle 1" in content
 
     def test_grep_default_output_stays_under_tool_result_limit(self, plugin, temp_dir):
         """Default grep limits should avoid the executor's oversized fallback."""
@@ -460,8 +419,7 @@ class TestFileSystemPlugin:
             separators=(",", ":"),
         )
         assert result.success is True
-        assert result.output["isTruncated"] is True
-        assert result.output["maxReturnedBytes"] == 32 * 1024
+        assert "truncated:" in output_text(result)
         assert len(payload.encode("utf-8")) <= 50 * 1024
 
     def test_grep_truncates_large_results(self, plugin, temp_dir):
@@ -477,12 +435,9 @@ class TestFileSystemPlugin:
         result = plugin.grep("needle", path=temp_dir)
 
         assert result.success is True
-        assert result.output["numMatches"] == 5
-        assert result.output["numLines"] == 3
-        assert result.output["isTruncated"] is True
-        assert result.output["omittedMatches"] == 2
-        assert "returned 3 of 5 matches" in result.output["content"]
-        assert "total matches: 5" in result.output["content"]
+        content = output_text(result)
+        assert "returned 3 of 5 matches" in content
+        assert "total matches: 5" in content
 
     def test_grep_truncates_by_byte_budget(self, plugin, temp_dir):
         """grep should apply the byte budget after the full-result window."""
@@ -499,19 +454,16 @@ class TestFileSystemPlugin:
         result = plugin.grep("needle", path=temp_dir)
 
         assert result.success is True
-        assert result.output["numMatches"] == 501
-        assert result.output["numLines"] == 1
-        assert result.output["isTruncated"] is True
-        assert "[line truncated]" in result.output["content"]
+        assert "[line truncated]" in output_text(result)
 
     def test_grep_invalid_regex(self, plugin, temp_dir):
-        """Invalid regex patterns should return a structured failure."""
+        """Invalid regex patterns should return a failure."""
         result = plugin.grep("(", path=temp_dir)
         assert result.success is False
         assert "invalid regex pattern" in result.error
 
     def test_grep_missing_path(self, plugin):
-        """Missing grep paths should return a structured failure."""
+        """Missing grep paths should return a failure."""
         result = plugin.grep("hello", path="/definitely/not/real/path")
         assert result.success is False
         assert "does not exist" in result.error
@@ -529,11 +481,10 @@ class TestFileSystemPlugin:
             f.write("hello")
 
         first = plugin.read_file(file_path)
-        assert first.output["type"] == "text"
+        assert "hello" in output_text(first)
 
         second = plugin.read_file(file_path)
-        assert second.output["type"] == "file_unchanged"
-        assert second.output["file"]["filePath"] == os.path.abspath(file_path)
+        assert output_text(second) == f"File unchanged: {os.path.abspath(file_path)}"
 
     def test_write_file_requires_read_first(self, plugin, temp_dir):
         """Writing to an existing file without reading first fails."""
@@ -608,7 +559,7 @@ class TestFileSystemPlugin:
 
         result = plugin.write_file(file_path, "new content")
         assert result.success is True
-        assert result.output["type"] == "create"
+        assert output_text(result).startswith(f"Created file: {os.path.abspath(file_path)}")
         with open(file_path, "r") as f:
             assert f.read() == "new content"
 
@@ -642,8 +593,7 @@ class TestFileSystemPlugin:
         cloned = plugin.clone()
         result = cloned.read_file(file_path)
         # Should return full text, not file_unchanged, because cloned cache is empty
-        assert result.output["type"] == "text"
-        assert "hello" in result.output["file"]["content"]
+        assert "hello" in output_text(result)
 
     def test_read_file_binary(self, plugin, temp_dir):
         """read_file returns failure for binary files."""
@@ -662,14 +612,10 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path)
         assert result.success is True
-        assert result.output["type"] == "text"
-        assert result.output["file"]["content"] == ""
-        assert result.output["file"]["numLines"] == 0
-        assert result.output["file"]["totalLines"] == 0
-        assert result.output["file"]["isTruncated"] is False
+        assert output_text(result) == ""
 
     def test_write_file_update_existing(self, plugin, temp_dir):
-        """write_file to an existing file returns type 'update' with original_content and patch."""
+        """write_file to an existing file returns an update message with a diff."""
         file_path = os.path.join(temp_dir, "test.txt")
         with open(file_path, "w") as f:
             f.write("old content")
@@ -677,10 +623,9 @@ class TestFileSystemPlugin:
 
         result = plugin.write_file(file_path, "new content")
         assert result.success is True
-        assert result.output["type"] == "update"
-        assert result.output["original_content"] == "old content"
-        assert len(result.output["structured_patch"]) > 0
-        assert "new content" in result.output["git_diff"]
+        content = output_text(result)
+        assert content.startswith(f"Updated file: {os.path.abspath(file_path)}")
+        assert "new content" in content
 
     def test_write_file_creates_nested_directories(self, plugin, temp_dir):
         """write_file automatically creates parent directories."""
@@ -714,12 +659,12 @@ class TestFileSystemPlugin:
 
         # Without clearing cache, read should return file_unchanged with the new mtime
         result = plugin.read_file(file_path)
-        assert result.output["type"] == "file_unchanged"
+        assert output_text(result) == f"File unchanged: {os.path.abspath(file_path)}"
 
         # Clear cache and re-read to verify actual disk content
         plugin._read_state_cache.pop(os.path.abspath(file_path), None)
         result = plugin.read_file(file_path)
-        assert "beta" in result.output["file"]["content"]
+        assert "beta" in output_text(result)
 
     def test_write_file_concurrent_ok(self, plugin, temp_dir):
         """write_file succeeds when file has not been modified since read."""
@@ -730,7 +675,7 @@ class TestFileSystemPlugin:
 
         result = plugin.write_file(file_path, "new")
         assert result.success is True
-        assert result.output["type"] == "update"
+        assert output_text(result).startswith(f"Updated file: {os.path.abspath(file_path)}")
 
     def test_edit_file_concurrent_ok(self, plugin, temp_dir):
         """edit_file succeeds when file has not been modified since read."""
@@ -755,10 +700,9 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("secret", path=temp_dir)
         assert result.success is True
-        assert result.output["numLines"] == 1
-        assert "a.txt" in result.output["content"]
-        assert "b.png" not in result.output["content"]
-        assert result.output["numFiles"] == 1
+        content = output_text(result)
+        assert "a.txt" in content
+        assert "b.png" not in content
 
     def test_grep_skips_hidden_directories(self, plugin, temp_dir):
         """grep should ignore files under hidden directories."""
@@ -774,10 +718,9 @@ class TestFileSystemPlugin:
 
         result = plugin.grep("needle", path=temp_dir)
         assert result.success is True
-        assert result.output["numLines"] == 1
-        assert "public.txt" in result.output["content"]
-        assert ".hidden" not in result.output["content"]
-        assert result.output["filenames"] == [os.path.join(visible_dir, "public.txt")]
+        content = output_text(result)
+        assert "public.txt" in content
+        assert ".hidden" not in content
 
     def test_glob_absolute_pattern(self, plugin, temp_dir):
         """glob works with absolute path patterns."""
@@ -786,7 +729,7 @@ class TestFileSystemPlugin:
 
         result = plugin.glob(pattern)
         assert result.success is True
-        matches = result.output["matches"]
+        matches = output_text(result).splitlines()
         assert any("x.py" in m for m in matches)
 
     def test_glob_truncates_large_results(self, plugin, temp_dir):
@@ -798,9 +741,9 @@ class TestFileSystemPlugin:
         result = plugin.glob("*.txt", directory=temp_dir)
 
         assert result.success is True
-        assert len(result.output["matches"]) == 2
-        assert result.output["numMatches"] == 4
-        assert result.output["isTruncated"] is True
+        content = output_text(result)
+        assert len([line for line in content.splitlines() if line.endswith(".txt")]) == 2
+        assert "returned 2 of 4 matches" in content
 
     def test_read_file_structure_python(self, plugin, temp_dir):
         """read_file_structure extracts functions and classes from Python files."""
@@ -823,24 +766,13 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, mode="structure")
         assert result.success is True
-        assert result.output["type"] == "structure"
-        assert result.output["language"] == "python"
-        assert result.output["numSymbols"] == 4
-
-        # Check symbol types and names
-        symbols = result.output["symbols"]
-        assert symbols[0]["type"] == "function"
-        assert symbols[0]["name"] == "hello"
-        assert symbols[0]["line"] == 3  # 1-based
-
-        assert symbols[1]["type"] == "class"
-        assert symbols[1]["name"] == "Calculator"
-
-        assert symbols[2]["type"] == "function"
-        assert symbols[2]["name"] == "add"  # Nested method within class
-
-        assert symbols[3]["type"] == "function"
-        assert symbols[3]["name"] == "fetch_data"
+        content = output_text(result)
+        assert "language: python" in content
+        assert "symbols: 4" in content
+        assert "function hello: lines 3-5" in content
+        assert "class Calculator" in content
+        assert "function add" in content
+        assert "function fetch_data" in content
 
     def test_read_file_structure_file_not_found(self, plugin, temp_dir):
         """read_file_structure fails for missing files."""
@@ -873,13 +805,10 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, mode="structure")
         assert result.success is True
-        assert result.output["numSymbols"] == 3
-
-        symbols = result.output["symbols"]
-        assert symbols[0]["type"] == "section"
-        assert "Title" in symbols[0]["name"]
-        assert symbols[1]["type"] == "section"
-        assert "Section 1" in symbols[1]["name"]
+        content = output_text(result)
+        assert "symbols: 3" in content
+        assert "section Title" in content
+        assert "section Section 1" in content
 
     def test_read_file_structure_empty_file(self, plugin, temp_dir):
         """read_file_structure returns empty symbols for empty file."""
@@ -889,7 +818,7 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, mode="structure")
         assert result.success is True
-        assert result.output["numSymbols"] == 0
+        assert "symbols: 0" in output_text(result)
 
     def test_read_file_language_header(self, plugin, temp_dir):
         """read_file includes language in header for recognized languages."""
@@ -899,7 +828,7 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path)
         assert result.success is True
-        content = result.output["file"]["content"]
+        content = output_text(result)
         # Header should contain language annotation
         assert "language: python" in content or "python" in content
 
@@ -911,6 +840,6 @@ class TestFileSystemPlugin:
 
         result = plugin.read_file(file_path, show_line_numbers=False)
         assert result.success is True
-        content = result.output["file"]["content"]
+        content = output_text(result)
         # Should be wrapped in python fenced code block after language header
         assert "```python" in content
