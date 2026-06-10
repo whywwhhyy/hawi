@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderToolArguments, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveToolCallPurposeControlState, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -820,6 +820,7 @@ describe("resolveEscapeDismissTarget", () => {
     pluginDialogOpen: false,
     modelDialogOpen: false,
     subagentObserverOpen: false,
+    exportMenuOpen: false,
     settingsMenuOpen: false,
     queuePopoverOpen: false,
     editingQueueTaskId: null,
@@ -872,6 +873,18 @@ describe("resolveEscapeDismissTarget", () => {
       contextPopoverOpen: true,
       queuePopoverOpen: true
     })).toBe("contextPopover");
+  });
+
+  it("closes the export menu before the settings menu", () => {
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      exportMenuOpen: true
+    })).toBe("exportMenu");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      exportMenuOpen: true,
+      settingsMenuOpen: true
+    })).toBe("exportMenu");
   });
 
   it("cancels queue item editing before closing the queue popover", () => {
@@ -1218,6 +1231,33 @@ describe("formatToolCopyText", () => {
     expect(text).toContain("Status: success");
     expect(text).toContain("\"path\": \"docs/todo.md\"");
     expect(text).toContain("Result:\ndone");
+  });
+});
+
+describe("renderToolArguments", () => {
+  it("renders accumulated raw JSON while arguments are still streaming", () => {
+    const html = renderToString(createElement("div", null, renderToolArguments({
+      runId: "run-1",
+      toolCallId: "call-1",
+      name: "write_file",
+      status: "running",
+      argsRaw: "{\"file_path\":\"a.txt\",\"content\":\"hello",
+      argsState: "streaming",
+      resultPreview: ""
+    })));
+
+    expect(html).toContain("argument-code");
+    expect(html).toContain("{&quot;file_path&quot;:&quot;a.txt&quot;,&quot;content&quot;:&quot;hello");
+    expect(html).not.toContain("Receiving arguments");
+  });
+});
+
+describe("resolveToolCallPurposeControlState", () => {
+  it("keeps the tool call purpose toggle clickable", () => {
+    expect(resolveToolCallPurposeControlState()).toEqual({
+      disabled: false,
+      title: "影响后续新 Session；当前 Session 需要重启后生效"
+    });
   });
 });
 

@@ -88,7 +88,7 @@ export interface ToolState {
   argsState: "pending" | "streaming" | "complete";
   arguments?: unknown;
   resultPreview: string;
-  /** 原始 tool result output 结构化数据（仅保持最近的完整结果） */
+  /** 原始 tool result output 数据，可能是文本或结构化对象（仅保持最近的完整结果） */
   resultData?: unknown;
   contextMessageId?: string;
   contextMessageIndex?: number;
@@ -3749,7 +3749,7 @@ function formatToolResultText(payload: Record<string, unknown>): string {
     return formatToolValue(payload.part);
   }
 
-  // 提取结构化输出的纯文本内容（如 list_dir 的 directory/text 类型）
+  // 提取输出文本；兼容旧版结构化 tool output。
   const rawOutput = payload.output;
   const toolName = optionalString(payload.tool_name);
   const formattedOutput = formatStructuredToolOutput(rawOutput, toolName);

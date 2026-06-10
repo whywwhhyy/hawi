@@ -1196,6 +1196,29 @@ describe("core event reducer", () => {
     expect(state.nodes[0].tool?.arguments).toEqual({ path: "a.txt" });
   });
 
+  it("accumulates raw tool call JSON while streaming arguments are incomplete", () => {
+    let state = createInitialState();
+    state = reduceCoreEvent(state, frame("tool.call_start", {
+      run_id: "run-raw-args",
+      tool_call_id: "tc-raw-args",
+      tool_name: "write"
+    }));
+    state = reduceCoreEvent(state, frame("tool.call_delta", {
+      tool_call_id: "tc-raw-args",
+      delta: "{\"file_path\":\"a.txt\",",
+      is_streaming: true
+    }));
+    state = reduceCoreEvent(state, frame("tool.call_delta", {
+      tool_call_id: "tc-raw-args",
+      delta: "\"content\":\"hello",
+      is_streaming: true
+    }));
+
+    expect(state.nodes[0].tool?.argsState).toBe("streaming");
+    expect(state.nodes[0].tool?.argsRaw).toBe("{\"file_path\":\"a.txt\",\"content\":\"hello");
+    expect(state.nodes[0].tool?.arguments).toEqual({ file_path: "a.txt" });
+  });
+
   it("parses complete top-level arguments before the whole object closes", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("tool.call_start", { run_id: "run-partial-object", tool_call_id: "tc-partial-object", tool_name: "fetch" }));

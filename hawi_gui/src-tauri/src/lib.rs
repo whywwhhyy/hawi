@@ -2833,6 +2833,31 @@ async fn select_working_directory(
     }))
 }
 
+async fn prompt_save_file(
+    app: AppHandle,
+    title: &str,
+    file_name: String,
+    filter_name: &str,
+    extensions: &[&str],
+) -> Result<Option<PathBuf>, String> {
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    app.dialog()
+        .file()
+        .set_title(title)
+        .set_file_name(file_name)
+        .add_filter(filter_name, extensions)
+        .save_file(move |file_path| {
+            let _ = tx.try_send(file_path);
+        });
+    let file_path = rx.recv().await.flatten();
+    file_path
+        .map(|path| {
+            path.into_path()
+                .map_err(|error| format!("failed to resolve selected path: {error}"))
+        })
+        .transpose()
+}
+
 #[tauri::command]
 fn set_minimum_content_size(app: AppHandle, size: Value) -> Result<Value, String> {
     let width = normalize_minimum_content_dimension(
@@ -2865,26 +2890,19 @@ fn set_minimum_content_size(app: AppHandle, size: Value) -> Result<Value, String
 }
 
 #[tauri::command]
-fn save_markdown_export(app: AppHandle, payload: Value) -> Result<Value, String> {
+async fn save_markdown_export(app: AppHandle, payload: Value) -> Result<Value, String> {
     let markdown = payload
         .get("markdown")
         .and_then(Value::as_str)
-        .ok_or_else(|| "invalid markdown export payload".to_string())?;
+        .ok_or_else(|| "invalid markdown export payload".to_string())?
+        .to_string();
     let suggested =
         safe_markdown_filename(payload.get("suggested_filename").and_then(Value::as_str));
-    let file_path = app
-        .dialog()
-        .file()
-        .set_title("导出 Markdown")
-        .set_file_name(&suggested)
-        .add_filter("Markdown", &["md"])
-        .blocking_save_file();
-    let Some(file_path) = file_path else {
+    let Some(markdown_path) =
+        prompt_save_file(app, "导出 Markdown", suggested, "Markdown", &["md"]).await?
+    else {
         return Ok(json!({ "canceled": true }));
     };
-    let markdown_path = file_path
-        .into_path()
-        .map_err(|error| format!("failed to resolve selected path: {error}"))?;
     let markdown_path = ensure_markdown_extension(markdown_path);
     let parsed_dir = markdown_path
         .parent()
@@ -2900,10 +2918,10 @@ fn save_markdown_export(app: AppHandle, payload: Value) -> Result<Value, String>
         if original_ref_dir != reference_dir_name {
             markdown.replace(original_ref_dir, &reference_dir_name)
         } else {
-            markdown.to_string()
+            markdown
         }
     } else {
-        markdown.to_string()
+        markdown
     };
 
     fs::create_dir_all(&parsed_dir)
@@ -2941,30 +2959,12 @@ fn save_markdown_export(app: AppHandle, payload: Value) -> Result<Value, String>
 }
 
 #[tauri::command]
-fn save_jsonl_export(app: AppHandle, payload: Value) -> Result<Value, String> {
+async fn save_jsonl_export(app: AppHandle, payload: Value) -> Result<Value, String> {
     let records = payload
         .get("records")
         .and_then(Value::as_array)
         .ok_or_else(|| "invalid JSONL export payload".to_string())?;
     let suggested = safe_jsonl_filename(payload.get("suggested_filename").and_then(Value::as_str));
-    let file_path = app
-        .dialog()
-        .file()
-        .set_title("导出 JSONL")
-        .set_file_name(&suggested)
-        .add_filter("JSON Lines", &["jsonl"])
-        .blocking_save_file();
-    let Some(file_path) = file_path else {
-        return Ok(json!({ "canceled": true }));
-    };
-    let jsonl_path = file_path
-        .into_path()
-        .map_err(|error| format!("failed to resolve selected path: {error}"))?;
-    let jsonl_path = ensure_jsonl_extension(jsonl_path);
-    let parsed_dir = jsonl_path
-        .parent()
-        .ok_or_else(|| "selected export path has no parent directory".to_string())?
-        .to_path_buf();
     let mut contents = String::new();
     for record in records {
         contents.push_str(
@@ -2973,6 +2973,17 @@ fn save_jsonl_export(app: AppHandle, payload: Value) -> Result<Value, String> {
         );
         contents.push('\n');
     }
+
+    let Some(jsonl_path) =
+        prompt_save_file(app, "导出 JSONL", suggested, "JSON Lines", &["jsonl"]).await?
+    else {
+        return Ok(json!({ "canceled": true }));
+    };
+    let jsonl_path = ensure_jsonl_extension(jsonl_path);
+    let parsed_dir = jsonl_path
+        .parent()
+        .ok_or_else(|| "selected export path has no parent directory".to_string())?
+        .to_path_buf();
 
     fs::create_dir_all(&parsed_dir)
         .map_err(|error| format!("failed to create export directory: {error}"))?;

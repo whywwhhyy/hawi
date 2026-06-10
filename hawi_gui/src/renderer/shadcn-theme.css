@@ -193,11 +193,13 @@ body {
   color: hsl(var(--foreground));
 }
 
+.rail-export-anchor,
 .rail-settings-anchor {
   position: relative;
   min-width: 0;
 }
 
+.rail-export-menu,
 .rail-settings-menu {
   position: fixed;
   top: 10px;
@@ -210,6 +212,11 @@ body {
   padding: 8px;
   overflow: auto;
   overscroll-behavior: contain;
+}
+
+.rail-export-menu {
+  gap: 2px;
+  padding: 4px;
 }
 
 .rail-menu-section {

@@ -76,6 +76,8 @@ const RAIL_SETTINGS_MENU_GAP_PX = 10;
 const RAIL_SETTINGS_MENU_MARGIN_PX = 10;
 const RAIL_SETTINGS_MENU_MAX_WIDTH_PX = 520;
 const RAIL_SETTINGS_MENU_MIN_WIDTH_PX = 220;
+const RAIL_EXPORT_MENU_MAX_WIDTH_PX = 240;
+const RAIL_EXPORT_MENU_MIN_WIDTH_PX = 180;
 const SYSTEM_PROMPT_MAX_ROWS = 8;
 const MESSAGE_INPUT_MAX_ROWS = 5;
 const MAX_INPUT_HISTORY = 100;
@@ -338,6 +340,11 @@ interface RailSettingsMenuLayoutInput {
   viewportHeight: number;
 }
 
+interface RailPopoverLayoutInput extends RailSettingsMenuLayoutInput {
+  minWidth: number;
+  maxWidth: number;
+}
+
 interface StatusPopoverRect {
   top: number;
   right: number;
@@ -432,6 +439,7 @@ type EscapeDismissTarget =
   | "messageEdit"
   | "pluginDialog"
   | "modelDialog"
+  | "exportMenu"
   | "settingsMenu"
   | "queueTaskEdit"
   | "queuePopover"
@@ -443,6 +451,7 @@ interface EscapeDismissState {
   projectPopoverOpen: boolean;
   pluginDialogOpen: boolean;
   modelDialogOpen: boolean;
+  exportMenuOpen: boolean;
   subagentObserverOpen: boolean;
   settingsMenuOpen: boolean;
   queuePopoverOpen: boolean;
@@ -456,6 +465,7 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
+  if (state.exportMenuOpen) return "exportMenu";
   if (state.settingsMenuOpen) return "settingsMenu";
   if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
@@ -471,6 +481,7 @@ function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTar
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
+  if (state.exportMenuOpen) return "exportMenu";
   if (state.settingsMenuOpen) return "settingsMenu";
   if (state.projectPopoverOpen) return "projectPopover";
   if (state.contextPopoverOpen) return "contextPopover";
@@ -493,6 +504,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
       return ".plugin-modal";
     case "modelDialog":
       return ".model-modal";
+    case "exportMenu":
+      return ".rail-export-menu";
     case "settingsMenu":
       return ".rail-settings-menu";
     case "queueTaskEdit":
@@ -573,6 +586,7 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
       case "sessionDialog":
         return scope.querySelector<HTMLElement>(".session-option.current .session-title-button:not(:disabled)")
           ?? scope.querySelector<HTMLElement>(".session-title-button:not(:disabled)");
+      case "exportMenu":
       case "settingsMenu":
       case "queueTaskEdit":
       case "queuePopover":
@@ -1002,26 +1016,28 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max));
 }
 
-export function resolveRailSettingsMenuLayout({
+function resolveRailPopoverLayout({
   anchorTop,
   anchorRight,
   menuHeight,
   viewportWidth,
-  viewportHeight
-}: RailSettingsMenuLayoutInput): CSSProperties {
+  viewportHeight,
+  minWidth,
+  maxWidth
+}: RailPopoverLayoutInput): CSSProperties {
   const maxHeight = Math.max(0, viewportHeight - RAIL_SETTINGS_MENU_MARGIN_PX * 2);
   const preferredLeft = anchorRight + RAIL_SETTINGS_MENU_GAP_PX;
   const preferredAvailableWidth = viewportWidth - preferredLeft - RAIL_SETTINGS_MENU_MARGIN_PX;
-  const left = preferredAvailableWidth >= RAIL_SETTINGS_MENU_MIN_WIDTH_PX
+  const left = preferredAvailableWidth >= minWidth
     ? preferredLeft
     : Math.max(
       RAIL_SETTINGS_MENU_MARGIN_PX,
-      viewportWidth - RAIL_SETTINGS_MENU_MIN_WIDTH_PX - RAIL_SETTINGS_MENU_MARGIN_PX
+      viewportWidth - minWidth - RAIL_SETTINGS_MENU_MARGIN_PX
     );
   const width = Math.max(
     0,
     Math.min(
-      RAIL_SETTINGS_MENU_MAX_WIDTH_PX,
+      maxWidth,
       viewportWidth - left - RAIL_SETTINGS_MENU_MARGIN_PX
     )
   );
@@ -1041,6 +1057,22 @@ export function resolveRailSettingsMenuLayout({
     width: Math.round(width),
     maxHeight: Math.round(maxHeight),
   };
+}
+
+export function resolveRailSettingsMenuLayout(input: RailSettingsMenuLayoutInput): CSSProperties {
+  return resolveRailPopoverLayout({
+    ...input,
+    minWidth: RAIL_SETTINGS_MENU_MIN_WIDTH_PX,
+    maxWidth: RAIL_SETTINGS_MENU_MAX_WIDTH_PX
+  });
+}
+
+function resolveRailExportMenuLayout(input: RailSettingsMenuLayoutInput): CSSProperties {
+  return resolveRailPopoverLayout({
+    ...input,
+    minWidth: RAIL_EXPORT_MENU_MIN_WIDTH_PX,
+    maxWidth: RAIL_EXPORT_MENU_MAX_WIDTH_PX
+  });
 }
 
 export default function App() {
@@ -1080,6 +1112,8 @@ export default function App() {
   const [contextCompactBusy, setContextCompactBusy] = useState(false);
   const [contextSettingsBusy, setContextSettingsBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportMenuStyle, setExportMenuStyle] = useState<CSSProperties>({});
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsMenuStyle, setSettingsMenuStyle] = useState<CSSProperties>({});
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
@@ -1103,6 +1137,8 @@ export default function App() {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const historyPreviewRef = useRef<HTMLDivElement | null>(null);
   const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const exportMenuAnchorRef = useRef<HTMLDivElement | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const settingsMenuAnchorRef = useRef<HTMLDivElement | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1368,17 +1404,78 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!settingsMenuOpen) return;
+    if (!settingsMenuOpen && !exportMenuOpen) return;
     function handlePointerDown(event: PointerEvent) {
       const target = event.target;
-      if (target instanceof Element && target.closest(".rail-settings-anchor")) return;
-      setSettingsMenuOpen(false);
+      if (settingsMenuOpen && !(target instanceof Element && target.closest(".rail-settings-anchor"))) {
+        setSettingsMenuOpen(false);
+      }
+      if (exportMenuOpen && !(target instanceof Element && target.closest(".rail-export-anchor"))) {
+        setExportMenuOpen(false);
+      }
     }
     document.addEventListener("pointerdown", handlePointerDown);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [settingsMenuOpen]);
+  }, [exportMenuOpen, settingsMenuOpen]);
+
+  useBrowserLayoutEffect(() => {
+    if (!exportMenuOpen) {
+      setExportMenuStyle({});
+      return;
+    }
+    const anchor = exportMenuAnchorRef.current;
+    const menu = exportMenuRef.current;
+    if (!anchor || !menu) return;
+
+    let frameId: number | null = null;
+    const updateMenuLayout = () => {
+      const anchorRect = anchor.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const nextStyle = resolveRailExportMenuLayout({
+        anchorTop: anchorRect.top,
+        anchorRight: anchorRect.right,
+        menuHeight: menuRect.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      });
+      setExportMenuStyle((current) => (
+        current.top === nextStyle.top
+          && current.left === nextStyle.left
+          && current.width === nextStyle.width
+          && current.maxHeight === nextStyle.maxHeight
+          ? current
+          : nextStyle
+      ));
+    };
+    const scheduleMenuLayout = () => {
+      if (frameId !== null) return;
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        updateMenuLayout();
+      });
+    };
+
+    updateMenuLayout();
+    scheduleMenuLayout();
+    window.addEventListener("resize", scheduleMenuLayout);
+    window.addEventListener("scroll", scheduleMenuLayout, true);
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(scheduleMenuLayout);
+    resizeObserver?.observe(anchor);
+    resizeObserver?.observe(menu);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      window.removeEventListener("resize", scheduleMenuLayout);
+      window.removeEventListener("scroll", scheduleMenuLayout, true);
+      resizeObserver?.disconnect();
+    };
+  }, [exportMenuOpen]);
 
   useBrowserLayoutEffect(() => {
     if (!settingsMenuOpen) {
@@ -1477,6 +1574,7 @@ export default function App() {
         projectPopoverOpen,
         pluginDialogOpen,
         modelDialogOpen,
+        exportMenuOpen,
         subagentObserverOpen: subagentObserverId !== null,
         settingsMenuOpen,
         queuePopoverOpen,
@@ -1515,6 +1613,9 @@ export default function App() {
             break;
           case "modelDialog":
             setModelDialogOpen(false);
+            break;
+          case "exportMenu":
+            setExportMenuOpen(false);
             break;
           case "settingsMenu":
             setSettingsMenuOpen(false);
@@ -1567,6 +1668,7 @@ export default function App() {
     projectPopoverOpen,
     pluginDialogOpen,
     modelDialogOpen,
+    exportMenuOpen,
     mediaPreview,
     subagentObserverId,
     settingsMenuOpen,
@@ -1649,7 +1751,7 @@ export default function App() {
   }, []);
 
   const systemPromptLocked = state.nodes.some(isConversationNode);
-  const toolCallPurposeLocked = Boolean(currentSessionId);
+  const toolCallPurposeControl = resolveToolCallPurposeControlState();
   const contextRunnerBusy = state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING";
   const canCompactContextManually = coreRunning && !contextRunnerBusy && state.contextCompression?.active !== true;
 
@@ -1861,6 +1963,19 @@ export default function App() {
       setModelDialogOpen(true);
       return null;
     }
+    try {
+      return await window.hawi.sendCommand(type, payload, targetSessionId);
+    } catch (error) {
+      dispatch(errorFrame(error));
+      return null;
+    }
+  }
+
+  async function sendSessionCommand(
+    type: CoreCommandType,
+    payload: Record<string, unknown>,
+    targetSessionId: string | null = currentSessionIdRef.current
+  ): Promise<CoreFrame | null> {
     try {
       return await window.hawi.sendCommand(type, payload, targetSessionId);
     } catch (error) {
@@ -3400,10 +3515,15 @@ export default function App() {
   async function exportCurrentSession(format: "markdown" | "jsonl") {
     if (!currentSessionId || exportBusy) return;
     setExportMenuOpen(false);
+    setSettingsMenuOpen(false);
     setExportBusy(true);
     try {
       if (format === "markdown") {
-        const frame = await sendCommand("session_export_markdown", { session_id: currentSessionId });
+        const frame = await sendSessionCommand(
+          "session_export_markdown",
+          { session_id: currentSessionId },
+          currentSessionId
+        );
         const exportPayload = normalizeMarkdownExportPayload(frame?.payload?.export);
         if (!exportPayload) {
           throw new Error("导出结果为空");
@@ -3415,9 +3535,9 @@ export default function App() {
         return;
       }
 
-      const savedFrame = await sendCommand("session_save_now", { session_id: currentSessionId }, currentSessionId);
+      const savedFrame = await sendSessionCommand("session_save_now", { session_id: currentSessionId }, currentSessionId);
       if (!savedFrame) return;
-      const frame = await sendCommand("session_history", { session_id: currentSessionId }, currentSessionId);
+      const frame = await sendSessionCommand("session_history", { session_id: currentSessionId }, currentSessionId);
       const payload = framePayload(frame);
       if (!Array.isArray(payload?.message_history)) {
         throw new Error("JSONL 导出结果为空");
@@ -3486,9 +3606,6 @@ export default function App() {
   }
 
   function updateToolCallPurposeEnabled(enabled: boolean) {
-    if (toolCallPurposeLocked) {
-      return;
-    }
     const baseConfig = configRef.current ?? config;
     if (!baseConfig) return;
     const next = { ...baseConfig, toolCallPurposeEnabled: enabled };
@@ -3534,14 +3651,74 @@ export default function App() {
           <strong>Hawi</strong>
         </div>
         <nav className="rail-actions" aria-label="Primary actions">
-          <button type="button" className="rail-button" title="切换模型" onClick={() => setModelDialogOpen(true)}>
+          <button
+            type="button"
+            className="rail-button"
+            title="切换模型"
+            onClick={() => {
+              setExportMenuOpen(false);
+              setSettingsMenuOpen(false);
+              setModelDialogOpen(true);
+            }}
+          >
             <Brain size={18} />
             <span>Model</span>
           </button>
-          <button type="button" className="rail-button" title="插件配置" onClick={() => setPluginDialogOpen(true)}>
+          <button
+            type="button"
+            className="rail-button"
+            title="插件配置"
+            onClick={() => {
+              setExportMenuOpen(false);
+              setSettingsMenuOpen(false);
+              setPluginDialogOpen(true);
+            }}
+          >
             <Plug size={18} />
             <span>Plugins</span>
           </button>
+          <div className="rail-export-anchor" ref={exportMenuAnchorRef}>
+            <button
+              type="button"
+              className={`rail-button ${exportMenuOpen ? "active" : ""}`}
+              title={exportDisabled ? "当前会话没有可导出的消息记录" : "导出消息记录"}
+              aria-haspopup="menu"
+              aria-expanded={exportMenuOpen}
+              disabled={exportDisabled}
+              onClick={() => {
+                setSettingsMenuOpen(false);
+                setExportMenuOpen((open) => !open);
+              }}
+            >
+              <FileText size={18} />
+              <span>{exportBusy ? "Exporting" : "Export"}</span>
+            </button>
+            {exportMenuOpen && (
+              <div
+                ref={exportMenuRef}
+                className="rail-export-menu menu-popover"
+                role="menu"
+                style={exportMenuStyle}
+              >
+                <button
+                  type="button"
+                  className="menu-item"
+                  disabled={exportDisabled}
+                  onClick={() => void exportCurrentSession("jsonl")}
+                >
+                  <FileText size={15} /> 导出 JSONL
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  disabled={exportDisabled}
+                  onClick={() => void exportCurrentSession("markdown")}
+                >
+                  <FileText size={15} /> 导出 Markdown
+                </button>
+              </div>
+            )}
+          </div>
           <div className="rail-settings-anchor" ref={settingsMenuAnchorRef}>
             <button
               type="button"
@@ -3549,7 +3726,10 @@ export default function App() {
               title="设置"
               aria-haspopup="menu"
               aria-expanded={settingsMenuOpen}
-              onClick={() => setSettingsMenuOpen((open) => !open)}
+              onClick={() => {
+                setExportMenuOpen(false);
+                setSettingsMenuOpen((open) => !open);
+              }}
             >
               <Settings size={18} />
               <span>Settings</span>
@@ -3580,31 +3760,6 @@ export default function App() {
                   />
                 </div>
                 <div className="rail-menu-section">
-                  <strong>Session</strong>
-                  <button
-                    type="button"
-                    className="menu-item"
-                    disabled={exportDisabled}
-                    onClick={() => {
-                      setSettingsMenuOpen(false);
-                      void exportCurrentSession("jsonl");
-                    }}
-                  >
-                    <FileText size={15} /> 导出 JSONL
-                  </button>
-                  <button
-                    type="button"
-                    className="menu-item"
-                    disabled={exportDisabled}
-                    onClick={() => {
-                      setSettingsMenuOpen(false);
-                      void exportCurrentSession("markdown");
-                    }}
-                  >
-                    <FileText size={15} /> 导出 Markdown
-                  </button>
-                </div>
-                <div className="rail-menu-section">
                   <strong>Display</strong>
                   <label className="menu-item checkbox-menu-item" title="折叠每轮中的中间过程，只保留最后一条正式回复">
                     <input
@@ -3632,12 +3787,12 @@ export default function App() {
                   </label>
                   <label
                     className="menu-item checkbox-menu-item"
-                    title={toolCallPurposeLocked ? "仅新 Session 可修改" : "新 Session 工具调用要求填写目的"}
+                    title={toolCallPurposeControl.title}
                   >
                     <input
                       type="checkbox"
                       checked={config.toolCallPurposeEnabled}
-                      disabled={toolCallPurposeLocked}
+                      disabled={toolCallPurposeControl.disabled}
                       onChange={(event) => updateToolCallPurposeEnabled(event.target.checked)}
                     />
                     工具调用目的
@@ -7204,9 +7359,11 @@ const ToolBubble = memo(function ToolBubble({
 });
 
 /** 根据工具名称渲染参数区域 */
-function renderToolArguments(tool: ToolState): ReactNode {
+export function renderToolArguments(tool: ToolState): ReactNode {
   if (tool.argsState !== "complete") {
-    return <div className="tool-hint">Receiving arguments...</div>;
+    return tool.argsRaw
+      ? <CopyablePreBlock className="argument-code" value={tool.argsRaw} />
+      : <div className="tool-hint">Receiving arguments...</div>;
   }
   const args = tool.arguments;
   if (!isRecord(args)) {
@@ -7255,9 +7412,9 @@ function renderToolResult(tool: ToolState): ReactNode {
   const preview = tool.resultPreview || (tool.status === "fail" ? "Tool failed without an error message." : "");
   const toolKind = filesystemToolKind(tool.name);
 
-  // read_file: 从 resultData 解析结构化输出做语法高亮
+  // read_file: 兼容旧版 resultData 结构化输出做语法高亮；文本输出走 preview。
   if (toolKind === "read_file") {
-    // 优先从 resultData 解析结构化数据
+    // 优先从旧版 resultData 解析结构化数据
     const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
     const fileInfo = resultData ? (isRecord(resultData.file) ? resultData.file : undefined) : undefined;
     if (resultData?.type === "file_unchanged") {
@@ -7327,6 +7484,16 @@ function renderToolResult(tool: ToolState): ReactNode {
 
   if (toolKind === "glob") {
     const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
+    if (!resultData) {
+      return (
+        <div className="tool-result-view">
+          <CopyablePreBlock
+            className="tool-result-block nowrap"
+            value={preview || "No matches."}
+          />
+        </div>
+      );
+    }
     const matches = Array.isArray(resultData?.matches)
       ? resultData.matches.map((item) => String(item))
       : [];
@@ -7343,6 +7510,13 @@ function renderToolResult(tool: ToolState): ReactNode {
 
   if (toolKind === "grep") {
     const resultData = isRecord(tool.resultData) ? tool.resultData : undefined;
+    if (!resultData) {
+      return (
+        <div className="tool-result-view">
+          <CopyablePreBlock className="tool-result-block search nowrap" value={preview || "No matches."} />
+        </div>
+      );
+    }
     const content = resultData && typeof resultData.content === "string"
       ? resultData.content
       : preview;
@@ -10380,6 +10554,13 @@ function isConversationNode(node: ChatNode): boolean {
     || node.kind === "tool"
     || node.kind === "divider"
     || node.kind === "compact";
+}
+
+export function resolveToolCallPurposeControlState(): { disabled: boolean; title: string } {
+  return {
+    disabled: false,
+    title: "影响后续新 Session；当前 Session 需要重启后生效"
+  };
 }
 
 export function thinkingExcerpt(value: string, maxChars = 120): string {
