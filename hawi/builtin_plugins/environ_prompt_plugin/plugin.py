@@ -246,34 +246,51 @@ class EnvironPromptPlugin(HawiPlugin):
                     "type": "boolean",
                     "title": "启用环境提示",
                     "default": True,
+                    "description": (
+                        "开启时：按下面的分类开关在会话开始和每次用户消息前"
+                        "注入环境上下文；关闭时：不注入任何 Environment Prompt 内容。"
+                    ),
                 },
                 "config_path": {
                     "type": "string",
                     "title": "Config Path",
                     "default": "",
-                    "description":
-                        "Path to environ_prompt config file "
-                        "(YAML, JSON, or TOML). When empty, searches "
-                        ".hawi and ~/.hawi before falling back to built-in "
-                        "defaults.",
+                    "description": (
+                        "指定时：从该 YAML / JSON / TOML 文件加载 Environment "
+                        "Prompt 配置；留空时：先查找项目 .hawi/environ_prompt.*，"
+                        "再查找 ~/.hawi/environ_prompt.*，都没有或解析失败时使用"
+                        "内置默认配置。"
+                    ),
                 },
                 "include_project_rules": {
                     "type": "boolean",
-                    "title": "项目规则",
+                    "title": "项目规则文件(system prompt)",
                     "default": True,
-                    "description": "注入 AGENTS.md / CLAUDE.md 等项目规则文件。",
+                    "description": (
+                        "开启时：会话开始时读取项目根目录附近的 AGENTS.md / "
+                        "CLAUDE.md 等项目规则文件，并注入 system prompt；关闭时："
+                        "不读取也不注入这些项目规则。"
+                    ),
                 },
                 "include_workspace_status": {
                     "type": "boolean",
-                    "title": "工作区状态",
+                    "title": "工作区信息(user prompt)",
                     "default": True,
-                    "description": "每轮用户消息前注入当前工作目录和近期文件变更。",
+                    "description": (
+                        "开启时：每次用户消息前插入一条框架 user 消息，包含当前"
+                        "工作目录和自上次注入后修改过的文件；关闭时：不插入这类"
+                        "动态工作区状态。"
+                    ),
                 },
                 "include_runtime_environment": {
                     "type": "boolean",
-                    "title": "运行环境",
+                    "title": "环境信息(system prompt)",
                     "default": True,
-                    "description": "注入 OS、平台、架构、时区、CPU 和主机名等运行信息。",
+                    "description": (
+                        "开启时：会话开始时把启动时间、OS、平台、架构、时区、"
+                        "CPU 数量和主机名等运行信息注入 system prompt；关闭时："
+                        "不注入这些运行环境信息。"
+                    ),
                 },
             },
             "additionalProperties": False,

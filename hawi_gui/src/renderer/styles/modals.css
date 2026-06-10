@@ -584,6 +584,7 @@
 
 .plugin-list {
   padding: 14px;
+  gap: 0;
 }
 
 .model-modal .model-grid {
@@ -592,8 +593,7 @@
   overflow: auto;
 }
 
-.model-provider,
-.plugin-item {
+.model-provider {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   padding: 10px;
@@ -609,8 +609,19 @@
 .plugin-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
+  gap: 14px;
   align-items: start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.plugin-item:first-child {
+  padding-top: 0;
+}
+
+.plugin-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .model-provider-main,
@@ -817,7 +828,7 @@
 .plugin-info-preview {
   min-width: 0;
   height: 100%;
-  padding-left: 12px;
+  padding-left: 14px;
   border-left: 1px solid var(--color-border-subtle);
   color: #617078;
 }

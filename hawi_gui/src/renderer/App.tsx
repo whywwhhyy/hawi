@@ -9184,9 +9184,13 @@ function PluginDialog({
         {catalog.map((item) => (
           <section className="plugin-item" key={item.key}>
             <div className="plugin-main">
-              <label className="plugin-enable">
+              <label
+                className="plugin-enable"
+                title={`勾选并应用后加载 ${item.display_name} 插件；取消勾选并应用后不加载该插件。`}
+              >
                 <input
                   type="checkbox"
+                  title={`勾选并应用后加载 ${item.display_name} 插件；取消勾选并应用后不加载该插件。`}
                   checked={selected.has(item.key)}
                   onChange={(event) => {
                     const next = new Set(selected);
@@ -9364,19 +9368,28 @@ function pluginToolParameterNames(tool: PluginToolPreviewItem): string[] {
 
 function SchemaField({ field, schema, disabled, value, error, onChange }: { field: string; schema: JsonSchemaObject; disabled: boolean; value: unknown; error?: string; onChange: (value: unknown) => void }) {
   const label = schema.title ?? field;
+  const description = typeof schema.description === "string" ? schema.description : undefined;
+  const labelTitle = description ? `${label}\n${description}` : label;
   if (schema.type === "boolean") {
     return (
-      <label className="schema-field inline">
-        <span>{label}</span>
-        <input type="checkbox" disabled={disabled} checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+      <label className="schema-field inline" title={labelTitle}>
+        <span title={labelTitle}>{label}</span>
+        <input
+          type="checkbox"
+          title={description}
+          disabled={disabled}
+          checked={Boolean(value)}
+          onChange={(event) => onChange(event.target.checked)}
+        />
       </label>
     );
   }
   if (schema.enum && Array.isArray(schema.enum) && schema.enum.length > 0) {
     return (
-      <label className="schema-field">
-        <span>{label}</span>
+      <label className="schema-field" title={labelTitle}>
+        <span title={labelTitle}>{label}</span>
         <select
+          title={description}
           disabled={disabled}
           value={String(value ?? "")}
           onChange={(event) => onChange(coerceSchemaValue(schema, event.target.value))}
@@ -9386,21 +9399,20 @@ function SchemaField({ field, schema, disabled, value, error, onChange }: { fiel
             <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
           ))}
         </select>
-        {schema.description && <small>{schema.description}</small>}
         {error && <small className="schema-error">{error}</small>}
       </label>
     );
   }
   return (
-    <label className="schema-field">
-      <span>{label}</span>
+    <label className="schema-field" title={labelTitle}>
+      <span title={labelTitle}>{label}</span>
       <input
+        title={description}
         disabled={disabled}
         type={schema.type === "integer" || schema.type === "number" ? "number" : "text"}
         value={String(value ?? "")}
         onChange={(event) => onChange(coerceSchemaValue(schema, event.target.value))}
       />
-      {schema.description && <small>{schema.description}</small>}
       {error && <small className="schema-error">{error}</small>}
     </label>
   );

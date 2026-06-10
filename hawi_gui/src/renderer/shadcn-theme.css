@@ -790,13 +790,11 @@ body {
 }
 
 .model-provider,
-.plugin-item,
 .artifact-preview,
 .plugin-status,
 .plugin-message,
 .subagent-item,
 .queue-message,
-.plugin-info-preview,
 .history-result,
 .history-preview-pane,
 .history-results-pane {
