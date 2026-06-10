@@ -345,7 +345,7 @@ def test_tool_result_default_limit_is_context_friendly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_converts_oversized_text_result_to_error_with_preview(
+async def test_tool_executor_truncates_oversized_text_result_with_warning(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -368,13 +368,13 @@ async def test_tool_executor_converts_oversized_text_result_to_error_with_previe
         _ExecutionState(run_id="run-big", iteration=1),
     )
 
-    assert record.result.success is False
-    assert "Tool result from 'big_text_tool'" in record.result.error
-    assert isinstance(record.result.output, dict)
-    assert record.result.output["hawi_oversized_tool_result"] is True
-    assert record.result.output["original_output_type"] == "str"
-    assert record.result.output["output_preview"].startswith("xxx")
-    assert "Hawi warning:" in record.result.output["output_preview"]
+    assert record.result.success is True
+    assert record.result.error == ""
+    assert isinstance(record.result.output, str)
+    assert record.result.output.startswith("xxx")
+    assert record.result.output.endswith("]")
+    assert "Hawi warning:" in record.result.output
+    assert "Tool result was truncated" in record.result.output
     serialized = tool_executor_module.ToolExecutor._serialize_tool_result_for_limit(
         record.result
     )
@@ -382,14 +382,14 @@ async def test_tool_executor_converts_oversized_text_result_to_error_with_previe
     assert "exceeding limit 3000 bytes" in caplog.text
     tool_part = agent.context.messages[-1]["content"][0]
     assert tool_part["tool_call_id"] == "call-big"
-    assert tool_part["is_error"] is True
+    assert tool_part["is_error"] is False
     tool_text = tool_part["content"][0]["text"]
-    assert "Output before error:" in tool_text
-    assert "Error: Tool result from 'big_text_tool'" in tool_text
+    assert tool_text == record.result.output
+    assert tool_text.rstrip().endswith("]")
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_converts_oversized_structured_result_to_error_with_preview(
+async def test_tool_executor_truncates_oversized_structured_result_with_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("HAWI_DEBUG", raising=False)
@@ -410,13 +410,12 @@ async def test_tool_executor_converts_oversized_structured_result_to_error_with_
         _ExecutionState(run_id="run-big", iteration=1),
     )
 
-    assert record.result.success is False
-    assert "Tool result from 'big_dict_tool'" in record.result.error
-    assert isinstance(record.result.output, dict)
-    assert record.result.output["hawi_oversized_tool_result"] is True
-    assert record.result.output["original_output_type"] == "dict"
-    assert "serialized_preview" in record.result.output
-    assert "payload" in record.result.output["serialized_preview"]
+    assert record.result.success is True
+    assert record.result.error == ""
+    assert isinstance(record.result.output, str)
+    assert record.result.output.startswith("{\n")
+    assert '"payload"' in record.result.output
+    assert "Hawi warning:" in record.result.output
     serialized = tool_executor_module.ToolExecutor._serialize_tool_result_for_limit(
         record.result
     )
@@ -445,10 +444,11 @@ async def test_tool_executor_does_not_raise_on_oversized_tool_result_in_debug(
         _ExecutionState(run_id="run-big", iteration=1),
     )
 
-    assert record.result.success is False
-    assert "Tool result from 'big_text_tool'" in record.result.error
-    assert isinstance(record.result.output, dict)
-    assert record.result.output["output_preview"].startswith("xxx")
+    assert record.result.success is True
+    assert record.result.error == ""
+    assert isinstance(record.result.output, str)
+    assert record.result.output.startswith("xxx")
+    assert "Hawi warning:" in record.result.output
 
 
 @pytest.mark.asyncio

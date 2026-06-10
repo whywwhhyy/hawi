@@ -1341,11 +1341,9 @@ class ToolExecutor:
             f"Tool result from '{tool_name}' ({tool_call_id}) is {size_bytes} bytes, "
             f"exceeding limit {TOOL_RESULT_MAX_BYTES} bytes"
         )
-        logger.warning("%s; returning truncated error tool result", message)
-        return self._oversized_tool_result(
+        logger.warning("%s; returning truncated tool result", message)
+        return self._truncated_tool_result(
             result,
-            error_message=message,
-            serialized=serialized,
             size_bytes=size_bytes,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
@@ -1370,64 +1368,99 @@ class ToolExecutor:
 
     @staticmethod
     def _truncate_utf8(text: str, max_bytes: int) -> str:
-        encoded = text.encode("utf-8")
-        if len(encoded) <= max_bytes:
+        if len(text.encode("utf-8")) <= max_bytes:
             return text
-        suffix = TOOL_RESULT_TRUNCATION_SUFFIX
+        return ToolExecutor._truncate_utf8_with_suffix(
+            text,
+            max_bytes,
+            TOOL_RESULT_TRUNCATION_SUFFIX,
+        )
+
+    @staticmethod
+    def _truncate_utf8_with_suffix(text: str, max_bytes: int, suffix: str) -> str:
+        encoded = text.encode("utf-8")
         suffix_bytes = suffix.encode("utf-8")
         if max_bytes <= len(suffix_bytes):
             return suffix[:max(max_bytes, 0)]
         prefix = encoded[: max_bytes - len(suffix_bytes)]
         return prefix.decode("utf-8", errors="ignore") + suffix
 
-    def _oversized_tool_result(
+    @staticmethod
+    def _tool_output_text(output: Any) -> str:
+        if output is None:
+            return ""
+        if isinstance(output, str):
+            return output
+        try:
+            return json.dumps(output, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            return str(output)
+
+    def _truncated_tool_result(
         self,
         result: ToolResult,
         *,
-        error_message: str,
-        serialized: str,
         size_bytes: int,
         tool_name: str,
         tool_call_id: str,
         run_id: str,
     ) -> ToolResult:
-        error_budget_bytes = len(error_message.encode("utf-8")) + 256
+        warning_message = (
+            f"{TOOL_RESULT_TRUNCATION_WARNING} "
+            f"Original size: {size_bytes} bytes; limit: {TOOL_RESULT_MAX_BYTES} bytes; "
+            f"tool: {tool_name}; tool_call_id: {tool_call_id}; run_id: {run_id}."
+        )
+        warning_suffix = f"\n\n[Hawi warning: {warning_message}]"
+        source_text = self._tool_output_text(result.output)
+        error_text = result.error
         max_payload_bytes = max(
             0,
-            TOOL_RESULT_MAX_BYTES - 2048 - error_budget_bytes,
+            TOOL_RESULT_MAX_BYTES
+            - len(warning_suffix.encode("utf-8"))
+            - len(error_text.encode("utf-8"))
+            - 512,
         )
-        if isinstance(result.output, str):
-            output_preview = self._truncate_utf8(result.output, max_payload_bytes)
-            serialized_preview = None
-        else:
-            output_preview = None
-            serialized_preview = self._truncate_utf8(serialized, max_payload_bytes)
-
-        output: dict[str, Any] = {
-            "hawi_oversized_tool_result": True,
-            "warning": TOOL_RESULT_TRUNCATION_WARNING,
-            "tool_name": tool_name,
-            "tool_call_id": tool_call_id,
-            "run_id": run_id,
-            "original_success": result.success,
-            "original_size_bytes": size_bytes,
-            "max_size_bytes": TOOL_RESULT_MAX_BYTES,
-            "original_output_type": type(result.output).__name__,
-        }
-        if output_preview is not None:
-            output["output_preview"] = output_preview
-        if serialized_preview is not None:
-            output["serialized_preview"] = serialized_preview
-        if result.error:
-            output["original_error_preview"] = self._truncate_utf8(
-                result.error,
-                1024,
+        output = self._truncate_utf8_with_suffix(
+            source_text,
+            max_payload_bytes,
+            warning_suffix,
+        )
+        candidate = ToolResult(
+            success=result.success,
+            output=output,
+            error=error_text,
+            cache_point=result.cache_point,
+            cache_point_source=result.cache_point_source,
+        )
+        for _ in range(8):
+            if (
+                len(self._serialize_tool_result_for_limit(candidate).encode("utf-8"))
+                <= TOOL_RESULT_MAX_BYTES
+            ):
+                return candidate
+            max_payload_bytes = max(0, max_payload_bytes - 512)
+            candidate.output = self._truncate_utf8_with_suffix(
+                source_text,
+                max_payload_bytes,
+                warning_suffix,
             )
 
+        if candidate.error:
+            candidate.error = self._truncate_utf8_with_suffix(
+                candidate.error,
+                1024,
+                "\n\n[truncated]",
+            )
+        if (
+            len(self._serialize_tool_result_for_limit(candidate).encode("utf-8"))
+            <= TOOL_RESULT_MAX_BYTES
+        ):
+            return candidate
+
         return ToolResult(
-            success=False,
-            output=output,
-            error=error_message,
+            success=result.success,
+            output=warning_suffix.strip(),
+            error="",
             cache_point=result.cache_point,
             cache_point_source=result.cache_point_source,
         )
