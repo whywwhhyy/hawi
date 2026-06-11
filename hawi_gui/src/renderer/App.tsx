@@ -50,6 +50,115 @@ const markdown = new MarkdownIt({
   breaks: true,
   highlight: highlightCode
 });
+const INLINE_LATEX_SYMBOLS: Record<string, string> = {
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  delta: "δ",
+  epsilon: "ε",
+  theta: "θ",
+  lambda: "λ",
+  mu: "μ",
+  pi: "π",
+  rho: "ρ",
+  sigma: "σ",
+  tau: "τ",
+  phi: "φ",
+  omega: "ω",
+  Gamma: "Γ",
+  Delta: "Δ",
+  Theta: "Θ",
+  Lambda: "Λ",
+  Pi: "Π",
+  Sigma: "Σ",
+  Phi: "Φ",
+  Omega: "Ω",
+  to: "→",
+  rightarrow: "→",
+  longrightarrow: "⟶",
+  Rightarrow: "⇒",
+  Longrightarrow: "⟹",
+  leftarrow: "←",
+  longleftarrow: "⟵",
+  Leftarrow: "⇐",
+  Longleftarrow: "⟸",
+  leftrightarrow: "↔",
+  Leftrightarrow: "⇔",
+  mapsto: "↦",
+  uparrow: "↑",
+  downarrow: "↓",
+  le: "≤",
+  leq: "≤",
+  ge: "≥",
+  geq: "≥",
+  neq: "≠",
+  approx: "≈",
+  sim: "∼",
+  infty: "∞",
+  times: "×",
+  cdot: "·",
+  pm: "±",
+  mp: "∓",
+  ellipsis: "…",
+  ldots: "…",
+  in: "∈",
+  notin: "∉",
+  subset: "⊂",
+  subseteq: "⊆",
+  supset: "⊃",
+  supseteq: "⊇",
+  cup: "∪",
+  cap: "∩",
+  emptyset: "∅",
+  forall: "∀",
+  exists: "∃",
+  neg: "¬",
+  land: "∧",
+  lor: "∨"
+};
+
+function inlineLatexSymbolRule(state: MarkdownIt.StateInline, silent: boolean): boolean {
+  if (state.src.charCodeAt(state.pos) !== 0x24 /* $ */) return false;
+  if (state.src.charCodeAt(state.pos + 1) === 0x24 /* $ */) return false;
+
+  const close = findInlineLatexCloseDelimiter(state.src, state.pos + 1);
+  if (close < 0) return false;
+
+  const symbol = latexInlineSymbol(state.src.slice(state.pos + 1, close));
+  if (!symbol) return false;
+
+  if (!silent) {
+    const token = state.push("text_special", "", 0);
+    token.content = symbol;
+  }
+  state.pos = close + 1;
+  return true;
+}
+
+function findInlineLatexCloseDelimiter(value: string, from: number): number {
+  for (let index = from; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 0x24 /* $ */) continue;
+    if (isEscapedMarkdownDelimiter(value, index)) continue;
+    return index;
+  }
+  return -1;
+}
+
+function isEscapedMarkdownDelimiter(value: string, index: number): boolean {
+  let slashCount = 0;
+  for (let pos = index - 1; pos >= 0 && value.charCodeAt(pos) === 0x5c /* \ */; pos -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function latexInlineSymbol(value: string): string | null {
+  const match = value.trim().match(/^\\([A-Za-z]+)$/);
+  if (!match) return null;
+  return INLINE_LATEX_SYMBOLS[match[1]] ?? null;
+}
+
+markdown.inline.ruler.before("escape", "hawi_inline_latex_symbol", inlineLatexSymbolRule);
 const defaultLinkOpen = markdown.renderer.rules.link_open
   ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {

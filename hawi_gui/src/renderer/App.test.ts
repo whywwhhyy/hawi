@@ -1220,6 +1220,22 @@ describe("renderMarkdown", () => {
     expect(html).toContain("target=\"_blank\"");
     expect(html).toContain("rel=\"noopener noreferrer\"");
   });
+
+  it("renders simple inline LaTeX symbols as Unicode", () => {
+    const html = renderMarkdown("`1Sorghum` $\\rightarrow$ `Backup` $\\Leftarrow$ `Root`");
+
+    expect(html).toContain("<code>1Sorghum</code> → <code>Backup</code> ⇐ <code>Root</code>");
+    expect(html).not.toContain("\\rightarrow");
+    expect(html).not.toContain("\\Leftarrow");
+  });
+
+  it("does not render LaTeX symbols inside code spans or fenced code blocks", () => {
+    const inlineHtml = renderMarkdown("`$\\rightarrow$`");
+    const fencedHtml = renderMarkdown("```txt\n$\\rightarrow$\n```");
+
+    expect(inlineHtml).toContain("<code>$\\rightarrow$</code>");
+    expect(fencedHtml).toContain("$\\rightarrow$");
+  });
 });
 
 describe("codeBlockHasHorizontalOverflow", () => {
