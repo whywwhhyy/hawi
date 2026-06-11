@@ -8,7 +8,6 @@ launch_cwd="$PWD"
 
 if [[ ! -f "$gui_dir/package.json" ]]; then
   echo "Current Hawi GUI directory is missing: $gui_dir" >&2
-  echo "Start only targets $gui_dir_name; hawi_legacy_gui is archived and not used by this script." >&2
   exit 1
 fi
 

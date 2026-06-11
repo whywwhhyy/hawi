@@ -434,7 +434,7 @@ async def interrupt(
 兼容策略：
 
 - 库层默认 `pause=False`，避免破坏旧 API。
-- legacy GUI 的 interrupt 命令传 `pause=true` 时，engine 转为纯停止。
+- 旧客户端的 interrupt 命令传 `pause=true` 时，engine 转为纯停止。
 - 如果 reason 是 `"user"` 且来自 GUI，也可以由 engine 负责转为 pause。
 - 旧 `enqueue(queue="urgent")` 内部可以降级为 `interrupt(message=content, pause=False)` 或新 `stop(message=content)`，但不应再作为新 GUI 的入口。
 

@@ -14,7 +14,6 @@ GUI 侧启动 `hawi-engine` 作为常驻核心进程，通过 stdio/tcp/http 协
 
 - `hawi/`：Python 核心包，包含 `agent/`、`models/`、`tool/`、`plugin/`、`events/`、`session/`、`engine/` 和内置插件。
 - `hawi_gui/`：当前桌面 GUI，采用 shadcn 风格工作台界面，包含 React renderer、Electron main/preload、Tauri shell 和共享协议类型；以后 GUI 开发默认只改这里。
-- `hawi_legacy_gui/`：旧版桌面 GUI 封存目录。除非用户明确要求维护旧版，否则不要修改、重构、格式化或迁移这里的文件。
 - `hawi_engine/`：兼容入口包。
 - `test/`：Python 单元与集成测试。
 - `docs/`、`assets/`、`packaging/`：文档、资源和打包辅助文件。

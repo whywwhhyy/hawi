@@ -218,7 +218,7 @@ def test_gui_category_overrides_map_to_prompt_config(
     assert _inject_user_prompt(plugin) == ""
 
 
-def test_legacy_gui_detail_overrides_still_work_without_new_categories(
+def test_legacy_detail_overrides_still_work_without_new_categories(
     tmp_path: Path,
     monkeypatch,
 ) -> None:

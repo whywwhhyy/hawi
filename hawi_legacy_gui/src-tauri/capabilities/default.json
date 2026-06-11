@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Default desktop permissions for Hawi.",
-  "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "opener:default"]
-}

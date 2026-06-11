@@ -7,7 +7,6 @@ $guiDir = Join-Path $scriptDir $guiDirName
 
 if (-not (Test-Path -LiteralPath (Join-Path $guiDir "package.json") -PathType Leaf)) {
     [Console]::Error.WriteLine("Current Hawi GUI directory is missing: $guiDir")
-    [Console]::Error.WriteLine("Install only targets $guiDirName; hawi_legacy_gui is archived and not used by this script.")
     exit 1
 }
 
