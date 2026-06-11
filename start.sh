@@ -18,8 +18,12 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -d node_modules ]]; then
-  echo "Installing Hawi GUI dependencies..."
+dependencies_ready() {
+  [[ -d node_modules ]] && npm ls --depth=0 --silent >/dev/null 2>&1
+}
+
+if ! dependencies_ready; then
+  echo "Installing or repairing Hawi GUI dependencies..."
   npm install
 fi
 

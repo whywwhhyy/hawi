@@ -62,6 +62,15 @@ function Invoke-Npm {
     }
 }
 
+function Test-NpmDependencies {
+    if (-not (Test-Path -LiteralPath "node_modules" -PathType Container)) {
+        return $false
+    }
+
+    & $npm.Source ls --depth=0 --silent *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 function Add-HawiBinToUserPath {
     if ($env:OS -ne "Windows_NT") {
         return
@@ -112,8 +121,8 @@ if ($requiresUv) {
 
 Push-Location -LiteralPath $guiDir
 try {
-    if (-not (Test-Path -LiteralPath "node_modules" -PathType Container)) {
-        Write-Host "Installing Hawi GUI dependencies..."
+    if (-not (Test-NpmDependencies)) {
+        Write-Host "Installing or repairing Hawi GUI dependencies..."
         Invoke-Npm install
     }
 
