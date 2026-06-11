@@ -431,6 +431,16 @@ interface SessionRuntimeStats {
   maxLoaded: number;
 }
 
+interface CacheSensitiveSettingAcknowledgement {
+  sessionId: string | null;
+  messageCount: number;
+}
+
+interface PendingPluginApply {
+  selectedPlugins: string[];
+  pluginConfigs: Record<string, Record<string, unknown>>;
+}
+
 type EscapeDismissTarget =
   | "mediaPreview"
   | "subagentObserver"
@@ -439,6 +449,9 @@ type EscapeDismissTarget =
   | "messageEdit"
   | "pluginDialog"
   | "modelDialog"
+  | "systemPromptConfirm"
+  | "pluginSettingsConfirm"
+  | "toolCallPurposeConfirm"
   | "exportMenu"
   | "settingsMenu"
   | "queueTaskEdit"
@@ -451,6 +464,9 @@ interface EscapeDismissState {
   projectPopoverOpen: boolean;
   pluginDialogOpen: boolean;
   modelDialogOpen: boolean;
+  systemPromptConfirmOpen: boolean;
+  pluginSettingsConfirmOpen: boolean;
+  toolCallPurposeConfirmOpen: boolean;
   exportMenuOpen: boolean;
   subagentObserverOpen: boolean;
   settingsMenuOpen: boolean;
@@ -465,6 +481,9 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
+  if (state.systemPromptConfirmOpen) return "systemPromptConfirm";
+  if (state.pluginSettingsConfirmOpen) return "pluginSettingsConfirm";
+  if (state.toolCallPurposeConfirmOpen) return "toolCallPurposeConfirm";
   if (state.exportMenuOpen) return "exportMenu";
   if (state.settingsMenuOpen) return "settingsMenu";
   if (state.projectPopoverOpen) return "projectPopover";
@@ -481,6 +500,9 @@ function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTar
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
+  if (state.systemPromptConfirmOpen) return "systemPromptConfirm";
+  if (state.pluginSettingsConfirmOpen) return "pluginSettingsConfirm";
+  if (state.toolCallPurposeConfirmOpen) return "toolCallPurposeConfirm";
   if (state.exportMenuOpen) return "exportMenu";
   if (state.settingsMenuOpen) return "settingsMenu";
   if (state.projectPopoverOpen) return "projectPopover";
@@ -504,6 +526,12 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
       return ".plugin-modal";
     case "modelDialog":
       return ".model-modal";
+    case "systemPromptConfirm":
+      return ".system-prompt-confirm-modal";
+    case "pluginSettingsConfirm":
+      return ".plugin-settings-confirm-modal";
+    case "toolCallPurposeConfirm":
+      return ".tool-call-purpose-confirm-modal";
     case "exportMenu":
       return ".rail-export-menu";
     case "settingsMenu":
@@ -579,6 +607,9 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
       case "projectPopover":
         return scope.querySelector<HTMLElement>(".primary-button:not(:disabled)");
       case "pluginDialog":
+      case "systemPromptConfirm":
+      case "pluginSettingsConfirm":
+      case "toolCallPurposeConfirm":
         return scope.querySelector<HTMLElement>(".modal-actions .primary-button:not(:disabled)");
       case "modelDialog":
         return scope.querySelector<HTMLElement>(".model.active:not(:disabled)")
@@ -1116,6 +1147,12 @@ export default function App() {
   const [exportMenuStyle, setExportMenuStyle] = useState<CSSProperties>({});
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsMenuStyle, setSettingsMenuStyle] = useState<CSSProperties>({});
+  const [systemPromptConfirmOpen, setSystemPromptConfirmOpen] = useState(false);
+  const [systemPromptEditAcknowledgement, setSystemPromptEditAcknowledgement] = useState<CacheSensitiveSettingAcknowledgement | null>(null);
+  const [pluginSettingsConfirmOpen, setPluginSettingsConfirmOpen] = useState(false);
+  const [pluginSettingsApplyAcknowledgement, setPluginSettingsApplyAcknowledgement] = useState<CacheSensitiveSettingAcknowledgement | null>(null);
+  const [pendingPluginSettingsApply, setPendingPluginSettingsApply] = useState<PendingPluginApply | null>(null);
+  const [pendingToolCallPurposeEnabled, setPendingToolCallPurposeEnabled] = useState<boolean | null>(null);
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [historySearchCaseSensitive, setHistorySearchCaseSensitive] = useState(false);
@@ -1574,6 +1611,9 @@ export default function App() {
         projectPopoverOpen,
         pluginDialogOpen,
         modelDialogOpen,
+        systemPromptConfirmOpen,
+        pluginSettingsConfirmOpen,
+        toolCallPurposeConfirmOpen: pendingToolCallPurposeEnabled !== null,
         exportMenuOpen,
         subagentObserverOpen: subagentObserverId !== null,
         settingsMenuOpen,
@@ -1613,6 +1653,16 @@ export default function App() {
             break;
           case "modelDialog":
             setModelDialogOpen(false);
+            break;
+          case "systemPromptConfirm":
+            setSystemPromptConfirmOpen(false);
+            break;
+          case "pluginSettingsConfirm":
+            setPluginSettingsConfirmOpen(false);
+            setPendingPluginSettingsApply(null);
+            break;
+          case "toolCallPurposeConfirm":
+            setPendingToolCallPurposeEnabled(null);
             break;
           case "exportMenu":
             setExportMenuOpen(false);
@@ -1668,6 +1718,10 @@ export default function App() {
     projectPopoverOpen,
     pluginDialogOpen,
     modelDialogOpen,
+    systemPromptConfirmOpen,
+    pluginSettingsConfirmOpen,
+    pendingPluginSettingsApply,
+    pendingToolCallPurposeEnabled,
     exportMenuOpen,
     mediaPreview,
     subagentObserverId,
@@ -1750,14 +1804,28 @@ export default function App() {
     }
   }, []);
 
-  const systemPromptLocked = state.nodes.some(isConversationNode);
+  const currentSessionHasConversation = state.nodes.some(isConversationNode);
+  const systemPromptRequiresConfirmation = shouldConfirmSystemPromptEdit({
+    hasConversation: currentSessionHasConversation,
+    sessionId: currentSessionId,
+    messageCount: state.sessionMessageCount,
+    acknowledgedSessionId: systemPromptEditAcknowledgement?.sessionId ?? null,
+    acknowledgedMessageCount: systemPromptEditAcknowledgement?.messageCount ?? null
+  });
+  const pluginSettingsApplyRequiresConfirmation = shouldConfirmPluginSettingsApply({
+    hasConversation: currentSessionHasConversation,
+    sessionId: currentSessionId,
+    messageCount: state.sessionMessageCount,
+    acknowledgedSessionId: pluginSettingsApplyAcknowledgement?.sessionId ?? null,
+    acknowledgedMessageCount: pluginSettingsApplyAcknowledgement?.messageCount ?? null
+  });
   const toolCallPurposeControl = resolveToolCallPurposeControlState();
   const contextRunnerBusy = state.runnerState === "RUNNING" || state.runnerState === "INTERRUPTING";
   const canCompactContextManually = coreRunning && !contextRunnerBusy && state.contextCompression?.active !== true;
 
   useEffect(() => {
     resizeTextareaToRows(systemPromptRef.current, SYSTEM_PROMPT_MAX_ROWS);
-  }, [config?.systemPrompt, settingsMenuOpen, systemPromptLocked]);
+  }, [config?.systemPrompt, settingsMenuOpen, systemPromptRequiresConfirmation]);
 
   useEffect(() => {
     resizeTextareaToRows(inputRef.current, MESSAGE_INPUT_MAX_ROWS);
@@ -3423,6 +3491,47 @@ export default function App() {
     })();
   }
 
+  function requestSystemPromptEditConfirmation() {
+    if (!systemPromptRequiresConfirmation) return;
+    setSystemPromptConfirmOpen(true);
+  }
+
+  function confirmSystemPromptEdit() {
+    setSystemPromptEditAcknowledgement({
+      sessionId: currentSessionId,
+      messageCount: state.sessionMessageCount
+    });
+    setSystemPromptConfirmOpen(false);
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      systemPromptRef.current?.focus({ preventScroll: true });
+    });
+  }
+
+  function confirmPluginSettingsApply() {
+    const pendingApply = pendingPluginSettingsApply;
+    setPluginSettingsApplyAcknowledgement({
+      sessionId: currentSessionId,
+      messageCount: state.sessionMessageCount
+    });
+    setPluginSettingsConfirmOpen(false);
+    setPendingPluginSettingsApply(null);
+    if (!pendingApply) return;
+    void performApplyPlugins(pendingApply.selectedPlugins, pendingApply.pluginConfigs);
+  }
+
+  function handleSystemPromptPointerDown(event: ReactMouseEvent<HTMLTextAreaElement>) {
+    if (!systemPromptRequiresConfirmation) return;
+    event.preventDefault();
+    requestSystemPromptEditConfirmation();
+  }
+
+  function handleSystemPromptFocus() {
+    if (!systemPromptRequiresConfirmation) return;
+    requestSystemPromptEditConfirmation();
+    systemPromptRef.current?.blur();
+  }
+
   async function selectModel(modelName: string) {
     if (!config || !metadata) return;
     const nextConfig = { ...config, modelName };
@@ -3490,6 +3599,18 @@ export default function App() {
   }
 
   async function applyPlugins(selectedPlugins: string[], pluginConfigs: Record<string, Record<string, unknown>>) {
+    if (pluginSettingsApplyRequiresConfirmation) {
+      setPendingPluginSettingsApply({
+        selectedPlugins,
+        pluginConfigs
+      });
+      setPluginSettingsConfirmOpen(true);
+      return;
+    }
+    await performApplyPlugins(selectedPlugins, pluginConfigs);
+  }
+
+  async function performApplyPlugins(selectedPlugins: string[], pluginConfigs: Record<string, Record<string, unknown>>) {
     if (!config) return;
     if (!currentSessionIdRef.current) {
       const nextConfig = { ...(configRef.current ?? config), selectedPlugins, pluginConfigs: normalizePluginConfigs(pluginConfigs) };
@@ -3605,13 +3726,34 @@ export default function App() {
     void saveGlobalAndSet(next);
   }
 
-  function updateToolCallPurposeEnabled(enabled: boolean) {
+  function requestToolCallPurposeEnabledChange(enabled: boolean) {
+    const baseConfig = configRef.current ?? config;
+    if (!baseConfig) return;
+    if (shouldConfirmToolCallPurposeChange({
+      hasConversation: currentSessionHasConversation,
+      currentEnabled: baseConfig.toolCallPurposeEnabled,
+      nextEnabled: enabled
+    })) {
+      setPendingToolCallPurposeEnabled(enabled);
+      return;
+    }
+    applyToolCallPurposeEnabled(enabled);
+  }
+
+  function applyToolCallPurposeEnabled(enabled: boolean) {
     const baseConfig = configRef.current ?? config;
     if (!baseConfig) return;
     const next = { ...baseConfig, toolCallPurposeEnabled: enabled };
     configRef.current = next;
     setConfig(next);
     void saveGlobalAndSet(next);
+  }
+
+  function confirmToolCallPurposeChange() {
+    const enabled = pendingToolCallPurposeEnabled;
+    setPendingToolCallPurposeEnabled(null);
+    if (enabled === null) return;
+    applyToolCallPurposeEnabled(enabled);
   }
 
   function updateProfilingEnabled(enabled: boolean) {
@@ -3748,10 +3890,17 @@ export default function App() {
                     className="rail-system-prompt-input"
                     rows={4}
                     value={config.systemPrompt}
-                    disabled={systemPromptLocked}
-                    title={systemPromptLocked ? "当前会话已有消息，System Prompt 已锁定" : "System Prompt"}
+                    readOnly={systemPromptRequiresConfirmation}
+                    title={systemPromptRequiresConfirmation ? "当前会话已有消息，点击确认后可编辑 System Prompt" : "System Prompt"}
                     aria-label="System Prompt"
+                    aria-readonly={systemPromptRequiresConfirmation}
+                    onMouseDown={handleSystemPromptPointerDown}
+                    onFocus={handleSystemPromptFocus}
                     onChange={(event) => {
+                      if (systemPromptRequiresConfirmation) {
+                        requestSystemPromptEditConfirmation();
+                        return;
+                      }
                       resizeTextareaToRows(event.currentTarget, SYSTEM_PROMPT_MAX_ROWS);
                       const nextConfig = { ...config, systemPrompt: event.target.value };
                       setConfig(nextConfig);
@@ -3793,7 +3942,7 @@ export default function App() {
                       type="checkbox"
                       checked={config.toolCallPurposeEnabled}
                       disabled={toolCallPurposeControl.disabled}
-                      onChange={(event) => updateToolCallPurposeEnabled(event.target.checked)}
+                      onChange={(event) => requestToolCallPurposeEnabledChange(event.target.checked)}
                     />
                     工具调用目的
                   </label>
@@ -4092,7 +4241,112 @@ export default function App() {
           onClose={() => setMediaPreview(null)}
         />
       )}
+      {systemPromptConfirmOpen && (
+        <SystemPromptConfirmModal
+          onCancel={() => setSystemPromptConfirmOpen(false)}
+          onConfirm={confirmSystemPromptEdit}
+        />
+      )}
+      {pluginSettingsConfirmOpen && (
+        <PluginSettingsConfirmModal
+          onCancel={() => {
+            setPluginSettingsConfirmOpen(false);
+            setPendingPluginSettingsApply(null);
+          }}
+          onConfirm={confirmPluginSettingsApply}
+        />
+      )}
+      {pendingToolCallPurposeEnabled !== null && (
+        <ToolCallPurposeConfirmModal
+          enabled={pendingToolCallPurposeEnabled}
+          onCancel={() => setPendingToolCallPurposeEnabled(null)}
+          onConfirm={confirmToolCallPurposeChange}
+        />
+      )}
     </div>
+  );
+}
+
+function SystemPromptConfirmModal({
+  onCancel,
+  onConfirm
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal
+      title="确认编辑 System Prompt"
+      className="confirm-modal system-prompt-confirm-modal"
+      onClose={onCancel}
+      footer={(
+        <div className="modal-action-row">
+          <button type="button" className="tool-button" onClick={onCancel}>取消</button>
+          <button type="button" className="primary-button" onClick={onConfirm}>确认编辑</button>
+        </div>
+      )}
+    >
+      <div className="confirm-content">
+        <p>当前 Session 已有对话。修改 System Prompt 会改变后续请求的系统提示，可能降低当前上下文的 KV cache 命中率。</p>
+        <p>确认后，在当前消息数不变期间可以继续编辑；会话消息更新后，下次编辑会重新确认。</p>
+      </div>
+    </Modal>
+  );
+}
+
+function PluginSettingsConfirmModal({
+  onCancel,
+  onConfirm
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal
+      title="确认应用 Plugin 设置"
+      className="confirm-modal plugin-settings-confirm-modal"
+      onClose={onCancel}
+      footer={(
+        <div className="modal-action-row">
+          <button type="button" className="tool-button" onClick={onCancel}>取消</button>
+          <button type="button" className="primary-button" onClick={onConfirm}>确认应用</button>
+        </div>
+      )}
+    >
+      <div className="confirm-content">
+        <p>当前 Session 已有对话。修改 Plugin 启用状态或配置会改变后续可用工具和工具提示内容，可能降低当前上下文的 KV cache 命中率。</p>
+        <p>确认后会应用当前 Plugin 设置；会话消息更新后，下次应用会重新确认。</p>
+      </div>
+    </Modal>
+  );
+}
+
+function ToolCallPurposeConfirmModal({
+  enabled,
+  onCancel,
+  onConfirm
+}: {
+  enabled: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal
+      title="确认修改工具调用目的"
+      className="confirm-modal tool-call-purpose-confirm-modal"
+      onClose={onCancel}
+      footer={(
+        <div className="modal-action-row">
+          <button type="button" className="tool-button" onClick={onCancel}>取消</button>
+          <button type="button" className="primary-button" onClick={onConfirm}>确认{enabled ? "开启" : "关闭"}</button>
+        </div>
+      )}
+    >
+      <div className="confirm-content">
+        <p>当前 Session 已有对话。修改“工具调用目的”会改变后续工具调用的提示内容，可能降低当前上下文的 KV cache 命中率。</p>
+        <p>确认后会从后续请求开始生效；如果想保持当前 cache 命中率，请在新 Session 中修改。</p>
+      </div>
+    </Modal>
   );
 }
 
@@ -10561,6 +10815,36 @@ export function resolveToolCallPurposeControlState(): { disabled: boolean; title
     disabled: false,
     title: "影响后续新 Session；当前 Session 需要重启后生效"
   };
+}
+
+export function shouldConfirmSystemPromptEdit(input: {
+  hasConversation: boolean;
+  sessionId: string | null;
+  messageCount: number;
+  acknowledgedSessionId: string | null;
+  acknowledgedMessageCount: number | null;
+}): boolean {
+  if (!input.hasConversation) return false;
+  return input.acknowledgedSessionId !== input.sessionId
+    || input.acknowledgedMessageCount !== input.messageCount;
+}
+
+export function shouldConfirmPluginSettingsApply(input: {
+  hasConversation: boolean;
+  sessionId: string | null;
+  messageCount: number;
+  acknowledgedSessionId: string | null;
+  acknowledgedMessageCount: number | null;
+}): boolean {
+  return shouldConfirmSystemPromptEdit(input);
+}
+
+export function shouldConfirmToolCallPurposeChange(input: {
+  hasConversation: boolean;
+  currentEnabled: boolean;
+  nextEnabled: boolean;
+}): boolean {
+  return input.hasConversation && input.currentEnabled !== input.nextEnabled;
 }
 
 export function thinkingExcerpt(value: string, maxChars = 120): string {

@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderToolArguments, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveToolCallPurposeControlState, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderToolArguments, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveToolCallPurposeControlState, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldConfirmPluginSettingsApply, shouldConfirmSystemPromptEdit, shouldConfirmToolCallPurposeChange, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -819,6 +819,9 @@ describe("resolveEscapeDismissTarget", () => {
     projectPopoverOpen: false,
     pluginDialogOpen: false,
     modelDialogOpen: false,
+    systemPromptConfirmOpen: false,
+    pluginSettingsConfirmOpen: false,
+    toolCallPurposeConfirmOpen: false,
     subagentObserverOpen: false,
     exportMenuOpen: false,
     settingsMenuOpen: false,
@@ -856,6 +859,21 @@ describe("resolveEscapeDismissTarget", () => {
       pluginDialogOpen: true,
       modelDialogOpen: true
     })).toBe("pluginDialog");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      systemPromptConfirmOpen: true,
+      settingsMenuOpen: true
+    })).toBe("systemPromptConfirm");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      pluginSettingsConfirmOpen: true,
+      settingsMenuOpen: true
+    })).toBe("pluginSettingsConfirm");
+    expect(resolveEscapeDismissTarget({
+      ...closed,
+      toolCallPurposeConfirmOpen: true,
+      settingsMenuOpen: true
+    })).toBe("toolCallPurposeConfirm");
   });
 
   it("closes the context popover after modal dialogs", () => {
@@ -1258,6 +1276,95 @@ describe("resolveToolCallPurposeControlState", () => {
       disabled: false,
       title: "影响后续新 Session；当前 Session 需要重启后生效"
     });
+  });
+});
+
+describe("shouldConfirmSystemPromptEdit", () => {
+  it("requires confirmation until the current session message count is acknowledged", () => {
+    expect(shouldConfirmSystemPromptEdit({
+      hasConversation: true,
+      sessionId: "session-1",
+      messageCount: 3,
+      acknowledgedSessionId: null,
+      acknowledgedMessageCount: null
+    })).toBe(true);
+    expect(shouldConfirmSystemPromptEdit({
+      hasConversation: true,
+      sessionId: "session-1",
+      messageCount: 3,
+      acknowledgedSessionId: "session-1",
+      acknowledgedMessageCount: 3
+    })).toBe(false);
+  });
+
+  it("resets confirmation when messages update or the session changes", () => {
+    expect(shouldConfirmSystemPromptEdit({
+      hasConversation: true,
+      sessionId: "session-1",
+      messageCount: 4,
+      acknowledgedSessionId: "session-1",
+      acknowledgedMessageCount: 3
+    })).toBe(true);
+    expect(shouldConfirmSystemPromptEdit({
+      hasConversation: true,
+      sessionId: "session-2",
+      messageCount: 3,
+      acknowledgedSessionId: "session-1",
+      acknowledgedMessageCount: 3
+    })).toBe(true);
+    expect(shouldConfirmSystemPromptEdit({
+      hasConversation: false,
+      sessionId: "session-1",
+      messageCount: 0,
+      acknowledgedSessionId: null,
+      acknowledgedMessageCount: null
+    })).toBe(false);
+  });
+});
+
+describe("shouldConfirmPluginSettingsApply", () => {
+  it("uses the same session message acknowledgement rule as System Prompt edits", () => {
+    expect(shouldConfirmPluginSettingsApply({
+      hasConversation: true,
+      sessionId: "session-1",
+      messageCount: 2,
+      acknowledgedSessionId: null,
+      acknowledgedMessageCount: null
+    })).toBe(true);
+    expect(shouldConfirmPluginSettingsApply({
+      hasConversation: true,
+      sessionId: "session-1",
+      messageCount: 2,
+      acknowledgedSessionId: "session-1",
+      acknowledgedMessageCount: 2
+    })).toBe(false);
+    expect(shouldConfirmPluginSettingsApply({
+      hasConversation: true,
+      sessionId: "session-1",
+      messageCount: 3,
+      acknowledgedSessionId: "session-1",
+      acknowledgedMessageCount: 2
+    })).toBe(true);
+  });
+});
+
+describe("shouldConfirmToolCallPurposeChange", () => {
+  it("requires confirmation only when a conversation already exists and the value changes", () => {
+    expect(shouldConfirmToolCallPurposeChange({
+      hasConversation: true,
+      currentEnabled: true,
+      nextEnabled: false
+    })).toBe(true);
+    expect(shouldConfirmToolCallPurposeChange({
+      hasConversation: false,
+      currentEnabled: true,
+      nextEnabled: false
+    })).toBe(false);
+    expect(shouldConfirmToolCallPurposeChange({
+      hasConversation: true,
+      currentEnabled: true,
+      nextEnabled: true
+    })).toBe(false);
   });
 });
 
