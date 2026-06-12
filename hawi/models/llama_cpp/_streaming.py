@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import Any, Iterator, cast
 
 from hawi.models.message import DeltaFinishPart, DeltaPart, DeltaProfilePart
@@ -23,11 +25,15 @@ class LlamaCppStreamProcessor(StreamProcessor):
         *,
         expect_usage: bool = False,
         profiling_enabled: bool = True,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         super().__init__(expect_usage=expect_usage)
         self._profiling_enabled = profiling_enabled
+        self._clock = clock or time.monotonic
         self._timings: dict[str, float | int] | None = None
         self._prompt_progress: dict[str, float | int] | None = None
+        self._prompt_progress_wall_origin: float | None = None
+        self._prompt_progress_elapsed_origin_ms: float | int | None = None
         self._peak_decode_tokens_per_second: float | int | None = None
         self._last_decode_sample: tuple[float | int, float | int] | None = None
         self._last_emitted_profile: dict[str, float | int | None] | None = None
@@ -50,7 +56,7 @@ class LlamaCppStreamProcessor(StreamProcessor):
             chunk_dict.get("prompt_progress")
         )
         if prompt_progress is not None:
-            self._prompt_progress = prompt_progress
+            self._prompt_progress = self._with_wall_elapsed_floor(prompt_progress)
 
         profile_delta = self._profile_delta()
         if profile_delta is not None:
@@ -101,6 +107,36 @@ class LlamaCppStreamProcessor(StreamProcessor):
             return None
         self._last_emitted_profile = current
         return DeltaProfilePart(type="profile_delta", profile=profile)
+
+    def _with_wall_elapsed_floor(
+        self,
+        prompt_progress: dict[str, float | int],
+    ) -> dict[str, float | int]:
+        time_ms = prompt_progress.get("time_ms")
+        if not isinstance(time_ms, (int, float)) or time_ms < 0:
+            return prompt_progress
+
+        now = self._clock()
+        if self._prompt_progress_wall_origin is None:
+            self._prompt_progress_wall_origin = now
+            self._prompt_progress_elapsed_origin_ms = time_ms
+            return prompt_progress
+
+        elapsed_origin_ms = self._prompt_progress_elapsed_origin_ms
+        if elapsed_origin_ms is None:
+            return prompt_progress
+
+        wall_elapsed_ms = elapsed_origin_ms + max(
+            0.0,
+            (now - self._prompt_progress_wall_origin) * 1000,
+        )
+        if wall_elapsed_ms <= time_ms:
+            return prompt_progress
+
+        return {
+            **prompt_progress,
+            "time_ms": wall_elapsed_ms,
+        }
 
     def _update_peak_decode_tokens_per_second(
         self,

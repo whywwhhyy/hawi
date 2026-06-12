@@ -165,6 +165,87 @@ def test_llama_cpp_stream_processor_attaches_profile_and_usage_fallbacks() -> No
     }
 
 
+def test_llama_cpp_stream_processor_bounds_live_prefill_rate_with_wall_time() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    processor = LlamaCppStreamProcessor(clock=clock)
+    first_parts = list(
+        processor.process_chunk(
+            {
+                "choices": [{"index": 0, "delta": {}}],
+                "prompt_progress": {
+                    "total": 400,
+                    "cache": 0,
+                    "processed": 100,
+                    "time_ms": 1000,
+                },
+            }
+        )
+    )
+    first_profile = next(part for part in first_parts if part["type"] == "profile_delta")
+    assert first_profile["profile"].get("prefill_tokens_per_second") == pytest.approx(100.0)
+
+    now += 4.0
+    second_parts = list(
+        processor.process_chunk(
+            {
+                "choices": [{"index": 0, "delta": {}}],
+                "prompt_progress": {
+                    "total": 400,
+                    "cache": 0,
+                    "processed": 200,
+                    "time_ms": 1000,
+                },
+            }
+        )
+    )
+    second_profile = next(part for part in second_parts if part["type"] == "profile_delta")
+    assert second_profile["profile"].get("prefill_ms") == pytest.approx(5000.0)
+    assert second_profile["profile"].get("prefill_tokens_per_second") == pytest.approx(40.0)
+
+
+def test_llama_cpp_stream_processor_keeps_larger_provider_elapsed_time() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    processor = LlamaCppStreamProcessor(clock=clock)
+    list(
+        processor.process_chunk(
+            {
+                "choices": [{"index": 0, "delta": {}}],
+                "prompt_progress": {
+                    "total": 400,
+                    "cache": 0,
+                    "processed": 100,
+                    "time_ms": 1000,
+                },
+            }
+        )
+    )
+
+    second_parts = list(
+        processor.process_chunk(
+            {
+                "choices": [{"index": 0, "delta": {}}],
+                "prompt_progress": {
+                    "total": 400,
+                    "cache": 0,
+                    "processed": 200,
+                    "time_ms": 5000,
+                },
+            }
+        )
+    )
+    second_profile = next(part for part in second_parts if part["type"] == "profile_delta")
+    assert second_profile["profile"].get("prefill_ms") == 5000
+    assert second_profile["profile"].get("prefill_tokens_per_second") == pytest.approx(40.0)
+
+
 def test_llama_cpp_stream_processor_ignores_first_decode_sample_for_peak() -> None:
     processor = LlamaCppStreamProcessor(expect_usage=True)
 
