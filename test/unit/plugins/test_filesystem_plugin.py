@@ -32,7 +32,9 @@ class TestFileSystemPlugin:
         # Write new file
         result = plugin.write_file(file_path, content)
         assert result.success is True
-        assert output_text(result).startswith(f"Created file: {os.path.abspath(file_path)}")
+        write_output = output_text(result)
+        assert write_output.startswith(f"Created file: {os.path.abspath(file_path)}")
+        assert "Changed +13/-0 chars, +1/-0 lines." in write_output
         assert os.path.exists(file_path)
 
         # Clear cache to simulate fresh read (write_file populates cache)
@@ -615,7 +617,7 @@ class TestFileSystemPlugin:
         assert output_text(result) == ""
 
     def test_write_file_update_existing(self, plugin, temp_dir):
-        """write_file to an existing file returns an update message with a diff."""
+        """write_file to an existing file returns a compact change summary."""
         file_path = os.path.join(temp_dir, "test.txt")
         with open(file_path, "w") as f:
             f.write("old content")
@@ -625,7 +627,10 @@ class TestFileSystemPlugin:
         assert result.success is True
         content = output_text(result)
         assert content.startswith(f"Updated file: {os.path.abspath(file_path)}")
-        assert "new content" in content
+        assert "Changed +11/-11 chars, +1/-1 lines." in content
+        assert "new content" not in content
+        assert "---" not in content
+        assert "@@" not in content
 
     def test_write_file_creates_nested_directories(self, plugin, temp_dir):
         """write_file automatically creates parent directories."""

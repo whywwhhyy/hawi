@@ -25,6 +25,14 @@ class FileReadState:
     show_line_numbers: bool
 
 
+@dataclass(frozen=True)
+class WriteSummary:
+    written_chars: int
+    removed_chars: int
+    written_lines: int
+    removed_lines: int
+
+
 class FileSystemPlugin(HawiPlugin):
     """
     文件系统操作插件，提供文件读写、编辑、搜索能力。
@@ -473,50 +481,6 @@ class FileSystemPlugin(HawiPlugin):
 
         return symbols
 
-    def _generate_structured_patch(
-        self, old_content: str, new_content: str, file_path: str = "file"
-    ) -> tuple[list[dict], str]:
-        old_lines = old_content.splitlines(keepends=False)
-        new_lines = new_content.splitlines(keepends=False)
-
-        git_diff = "\n".join(
-            difflib.unified_diff(
-                old_content.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=file_path,
-                tofile=file_path,
-            )
-        )
-
-        sm = difflib.SequenceMatcher(None, old_lines, new_lines)
-        hunks: list[dict] = []
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag == "equal":
-                continue
-            hunk_lines: list[str] = []
-            context_start = max(i1 - 2, 0)
-            for k in range(context_start, i1):
-                hunk_lines.append(f" {old_lines[k]}")
-            for k in range(i1, i2):
-                hunk_lines.append(f"-{old_lines[k]}")
-            for k in range(j1, j2):
-                hunk_lines.append(f"+{new_lines[k]}")
-            context_end = min(i2 + 2, len(old_lines))
-            for k in range(i2, context_end):
-                hunk_lines.append(f" {old_lines[k]}")
-
-            hunks.append(
-                {
-                    "old_start": i1 + 1,
-                    "old_lines": i2 - i1,
-                    "new_start": j1 + 1,
-                    "new_lines": j2 - j1,
-                    "lines": hunk_lines,
-                }
-            )
-
-        return hunks, git_diff
-
     def _format_structure_output(
         self,
         *,
@@ -546,19 +510,49 @@ class FileSystemPlugin(HawiPlugin):
                     lines.append(f"- {kind} {name}")
         return "\n".join(lines)
 
+    def _summarize_write_change(
+        self,
+        old_content: str,
+        new_content: str,
+    ) -> WriteSummary:
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        sm = difflib.SequenceMatcher(None, old_lines, new_lines)
+        written_chars = 0
+        removed_chars = 0
+        written_lines = 0
+        removed_lines = 0
+
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal":
+                continue
+            removed_chunk = "".join(old_lines[i1:i2])
+            written_chunk = "".join(new_lines[j1:j2])
+            removed_chars += len(removed_chunk)
+            written_chars += len(written_chunk)
+            removed_lines += i2 - i1
+            written_lines += j2 - j1
+
+        return WriteSummary(
+            written_chars=written_chars,
+            removed_chars=removed_chars,
+            written_lines=written_lines,
+            removed_lines=removed_lines,
+        )
+
     def _format_write_result(
         self,
         *,
         file_path: str,
         created: bool,
-        git_diff: str,
+        summary: WriteSummary,
     ) -> str:
         action = "Created" if created else "Updated"
-        if created:
-            return f"{action} file: {file_path}"
-        if git_diff.strip():
-            return f"{action} file: {file_path}\n\n{git_diff}"
-        return f"{action} file: {file_path}"
+        return (
+            f"{action} file: {file_path}\n\n"
+            f"Changed +{summary.written_chars}/-{summary.removed_chars} chars, "
+            f"+{summary.written_lines}/-{summary.removed_lines} lines."
+        )
 
     def _directory_entry_type(self, entry: os.DirEntry) -> str:
         if entry.is_symlink():
@@ -887,7 +881,7 @@ class FileSystemPlugin(HawiPlugin):
         """
         覆盖写入文件内容。如果文件已存在，必须先使用 read_file 读取。
 
-        写入后自动更新内部缓存；更新已有文件时返回 git diff 文本用于审计。
+        写入后自动更新内部缓存；成功时返回简短变更统计，不返回 diff 或文件正文。
 
         规则：
         - 已存在文件必须先 read_file 再 write_file（乐观并发控制）
@@ -952,15 +946,13 @@ class FileSystemPlugin(HawiPlugin):
             show_line_numbers=True,
         )
 
-        _, git_diff = self._generate_structured_patch(
-            original_content or "", content, file_path=abs_path
-        )
+        summary = self._summarize_write_change(original_content or "", content)
         return ToolResult(
             success=True,
             output=self._format_write_result(
                 file_path=abs_path,
                 created=not file_exists,
-                git_diff=git_diff,
+                summary=summary,
             ),
         )
 
