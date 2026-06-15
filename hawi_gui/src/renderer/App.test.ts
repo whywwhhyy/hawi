@@ -1221,15 +1221,28 @@ describe("renderMarkdown", () => {
     expect(html).toContain("rel=\"noopener noreferrer\"");
   });
 
-  it("renders simple inline LaTeX symbols as Unicode", () => {
+  it("renders simple inline LaTeX symbols with KaTeX", () => {
     const html = renderMarkdown("`1Sorghum` $\\rightarrow$ `Backup` $\\Leftarrow$ `Root`");
 
-    expect(html).toContain("<code>1Sorghum</code> → <code>Backup</code> ⇐ <code>Root</code>");
-    expect(html).not.toContain("\\rightarrow");
-    expect(html).not.toContain("\\Leftarrow");
+    expect(html).toContain("<code>1Sorghum</code>");
+    expect(html).toContain("<code>Backup</code>");
+    expect(html).toContain("class=\"katex\"");
+    expect(html).toContain("<span class=\"mrel\">→</span>");
+    expect(html).toContain("<span class=\"mrel\">⇐</span>");
+    expect(html).toContain("<annotation encoding=\"application/x-tex\">\\rightarrow</annotation>");
   });
 
-  it("does not render LaTeX symbols inside code spans or fenced code blocks", () => {
+  it("renders inline and display LaTeX formulas with KaTeX", () => {
+    const inlineHtml = renderMarkdown("$\\frac{a}{b} + x^2$");
+    const displayHtml = renderMarkdown("$$\n\\frac{a}{b}\n$$");
+
+    expect(inlineHtml).toContain("class=\"katex\"");
+    expect(inlineHtml).toContain("<annotation encoding=\"application/x-tex\">\\frac{a}{b} + x^2</annotation>");
+    expect(displayHtml).toContain("class=\"katex-display\"");
+    expect(displayHtml).toContain("<annotation encoding=\"application/x-tex\">\\frac{a}{b}</annotation>");
+  });
+
+  it("does not render LaTeX inside code spans or fenced code blocks", () => {
     const inlineHtml = renderMarkdown("`$\\rightarrow$`");
     const fencedHtml = renderMarkdown("```txt\n$\\rightarrow$\n```");
 

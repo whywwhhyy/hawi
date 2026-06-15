@@ -2,5 +2,6 @@
 @import "./styles/status-bar.css";
 @import "./styles/workspace.css";
 @import "./styles/chat-bubbles.css";
+@import "katex/dist/katex.min.css";
 @import "./styles/markdown-tools.css";
 @import "./styles/modals.css";

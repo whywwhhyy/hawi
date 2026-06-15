@@ -1,6 +1,7 @@
 import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DependencyList, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
 import MarkdownIt from "markdown-it";
+import katex from "katex";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import css from "highlight.js/lib/languages/css";
@@ -50,86 +51,25 @@ const markdown = new MarkdownIt({
   breaks: true,
   highlight: highlightCode
 });
-const INLINE_LATEX_SYMBOLS: Record<string, string> = {
-  alpha: "α",
-  beta: "β",
-  gamma: "γ",
-  delta: "δ",
-  epsilon: "ε",
-  theta: "θ",
-  lambda: "λ",
-  mu: "μ",
-  pi: "π",
-  rho: "ρ",
-  sigma: "σ",
-  tau: "τ",
-  phi: "φ",
-  omega: "ω",
-  Gamma: "Γ",
-  Delta: "Δ",
-  Theta: "Θ",
-  Lambda: "Λ",
-  Pi: "Π",
-  Sigma: "Σ",
-  Phi: "Φ",
-  Omega: "Ω",
-  to: "→",
-  rightarrow: "→",
-  longrightarrow: "⟶",
-  Rightarrow: "⇒",
-  Longrightarrow: "⟹",
-  leftarrow: "←",
-  longleftarrow: "⟵",
-  Leftarrow: "⇐",
-  Longleftarrow: "⟸",
-  leftrightarrow: "↔",
-  Leftrightarrow: "⇔",
-  mapsto: "↦",
-  uparrow: "↑",
-  downarrow: "↓",
-  le: "≤",
-  leq: "≤",
-  ge: "≥",
-  geq: "≥",
-  neq: "≠",
-  approx: "≈",
-  sim: "∼",
-  infty: "∞",
-  times: "×",
-  cdot: "·",
-  pm: "±",
-  mp: "∓",
-  ellipsis: "…",
-  ldots: "…",
-  in: "∈",
-  notin: "∉",
-  subset: "⊂",
-  subseteq: "⊆",
-  supset: "⊃",
-  supseteq: "⊇",
-  cup: "∪",
-  cap: "∩",
-  emptyset: "∅",
-  forall: "∀",
-  exists: "∃",
-  neg: "¬",
-  land: "∧",
-  lor: "∨"
-};
 
-function inlineLatexSymbolRule(state: MarkdownIt.StateInline, silent: boolean): boolean {
+interface MarkdownRenderEnv {
+  latexHtml?: string[];
+}
+
+function inlineLatexRule(state: MarkdownIt.StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x24 /* $ */) return false;
   if (state.src.charCodeAt(state.pos + 1) === 0x24 /* $ */) return false;
 
   const close = findInlineLatexCloseDelimiter(state.src, state.pos + 1);
   if (close < 0) return false;
 
-  const symbol = latexInlineSymbol(state.src.slice(state.pos + 1, close));
-  if (!symbol) return false;
+  const content = state.src.slice(state.pos + 1, close);
+  if (!isInlineLatexContent(content)) return false;
 
   if (!silent) {
-    const token = state.push("text_special", "", 0);
-    token.content = symbol;
+    const token = state.push("math_inline", "math", 0);
+    token.content = content.trim();
+    token.markup = "$";
   }
   state.pos = close + 1;
   return true;
@@ -144,6 +84,12 @@ function findInlineLatexCloseDelimiter(value: string, from: number): number {
   return -1;
 }
 
+function isInlineLatexContent(value: string): boolean {
+  if (!value.trim()) return false;
+  if (/^\s|\s$/.test(value)) return false;
+  return !/[\r\n]/.test(value);
+}
+
 function isEscapedMarkdownDelimiter(value: string, index: number): boolean {
   let slashCount = 0;
   for (let pos = index - 1; pos >= 0 && value.charCodeAt(pos) === 0x5c /* \ */; pos -= 1) {
@@ -152,13 +98,95 @@ function isEscapedMarkdownDelimiter(value: string, index: number): boolean {
   return slashCount % 2 === 1;
 }
 
-function latexInlineSymbol(value: string): string | null {
-  const match = value.trim().match(/^\\([A-Za-z]+)$/);
-  if (!match) return null;
-  return INLINE_LATEX_SYMBOLS[match[1]] ?? null;
+function blockLatexRule(state: MarkdownIt.StateBlock, startLine: number, endLine: number, silent: boolean): boolean {
+  let startPos = state.bMarks[startLine] + state.tShift[startLine];
+  const startMax = state.eMarks[startLine];
+  if (startPos + 2 > startMax) return false;
+  if (state.src.slice(startPos, startPos + 2) !== "$$") return false;
+
+  startPos += 2;
+  const firstLine = state.src.slice(startPos, startMax);
+  const firstLineClose = findBlockLatexCloseDelimiter(firstLine);
+  let content = "";
+  let nextLine = startLine;
+
+  if (firstLineClose >= 0) {
+    content = firstLine.slice(0, firstLineClose);
+  } else {
+    content = `${firstLine}\n`;
+    let found = false;
+    for (nextLine = startLine + 1; nextLine < endLine; nextLine += 1) {
+      const line = state.getLines(nextLine, nextLine + 1, state.blkIndent, false);
+      const close = findBlockLatexCloseDelimiter(line);
+      if (close >= 0) {
+        content += line.slice(0, close);
+        found = true;
+        break;
+      }
+      content += `${line}\n`;
+    }
+    if (!found) return false;
+  }
+
+  if (!content.trim()) return false;
+  if (silent) return true;
+
+  const token = state.push("math_block", "math", 0);
+  token.block = true;
+  token.content = content.trim();
+  token.markup = "$$";
+  token.map = [startLine, nextLine + 1];
+  state.line = nextLine + 1;
+  return true;
 }
 
-markdown.inline.ruler.before("escape", "hawi_inline_latex_symbol", inlineLatexSymbolRule);
+function findBlockLatexCloseDelimiter(value: string): number {
+  for (let index = 0; index < value.length - 1; index += 1) {
+    if (value.slice(index, index + 2) !== "$$") continue;
+    if (isEscapedMarkdownDelimiter(value, index)) continue;
+    return index;
+  }
+  return -1;
+}
+
+function renderLatexPlaceholder(value: string, displayMode: boolean, env: unknown): string {
+  const renderEnv = env as MarkdownRenderEnv;
+  if (!renderEnv.latexHtml) {
+    renderEnv.latexHtml = [];
+  }
+  const index = renderEnv.latexHtml.length;
+  renderEnv.latexHtml.push(renderLatex(value, displayMode));
+  const tag = displayMode ? "div" : "span";
+  return `<${tag} data-hawi-latex-placeholder="${index}"></${tag}>`;
+}
+
+function renderLatex(value: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(value, {
+      displayMode,
+      throwOnError: false,
+      trust: false,
+      strict: "ignore"
+    });
+  } catch {
+    return `<code>${escapeHtml(value)}</code>`;
+  }
+}
+
+function restoreLatexPlaceholders(value: string, latexHtml: string[]): string {
+  if (latexHtml.length === 0) return value;
+  return value.replace(
+    /<(span|div)\b[^>]*\sdata-hawi-latex-placeholder="(\d+)"[^>]*>\s*<\/\1>/g,
+    (_match: string, _tag: string, indexText: string) => latexHtml[Number(indexText)] ?? ""
+  );
+}
+
+markdown.inline.ruler.before("escape", "hawi_inline_latex", inlineLatexRule);
+markdown.block.ruler.before("fence", "hawi_block_latex", blockLatexRule, {
+  alt: ["paragraph", "reference", "blockquote", "list"]
+});
+markdown.renderer.rules.math_inline = (tokens, idx, _options, env) => renderLatexPlaceholder(tokens[idx].content, false, env);
+markdown.renderer.rules.math_block = (tokens, idx, _options, env) => renderLatexPlaceholder(tokens[idx].content, true, env);
 const defaultLinkOpen = markdown.renderer.rules.link_open
   ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
@@ -11170,7 +11198,11 @@ function isInputComposing(event: InputKeyEvent, inputComposing: boolean): boolea
 }
 
 export function renderMarkdown(value: string): string {
-  return sanitizeRenderedHtml(markdown.render(value));
+  const env: MarkdownRenderEnv = { latexHtml: [] };
+  return restoreLatexPlaceholders(
+    sanitizeRenderedHtml(markdown.render(value, env)),
+    env.latexHtml ?? []
+  );
 }
 
 export function formatStreamFinishedLabel(durationMs?: number): string | null {
