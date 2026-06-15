@@ -39,6 +39,11 @@ TASKFLOW_PROMPT_BEGIN = "<hawi-taskflow>"
 TASKFLOW_PROMPT_END = "</hawi-taskflow>"
 TASKFLOW_REMINDER_BEGIN = "<hawi-taskflow-reminder>"
 TASKFLOW_REMINDER_END = "</hawi-taskflow-reminder>"
+TASKFLOW_REMINDER_HEADER = (
+    "**TASKFLOWPLUGIN AUTOMATIC REMINDER - NOT A HUMAN USER MESSAGE**\n"
+    "source: TaskflowPlugin\n"
+    "purpose: continue taskflow execution while unfinished steps remain\n"
+)
 TASKFLOW_SUBMIT_CACHE_POINT_SOURCE = "taskflow.submit_taskflow_step"
 
 
@@ -280,6 +285,10 @@ class TaskflowPlugin(HawiPlugin):
                     run.completed_at = time.time()
                     self._sync_artifact()
                 return None
+            self._emit_runtime_reminder_message(
+                ctx,
+                data={"open_step_count": len(open_steps)},
+            )
             return HookResult.reinvoke(self._format_freeform_reminder(open_steps))
 
         step = self._current_step()
@@ -288,6 +297,14 @@ class TaskflowPlugin(HawiPlugin):
             run.completed_at = time.time()
             self._sync_artifact()
             return None
+        self._emit_runtime_reminder_message(
+            ctx,
+            data={
+                "current_step_id": step.id,
+                "current_step_title": step.title,
+                "current_step_status": step.status,
+            },
+        )
         return HookResult.reinvoke(self._format_step_reminder(step))
 
     @tool(
@@ -2072,6 +2089,7 @@ class TaskflowPlugin(HawiPlugin):
         transition_options = self._format_transition_options(step)
         return (
             f"{TASKFLOW_REMINDER_BEGIN}\n"
+            f"{TASKFLOW_REMINDER_HEADER}\n"
             "Taskflow current step context.\n\n"
             f"Step: {step.title} ({step.id})\n"
             f"Attempt: {step.attempt_count}/{step.review.max_retries}\n"
@@ -2086,6 +2104,8 @@ class TaskflowPlugin(HawiPlugin):
     def _format_freeform_reminder(self, open_steps: list[TaskflowStep]) -> str:
         lines = [
             f"{TASKFLOW_REMINDER_BEGIN}",
+            TASKFLOW_REMINDER_HEADER,
+            "",
             "Taskflow has unfinished steps. Continue the work or update step status.",
             "",
         ]
@@ -2098,6 +2118,7 @@ class TaskflowPlugin(HawiPlugin):
         if step.status == "completed" and len(self._transition_downstream_ids(step.id)) > 1:
             return (
                 f"{TASKFLOW_REMINDER_BEGIN}\n"
+                f"{TASKFLOW_REMINDER_HEADER}\n"
                 f"Taskflow step {step.title} ({step.id}) is complete and needs "
                 "a conditional route selection.\n\n"
                 f"{self._format_transition_options(step)}\n\n"
@@ -2107,11 +2128,25 @@ class TaskflowPlugin(HawiPlugin):
             )
         return (
             f"{TASKFLOW_REMINDER_BEGIN}\n"
+            f"{TASKFLOW_REMINDER_HEADER}\n"
             f"Taskflow is still running. Current step: {step.title} ({step.id}).\n\n"
             f"{step.instructions or step.description or step.title}\n\n"
             f"Available next transitions:\n{self._format_transition_options(step)}\n\n"
             "Complete the work and call submit_taskflow_step with output.\n"
             f"{TASKFLOW_REMINDER_END}"
+        )
+
+    def _emit_runtime_reminder_message(
+        self,
+        ctx: Any,
+        *,
+        data: dict[str, Any],
+    ) -> None:
+        self.emit_message(
+            "Taskflow has unfinished steps; asking the agent to continue.",
+            title="Taskflow reminder",
+            data=data,
+            run_id=getattr(ctx, "run_id", None),
         )
 
 

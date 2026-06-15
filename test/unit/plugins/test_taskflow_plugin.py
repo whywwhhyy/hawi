@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from hawi.agent.context import AgentContext
+from hawi.events import Event, EventBus
 from hawi.tool import ToolResult
 from hawi.builtin_plugins.taskflow_plugin import TaskflowPlugin
 from hawi.builtin_plugins.taskflow_plugin.plugin import TASKFLOW_SUBMIT_CACHE_POINT_SOURCE
@@ -75,6 +76,62 @@ def test_taskflow_plan_supports_tree_and_auto_parent_completion() -> None:
     assert steps["T2"]["status"] == "completed"
     assert steps["T3"]["status"] == "completed"
     assert status.output["open_step_count"] == 0
+
+
+def test_taskflow_runtime_reminder_is_visible_and_self_identifying() -> None:
+    bus = EventBus()
+    received: list[Event] = []
+    bus.subscribe_blocking(received.append)
+    plugin = TaskflowPlugin()
+    plugin.bind_event_bus(bus)
+    added = plugin.add_taskflow_steps(steps=[{"title": "Finish the task"}])
+    assert added.success is True
+
+    try:
+        result = plugin.continue_active_taskflow(
+            SimpleNamespace(),
+            SimpleNamespace(error=None, run_id="run-taskflow"),
+        )
+    finally:
+        bus.close(wait=True, timeout=2)
+
+    assert result is not None
+    assert result.action == "reinvoke"
+    assert result.message is not None
+    reminder = str(result.message)
+    assert "TASKFLOWPLUGIN AUTOMATIC REMINDER - NOT A HUMAN USER MESSAGE" in reminder
+    assert "Finish the task" in reminder
+    assert any(event.type == "plugin.message" for event in received)
+
+
+def test_taskflow_workflow_runtime_reminder_is_visible_and_self_identifying() -> None:
+    bus = EventBus()
+    received: list[Event] = []
+    bus.subscribe_blocking(received.append)
+    plugin = TaskflowPlugin()
+    plugin.bind_event_bus(bus)
+    created = _create_two_step_workflow(plugin)
+    assert created.success is True
+    started = plugin.start_taskflow()
+    assert started.success is True
+
+    try:
+        result = plugin.continue_active_taskflow(
+            SimpleNamespace(),
+            SimpleNamespace(error=None, run_id="run-taskflow"),
+        )
+    finally:
+        bus.close(wait=True, timeout=2)
+
+    assert result is not None
+    assert result.action == "reinvoke"
+    assert result.message is not None
+    reminder = str(result.message)
+    assert "TASKFLOWPLUGIN AUTOMATIC REMINDER - NOT A HUMAN USER MESSAGE" in reminder
+    assert "Research" in reminder
+    message_events = [event for event in received if event.type == "plugin.message"]
+    assert message_events
+    assert message_events[-1].payload["data"]["current_step_id"] == "research"
 
 
 def test_taskflow_workflow_routes_logger_reviewed_steps() -> None:
