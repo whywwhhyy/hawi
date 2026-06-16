@@ -777,10 +777,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     }
 
     case "agent.tool_runtime_context_injected":
-      return appendFrameworkInjection(
-        state,
-        frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected")
-      );
+      return state;
 
     case "agent.compact_start": {
       const eventAt = frameTime(frame);
@@ -1357,12 +1354,6 @@ function applyHistoryChatEvent(nodes: ChatNode[], frame: CoreFrame, historyIndex
     return true;
   }
   if (frame.type === "agent.tool_runtime_context_injected") {
-    appendHistoryFrameworkInjection(
-      nodes,
-      frame,
-      frameworkInjectionFromFrame(frame, payload, "tool_runtime_context_injected"),
-      historyIndex
-    );
     return true;
   }
   if (frame.type === "plugin.message") {

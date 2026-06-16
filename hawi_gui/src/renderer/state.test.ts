@@ -684,6 +684,25 @@ describe("core event reducer", () => {
         {
           run_id: "run-replay",
           role: "event",
+          content: [{ type: "text", text: "runtime context injected" }],
+          metadata: {
+            display_message_type: "core_event",
+            event_type: "agent.tool_runtime_context_injected",
+            event_payload: {
+              run_id: "run-replay",
+              tool_name: "complete_plan_item",
+              tool_call_id: "tc-plan",
+              parameter_name: "ctx",
+              plugin_id: "plan",
+              plugin_name: "Plan",
+              plugin_role: "plugin",
+              injection_name: "complete_plan_item.ctx"
+            }
+          }
+        },
+        {
+          run_id: "run-replay",
+          role: "event",
           content: [{ type: "text", text: "Collected notes" }],
           metadata: {
             display_message_type: "core_event",
@@ -2203,7 +2222,7 @@ describe("core event reducer", () => {
     expect(state.processing).toMatchObject({ runId: "run-context" });
   });
 
-  it("shows runtime context injections as framework bubbles", () => {
+  it("does not show runtime context injections as framework bubbles", () => {
     let state = createInitialState();
     state = reduceCoreEvent(state, frame("agent.tool_runtime_context_injected", {
       run_id: "run-tool",
@@ -2216,13 +2235,7 @@ describe("core event reducer", () => {
       injection_name: "runtime_context"
     }));
 
-    expect(state.nodes.map((node) => node.kind)).toEqual(["framework"]);
-    expect(state.nodes[0].framework).toMatchObject({
-      kind: "tool_runtime_context_injected",
-      toolName: "inspect",
-      parameterName: "context",
-      pluginName: "InspectorPlugin"
-    });
+    expect(state.nodes).toEqual([]);
   });
 
   it("keeps plugin messages in the plugin log and mirrors them as framework bubbles", () => {
