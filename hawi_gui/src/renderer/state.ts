@@ -275,6 +275,30 @@ export interface SubAgentRuntimeState {
   lastEventAt?: number;
 }
 
+export type SideThreadStatus = "running" | "completed" | "error" | "cancelled" | "stale";
+
+export interface SideThreadState {
+  id: string;
+  sessionId?: string;
+  anchorContextMessageId?: string;
+  anchorMessageIndex?: number;
+  anchorRole?: string;
+  anchorPreview: string;
+  quotedText: string;
+  quotedRange?: { start: number; end: number };
+  quotedPreview: string;
+  createdAt?: number;
+  updatedAt?: number;
+  status: SideThreadStatus;
+  error?: string | null;
+  messages: SessionHistoryRecord[];
+  nodes: ChatNode[];
+  runs: Record<string, RunState>;
+  toolNodeByCallId: Record<string, string>;
+  activeRunId?: string;
+  processing?: ProcessingState;
+}
+
 interface RunState {
   userNodeId?: string;
   agentNodeId?: string;
@@ -313,6 +337,8 @@ export interface AppState {
   toolProgress: Record<string, ToolProgressState>;
   subagents: Record<string, SubAgentRuntimeState>;
   subagentOrder: string[];
+  sideThreads: Record<string, SideThreadState>;
+  sideThreadOrder: string[];
   sessionMessageCount: number;
   nextContextMessageIndex: number;
   processing?: ProcessingState;
@@ -342,6 +368,8 @@ export function createInitialState(): AppState {
     toolProgress: {},
     subagents: {},
     subagentOrder: [],
+    sideThreads: {},
+    sideThreadOrder: [],
     sessionMessageCount: 0,
     nextContextMessageIndex: 0,
     processing: undefined
@@ -350,6 +378,29 @@ export function createInitialState(): AppState {
 
 export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
   const payload = (frame.payload ?? {}) as Record<string, unknown>;
+  const sideThreadId = optionalString(payload.side_thread_id);
+  if (sideThreadId && frame.type !== "side_thread.update") {
+    if (sideThreadFrameHiddenFromTranscript(frame.type)) {
+      return state;
+    }
+    return reduceSideThreadCoreEvent(state, sideThreadId, frame);
+  }
+  return reduceMainCoreEvent(state, frame);
+}
+
+function sideThreadFrameHiddenFromTranscript(type: string): boolean {
+  return type === "agent.system_prompt"
+    || type === "agent.context_injected"
+    || type === "agent.tool_runtime_context_injected"
+    || type === "debug.info"
+    || type === "model.metadata"
+    || type === "model.profile"
+    || type === "model.retry";
+}
+
+function reduceMainCoreEvent(state: AppState, frame: CoreFrame): AppState {
+  const payload = (frame.payload ?? {}) as Record<string, unknown>;
+  const sideThreadId = optionalString(payload.side_thread_id);
   switch (frame.type) {
     case "gui.clear_chat":
       return {
@@ -373,6 +424,8 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         toolProgress: {},
         subagents: {},
         subagentOrder: [],
+        sideThreads: {},
+        sideThreadOrder: [],
         sessionMessageCount: 0,
         nextContextMessageIndex: 0,
         processing: undefined
@@ -406,10 +459,23 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
         toolProgress: replayState.toolProgress,
         subagents: replayState.subagents,
         subagentOrder: replayState.subagentOrder,
+        sideThreads: {},
+        sideThreadOrder: [],
         sessionMessageCount: history.length,
         nextContextMessageIndex: nextContextMessageIndexFromHistory(history),
         processing: undefined
       };
+    }
+
+    case "gui.load_side_threads": {
+      return loadSideThreads(state, payload.side_threads);
+    }
+
+    case "side_thread.update": {
+      if (payload.deleted === true) {
+        return removeSideThread(state, optionalString(payload.side_thread_id));
+      }
+      return upsertSideThread(state, normalizeSideThread(payload.side_thread));
     }
 
     case "gui.select_artifact": {
@@ -439,7 +505,7 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
       const userContent = String(payload.user_content ?? "");
       const contentParts = normalizeContentParts(payload.content);
       const userNodeId = messageId ? userMessageNodeId(messageId) : nodeId("user", runId);
-      const existingUser = releaseDedupFallbackEnabled()
+      const existingUser = releaseDedupFallbackEnabled() || sideThreadId
         ? findRunStartUserNode(
             state,
             userNodeId,
@@ -945,6 +1011,170 @@ export function reduceCoreEvent(state: AppState, frame: CoreFrame): AppState {
     default:
       return state;
   }
+}
+
+function reduceSideThreadCoreEvent(
+  state: AppState,
+  sideThreadId: string,
+  frame: CoreFrame,
+): AppState {
+  const existing = state.sideThreads[sideThreadId] ?? createEmptySideThread(sideThreadId, frame);
+  const base = createInitialState();
+  const transcriptState: AppState = {
+    ...base,
+    nodes: existing.nodes,
+    runs: existing.runs,
+    toolNodeByCallId: existing.toolNodeByCallId,
+    activeRunId: existing.activeRunId,
+    processing: existing.processing,
+    sessionMessageCount: existing.messages.length,
+  };
+  const nextTranscript = reduceMainCoreEvent(transcriptState, frame);
+  const updated: SideThreadState = {
+    ...existing,
+    nodes: nextTranscript.nodes,
+    runs: nextTranscript.runs,
+    toolNodeByCallId: nextTranscript.toolNodeByCallId,
+    activeRunId: nextTranscript.activeRunId,
+    processing: nextTranscript.processing,
+    updatedAt: frameTime(frame),
+  };
+  return upsertSideThreadState(state, updated);
+}
+
+function loadSideThreads(state: AppState, value: unknown): AppState {
+  if (!Array.isArray(value)) {
+    return { ...state, sideThreads: {}, sideThreadOrder: [] };
+  }
+  const sideThreads: Record<string, SideThreadState> = {};
+  const sideThreadOrder: string[] = [];
+  for (const item of value) {
+    const sideThread = normalizeSideThread(item);
+    if (!sideThread) continue;
+    sideThreads[sideThread.id] = sideThread;
+    sideThreadOrder.push(sideThread.id);
+  }
+  sideThreadOrder.sort((left, right) => {
+    const leftThread = sideThreads[left];
+    const rightThread = sideThreads[right];
+    return (rightThread?.createdAt ?? 0) - (leftThread?.createdAt ?? 0);
+  });
+  return { ...state, sideThreads, sideThreadOrder };
+}
+
+function upsertSideThread(state: AppState, sideThread: SideThreadState | null): AppState {
+  if (!sideThread) return state;
+  const existing = state.sideThreads[sideThread.id];
+  if (existing) {
+    const isRunning = sideThread.status === "running";
+    const shouldUseIncomingNodes = sideThread.status === "completed"
+      || sideThread.nodes.length >= existing.nodes.length;
+    sideThread = {
+      ...sideThread,
+      nodes: shouldUseIncomingNodes ? sideThread.nodes : existing.nodes,
+      runs: Object.keys(existing.runs).length > 0 && isRunning ? existing.runs : sideThread.runs,
+      toolNodeByCallId: Object.keys(existing.toolNodeByCallId).length > 0 && isRunning
+        ? existing.toolNodeByCallId
+        : sideThread.toolNodeByCallId,
+      activeRunId: isRunning ? (existing.activeRunId ?? sideThread.activeRunId) : sideThread.activeRunId,
+      processing: isRunning ? (existing.processing ?? sideThread.processing) : sideThread.processing,
+    };
+  }
+  return upsertSideThreadState(state, sideThread);
+}
+
+function upsertSideThreadState(state: AppState, sideThread: SideThreadState): AppState {
+  const exists = Object.prototype.hasOwnProperty.call(state.sideThreads, sideThread.id);
+  const sideThreads = {
+    ...state.sideThreads,
+    [sideThread.id]: sideThread,
+  };
+  const sideThreadOrder = exists
+    ? state.sideThreadOrder
+    : [sideThread.id, ...state.sideThreadOrder];
+  return { ...state, sideThreads, sideThreadOrder };
+}
+
+function removeSideThread(state: AppState, sideThreadId: string | undefined): AppState {
+  if (!sideThreadId || !Object.prototype.hasOwnProperty.call(state.sideThreads, sideThreadId)) {
+    return state;
+  }
+  const sideThreads = { ...state.sideThreads };
+  delete sideThreads[sideThreadId];
+  return {
+    ...state,
+    sideThreads,
+    sideThreadOrder: state.sideThreadOrder.filter((id) => id !== sideThreadId),
+  };
+}
+
+function normalizeSideThread(value: unknown): SideThreadState | null {
+  if (!isRecord(value)) return null;
+  const id = optionalString(value.id);
+  if (!id) return null;
+  const messages = normalizeSessionHistory(value.messages);
+  const status = normalizeSideThreadStatus(value.status);
+  return {
+    id,
+    sessionId: optionalString(value.session_id ?? value.sessionId),
+    anchorContextMessageId: optionalString(value.anchor_context_message_id ?? value.anchorContextMessageId),
+    anchorMessageIndex: optionalNumber(value.anchor_message_index ?? value.anchorMessageIndex),
+    anchorRole: optionalString(value.anchor_role ?? value.anchorRole),
+    anchorPreview: optionalString(value.anchor_preview ?? value.anchorPreview) ?? "",
+    quotedText: optionalString(value.quoted_text ?? value.quotedText) ?? "",
+    quotedRange: normalizeQuotedRange(value.quoted_range ?? value.quotedRange),
+    quotedPreview: optionalString(value.quoted_preview ?? value.quotedPreview) ?? "",
+    createdAt: optionalNumber(value.created_at ?? value.createdAt),
+    updatedAt: optionalNumber(value.updated_at ?? value.updatedAt),
+    status,
+    error: optionalString(value.error),
+    messages,
+    nodes: chatNodesFromMessageHistory(messages),
+    runs: {},
+    toolNodeByCallId: {},
+  };
+}
+
+function createEmptySideThread(sideThreadId: string, frame: CoreFrame): SideThreadState {
+  const payload = (frame.payload ?? {}) as Record<string, unknown>;
+  return {
+    id: sideThreadId,
+    sessionId: optionalString(payload.session_id),
+    anchorContextMessageId: optionalString(payload.anchor_context_message_id),
+    anchorPreview: "",
+    quotedText: "",
+    quotedPreview: "",
+    createdAt: frameTime(frame),
+    updatedAt: frameTime(frame),
+    status: "running",
+    error: null,
+    messages: [],
+    nodes: [],
+    runs: {},
+    toolNodeByCallId: {},
+  };
+}
+
+function normalizeSideThreadStatus(value: unknown): SideThreadStatus {
+  if (
+    value === "running"
+    || value === "completed"
+    || value === "error"
+    || value === "cancelled"
+    || value === "stale"
+  ) {
+    return value;
+  }
+  return "completed";
+}
+
+function normalizeQuotedRange(value: unknown): { start: number; end: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const start = optionalNumber(value.start);
+  const end = optionalNumber(value.end);
+  if (start === undefined || end === undefined) return undefined;
+  if (start < 0 || end < start) return undefined;
+  return { start, end };
 }
 
 function normalizeControlState(value: unknown): RuntimeControlState {

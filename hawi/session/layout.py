@@ -8,6 +8,7 @@ Each session lives in its own directory under ``root``::
         message_history.jsonl  # append-only user-visible messages
         queues.json            # runner queues + steer + runner control
         runtime.json           # in-flight run state + last unsent results
+        side_threads.json      # anchored temporary conversations
         plugins/<name>.json    # one per plugin returning non-None state
         exports/<id>/...       # session-internal markdown export bundles
         subagents/<id>/...     # child agent histories and export bundles
@@ -35,6 +36,7 @@ CONTEXT_FILENAME = "context.json"
 MESSAGE_HISTORY_FILENAME = "message_history.jsonl"
 QUEUES_FILENAME = "queues.json"
 RUNTIME_FILENAME = "runtime.json"
+SIDE_THREADS_FILENAME = "side_threads.json"
 PLUGINS_DIRNAME = "plugins"
 EXPORTS_DIRNAME = "exports"
 SUBAGENTS_DIRNAME = "subagents"
@@ -43,6 +45,7 @@ SUBAGENTS_DIRNAME = "subagents"
 MANIFEST_VERSION = 1
 QUEUES_VERSION = 2
 RUNTIME_VERSION = 1
+SIDE_THREADS_VERSION = 1
 PLUGIN_FILE_VERSION = 1
 # Context already uses string "1.0" — keep that for backward compat with
 # AgentContext.save/load.
@@ -53,6 +56,7 @@ COMPONENT_CONTEXT = "context"
 COMPONENT_MESSAGE_HISTORY = "message_history"
 COMPONENT_QUEUES = "queues"
 COMPONENT_RUNTIME = "runtime"
+COMPONENT_SIDE_THREADS = "side_threads"
 COMPONENT_PLUGINS = "plugins"
 COMPONENT_MANIFEST = "manifest"
 
@@ -84,6 +88,10 @@ def queues_path(session_dir_: Path) -> Path:
 
 def runtime_path(session_dir_: Path) -> Path:
     return session_dir_ / RUNTIME_FILENAME
+
+
+def side_threads_path(session_dir_: Path) -> Path:
+    return session_dir_ / SIDE_THREADS_FILENAME
 
 
 def plugins_dir(session_dir_: Path) -> Path:

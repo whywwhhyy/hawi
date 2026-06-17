@@ -17,10 +17,10 @@ import threading
 import time
 import uuid
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from hawi.events import (
     Event,
@@ -603,6 +603,148 @@ class SessionManager:
             return self._history_with_context_indices(entries, messages)
         return entries
 
+    def read_side_threads(
+        self,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read anchored temporary conversations for a session."""
+        sid = session_id or self._session_id
+        if sid is None:
+            return []
+        path = layout.side_threads_path(layout.session_dir(self._root, sid))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except (OSError, json.JSONDecodeError):
+            logger.warning("could not read side threads %s", path)
+            return []
+        if isinstance(data, list):
+            return [deepcopy(item) for item in data if isinstance(item, dict)]
+        if not isinstance(data, dict):
+            return []
+        threads = data.get("threads")
+        if not isinstance(threads, list):
+            return []
+        return [deepcopy(item) for item in threads if isinstance(item, dict)]
+
+    def upsert_side_thread(
+        self,
+        thread: dict[str, Any],
+        session_id: str | None = None,
+        *,
+        fsync: bool = False,
+    ) -> None:
+        """Insert or replace one anchored temporary conversation."""
+        sid = session_id or self._session_id
+        if sid is None:
+            raise RuntimeError("No active session for side thread")
+        thread_id = thread.get("id")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise ValueError("side thread id must be a non-empty string")
+        session_dir = layout.session_dir(self._root, sid)
+        if sid == self._session_id:
+            self._ensure_current_session_lock()
+        threads = self.read_side_threads(sid)
+        replaced = False
+        next_threads: list[dict[str, Any]] = []
+        for existing in threads:
+            if existing.get("id") == thread_id:
+                next_threads.append(deepcopy(thread))
+                replaced = True
+            else:
+                next_threads.append(existing)
+        if not replaced:
+            next_threads.append(deepcopy(thread))
+        self._write_side_threads(session_dir, next_threads, fsync=fsync)
+        self._patch_manifest(
+            session_dir,
+            {
+                "last_checkpoint_event": "side_thread_update",
+                "updated_side_thread_id": thread_id,
+            },
+            components=[layout.COMPONENT_SIDE_THREADS],
+        )
+
+    def delete_side_thread(
+        self,
+        side_thread_id: str,
+        session_id: str | None = None,
+        *,
+        fsync: bool = False,
+    ) -> bool:
+        """Delete one anchored temporary conversation by id."""
+        sid = session_id or self._session_id
+        if sid is None:
+            raise RuntimeError("No active session for side thread")
+        if not isinstance(side_thread_id, str) or not side_thread_id:
+            raise ValueError("side thread id must be a non-empty string")
+        session_dir = layout.session_dir(self._root, sid)
+        if sid == self._session_id:
+            self._ensure_current_session_lock()
+        threads = self.read_side_threads(sid)
+        next_threads = [
+            thread for thread in threads if thread.get("id") != side_thread_id
+        ]
+        if len(next_threads) == len(threads):
+            return False
+        self._write_side_threads(session_dir, next_threads, fsync=fsync)
+        self._patch_manifest(
+            session_dir,
+            {
+                "last_checkpoint_event": "side_thread_delete",
+                "deleted_side_thread_id": side_thread_id,
+            },
+            components=[layout.COMPONENT_SIDE_THREADS],
+        )
+        return True
+
+    def mark_stale_side_threads(
+        self,
+        session_id: str | None = None,
+        *,
+        active_ids: Iterable[str] = (),
+        fsync: bool = False,
+    ) -> bool:
+        """Mark persisted running side threads as stale unless still active."""
+        sid = session_id or self._session_id
+        if sid is None:
+            return False
+        active = {item for item in active_ids if isinstance(item, str)}
+        session_dir = layout.session_dir(self._root, sid)
+        if sid == self._session_id:
+            self._ensure_current_session_lock()
+        threads = self.read_side_threads(sid)
+        if not threads:
+            return False
+        changed = False
+        now = time.time()
+        next_threads: list[dict[str, Any]] = []
+        for thread in threads:
+            thread_id = thread.get("id")
+            if (
+                thread.get("status") == "running"
+                and isinstance(thread_id, str)
+                and thread_id not in active
+            ):
+                updated = deepcopy(thread)
+                updated["status"] = "stale"
+                updated["updated_at"] = now
+                updated["error"] = "engine stopped before this side thread completed"
+                next_threads.append(updated)
+                changed = True
+            else:
+                next_threads.append(thread)
+        if not changed:
+            return False
+        self._write_side_threads(session_dir, next_threads, fsync=fsync)
+        self._patch_manifest(
+            session_dir,
+            {"last_checkpoint_event": "side_thread_stale"},
+            components=[layout.COMPONENT_SIDE_THREADS],
+        )
+        return True
+
     def export_markdown(
         self,
         session_id: str | None = None,
@@ -635,6 +777,14 @@ class SessionManager:
             },
             raw_history_path=str(history_path),
         )
+        side_threads_markdown = self._render_side_threads_markdown(
+            self.read_side_threads(sid)
+        )
+        if side_threads_markdown:
+            export = replace(
+                export,
+                markdown=f"{export.markdown.rstrip()}\n\n{side_threads_markdown}",
+            )
         return write_markdown_export_bundle(
             export,
             export_dir=layout.export_dir(session_dir, export.export_id),
@@ -1347,8 +1497,18 @@ class SessionManager:
             boundary_result.boundary_index,
         )
         layout.write_jsonl(history_path, pruned_history, fsync=True)
+        side_threads_pruned = self._prune_side_threads_to_context_boundary(
+            session_dir,
+            context.messages,
+        )
 
         if manifest_event is not None:
+            components = [
+                layout.COMPONENT_CONTEXT,
+                layout.COMPONENT_MESSAGE_HISTORY,
+            ]
+            if side_threads_pruned:
+                components.append(layout.COMPONENT_SIDE_THREADS)
             self._patch_manifest(
                 session_dir,
                 {
@@ -1360,10 +1520,7 @@ class SessionManager:
                     "rewind_boundary_index": boundary_result.boundary_index,
                     "rewind_target_role": boundary_result.target_role,
                 },
-                components=[
-                    layout.COMPONENT_CONTEXT,
-                    layout.COMPONENT_MESSAGE_HISTORY,
-                ],
+                components=components,
             )
 
         return SessionContextBranchResult(
@@ -1379,6 +1536,55 @@ class SessionManager:
                 else None
             ),
         )
+
+    def _prune_side_threads_to_context_boundary(
+        self,
+        session_dir: Path,
+        messages: list[Any],
+    ) -> bool:
+        threads = self._read_side_threads_from_dir(session_dir)
+        if not threads:
+            return False
+        kept_ids = {
+            message.get("context_message_id")
+            for message in messages
+            if isinstance(message, dict)
+            and isinstance(message.get("context_message_id"), str)
+        }
+        pruned = [
+            thread
+            for thread in threads
+            if thread.get("anchor_context_message_id") in kept_ids
+        ]
+        if len(pruned) == len(threads):
+            return False
+        self._write_side_threads(session_dir, pruned, fsync=True)
+        return True
+
+    @staticmethod
+    def _read_side_threads_payload(path: Path) -> list[dict[str, Any]]:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        if isinstance(data, list):
+            return [deepcopy(item) for item in data if isinstance(item, dict)]
+        if not isinstance(data, dict):
+            return []
+        threads = data.get("threads")
+        if not isinstance(threads, list):
+            return []
+        return [deepcopy(item) for item in threads if isinstance(item, dict)]
+
+    def _read_side_threads_from_dir(self, session_dir: Path) -> list[dict[str, Any]]:
+        try:
+            return self._read_side_threads_payload(layout.side_threads_path(session_dir))
+        except (OSError, json.JSONDecodeError):
+            logger.warning(
+                "could not inspect side threads %s",
+                layout.side_threads_path(session_dir),
+            )
+            return []
 
     def _prune_history_to_context_boundary(
         self,
@@ -1628,6 +1834,122 @@ class SessionManager:
         copy = dict(entry)
         copy.pop("context_message_index", None)
         return copy
+
+    @classmethod
+    def _render_side_threads_markdown(
+        cls,
+        threads: list[dict[str, Any]],
+    ) -> str:
+        if not threads:
+            return ""
+        sorted_threads = sorted(
+            threads,
+            key=lambda item: float(item.get("created_at") or 0),
+        )
+        lines: list[str] = ["## Side Threads"]
+        for index, thread in enumerate(sorted_threads, start=1):
+            status = str(thread.get("status") or "completed")
+            title = cls._inline_side_thread_text(
+                cls._first_side_thread_user_text(thread)
+                or str(thread.get("quoted_preview") or "")
+                or str(thread.get("anchor_preview") or "")
+                or "Side thread"
+            )
+            lines.extend(["", f"### {index:03d} · {status} · {title}"])
+            anchor_preview = cls._inline_side_thread_text(
+                str(thread.get("anchor_preview") or "")
+            )
+            if anchor_preview:
+                lines.extend(["", f"Anchor: {anchor_preview}"])
+            quoted_text = str(thread.get("quoted_text") or "")
+            if quoted_text:
+                lines.extend(["", "**Quoted text**", ""])
+                lines.extend(cls._quote_side_thread_lines(quoted_text))
+            error = str(thread.get("error") or "")
+            if error:
+                lines.extend(["", f"Error: `{cls._inline_side_thread_text(error)}`"])
+            messages = thread.get("messages")
+            if not isinstance(messages, list) or not messages:
+                continue
+            lines.extend(["", "#### Conversation"])
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                role = cls._side_thread_role_label(str(message.get("role") or "message"))
+                text = cls._side_thread_content_text(message.get("content"))
+                lines.extend(["", f"**{role}**", "", text or "_Empty message._"])
+        return "\n".join(lines).rstrip() + "\n"
+
+    @classmethod
+    def _first_side_thread_user_text(cls, thread: dict[str, Any]) -> str:
+        messages = thread.get("messages")
+        if not isinstance(messages, list):
+            return ""
+        for message in messages:
+            if isinstance(message, dict) and message.get("role") == "user":
+                return cls._side_thread_content_text(message.get("content"))
+        return ""
+
+    @classmethod
+    def _side_thread_content_text(cls, value: Any) -> str:
+        if not isinstance(value, list):
+            return "" if value is None else str(value)
+        parts: list[str] = []
+        for part in value:
+            if not isinstance(part, dict):
+                parts.append(str(part))
+                continue
+            part_type = part.get("type")
+            if part_type == "text":
+                parts.append(str(part.get("text") or ""))
+            elif part_type == "reasoning":
+                parts.append(str(part.get("reasoning") or part.get("text") or ""))
+            elif part_type == "tool_result":
+                parts.append(cls._side_thread_content_text(part.get("content")))
+            elif part_type == "tool_call":
+                continue
+            elif part_type in {"image", "document", "audio", "video", "file"}:
+                parts.append(f"*[{part_type}]*")
+            else:
+                parts.append(
+                    "```json\n"
+                    + json.dumps(part, ensure_ascii=False, indent=2)
+                    + "\n```"
+                )
+        return "\n\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _inline_side_thread_text(value: str) -> str:
+        return " ".join(value.split())
+
+    @staticmethod
+    def _quote_side_thread_lines(value: str) -> list[str]:
+        return ["> " + line if line else ">" for line in value.splitlines()]
+
+    @staticmethod
+    def _side_thread_role_label(role: str) -> str:
+        return {
+            "user": "User",
+            "assistant": "Assistant",
+            "tool": "Tool",
+        }.get(role, role.title())
+
+    def _write_side_threads(
+        self,
+        session_dir: Path,
+        threads: list[dict[str, Any]],
+        *,
+        fsync: bool,
+    ) -> None:
+        payload = {
+            "version": layout.SIDE_THREADS_VERSION,
+            "threads": deepcopy(threads),
+        }
+        layout.atomic_write_text(
+            layout.side_threads_path(session_dir),
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            fsync=fsync,
+        )
 
     def _patch_manifest(
         self,

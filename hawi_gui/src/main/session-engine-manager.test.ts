@@ -204,6 +204,32 @@ describe("SessionEngineManager", () => {
     expect((status?.payload as Record<string, unknown> | undefined)?.loaded_session_count).toBe(1);
   });
 
+  it("does not mark a session visible from side thread run events", () => {
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const manager = makeManager(events);
+    const internals = manager as unknown as ManagerInternals;
+    const record = fakeRecord("session-side-only", 1);
+    internals.loaded.set(record.sessionId, record);
+
+    internals.handleEngineEmit(record, "core:event", {
+      version: VERSION,
+      type: "run.start",
+      payload: {
+        side_thread_id: "side-a",
+        run_id: "side-run-a",
+        user_content: "why?",
+        queue: "normal"
+      },
+    });
+
+    const status = events.find((event) => event.channel === "core:event" && (event.payload as CoreFrame).type === "gui.session_status")
+      ?.payload as CoreFrame | undefined;
+    expect(record.hasVisibleMessages).toBe(false);
+    expect(status?.type).toBe("gui.session_status");
+    expect((status?.payload as Record<string, unknown> | undefined)?.has_visible_messages).toBe(false);
+    expect((status?.payload as Record<string, unknown> | undefined)?.loaded_session_count).toBe(0);
+  });
+
   it("does not count hidden empty sessions in the manager snapshot", () => {
     const manager = makeManager([]);
     const internals = manager as unknown as ManagerInternals;

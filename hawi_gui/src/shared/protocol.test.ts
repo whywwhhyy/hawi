@@ -27,4 +27,24 @@ describe("protocol", () => {
     expect(command.type).toBe("blob.info");
     expect(Array.isArray(enqueue.payload.content)).toBe(true);
   });
+
+  it("accepts side thread commands", () => {
+    const start = makeCommand("side_thread_start", {
+      context_message_id: "ctxmsg-a",
+      quoted_text: "selected",
+      quoted_range: { start: 2, end: 10 },
+      question: "why?"
+    }, "side-start");
+    const followup = makeCommand("side_thread_message", {
+      side_thread_id: "side-a",
+      question: "more?"
+    }, "side-msg");
+    const deletion = makeCommand("side_thread_delete", {
+      side_thread_id: "side-a",
+    }, "side-delete");
+
+    expect(start.type).toBe("side_thread_start");
+    expect(followup.type).toBe("side_thread_message");
+    expect(deletion.type).toBe("side_thread_delete");
+  });
 });

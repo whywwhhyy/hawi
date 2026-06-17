@@ -48,6 +48,144 @@ describe("core event reducer", () => {
     expect(state.sessionMessageCount).toBe(1);
   });
 
+  it("routes side thread run events into the anchored thread transcript", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("side_thread.update", {
+      side_thread_id: "side-a",
+      side_thread: {
+        id: "side-a",
+        session_id: "session-a",
+        anchor_context_message_id: "ctx-a",
+        quoted_preview: "selected text",
+        status: "running",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "why?" }],
+            metadata: { message_id: "side-a-1" },
+            context_message_id: "side-user-a"
+          }
+        ]
+      }
+    }));
+    expect(state.sideThreads["side-a"].nodes.map((node) => node.kind)).toEqual(["user"]);
+    state = reduceCoreEvent(state, frame("run.start", {
+      side_thread_id: "side-a",
+      session_id: "session-a",
+      run_id: "side-run-a",
+      message_id: "side-a-1",
+      user_content: "why?",
+      queue: "normal"
+    }));
+    state = reduceCoreEvent(state, frame("run.text_delta", {
+      side_thread_id: "side-a",
+      run_id: "side-run-a",
+      delta: "because"
+    }));
+    state = reduceCoreEvent(state, frame("agent.system_prompt", {
+      side_thread_id: "side-a",
+      run_id: "side-run-a",
+      content: [{ type: "text", text: "你是Hawi，一个通用的人工智能助手" }],
+      text: "你是Hawi，一个通用的人工智能助手",
+      plugin_role: "framework",
+      injection_name: "system_prompt"
+    }));
+    state = reduceCoreEvent(state, frame("debug.info", {
+      side_thread_id: "side-a",
+      run_id: "side-run-a",
+      message: "Model stream started"
+    }));
+    state = reduceCoreEvent(state, frame("model.metadata", {
+      side_thread_id: "side-a",
+      run_id: "side-run-a",
+      model: "hidden-model",
+      usage: { input_tokens: 11, output_tokens: 7 }
+    }));
+    state = reduceCoreEvent(state, frame("model.profile", {
+      side_thread_id: "side-a",
+      run_id: "side-run-a",
+      ttft_ms: 123,
+      total_ms: 456
+    }));
+    state = reduceCoreEvent(state, frame("model.retry", {
+      side_thread_id: "side-a",
+      run_id: "side-run-a",
+      attempt: 1,
+      max_retries: 3,
+      error_type: "network",
+      error_message: "retrying"
+    }));
+
+    expect(state.nodes).toEqual([]);
+    expect(state.modelUsage).toBeUndefined();
+    expect(state.processing).toBeUndefined();
+    expect(state.activeRunId).toBeUndefined();
+    expect(state.sideThreads["side-a"].nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
+    expect(state.sideThreads["side-a"].nodes[1].content).toBe("because");
+    expect(state.sideThreads["side-a"].activeRunId).toBe("side-run-a");
+
+    state = reduceCoreEvent(state, frame("side_thread.update", {
+      side_thread_id: "side-a",
+      side_thread: {
+        id: "side-a",
+        session_id: "session-a",
+        anchor_context_message_id: "ctx-a",
+        quoted_preview: "selected text",
+        status: "completed",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "why?" }],
+            metadata: { message_id: "side-a-1" },
+            context_message_id: "side-user-a"
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "because" }],
+            context_message_id: "side-assistant-a"
+          }
+        ]
+      }
+    }));
+
+    expect(state.sideThreads["side-a"].activeRunId).toBeUndefined();
+    expect(state.sideThreads["side-a"].processing).toBeUndefined();
+    expect(state.sideThreads["side-a"].nodes.map((node) => node.kind)).toEqual(["user", "agent"]);
+  });
+
+  it("removes a side thread when the update is marked deleted", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("gui.load_side_threads", {
+      side_threads: [
+        { id: "side-a", status: "completed", messages: [] },
+        { id: "side-b", status: "completed", messages: [] },
+      ]
+    }));
+
+    state = reduceCoreEvent(state, frame("side_thread.update", {
+      side_thread_id: "side-a",
+      deleted: true,
+    }));
+
+    expect(state.sideThreads["side-a"]).toBeUndefined();
+    expect(state.sideThreadOrder).toEqual(["side-b"]);
+  });
+
+  it("preserves stale side thread status when loading persisted threads", () => {
+    let state = createInitialState();
+
+    state = reduceCoreEvent(state, frame("gui.load_side_threads", {
+      side_threads: [
+        { id: "side-stale", status: "stale", error: "engine stopped before this side thread completed", messages: [] },
+      ]
+    }));
+
+    expect(state.sideThreads["side-stale"].status).toBe("stale");
+    expect(state.sideThreads["side-stale"].error).toContain("engine stopped");
+  });
+
   it("keeps repeated live user message events visible outside release fallback", () => {
     let state = createInitialState();
     const payload = {

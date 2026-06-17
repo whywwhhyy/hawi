@@ -218,6 +218,16 @@ class DummySessionManager:
                 }
             ],
         }
+        self.side_threads: dict[str, list[dict[str, Any]]] = {
+            "current-session": [
+                {
+                    "id": "side-a",
+                    "session_id": "current-session",
+                    "status": "completed",
+                    "messages": [],
+                }
+            ]
+        }
 
     def read_message_history(
         self,
@@ -390,6 +400,51 @@ class DummySessionManager:
         self.deleted.append(session_id)
         self.histories.pop(session_id, None)
 
+    def read_side_threads(
+        self,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return list(self.side_threads.get(session_id or self.current_session_id, []))
+
+    def mark_stale_side_threads(
+        self,
+        session_id: str | None = None,
+        *,
+        active_ids: Any = (),
+        fsync: bool = False,
+    ) -> bool:
+        sid = session_id or self.current_session_id
+        active = set(active_ids)
+        changed = False
+        next_threads: list[dict[str, Any]] = []
+        for thread in self.side_threads.get(sid, []):
+            if thread.get("status") == "running" and thread.get("id") not in active:
+                next_threads.append({
+                    **thread,
+                    "status": "stale",
+                    "error": "engine stopped before this side thread completed",
+                })
+                changed = True
+            else:
+                next_threads.append(thread)
+        self.side_threads[sid] = next_threads
+        self.marked_stale_side_threads = (sid, active, fsync)
+        return changed
+
+    def delete_side_thread(
+        self,
+        side_thread_id: str,
+        session_id: str | None = None,
+        *,
+        fsync: bool = False,
+    ) -> bool:
+        sid = session_id or self.current_session_id
+        threads = self.side_threads.get(sid, [])
+        kept = [thread for thread in threads if thread.get("id") != side_thread_id]
+        self.side_threads[sid] = kept
+        self.deleted_side_thread = (sid, side_thread_id, fsync)
+        return len(kept) != len(threads)
+
     def rename_session(self, session_id: str, name: str) -> None:
         self.renamed_session = (session_id, name)
 
@@ -434,6 +489,182 @@ class SimpleTool(AgentTool):
 
     def run(self, value: str) -> ToolResult:  # type: ignore[override]
         return ToolResult(True, value)
+
+
+def test_side_thread_context_keeps_anchor_boundary() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    context = AgentContext()
+    user_id = context.add_user_message("first")
+    context.add_assistant_message([{"type": "text", "text": "answer"}])
+    context.add_user_message("later")
+
+    runtime._truncate_context_after_side_anchor(
+        context,
+        context_message_id=user_id,
+        message_index=None,
+    )
+
+    assert [message["role"] for message in context.messages] == ["user"]
+    assert context.messages[0]["context_message_id"] == user_id
+
+
+def test_side_thread_context_keeps_assistant_tool_results() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    context = AgentContext()
+    context.add_user_message("first")
+    assistant_id = context.add_assistant_message(
+        [
+            {"type": "text", "text": "checking"},
+            {
+                "type": "tool_call",
+                "id": "tc-1",
+                "name": "read",
+                "arguments": {},
+            },
+        ]
+    )
+    tool_id = context.add_tool_result("tc-1", "done")
+    context.add_user_message("later")
+
+    runtime._truncate_context_after_side_anchor(
+        context,
+        context_message_id=assistant_id,
+        message_index=None,
+    )
+
+    assert [message["role"] for message in context.messages] == ["user", "assistant", "tool"]
+    assert context.messages[1]["context_message_id"] == assistant_id
+    assert context.messages[2]["context_message_id"] == tool_id
+
+
+def test_side_thread_result_messages_skip_internal_prompt_user_message() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    thread = {
+        "id": "side-a",
+        "messages": [
+            {
+                "version": 1,
+                "timestamp": 1.0,
+                "role": "user",
+                "content": [{"type": "text", "text": "visible question"}],
+                "metadata": {"intent": "side_thread", "persist_session": False},
+                "context_message_id": "side-user-a",
+            }
+        ],
+    }
+    updated = runtime._side_thread_with_result_messages(
+        thread,
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "internal prompt"}],
+                "metadata": {"intent": "side_thread", "persist_session": False},
+                "context_message_id": "internal-user",
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "answer"}],
+                "metadata": {"intent": "side_thread", "persist_session": False},
+                "context_message_id": "side-assistant-a",
+            },
+        ],
+    )
+
+    assert [message["role"] for message in updated["messages"]] == ["user", "assistant"]
+    assert updated["messages"][0]["content"][0]["text"] == "visible question"
+    assert updated["messages"][1]["content"][0]["text"] == "answer"
+
+
+def test_side_thread_update_uses_runtime_emit_path() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+
+    runtime._broadcast_side_thread_update({"id": "side-a", "session_id": "session-a"})
+
+
+def test_side_thread_model_prompt_includes_quoted_range_and_text() -> None:
+    prompt = CoreRuntime._side_thread_model_prompt(
+        question="为什么是 3 倍？",
+        quoted_text="3 倍（300%）",
+        quoted_range={"start": 8, "end": 17},
+        anchor_preview="这个问题的答案是 3 倍（300%）。",
+    )
+
+    assert "引用范围：8-17" in prompt
+    assert "引用内容：\n3 倍（300%）" in prompt
+    assert "用户的问题：\n为什么是 3 倍？" in prompt
+
+
+def test_side_thread_hides_framework_injection_frames() -> None:
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "agent.system_prompt"}) is False
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "agent.context_injected"}) is False
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "agent.tool_runtime_context_injected"}) is False
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "debug.info"}) is False
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "model.metadata"}) is False
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "model.profile"}) is False
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "model.retry"}) is False
+    assert CoreRuntime._side_thread_frame_is_visible({"type": "run.text_delta"}) is True
+
+
+@pytest.mark.asyncio
+async def test_side_thread_list_marks_unclaimed_running_threads_stale() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    client = FakeClient(authenticated=True)
+    sm = DummySessionManager()
+    sm.side_threads["current-session"] = [
+        {
+            "id": "side-running",
+            "session_id": "current-session",
+            "status": "running",
+            "messages": [],
+        }
+    ]
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"side_thread_list","id":"side-list",'
+            '"payload":{"session_id":"current-session"}}'
+        )
+        % VERSION,
+    )
+
+    payload = client.sent[-1]["payload"]
+    assert payload["command"] == "side_thread_list"
+    assert payload["side_threads"][0]["status"] == "stale"
+    assert "engine stopped" in payload["side_threads"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_side_thread_delete_removes_thread_and_broadcasts_deleted_update() -> None:
+    runtime = CoreRuntime(model_name="test-model", token=None)
+    runtime._loop = asyncio.get_running_loop()
+    client = FakeClient(authenticated=True)
+    sm = DummySessionManager()
+    runtime._session_manager = sm  # type: ignore[assignment]
+
+    await runtime.handle_frame(
+        client,
+        (
+            '{"version":"%s","type":"side_thread_delete","id":"side-delete",'
+            '"payload":{"session_id":"current-session","side_thread_id":"side-a"}}'
+        )
+        % VERSION,
+    )
+    await asyncio.sleep(0)
+
+    payload = client.sent[-1]["payload"]
+    assert client.sent[-1]["type"] == "ack"
+    assert payload["command"] == "side_thread_delete"
+    assert payload["side_thread_id"] == "side-a"
+    assert sm.deleted_side_thread == ("current-session", "side-a", True)
+    frame = runtime._broadcast_queue.get_nowait()
+    assert frame["type"] == "side_thread.update"
+    assert frame["payload"] == {
+        "session_id": "current-session",
+        "side_thread_id": "side-a",
+        "deleted": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -773,7 +1004,8 @@ async def test_session_history_command_returns_current_history() -> None:
 async def test_session_export_markdown_command_returns_export_payload() -> None:
     runtime = CoreRuntime(model_name="test-model", token=None)
     client = FakeClient(authenticated=True)
-    runtime._session_manager = DummySessionManager()  # type: ignore[assignment]
+    sm = DummySessionManager()
+    runtime._session_manager = sm  # type: ignore[assignment]
 
     await runtime.handle_frame(
         client,
@@ -786,6 +1018,7 @@ async def test_session_export_markdown_command_returns_export_payload() -> None:
     assert payload["session_id"] == "current-session"
     assert payload["export"]["suggested_filename"] == "current-session.md"
     assert payload["export"]["markdown"].startswith("# current-session")
+    assert sm.marked_stale_side_threads == ("current-session", set(), True)
 
 
 @pytest.mark.asyncio

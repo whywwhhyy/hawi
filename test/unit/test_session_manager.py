@@ -1095,6 +1095,160 @@ class TestSessionManager:
         assert [entry["role"] for entry in history] == ["user", "assistant"]
         assert all(entry.get("context_message_id") for entry in history)
 
+    def test_fork_session_prunes_side_threads_after_context_boundary(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("first")
+        kept_id = agent.context.add_assistant_message([{"type": "text", "text": "reply"}])
+        pruned_id = agent.context.add_user_message("second")
+        agent.context.add_assistant_message([{"type": "text", "text": "later"}])
+        sid = sm.new_session(name="source")
+        sm.save_now()
+        sm.upsert_side_thread(
+            {
+                "id": "keep",
+                "session_id": sid,
+                "anchor_context_message_id": kept_id,
+                "status": "completed",
+                "messages": [],
+            },
+            sid,
+            fsync=True,
+        )
+        sm.upsert_side_thread(
+            {
+                "id": "prune",
+                "session_id": sid,
+                "anchor_context_message_id": pruned_id,
+                "status": "completed",
+                "messages": [],
+            },
+            sid,
+            fsync=True,
+        )
+
+        result = sm.fork_session_after_message_id(
+            session_id=sid,
+            context_message_id=kept_id,
+        )
+
+        assert [thread["id"] for thread in sm.read_side_threads(result.session_id)] == ["keep"]
+
+    def test_delete_side_thread_removes_only_target_thread(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, _, _ = stub_setup
+        sid = sm.new_session(name="source")
+        sm.upsert_side_thread(
+            {
+                "id": "keep",
+                "session_id": sid,
+                "anchor_context_message_id": "ctx-a",
+                "status": "completed",
+                "messages": [],
+            },
+            sid,
+            fsync=True,
+        )
+        sm.upsert_side_thread(
+            {
+                "id": "delete",
+                "session_id": sid,
+                "anchor_context_message_id": "ctx-b",
+                "status": "completed",
+                "messages": [],
+            },
+            sid,
+            fsync=True,
+        )
+
+        assert sm.delete_side_thread("delete", session_id=sid) is True
+        assert [thread["id"] for thread in sm.read_side_threads(sid)] == ["keep"]
+        assert sm.delete_side_thread("missing", session_id=sid) is False
+        assert [thread["id"] for thread in sm.read_side_threads(sid)] == ["keep"]
+
+    def test_mark_stale_side_threads_skips_active_running_threads(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, _, _ = stub_setup
+        sid = sm.new_session(name="source")
+        for thread_id, status in [
+            ("stale", "running"),
+            ("active", "running"),
+            ("done", "completed"),
+        ]:
+            sm.upsert_side_thread(
+                {
+                    "id": thread_id,
+                    "session_id": sid,
+                    "anchor_context_message_id": f"ctx-{thread_id}",
+                    "status": status,
+                    "messages": [],
+                },
+                sid,
+                fsync=True,
+            )
+
+        assert sm.mark_stale_side_threads(sid, active_ids={"active"}, fsync=True) is True
+
+        statuses = {
+            thread["id"]: thread["status"]
+            for thread in sm.read_side_threads(sid)
+        }
+        assert statuses == {
+            "stale": "stale",
+            "active": "running",
+            "done": "completed",
+        }
+        stale_thread = next(
+            thread for thread in sm.read_side_threads(sid)
+            if thread["id"] == "stale"
+        )
+        assert "engine stopped" in stale_thread["error"]
+
+    def test_export_markdown_includes_side_threads(
+        self,
+        stub_setup,
+    ) -> None:
+        sm, agent, _ = stub_setup
+        agent.context.add_user_message("main question")
+        sid = sm.new_session(name="source")
+        sm.save_now()
+        sm.upsert_side_thread(
+            {
+                "id": "side-a",
+                "session_id": sid,
+                "anchor_context_message_id": "ctx-a",
+                "anchor_preview": "main answer excerpt",
+                "quoted_text": "selected quote",
+                "quoted_preview": "selected quote",
+                "status": "completed",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "side question"}],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "side answer"}],
+                    },
+                ],
+            },
+            sid,
+            fsync=True,
+        )
+
+        export = sm.export_markdown(sid)
+
+        assert "## Side Threads" in export.markdown
+        assert "selected quote" in export.markdown
+        assert "side question" in export.markdown
+        assert "side answer" in export.markdown
+
     def test_rewind_session_after_assistant_keeps_tool_results(
         self,
         stub_setup,

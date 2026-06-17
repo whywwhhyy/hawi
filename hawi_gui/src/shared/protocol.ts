@@ -136,7 +136,11 @@ export type CoreCommandType =
   | "session_message_edit"
   | "session_history"
   | "session_search"
-  | "session_export_markdown";
+  | "session_export_markdown"
+  | "side_thread_list"
+  | "side_thread_start"
+  | "side_thread_message"
+  | "side_thread_delete";
 
 export interface SessionMetaPayload {
   session_id: string;

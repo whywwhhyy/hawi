@@ -588,6 +588,9 @@ export class SessionEngineManager {
   }
 
   private updateRecordFromFrame(record: EngineRecord, frame: CoreFrame): void {
+    if (frameIsSideThreadFrame(frame)) {
+      return;
+    }
     const payload = framePayload(frame);
     if (frame.type === "core.ready" && isRecord(payload.status)) {
       record.agentState = String(payload.status.agent_state ?? record.agentState);
@@ -970,6 +973,11 @@ function injectSessionId(frame: CoreFrame, sessionId: string): CoreFrame {
 
 function framePayload(frame: CoreFrame): Record<string, unknown> {
   return isRecord(frame.payload) ? frame.payload : {};
+}
+
+function frameIsSideThreadFrame(frame: CoreFrame): boolean {
+  const payload = framePayload(frame);
+  return typeof payload.side_thread_id === "string" && payload.side_thread_id.length > 0;
 }
 
 function loadStateForRecord(record: EngineRecord): SessionLoadState {

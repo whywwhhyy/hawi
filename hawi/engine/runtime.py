@@ -9,7 +9,9 @@ import logging
 import math
 import os
 import re
+import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, Sequence, cast
@@ -17,7 +19,7 @@ from typing import Any, Literal, Protocol, Sequence, cast
 from hawi.agent import AutoCompactConfig, HawiAgent, AgentRunner
 from hawi.agent.context import AgentContext, ToolCallContext
 from hawi.agent.agent import SKIP_BEFORE_CONVERSATION_HOOKS_METADATA_KEY
-from hawi.events import Event
+from hawi.events import Event, EventBus
 from hawi.models import model_registry, persist_provider_properties
 from hawi.review import RuntimeReviewBroker, RuntimeReviewDecision
 from hawi.session import SessionLockedError, SessionManager
@@ -56,6 +58,8 @@ DEFAULT_RESUME_PROMPT = "继续"
 AUTO_SESSION_TITLE_MAX_CHARS = 48
 AUTO_SESSION_TITLE_MAX_TRANSCRIPT_CHARS = 4_000
 AUTO_SESSION_TITLE_TIMEOUT_SECONDS = 20.0
+SIDE_THREAD_SELECTED_TEXT_MAX_CHARS = 12_000
+SIDE_THREAD_PREVIEW_MAX_CHARS = 240
 AUTO_SESSION_TITLE_SYSTEM_PROMPT = (
     "你是 Hawi 的会话标题生成器。根据用户与助手的对话生成一个简洁标题。"
     "只输出标题本身，不要引号、编号、前缀或句号；使用对话的主要语言；"
@@ -305,6 +309,8 @@ class CoreRuntime:
         )
         self._auto_title_tasks: set[asyncio.Task[None]] = set()
         self._auto_title_pending_sessions: set[str] = set()
+        self._side_thread_tasks: dict[str, asyncio.Task[None]] = {}
+        self._deleted_side_thread_ids: set[str] = set()
         self._shutdown_requested = asyncio.Event()
         self._started = False
 
@@ -368,6 +374,13 @@ class CoreRuntime:
             await asyncio.gather(*auto_title_tasks, return_exceptions=True)
         self._auto_title_tasks.clear()
         self._auto_title_pending_sessions.clear()
+
+        side_thread_tasks = list(self._side_thread_tasks.values())
+        for task in side_thread_tasks:
+            task.cancel()
+        if side_thread_tasks:
+            await asyncio.gather(*side_thread_tasks, return_exceptions=True)
+        self._side_thread_tasks.clear()
 
         await self._stop_runner(self._runner, self._runner_task, self._plugins)
         self._runner = None
@@ -527,6 +540,14 @@ class CoreRuntime:
                 await self._handle_session_history(client, command)
             elif command.type == "session_export_markdown":
                 await self._handle_session_export_markdown(client, command)
+            elif command.type == "side_thread_list":
+                await self._handle_side_thread_list(client, command)
+            elif command.type == "side_thread_start":
+                await self._handle_side_thread_start(client, command)
+            elif command.type == "side_thread_message":
+                await self._handle_side_thread_message(client, command)
+            elif command.type == "side_thread_delete":
+                await self._handle_side_thread_delete(client, command)
             elif command.type == "shutdown":
                 await client.send(make_ack("shutdown", request_id=command.id))
                 await self.stop()
@@ -1926,6 +1947,11 @@ class CoreRuntime:
         session_id = requested_session_id or sm.current_session_id
         if session_id is None:
             raise ValueError("No active session to export")
+        sm.mark_stale_side_threads(
+            session_id,
+            active_ids=self._side_thread_tasks.keys(),
+            fsync=True,
+        )
         export = sm.export_markdown(
             requested_session_id,
             model=self.model_name,
@@ -1937,6 +1963,615 @@ class CoreRuntime:
                 payload={
                     "session_id": session_id,
                     "export": export.to_dict(include_markdown=True),
+                },
+            )
+        )
+
+    async def _handle_side_thread_list(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        requested_session_id = self._optional_session_id(command)
+        session_id = requested_session_id or sm.current_session_id
+        if session_id is not None:
+            sm.mark_stale_side_threads(
+                session_id,
+                active_ids=self._side_thread_tasks.keys(),
+                fsync=True,
+            )
+        await client.send(
+            make_ack(
+                "side_thread_list",
+                request_id=command.id,
+                payload={
+                    "session_id": session_id,
+                    "side_threads": sm.read_side_threads(requested_session_id),
+                },
+            )
+        )
+
+    async def _handle_side_thread_start(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        runner = self._require_runner()
+        session_id = self._active_side_thread_session_id(command)
+        context_message_id = self._optional_context_message_id(command)
+        message_index = (
+            None if context_message_id is not None else self._optional_message_index(command)
+        )
+        if context_message_id is None and message_index is None:
+            raise ValueError(
+                "'side_thread_start.payload.context_message_id' or "
+                "'side_thread_start.payload.message_index' is required"
+            )
+        question = self._required_side_thread_question(command)
+        quoted_text = self._side_thread_quoted_text(command.payload.get("quoted_text"))
+        quoted_range = self._side_thread_quoted_range(command.payload.get("quoted_range"))
+        anchor = self._resolve_side_thread_anchor(
+            runner.agent.context.messages,
+            context_message_id=context_message_id,
+            message_index=message_index,
+        )
+        now = time.time()
+        side_thread_id = f"side_{uuid.uuid4().hex[:16]}"
+        user_message = self._side_thread_user_message(
+            question,
+            now,
+            message_id=f"{side_thread_id}-1",
+        )
+        thread = {
+            "id": side_thread_id,
+            "session_id": session_id,
+            "anchor_context_message_id": anchor["context_message_id"],
+            "anchor_message_index": anchor["message_index"],
+            "anchor_role": anchor["role"],
+            "anchor_preview": anchor["preview"],
+            "quoted_text": quoted_text,
+            "quoted_range": quoted_range,
+            "quoted_preview": self._truncate_text(quoted_text, SIDE_THREAD_PREVIEW_MAX_CHARS),
+            "created_at": now,
+            "updated_at": now,
+            "status": "running",
+            "messages": [user_message],
+            "error": None,
+        }
+        sm.upsert_side_thread(thread, session_id=session_id)
+        self._broadcast_side_thread_update(thread)
+        task = asyncio.create_task(
+            self._run_side_thread(
+                thread,
+                question=question,
+                quoted_text=quoted_text,
+                quoted_range=quoted_range,
+            )
+        )
+        self._side_thread_tasks[side_thread_id] = task
+        task.add_done_callback(
+            lambda _task, thread_id=side_thread_id: self._side_thread_tasks.pop(thread_id, None)
+        )
+        await client.send(
+            make_ack(
+                "side_thread_start",
+                request_id=command.id,
+                payload={"session_id": session_id, "side_thread": thread},
+            )
+        )
+
+    async def _handle_side_thread_message(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        session_id = self._active_side_thread_session_id(command)
+        side_thread_id = command.payload.get("side_thread_id")
+        if not isinstance(side_thread_id, str) or not side_thread_id:
+            raise ValueError("'side_thread_message.payload.side_thread_id' must be a non-empty string")
+        if side_thread_id in self._side_thread_tasks:
+            raise ValueError("side thread is already running")
+        question = self._required_side_thread_question(command)
+        threads = sm.read_side_threads(session_id)
+        thread = next((item for item in threads if item.get("id") == side_thread_id), None)
+        if thread is None:
+            raise KeyError(f"side thread not found: {side_thread_id}")
+        now = time.time()
+        messages = list(thread.get("messages") if isinstance(thread.get("messages"), list) else [])
+        messages.append(
+            self._side_thread_user_message(
+                question,
+                now,
+                message_id=f"{side_thread_id}-{len(messages) + 1}",
+            )
+        )
+        quoted_text = self._side_thread_quoted_text(command.payload.get("quoted_text")) or str(
+            thread.get("quoted_text") or ""
+        )
+        quoted_range = (
+            self._side_thread_quoted_range(command.payload.get("quoted_range"))
+            or thread.get("quoted_range")
+        )
+        thread = {
+            **thread,
+            "status": "running",
+            "updated_at": now,
+            "messages": messages,
+            "error": None,
+        }
+        sm.upsert_side_thread(thread, session_id=session_id)
+        self._broadcast_side_thread_update(thread)
+        task = asyncio.create_task(
+            self._run_side_thread(
+                thread,
+                question=question,
+                quoted_text=quoted_text,
+                quoted_range=quoted_range if isinstance(quoted_range, dict) else None,
+            )
+        )
+        self._side_thread_tasks[side_thread_id] = task
+        task.add_done_callback(
+            lambda _task, thread_id=side_thread_id: self._side_thread_tasks.pop(thread_id, None)
+        )
+        await client.send(
+            make_ack(
+                "side_thread_message",
+                request_id=command.id,
+                payload={"session_id": session_id, "side_thread": thread},
+            )
+        )
+
+    async def _handle_side_thread_delete(
+        self,
+        client: RuntimeClient,
+        command: CoreCommand,
+    ) -> None:
+        sm = self._require_session_manager()
+        session_id = self._active_side_thread_session_id(command)
+        side_thread_id = command.payload.get("side_thread_id")
+        if not isinstance(side_thread_id, str) or not side_thread_id:
+            raise ValueError("'side_thread_delete.payload.side_thread_id' must be a non-empty string")
+        task = self._side_thread_tasks.pop(side_thread_id, None)
+        if task is not None and not task.done():
+            self._deleted_side_thread_ids.add(side_thread_id)
+            task.cancel()
+        deleted = sm.delete_side_thread(side_thread_id, session_id=session_id, fsync=True)
+        removed = deleted or task is not None
+        if removed:
+            self._broadcast_side_thread_deleted(session_id, side_thread_id)
+        await client.send(
+            make_ack(
+                "side_thread_delete",
+                request_id=command.id,
+                payload={
+                    "session_id": session_id,
+                    "side_thread_id": side_thread_id,
+                    "deleted": removed,
+                },
+            )
+        )
+
+    async def _run_side_thread(
+        self,
+        thread: dict[str, Any],
+        *,
+        question: str,
+        quoted_text: str,
+        quoted_range: dict[str, int] | None,
+    ) -> None:
+        sm = self._require_session_manager()
+        session_id = str(thread.get("session_id") or sm.current_session_id or "")
+        side_thread_id = str(thread.get("id") or "")
+        side_bus = EventBus()
+        mapper = SemanticEventMapper()
+
+        def forward_side_event(event: Event) -> None:
+            if side_thread_id in self._deleted_side_thread_ids:
+                return
+            for frame in mapper.map(event):
+                if not self._side_thread_frame_is_visible(frame):
+                    continue
+                payload = dict(frame.get("payload") or {})
+                if frame.get("type") == "run.start":
+                    payload["user_content"] = question
+                    payload["content"] = [{"type": "text", "text": question}]
+                    payload["content_preview"] = self._truncate_text(
+                        question,
+                        SIDE_THREAD_PREVIEW_MAX_CHARS,
+                    )
+                payload["side_thread_id"] = side_thread_id
+                payload["session_id"] = session_id
+                payload["anchor_context_message_id"] = thread.get("anchor_context_message_id")
+                frame["payload"] = payload
+                self.emit(frame)
+
+        side_bus.subscribe_blocking(forward_side_event)
+        try:
+            side_agent = self._side_agent_for_thread(thread, side_bus)
+            prompt = self._side_thread_model_prompt(
+                question=question,
+                quoted_text=quoted_text,
+                quoted_range=quoted_range,
+                anchor_preview=str(thread.get("anchor_preview") or ""),
+            )
+            message_id = self._side_thread_current_message_id(thread) or (
+                f"{side_thread_id}-{len(thread.get('messages', []))}"
+            )
+            result = await side_agent._arun_internal(
+                message=prompt,
+                event_bus=side_bus,
+                message_metadata={
+                    "intent": "side_thread",
+                    "message_id": message_id,
+                    "display_message_type": "normal",
+                    "side_thread_id": side_thread_id,
+                    "persist_session": False,
+                },
+            )
+            if side_thread_id in self._deleted_side_thread_ids:
+                return
+            thread = self._side_thread_with_result_messages(thread, result.messages)
+            thread["status"] = "completed"
+            thread["updated_at"] = time.time()
+            thread["error"] = None
+            sm.upsert_side_thread(thread, session_id=session_id)
+            self._broadcast_side_thread_update(thread)
+        except asyncio.CancelledError:
+            if side_thread_id in self._deleted_side_thread_ids:
+                return
+            thread = {
+                **thread,
+                "status": "cancelled",
+                "updated_at": time.time(),
+                "error": "cancelled",
+            }
+            sm.upsert_side_thread(thread, session_id=session_id)
+            self._broadcast_side_thread_update(thread)
+            raise
+        except Exception as exc:
+            if side_thread_id in self._deleted_side_thread_ids:
+                return
+            logger.exception("side thread failed")
+            thread = {
+                **thread,
+                "status": "error",
+                "updated_at": time.time(),
+                "error": str(exc),
+            }
+            sm.upsert_side_thread(thread, session_id=session_id)
+            self._broadcast_side_thread_update(thread)
+        finally:
+            self._deleted_side_thread_ids.discard(side_thread_id)
+            side_bus.close(wait=True, timeout=5.0)
+
+    @staticmethod
+    def _side_thread_frame_is_visible(frame: dict[str, Any]) -> bool:
+        return frame.get("type") not in {
+            "agent.system_prompt",
+            "agent.context_injected",
+            "agent.tool_runtime_context_injected",
+            "debug.info",
+            "model.metadata",
+            "model.profile",
+            "model.retry",
+        }
+
+    def _side_agent_for_thread(
+        self,
+        thread: dict[str, Any],
+        side_bus: EventBus,
+    ) -> HawiAgent:
+        runner = self._require_runner()
+        side_agent = runner.agent.clone()
+        side_agent._event_bus = side_bus
+        side_agent.plugins.bind_event_bus(side_bus)
+        side_agent.set_model(self.model_name)
+        side_context = runner.agent.context.copy()
+        anchor_context_message_id = str(thread.get("anchor_context_message_id") or "")
+        self._truncate_context_after_side_anchor(
+            side_context,
+            context_message_id=anchor_context_message_id,
+            message_index=(
+                int(thread["anchor_message_index"])
+                if isinstance(thread.get("anchor_message_index"), int)
+                else None
+            ),
+        )
+        for message in self._side_thread_context_messages(thread):
+            side_context.add_message(message)
+        side_agent.set_context(side_context)
+        return side_agent
+
+    def _truncate_context_after_side_anchor(
+        self,
+        context: Any,
+        *,
+        context_message_id: str | None,
+        message_index: int | None,
+    ) -> None:
+        if context_message_id:
+            index = context.message_index_for_id(context_message_id)
+        elif isinstance(message_index, int):
+            index = message_index
+        else:
+            raise ValueError("side thread anchor is missing")
+        if index < 0 or index >= len(context.messages):
+            raise IndexError(f"side thread anchor index out of range: {index}")
+        message = context.messages[index]
+        if not isinstance(message, dict):
+            raise ValueError("side thread anchor is not a message")
+        role = message.get("role")
+        if role == "tool":
+            raise ValueError("tool result messages cannot anchor side threads")
+        if role not in {"user", "assistant"}:
+            raise ValueError("only user and assistant messages can anchor side threads")
+        if role == "assistant":
+            boundary_index = context.message_boundary_after(index).boundary_index
+        else:
+            boundary_index = index + 1
+        context.messages = deepcopy(context.messages[:boundary_index])
+        context.context_usage = None
+        context.clear_pending_tool_calls()
+
+    def _side_thread_context_messages(
+        self,
+        thread: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        messages = thread.get("messages")
+        if not isinstance(messages, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in messages[:-1]:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if role not in {"user", "assistant", "tool"} or not isinstance(content, list):
+                continue
+            out.append(
+                {
+                    "role": role,
+                    "content": deepcopy(content),
+                    "metadata": (
+                        deepcopy(item.get("metadata"))
+                        if isinstance(item.get("metadata"), dict)
+                        else {"intent": "side_thread", "persist_session": False}
+                    ),
+                    **(
+                        {"context_message_id": item["context_message_id"]}
+                        if isinstance(item.get("context_message_id"), str)
+                        else {}
+                    ),
+                }
+            )
+        return out
+
+    def _side_thread_with_result_messages(
+        self,
+        thread: dict[str, Any],
+        result_messages: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        existing = list(thread.get("messages") if isinstance(thread.get("messages"), list) else [])
+        existing_user_count = sum(
+            1 for item in existing
+            if isinstance(item, dict) and item.get("role") == "user"
+        )
+        seen_user_count = 0
+        for message in result_messages:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            content = message.get("content")
+            if role not in {"user", "assistant", "tool"} or not isinstance(content, list):
+                continue
+            if role == "user":
+                seen_user_count += 1
+                if seen_user_count <= existing_user_count:
+                    continue
+            existing.append(
+                {
+                    "version": 1,
+                    "timestamp": time.time(),
+                    "role": role,
+                    "content": deepcopy(content),
+                    "metadata": (
+                        deepcopy(message.get("metadata"))
+                        if isinstance(message.get("metadata"), dict)
+                        else {"intent": "side_thread", "persist_session": False}
+                    ),
+                    "context_message_id": message.get("context_message_id"),
+                }
+            )
+        return {
+            **thread,
+            "messages": existing,
+        }
+
+    def _active_side_thread_session_id(self, command: CoreCommand) -> str:
+        sm = self._require_session_manager()
+        requested = self._optional_session_id(command)
+        current = sm.current_session_id
+        if current is None:
+            raise ValueError("No active session for side thread")
+        if requested is not None and requested != current:
+            raise ValueError("side threads can only run in the active session")
+        return current
+
+    @staticmethod
+    def _required_side_thread_question(command: CoreCommand) -> str:
+        raw = command.payload.get("question", command.payload.get("content"))
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError("'side thread question' must be a non-empty string")
+        return raw.strip()
+
+    @staticmethod
+    def _side_thread_quoted_text(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()[:SIDE_THREAD_SELECTED_TEXT_MAX_CHARS]
+
+    @staticmethod
+    def _side_thread_quoted_range(value: Any) -> dict[str, int] | None:
+        if not isinstance(value, dict):
+            return None
+        start = value.get("start")
+        end = value.get("end")
+        if isinstance(start, bool) or isinstance(end, bool):
+            return None
+        if not isinstance(start, int) or not isinstance(end, int):
+            return None
+        if start < 0 or end < start:
+            return None
+        return {"start": start, "end": end}
+
+    @staticmethod
+    def _side_thread_user_message(
+        question: str,
+        timestamp: float,
+        *,
+        message_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "timestamp": timestamp,
+            "role": "user",
+            "content": [{"type": "text", "text": question}],
+            "metadata": {
+                "intent": "side_thread",
+                "message_id": message_id,
+                "persist_session": False,
+            },
+            "context_message_id": f"side_ctx_{uuid.uuid4().hex[:16]}",
+        }
+
+    @staticmethod
+    def _side_thread_current_message_id(thread: dict[str, Any]) -> str | None:
+        messages = thread.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return None
+        last = messages[-1]
+        if not isinstance(last, dict):
+            return None
+        metadata = last.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        message_id = metadata.get("message_id")
+        return message_id if isinstance(message_id, str) and message_id else None
+
+    def _resolve_side_thread_anchor(
+        self,
+        messages: list[Any],
+        *,
+        context_message_id: str | None,
+        message_index: int | None,
+    ) -> dict[str, Any]:
+        if context_message_id:
+            index = next(
+                (
+                    pos for pos, message in enumerate(messages)
+                    if isinstance(message, dict)
+                    and message.get("context_message_id") == context_message_id
+                ),
+                -1,
+            )
+            if index < 0:
+                raise KeyError(f"context_message_id not found: {context_message_id}")
+        elif isinstance(message_index, int):
+            index = message_index
+        else:
+            raise ValueError("side thread anchor is missing")
+        if index < 0 or index >= len(messages):
+            raise IndexError(f"message_index out of range: {index}")
+        message = messages[index]
+        if not isinstance(message, dict):
+            raise ValueError("side thread anchor is not a message")
+        role = message.get("role")
+        if role not in {"user", "assistant"}:
+            raise ValueError("only user and assistant messages can anchor side threads")
+        from hawi.agent.context import ensure_context_message_id
+
+        context_id = ensure_context_message_id(message)
+        return {
+            "context_message_id": context_id,
+            "message_index": index,
+            "role": role,
+            "preview": self._truncate_text(
+                self._content_text(message.get("content")),
+                SIDE_THREAD_PREVIEW_MAX_CHARS,
+            ),
+        }
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+            elif part.get("type") == "reasoning":
+                parts.append(str(part.get("reasoning") or ""))
+            elif part.get("type") in {"image", "document", "audio", "video", "file"}:
+                parts.append(f"[{part.get('type')}]")
+        return "\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _truncate_text(text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[: max(0, max_chars - 1)].rstrip() + "…"
+
+    @staticmethod
+    def _side_thread_model_prompt(
+        *,
+        question: str,
+        quoted_text: str,
+        quoted_range: dict[str, int] | None,
+        anchor_preview: str,
+    ) -> str:
+        context_lines = [
+            "用户正在主对话中的某条消息旁发起一个临时旁路问题。",
+        ]
+        if anchor_preview:
+            context_lines.append(f"锚点消息摘要：\n{anchor_preview}")
+        if quoted_range:
+            context_lines.append(
+                f"引用范围：{quoted_range['start']}-{quoted_range['end']}"
+            )
+        if quoted_text:
+            context_lines.append(f"引用内容：\n{quoted_text}")
+        context_lines.append(f"用户的问题：\n{question}")
+        return "\n\n".join(context_lines)
+
+    def _broadcast_side_thread_update(self, thread: dict[str, Any]) -> None:
+        self.emit(
+            make_frame(
+                "side_thread.update",
+                {
+                    "session_id": thread.get("session_id"),
+                    "side_thread_id": thread.get("id"),
+                    "side_thread": to_json_safe(thread),
+                },
+            )
+        )
+
+    def _broadcast_side_thread_deleted(
+        self,
+        session_id: str,
+        side_thread_id: str,
+    ) -> None:
+        self.emit(
+            make_frame(
+                "side_thread.update",
+                {
+                    "session_id": session_id,
+                    "side_thread_id": side_thread_id,
+                    "deleted": True,
                 },
             )
         )

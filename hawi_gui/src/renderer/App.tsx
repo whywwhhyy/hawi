@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DependencyList, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ChangeEvent as ReactChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DependencyList, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref, type UIEvent as ReactUIEvent, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
 import MarkdownIt from "markdown-it";
 import katex from "katex";
@@ -12,13 +12,13 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, Image as ImageIcon, LoaderCircle, Lock, Paperclip, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Settings, Square, Trash2, Wrench, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, ChevronsUp, Copy, FileText, GitFork, Image as ImageIcon, LoaderCircle, Lock, MessageSquare, Paperclip, Pencil, Play, Plug, Plus, RotateCcw, Search, Send, Settings, Square, Trash2, Wrench, X } from "lucide-react";
 import type { BlobSource, ContentPart, CoreCommandType, CoreFrame, GuiMetadata, JsonSchemaObject, JsonlExportPayload, MarkdownExportPayload, MediaSource, ModelProviderConfigPreview, PersistedConfig, PluginCatalogItem, PluginToolPreviewItem, PluginToolPreviewPayload, QueueKind, RuntimeControlState, SessionLaunchProfile, SessionLoadState, SessionMetaPayload } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
 import { MIN_CONTENT_SIZE, normalizeMinimumContentSize, type LayoutSize } from "../shared/layout";
 import { StatusCell, StatusCellDisplay, StatusCellTrigger, StatusPopoverHeader } from "./StatusCell";
 import { coerceSchemaValue, mergePluginDefaults, resolvePluginSelectionChange, selectAllPluginKeys, validatePluginConfig } from "./pluginConfig";
-import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelProfileState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
+import { chatNodesFromMessageHistory, createInitialState, reduceCoreEvent, type AppState, type ChatNode, type ContextAutoCompactState, type ContextCompressionState, type ContextUsageState, type FrameworkInjectionState, type ModelProfileState, type ModelUsageState, type PluginArtifactState, type PluginMessageState, type PluginStatusState, type ProcessingState, type QueueMessageState, type SideThreadState, type SubAgentRuntimeState, type ToolProgressState, type ToolState } from "./state";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -375,11 +375,37 @@ interface HistorySearchResult {
   lastCwd?: string | null;
 }
 
-interface HistoryLocateTarget {
+export interface HistoryLocateTarget {
   sessionId: string;
   messageIndex?: number;
   contextMessageId?: string;
   contextMessageIndex?: number;
+}
+
+export interface SideThreadQuotedRange {
+  start: number;
+  end: number;
+}
+
+export interface SideThreadWindowRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface SideSelectionAnchor {
+  text: string;
+  quotedRange?: SideThreadQuotedRange;
+  rect: DOMRect;
+  target: HistoryLocateTarget;
+}
+
+interface SideThreadPopoverState {
+  mode: "compose" | "thread";
+  threadId?: string;
+  anchor: SideSelectionAnchor;
+  windowRect: SideThreadWindowRect;
 }
 
 type PendingAttachmentStatus = "ready" | "uploading" | "uploaded" | "error";
@@ -580,6 +606,7 @@ interface PendingPluginApply {
 
 type EscapeDismissTarget =
   | "mediaPreview"
+  | "sideThreadPopover"
   | "subagentObserver"
   | "projectPopover"
   | "contextPopover"
@@ -597,6 +624,7 @@ type EscapeDismissTarget =
 
 interface EscapeDismissState {
   mediaPreviewOpen: boolean;
+  sideThreadPopoverOpen: boolean;
   contextPopoverOpen: boolean;
   projectPopoverOpen: boolean;
   pluginDialogOpen: boolean;
@@ -615,6 +643,7 @@ interface EscapeDismissState {
 
 export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDismissTarget | null {
   if (state.mediaPreviewOpen) return "mediaPreview";
+  if (state.sideThreadPopoverOpen) return "sideThreadPopover";
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
@@ -634,6 +663,7 @@ export function resolveEscapeDismissTarget(state: EscapeDismissState): EscapeDis
 }
 
 function resolveKeyboardScopeTarget(state: EscapeDismissState): EscapeDismissTarget | null {
+  if (state.sideThreadPopoverOpen) return "sideThreadPopover";
   if (state.subagentObserverOpen) return "subagentObserver";
   if (state.pluginDialogOpen) return "pluginDialog";
   if (state.modelDialogOpen) return "modelDialog";
@@ -655,6 +685,8 @@ function dialogScopeSelector(target: EscapeDismissTarget): string | null {
       return ".context-popover";
     case "mediaPreview":
       return ".media-preview-lightbox";
+    case "sideThreadPopover":
+      return ".side-thread-popover";
     case "projectPopover":
       return ".project-popover";
     case "subagentObserver":
@@ -742,6 +774,7 @@ function clickDialogConfirmation(target: EscapeDismissTarget, scope: HTMLElement
     switch (target) {
       case "contextPopover":
       case "projectPopover":
+      case "sideThreadPopover":
         return scope.querySelector<HTMLElement>(".primary-button:not(:disabled)");
       case "pluginDialog":
       case "systemPromptConfirm":
@@ -796,7 +829,7 @@ interface ArtifactTypeGroup {
   artifacts: PluginArtifactState[];
 }
 
-type WorkspaceSidebarTab = "subagents" | `artifact:${string}`;
+type WorkspaceSidebarTab = "side_threads" | "subagents" | `artifact:${string}`;
 
 function artifactSidebarTab(type: string): WorkspaceSidebarTab {
   return `artifact:${type}`;
@@ -1303,6 +1336,11 @@ export default function App() {
   const [historyPreviewSession, setHistoryPreviewSession] = useState<SessionMetaPayload | null>(null);
   const [historyPreviewLocateTarget, setHistoryPreviewLocateTarget] = useState<HistoryLocateTarget | null>(null);
   const [mainLocateTarget, setMainLocateTarget] = useState<HistoryLocateTarget | null>(null);
+  const [pendingMainLocateScrollTarget, setPendingMainLocateScrollTarget] = useState<HistoryLocateTarget | null>(null);
+  const [sideSelectionAnchor, setSideSelectionAnchor] = useState<SideSelectionAnchor | null>(null);
+  const [sideThreadPopover, setSideThreadPopover] = useState<SideThreadPopoverState | null>(null);
+  const [sideThreadDraft, setSideThreadDraft] = useState("");
+  const [sideThreadBusy, setSideThreadBusy] = useState(false);
   const appShellRef = useRef<HTMLDivElement | null>(null);
   const brandBarRef = useRef<HTMLDivElement | null>(null);
   const statusRowRef = useRef<HTMLDivElement | null>(null);
@@ -1375,8 +1413,11 @@ export default function App() {
   const hasArtifacts = artifactList.length > 0;
   const subagentList = state.subagentOrder.map((id) => state.subagents[id]).filter(Boolean);
   const hasSubagents = subagentList.length > 0;
-  const hasRightSidebar = hasArtifacts || hasSubagents;
+  const sideThreadList = state.sideThreadOrder.map((id) => state.sideThreads[id]).filter(Boolean);
+  const hasSideThreads = sideThreadList.length > 0;
+  const hasRightSidebar = hasArtifacts || hasSubagents || hasSideThreads;
   const observedSubagent = subagentObserverId ? state.subagents[subagentObserverId] : undefined;
+  const popoverSideThread = sideThreadPopover?.threadId ? state.sideThreads[sideThreadPopover.threadId] : undefined;
   const canStopConversation = canStopRunnerState(state.runnerState);
   const canEditMessages = Boolean(currentSessionId) && !canStopConversation;
   const showDebug = config?.showDebug ?? true;
@@ -1511,6 +1552,46 @@ export default function App() {
     // Input-history navigation is reset only when the active session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionId]);
+
+  useEffect(() => {
+    if (!currentSessionId || !coreRunning) {
+      dispatch({
+        version: VERSION,
+        type: "gui.load_side_threads",
+        payload: { side_threads: [] }
+      }, currentSessionId);
+      return;
+    }
+    let cancelled = false;
+    void sendSessionCommand(
+      "side_thread_list",
+      { session_id: currentSessionId },
+      currentSessionId
+    ).then((frame) => {
+      if (!cancelled) {
+        applySideThreadsFromFrame(frame, currentSessionId);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // The command helpers use refs for current config/session; this effect is keyed to session identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSessionId, coreRunning]);
+
+  useEffect(() => {
+    function updateSelectionAnchor() {
+      setSideSelectionAnchor(resolveSideSelectionAnchor(chatRef.current, currentSessionIdRef.current));
+    }
+    document.addEventListener("selectionchange", updateSelectionAnchor);
+    document.addEventListener("mouseup", updateSelectionAnchor);
+    document.addEventListener("keyup", updateSelectionAnchor);
+    return () => {
+      document.removeEventListener("selectionchange", updateSelectionAnchor);
+      document.removeEventListener("mouseup", updateSelectionAnchor);
+      document.removeEventListener("keyup", updateSelectionAnchor);
+    };
+  }, []);
 
   useEffect(() => {
     sessionBusyRef.current = sessionBusy;
@@ -1744,6 +1825,7 @@ export default function App() {
       if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
       const keyboardState = {
         mediaPreviewOpen: mediaPreview !== null,
+        sideThreadPopoverOpen: sideThreadPopover !== null,
         contextPopoverOpen,
         projectPopoverOpen,
         pluginDialogOpen,
@@ -1775,6 +1857,9 @@ export default function App() {
         switch (target) {
           case "mediaPreview":
             setMediaPreview(null);
+            break;
+          case "sideThreadPopover":
+            setSideThreadPopover(null);
             break;
           case "subagentObserver":
             setSubagentObserverId(null);
@@ -1861,6 +1946,7 @@ export default function App() {
     pendingToolCallPurposeEnabled,
     exportMenuOpen,
     mediaPreview,
+    sideThreadPopover,
     subagentObserverId,
     settingsMenuOpen,
     queuePopoverOpen,
@@ -1914,6 +2000,18 @@ export default function App() {
     }
     previousSubagentCountRef.current = subagentCount;
   }, [currentSessionId, selectedArtifactTab, state.subagentOrder, state.subagents, subagentObserverId]);
+
+  useEffect(() => {
+    if (!hasSideThreads && rightSidebarTab === "side_threads") {
+      setRightSidebarTab(selectedArtifactTab ?? (hasSubagents ? "subagents" : null));
+    }
+    if (
+      sideThreadPopover?.threadId
+      && !state.sideThreads[sideThreadPopover.threadId]
+    ) {
+      setSideThreadPopover(null);
+    }
+  }, [hasSideThreads, hasSubagents, rightSidebarTab, selectedArtifactTab, sideThreadPopover, state.sideThreads]);
 
   useEffect(() => {
     function syncSelection() {
@@ -2277,12 +2375,15 @@ export default function App() {
   }, [historyPreviewLocateTarget, historyPreviewNodes, historySearchQuery]);
 
   useEffect(() => {
-    if (!mainLocateTarget || mainLocateTarget.sessionId !== currentSessionId) return;
+    if (!pendingMainLocateScrollTarget || pendingMainLocateScrollTarget.sessionId !== currentSessionId) return;
     const frame = window.requestAnimationFrame(() => {
-      scrollToHistoryTarget(chatRef.current, mainLocateTarget);
+      const found = scrollToHistoryTarget(chatRef.current, pendingMainLocateScrollTarget);
+      setPendingMainLocateScrollTarget((current) => (
+        reducePendingHistoryLocateScroll(current, pendingMainLocateScrollTarget, found)
+      ));
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [mainLocateTarget, currentSessionId, state.nodes]);
+  }, [pendingMainLocateScrollTarget, currentSessionId, state.nodes]);
 
   async function refreshSessions(): Promise<SessionMetaPayload[]> {
     const frame = await sendCommand("session_list", {}, null);
@@ -2330,6 +2431,24 @@ export default function App() {
       }
     }, nextCurrent ?? currentSessionIdRef.current);
     followTailRef.current = true;
+  }
+
+  function applySideThreadsFromFrame(frame: CoreFrame | null, fallbackSessionId = currentSessionIdRef.current) {
+    const payload = framePayload(frame);
+    const sessionId = optionalPayloadString(payload?.session_id) ?? fallbackSessionId;
+    if (!Array.isArray(payload?.side_threads)) {
+      return;
+    }
+    dispatch({
+      version: VERSION,
+      type: "gui.load_side_threads",
+      payload: { side_threads: payload.side_threads }
+    }, sessionId);
+  }
+
+  function requestMainLocateScroll(target: HistoryLocateTarget) {
+    setMainLocateTarget(target);
+    setPendingMainLocateScrollTarget(target);
   }
 
   function syncConfigFromSession(sessionId: string, sessionList = sessions) {
@@ -2400,6 +2519,7 @@ export default function App() {
         syncConfigFromSession(nextCurrent, refreshed);
       } else if (hasCurrentSessionId) {
         setMainLocateTarget(null);
+        setPendingMainLocateScrollTarget(null);
         followTailRef.current = true;
       }
     } finally {
@@ -2547,7 +2667,7 @@ export default function App() {
       applySessionHistoryFromFrame(frame);
       const refreshed = await refreshSessions();
       syncConfigFromSession(result.sessionId, refreshed);
-      setMainLocateTarget(historyResultToLocateTarget(result));
+      requestMainLocateScroll(historyResultToLocateTarget(result));
       setHistorySearchOpen(false);
       setSessionDialogOpen(false);
     } finally {
@@ -2561,6 +2681,121 @@ export default function App() {
     if (!node.contextMessageId && typeof node.contextMessageIndex !== "number") return;
     void forkSessionRef.current(sessionId, node.contextMessageIndex, node.contextMessageId);
   }, []);
+
+  function openSideComposerFromSelection(anchor = sideSelectionAnchor) {
+    if (!anchor || !currentSessionIdRef.current) return;
+    setSideThreadDraft("");
+    setSideThreadPopover({
+      mode: "compose",
+      anchor,
+      windowRect: resolveSideThreadInitialWindowRect(anchor.rect, currentViewportSize()),
+    });
+    window.getSelection()?.removeAllRanges();
+  }
+
+  async function submitSideThreadQuestion() {
+    const popover = sideThreadPopover;
+    const question = sideThreadDraft.trim();
+    const sessionId = currentSessionIdRef.current;
+    if (!popover || !question || !sessionId) return;
+    setSideThreadBusy(true);
+    try {
+      const payload: Record<string, unknown> = {
+        session_id: sessionId,
+        question,
+      };
+      if (popover.mode === "compose") {
+        payload.quoted_text = popover.anchor.text;
+        if (popover.anchor.quotedRange) {
+          payload.quoted_range = popover.anchor.quotedRange;
+        }
+        if (popover.anchor.target.contextMessageId) {
+          payload.context_message_id = popover.anchor.target.contextMessageId;
+        } else if (typeof popover.anchor.target.contextMessageIndex === "number") {
+          payload.message_index = popover.anchor.target.contextMessageIndex;
+        } else if (typeof popover.anchor.target.messageIndex === "number") {
+          payload.message_index = popover.anchor.target.messageIndex;
+        }
+      } else if (popover.threadId) {
+        payload.side_thread_id = popover.threadId;
+      }
+      const command = popover.mode === "compose" ? "side_thread_start" : "side_thread_message";
+      const frame = await sendSessionCommand(command, payload, sessionId);
+      const thread = framePayload(frame)?.side_thread;
+      const threadId = isRecord(thread) ? optionalPayloadString(thread.id) : undefined;
+      if (thread) {
+        dispatch({
+          version: VERSION,
+          type: "side_thread.update",
+          payload: {
+            session_id: sessionId,
+            side_thread_id: threadId,
+            side_thread: thread,
+          }
+        }, sessionId);
+      }
+      setSideThreadDraft("");
+      if (threadId) {
+        setRightSidebarTab("side_threads");
+        setSideThreadPopover({ ...popover, mode: "thread", threadId });
+      }
+    } finally {
+      setSideThreadBusy(false);
+    }
+  }
+
+  function openSideThread(thread: SideThreadState) {
+    const sessionId = currentSessionIdRef.current;
+    if (!sessionId) return;
+    const target = sideThreadLocateTarget(thread, sessionId);
+    setMainLocateTarget(target);
+    setRightSidebarTab("side_threads");
+    window.requestAnimationFrame(() => {
+      scrollToHistoryTarget(chatRef.current, target);
+      window.requestAnimationFrame(() => {
+        const element = findHistoryTargetElement(chatRef.current, target);
+        const rect = element?.getBoundingClientRect() ?? fallbackSidePopoverRect();
+        setSideThreadPopover({
+          mode: "thread",
+          threadId: thread.id,
+          anchor: {
+            text: thread.quotedText,
+            quotedRange: thread.quotedRange,
+            rect,
+            target,
+          },
+          windowRect: resolveSideThreadInitialWindowRect(rect, currentViewportSize()),
+        });
+      });
+    });
+  }
+
+  async function deleteSideThread(thread: SideThreadState) {
+    const sessionId = currentSessionIdRef.current;
+    if (!sessionId) return;
+    if (!window.confirm(`删除旁路对话「${sideThreadTitle(thread)}」？`)) {
+      return;
+    }
+    const frame = await sendSessionCommand(
+      "side_thread_delete",
+      { session_id: sessionId, side_thread_id: thread.id },
+      sessionId,
+    );
+    if (!frame) return;
+    if (framePayload(frame)?.deleted === false) return;
+    dispatch({
+      version: VERSION,
+      type: "side_thread.update",
+      payload: {
+        session_id: sessionId,
+        side_thread_id: thread.id,
+        deleted: true,
+      }
+    }, sessionId);
+    setSideThreadPopover((current) => (
+      current?.threadId === thread.id ? null : current
+    ));
+  }
 
   function setEditingMessageAndRef(
     updater: MessageEditState | null | ((previous: MessageEditState | null) => MessageEditState | null),
@@ -4230,12 +4465,15 @@ export default function App() {
             artifactOrder={state.artifactOrder}
             selectedArtifactId={state.selectedArtifactId}
             artifactGroups={artifactGroups}
+            sideThreads={sideThreadList}
             messages={state.pluginMessages}
             statuses={state.pluginStatuses}
             toolProgress={state.toolProgress}
             subagents={subagentList}
             activeTab={rightSidebarTab}
             onActiveTabChange={setRightSidebarTab}
+            onOpenSideThread={openSideThread}
+            onDeleteSideThread={(thread) => void deleteSideThread(thread)}
             onSelectArtifact={(artifactKey) => {
               dispatch({ version: VERSION, type: "gui.select_artifact", payload: { artifact_key: artifactKey } });
             }}
@@ -4320,6 +4558,29 @@ export default function App() {
       </footer>
       </main>
 
+      {sideSelectionAnchor && !sideThreadPopover && createPortal(
+        <SideSelectionButton
+          anchor={sideSelectionAnchor}
+          onClick={() => openSideComposerFromSelection(sideSelectionAnchor)}
+        />,
+        document.body
+      )}
+      {sideThreadPopover && createPortal(
+        <SideThreadPopover
+          state={sideThreadPopover}
+          thread={popoverSideThread}
+          draft={sideThreadDraft}
+          busy={sideThreadBusy}
+          onDraftChange={setSideThreadDraft}
+          onSubmit={() => void submitSideThreadQuestion()}
+          onClose={() => setSideThreadPopover(null)}
+          onWindowRectChange={(windowRect) => {
+            setSideThreadPopover((current) => current ? { ...current, windowRect } : current);
+          }}
+        />,
+        document.body
+      )}
+
       {modelDialogOpen && (
         <ModelDialog
           models={metadata.inspect.models}
@@ -4401,6 +4662,131 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+function SideSelectionButton({
+  anchor,
+  onClick,
+}: {
+  anchor: SideSelectionAnchor;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="side-selection-button"
+      style={sideSelectionButtonStyle(anchor.rect)}
+      title="询问 Hawi"
+      aria-label="询问 Hawi"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+    >
+      <MessageSquare size={15} />
+    </button>
+  );
+}
+
+function SideThreadPopover({
+  state,
+  thread,
+  draft,
+  busy,
+  onDraftChange,
+  onSubmit,
+  onClose,
+  onWindowRectChange,
+}: {
+  state: SideThreadPopoverState;
+  thread?: SideThreadState;
+  draft: string;
+  busy: boolean;
+  onDraftChange: (value: string) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+  onWindowRectChange: (rect: SideThreadWindowRect) => void;
+}) {
+  const composing = state.mode === "compose";
+  const title = composing ? "旁路提问" : "旁路对话";
+  const status = thread?.status ?? (composing ? undefined : "running");
+  const quotedText = state.anchor.text || thread?.quotedText || "";
+  const canSubmit = draft.trim().length > 0 && !busy && status !== "running";
+  const startMove = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || isInteractiveClickTarget(event.target, event.currentTarget)) return;
+    startSideThreadWindowGesture(event, state.windowRect, (startRect, deltaX, deltaY) => (
+      moveSideThreadWindowRect(startRect, deltaX, deltaY, currentViewportSize())
+    ), onWindowRectChange);
+  };
+  const startResize = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    startSideThreadWindowGesture(event, state.windowRect, (startRect, deltaX, deltaY) => (
+      resizeSideThreadWindowRect(startRect, deltaX, deltaY, currentViewportSize())
+    ), onWindowRectChange);
+  };
+
+  return (
+    <section
+      className="side-thread-popover"
+      style={sideThreadPopoverStyle(state.windowRect)}
+      role="dialog"
+      aria-label={title}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <header className="side-thread-popover-head" onPointerDown={startMove}>
+        <span><MessageSquare size={15} /> {title}</span>
+        <button type="button" className="icon-button" title="关闭" aria-label="关闭" onClick={onClose}>
+          <X size={16} />
+        </button>
+      </header>
+      <div className="side-thread-anchor-preview">
+        <strong>{thread?.anchorPreview || "选中文本"}</strong>
+        {quotedText && <p>{quotedText}</p>}
+      </div>
+      {thread && (
+        <div className="side-thread-transcript">
+          <ChatTranscript
+            nodes={thread.nodes}
+            processing={thread.processing}
+            allowFork={false}
+            enablePageFind={false}
+            focusMode={true}
+            profilingEnabled={false}
+            emptyLabel="等待回复..."
+          />
+        </div>
+      )}
+      {thread?.error && <div className="side-thread-error" role="alert">{thread.error}</div>}
+      <footer className="side-thread-composer">
+        <textarea
+          rows={2}
+          value={draft}
+          placeholder={composing ? "提问..." : "继续追问..."}
+          disabled={busy || status === "running"}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              if (canSubmit) onSubmit();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="primary-button side-thread-send"
+          disabled={!canSubmit}
+          onClick={onSubmit}
+        >
+          {busy || status === "running" ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+        </button>
+      </footer>
+      <button
+        type="button"
+        className="side-thread-resize-handle"
+        aria-label="调整旁路对话大小"
+        title="拖动调整大小"
+        onPointerDown={startResize}
+      />
+    </section>
   );
 }
 
@@ -8428,12 +8814,15 @@ function WorkspaceSidebar({
   artifactOrder,
   selectedArtifactId,
   artifactGroups,
+  sideThreads,
   messages,
   statuses,
   toolProgress,
   subagents,
   activeTab,
   onActiveTabChange,
+  onOpenSideThread,
+  onDeleteSideThread,
   onSelectArtifact,
   onPluginAction,
   onObserve
@@ -8442,12 +8831,15 @@ function WorkspaceSidebar({
   artifactOrder: string[];
   selectedArtifactId?: string;
   artifactGroups: ArtifactTypeGroup[];
+  sideThreads: SideThreadState[];
   messages: PluginMessageState[];
   statuses: Record<string, PluginStatusState>;
   toolProgress: Record<string, ToolProgressState>;
   subagents: SubAgentRuntimeState[];
   activeTab: WorkspaceSidebarTab | null;
   onActiveTabChange: (tab: WorkspaceSidebarTab | null) => void;
+  onOpenSideThread: (thread: SideThreadState) => void;
+  onDeleteSideThread: (thread: SideThreadState) => void;
   onSelectArtifact: (artifactKey: string) => void;
   onPluginAction: (payload: PluginActionPayload) => Promise<CoreFrame | null>;
   onObserve: (subagentId: string) => void;
@@ -8468,8 +8860,9 @@ function WorkspaceSidebar({
     ? selectedCandidate
     : displayedGroup?.artifacts[0];
   const canShowArtifact = activeArtifactType !== null && displayedGroup !== undefined && selected !== undefined;
+  const canShowSideThreads = activeTab === "side_threads" && sideThreads.length > 0;
   const canShowSubagents = activeTab === "subagents" && subagents.length > 0;
-  const open = canShowArtifact || canShowSubagents;
+  const open = canShowArtifact || canShowSideThreads || canShowSubagents;
 
   function toggleArtifactGroup(group: ArtifactTypeGroup) {
     const tab = artifactSidebarTab(group.type);
@@ -8483,6 +8876,10 @@ function WorkspaceSidebar({
 
   function toggleSubagents() {
     onActiveTabChange(activeTab === "subagents" ? null : "subagents");
+  }
+
+  function toggleSideThreads() {
+    onActiveTabChange(activeTab === "side_threads" ? null : "side_threads");
   }
 
   return (
@@ -8503,6 +8900,14 @@ function WorkspaceSidebar({
             }
           }}
           onPluginAction={onPluginAction}
+        />
+      )}
+      {canShowSideThreads && (
+        <SideThreadSidebarContent
+          sideThreads={sideThreads}
+          onClose={() => onActiveTabChange(null)}
+          onOpen={onOpenSideThread}
+          onDelete={onDeleteSideThread}
         />
       )}
       {canShowSubagents && (
@@ -8530,6 +8935,18 @@ function WorkspaceSidebar({
             </button>
           );
         })}
+        {sideThreads.length > 0 && (
+          <button
+            type="button"
+            className={activeTab === "side_threads" ? "workspace-sidebar-tab active" : "workspace-sidebar-tab"}
+            title={`Side Threads (${sideThreads.length})`}
+            aria-pressed={activeTab === "side_threads"}
+            onClick={toggleSideThreads}
+          >
+            <span>Side</span>
+            <strong>{sideThreads.length}</strong>
+          </button>
+        )}
         {subagents.length > 0 && (
           <button
             type="button"
@@ -8544,6 +8961,77 @@ function WorkspaceSidebar({
         )}
       </nav>
     </aside>
+  );
+}
+
+function SideThreadSidebarContent({
+  sideThreads,
+  onClose,
+  onOpen,
+  onDelete,
+}: {
+  sideThreads: SideThreadState[];
+  onClose: () => void;
+  onOpen: (thread: SideThreadState) => void;
+  onDelete: (thread: SideThreadState) => void;
+}) {
+  const runningCount = sideThreads.filter((thread) => thread.status === "running").length;
+  const sorted = [...sideThreads].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
+
+  return (
+    <section className="side-thread-preview workspace-sidebar-content">
+      <header className="preview-head">
+        <span><MessageSquare size={15} /> Side</span>
+        <button
+          type="button"
+          className="icon-button"
+          title="隐藏 Side"
+          aria-label="隐藏 Side"
+          onClick={onClose}
+        >
+          <ChevronRight size={17} />
+        </button>
+      </header>
+      <div className="side-thread-summary">
+        <strong>{runningCount}</strong>
+        <span>running</span>
+        <strong>{sideThreads.length}</strong>
+        <span>total</span>
+      </div>
+      <div className="side-thread-list">
+        {sorted.map((thread) => (
+          <article
+            className={`side-thread-item ${thread.status === "running" ? "active" : ""}`}
+            key={thread.id}
+            title={thread.anchorPreview || thread.quotedPreview}
+          >
+            <button
+              type="button"
+              className="side-thread-item-main"
+              onClick={() => onOpen(thread)}
+            >
+              <span className="side-thread-item-head">
+                <strong>{sideThreadTitle(thread)}</strong>
+                <em>{sideThreadStatusLabel(thread.status)}</em>
+              </span>
+              <span className="side-thread-item-anchor">
+                {thread.quotedPreview || thread.anchorPreview || "旁路对话"}
+              </span>
+              <span className="side-thread-item-text">{sideThreadLastText(thread)}</span>
+            </button>
+            <button
+              type="button"
+              className="side-thread-delete icon-button"
+              title="删除旁路对话"
+              aria-label={`删除旁路对话：${sideThreadTitle(thread)}`}
+              onClick={() => onDelete(thread)}
+            >
+              <Trash2 size={14} />
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -10082,15 +10570,44 @@ function historyResultToLocateTarget(result: HistorySearchResult): HistoryLocate
   };
 }
 
-function scrollToHistoryTarget(container: HTMLElement | null, target: HistoryLocateTarget): void {
-  if (!container) return;
+function scrollToHistoryTarget(container: HTMLElement | null, target: HistoryLocateTarget): boolean {
+  const element = findHistoryTargetElement(container, target);
+  if (!element) {
+    return false;
+  }
+  element.scrollIntoView({ block: "center" });
+  return true;
+}
+
+export function reducePendingHistoryLocateScroll(
+  current: HistoryLocateTarget | null,
+  scrolledTarget: HistoryLocateTarget,
+  found: boolean,
+): HistoryLocateTarget | null {
+  if (!found) return current;
+  return historyLocateTargetsEqual(current, scrolledTarget) ? null : current;
+}
+
+function historyLocateTargetsEqual(
+  left: HistoryLocateTarget | null,
+  right: HistoryLocateTarget | null,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.sessionId === right.sessionId
+    && left.messageIndex === right.messageIndex
+    && left.contextMessageId === right.contextMessageId
+    && left.contextMessageIndex === right.contextMessageIndex;
+}
+
+function findHistoryTargetElement(container: HTMLElement | null, target: HistoryLocateTarget): HTMLElement | null {
+  if (!container) return null;
   for (const selector of historyTargetSelectors(target)) {
     const element = container.querySelector<HTMLElement>(selector);
     if (element) {
-      element.scrollIntoView({ block: "center" });
-      return;
+      return element;
     }
   }
+  return null;
 }
 
 function historyTargetSelectors(target: HistoryLocateTarget): string[] {
@@ -10129,6 +10646,284 @@ function isHighlightedChatNode(
 
 function cssAttrEscape(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+}
+
+function resolveSideSelectionAnchor(container: HTMLElement | null, sessionId: string | null): SideSelectionAnchor | null {
+  if (!container || !sessionId) return null;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  const anchorNode = selection.anchorNode;
+  const focusNode = selection.focusNode;
+  if (
+    (anchorNode && !container.contains(anchorNode))
+    || (focusNode && !container.contains(focusNode))
+  ) {
+    return null;
+  }
+  const frame = closestChatNodeFrame(container, range.startContainer);
+  if (!frame) return null;
+  const quote = sideThreadQuoteFromRange(frame, range);
+  if (!quote) return null;
+  const target = sideTargetFromFrame(frame, sessionId);
+  if (!target.contextMessageId && typeof target.contextMessageIndex !== "number" && typeof target.messageIndex !== "number") {
+    return null;
+  }
+  const rect = firstUsableRangeRect(range);
+  if (!rect) return null;
+  return { text: quote.quotedText, quotedRange: quote.quotedRange, rect, target };
+}
+
+function closestChatNodeFrame(container: HTMLElement, node: Node): HTMLElement | null {
+  const element = node instanceof HTMLElement ? node : node.parentElement;
+  const frame = element?.closest<HTMLElement>(".chat-node-frame");
+  return frame && container.contains(frame) ? frame : null;
+}
+
+function sideTargetFromFrame(frame: HTMLElement, sessionId: string): HistoryLocateTarget {
+  return {
+    sessionId,
+    messageIndex: optionalDatasetNumber(frame.dataset.historyIndex),
+    contextMessageId: frame.dataset.contextMessageId || undefined,
+    contextMessageIndex: optionalDatasetNumber(frame.dataset.contextMessageIndex),
+  };
+}
+
+function firstUsableRangeRect(range: Range): DOMRect | null {
+  const rect = range.getBoundingClientRect();
+  if (rect.width > 0 || rect.height > 0) return rect;
+  for (const candidate of Array.from(range.getClientRects())) {
+    if (candidate.width > 0 || candidate.height > 0) return candidate;
+  }
+  return null;
+}
+
+function sideThreadQuoteFromRange(frame: HTMLElement, range: Range): { quotedText: string; quotedRange: SideThreadQuotedRange } | null {
+  const root = closestSideThreadQuoteRoot(frame, range.commonAncestorContainer);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) {
+    return null;
+  }
+  const fullText = root.textContent ?? "";
+  const beforeStart = range.cloneRange();
+  beforeStart.selectNodeContents(root);
+  beforeStart.setEnd(range.startContainer, range.startOffset);
+  const beforeEnd = range.cloneRange();
+  beforeEnd.selectNodeContents(root);
+  beforeEnd.setEnd(range.endContainer, range.endOffset);
+  return buildSideThreadQuote(fullText, beforeStart.toString().length, beforeEnd.toString().length);
+}
+
+function closestSideThreadQuoteRoot(frame: HTMLElement, node: Node): HTMLElement {
+  const element = node instanceof HTMLElement ? node : node.parentElement;
+  const root = element?.closest<HTMLElement>(
+    ".message-body-inner, .tool-bubble, .thinking, .framework, .handoff"
+  );
+  return root && frame.contains(root) ? root : frame;
+}
+
+export function buildSideThreadQuote(
+  fullText: string,
+  rawStart: number,
+  rawEnd: number,
+): { quotedText: string; quotedRange: SideThreadQuotedRange } | null {
+  const boundedStart = clampNumber(Math.min(rawStart, rawEnd), 0, fullText.length);
+  const boundedEnd = clampNumber(Math.max(rawStart, rawEnd), 0, fullText.length);
+  const rawText = fullText.slice(boundedStart, boundedEnd);
+  const leadingTrim = rawText.length - rawText.trimStart().length;
+  const trailingTrim = rawText.length - rawText.trimEnd().length;
+  const start = boundedStart + leadingTrim;
+  const end = boundedEnd - trailingTrim;
+  const quotedText = fullText.slice(start, end);
+  if (!quotedText.trim()) return null;
+  return {
+    quotedText,
+    quotedRange: { start, end },
+  };
+}
+
+function sideSelectionButtonStyle(rect: DOMRect): CSSProperties {
+  const top = clampNumber(rect.top - 38, 8, window.innerHeight - 42);
+  const left = clampNumber(rect.right + 8, 8, window.innerWidth - 42);
+  return {
+    top: Math.round(top),
+    left: Math.round(left),
+  };
+}
+
+function sideThreadPopoverStyle(rect: SideThreadWindowRect): CSSProperties {
+  return {
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+    top: Math.round(rect.top),
+    left: Math.round(rect.left),
+  };
+}
+
+function currentViewportSize(): { width: number; height: number } {
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  };
+}
+
+export function resolveSideThreadInitialWindowRect(
+  anchorRect: Pick<DOMRect, "top" | "right" | "left">,
+  viewport: { width: number; height: number },
+): SideThreadWindowRect {
+  const width = Math.min(420, Math.max(320, viewport.width - 24));
+  const height = Math.min(560, Math.max(320, viewport.height - 24));
+  const rightLeft = anchorRect.right + 12;
+  const left = rightLeft + width <= viewport.width - 12
+    ? rightLeft
+    : clampNumber(anchorRect.left - width - 12, 12, viewport.width - width - 12);
+  const top = clampNumber(anchorRect.top - 28, 12, viewport.height - height - 12);
+  return clampSideThreadWindowRect({ left, top, width, height }, viewport);
+}
+
+export function moveSideThreadWindowRect(
+  rect: SideThreadWindowRect,
+  deltaX: number,
+  deltaY: number,
+  viewport: { width: number; height: number },
+): SideThreadWindowRect {
+  return clampSideThreadWindowRect({
+    ...rect,
+    left: rect.left + deltaX,
+    top: rect.top + deltaY,
+  }, viewport);
+}
+
+export function resizeSideThreadWindowRect(
+  rect: SideThreadWindowRect,
+  deltaX: number,
+  deltaY: number,
+  viewport: { width: number; height: number },
+): SideThreadWindowRect {
+  return clampSideThreadWindowRect({
+    ...rect,
+    width: rect.width + deltaX,
+    height: rect.height + deltaY,
+  }, viewport);
+}
+
+function clampSideThreadWindowRect(
+  rect: SideThreadWindowRect,
+  viewport: { width: number; height: number },
+): SideThreadWindowRect {
+  const margin = 12;
+  const minWidth = Math.min(320, Math.max(160, viewport.width - margin * 2));
+  const minHeight = Math.min(320, Math.max(180, viewport.height - margin * 2));
+  const width = Math.round(clampNumber(rect.width, minWidth, Math.max(minWidth, viewport.width - margin * 2)));
+  const height = Math.round(clampNumber(rect.height, minHeight, Math.max(minHeight, viewport.height - margin * 2)));
+  return {
+    width,
+    height,
+    left: Math.round(clampNumber(rect.left, margin, viewport.width - width - margin)),
+    top: Math.round(clampNumber(rect.top, margin, viewport.height - height - margin)),
+  };
+}
+
+function startSideThreadWindowGesture(
+  event: ReactPointerEvent<HTMLElement>,
+  startRect: SideThreadWindowRect,
+  resolveNext: (startRect: SideThreadWindowRect, deltaX: number, deltaY: number) => SideThreadWindowRect,
+  onWindowRectChange: (rect: SideThreadWindowRect) => void,
+) {
+  event.preventDefault();
+  event.stopPropagation();
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const move = (pointerEvent: PointerEvent) => {
+    pointerEvent.preventDefault();
+    onWindowRectChange(resolveNext(startRect, pointerEvent.clientX - startX, pointerEvent.clientY - startY));
+  };
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop, { once: true });
+  window.addEventListener("pointercancel", stop, { once: true });
+}
+
+function fallbackSidePopoverRect(): DOMRect {
+  if (typeof DOMRect !== "undefined") {
+    return new DOMRect(window.innerWidth - 460, 96, 1, 1);
+  }
+  return {
+    x: window.innerWidth - 460,
+    y: 96,
+    width: 1,
+    height: 1,
+    top: 96,
+    right: window.innerWidth - 459,
+    bottom: 97,
+    left: window.innerWidth - 460,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
+function sideThreadLocateTarget(thread: SideThreadState, sessionId: string): HistoryLocateTarget {
+  return {
+    sessionId,
+    contextMessageId: thread.anchorContextMessageId,
+    contextMessageIndex: thread.anchorMessageIndex,
+  };
+}
+
+function sideThreadTitle(thread: SideThreadState): string {
+  const firstUser = thread.messages.find((message) => message.role === "user");
+  return truncateInlineText(sessionHistoryRecordText(firstUser), 36) || "旁路对话";
+}
+
+function sideThreadLastText(thread: SideThreadState): string {
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    const message = thread.messages[index];
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    const text = sessionHistoryRecordText(message);
+    if (text) return truncateInlineText(text, 92);
+  }
+  return thread.error ?? "";
+}
+
+function sideThreadStatusLabel(status: SideThreadState["status"]): string {
+  if (status === "running") return "running";
+  if (status === "error") return "error";
+  if (status === "cancelled") return "cancelled";
+  if (status === "stale") return "stale";
+  return "done";
+}
+
+function sessionHistoryRecordText(record: { content: unknown[] } | undefined): string {
+  if (!record) return "";
+  return contentPartsPlainText(record.content);
+}
+
+function contentPartsPlainText(content: unknown[]): string {
+  const parts: string[] = [];
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    if (part.type === "text") {
+      parts.push(String(part.text ?? ""));
+    } else if (part.type === "reasoning") {
+      parts.push(String(part.reasoning ?? ""));
+    } else if (typeof part.type === "string") {
+      parts.push(`[${part.type}]`);
+    }
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function truncateInlineText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function optionalDatasetNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function formatHistoryResultTimestamp(result: HistorySearchResult): string {

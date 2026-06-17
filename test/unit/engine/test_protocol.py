@@ -88,6 +88,59 @@ def test_parse_session_rewind_command() -> None:
     assert command.payload["message_index"] == 3
 
 
+def test_parse_side_thread_commands() -> None:
+    start = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "side_thread_start",
+                "id": "side-start",
+                "payload": {
+                    "context_message_id": "ctxmsg-a",
+                    "quoted_text": "selected",
+                    "quoted_range": {"start": 2, "end": 10},
+                    "question": "why?",
+                },
+            }
+        )
+    )
+    followup = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "side_thread_message",
+                "id": "side-msg",
+                "payload": {"side_thread_id": "side-a", "question": "more?"},
+            }
+        )
+    )
+    listing = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "side_thread_list",
+                "id": "side-list",
+                "payload": {},
+            }
+        )
+    )
+    deletion = parse_frame(
+        json.dumps(
+            {
+                "version": VERSION,
+                "type": "side_thread_delete",
+                "id": "side-delete",
+                "payload": {"side_thread_id": "side-a"},
+            }
+        )
+    )
+
+    assert start.type == "side_thread_start"
+    assert followup.type == "side_thread_message"
+    assert listing.type == "side_thread_list"
+    assert deletion.type == "side_thread_delete"
+
+
 def test_parse_compact_context_command() -> None:
     command = parse_frame(
         json.dumps(

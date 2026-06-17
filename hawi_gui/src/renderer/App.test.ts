@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, pageFindTextMatchOffsets, projectNameFromPath, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderToolArguments, renderUsageStatusText, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveToolCallPurposeControlState, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldConfirmPluginSettingsApply, shouldConfirmSystemPromptEdit, shouldConfirmToolCallPurposeChange, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, buildSideThreadQuote, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, moveSideThreadWindowRect, pageFindTextMatchOffsets, projectNameFromPath, reducePendingHistoryLocateScroll, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderToolArguments, renderUsageStatusText, resizeSideThreadWindowRect, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveSideThreadInitialWindowRect, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveToolCallPurposeControlState, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldConfirmPluginSettingsApply, shouldConfirmSystemPromptEdit, shouldConfirmToolCallPurposeChange, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -140,6 +140,48 @@ describe("page find helpers", () => {
     expect(resolvePageFindStep(0, 3, -1)).toBe(2);
     expect(resolvePageFindStep(2, 3, 1)).toBe(0);
     expect(resolvePageFindStep(0, 0, 1)).toBe(0);
+  });
+});
+
+describe("side thread helpers", () => {
+  it("builds a trimmed quote with source text offsets", () => {
+    expect(buildSideThreadQuote("答案是 3 倍（300%） 。", 4, 14)).toEqual({
+      quotedText: "3 倍（300%）",
+      quotedRange: { start: 4, end: 13 }
+    });
+  });
+
+  it("clamps side thread window movement and resize inside the viewport", () => {
+    const initial = resolveSideThreadInitialWindowRect(
+      { top: 60, right: 420, left: 320 },
+      { width: 900, height: 700 },
+    );
+
+    expect(initial).toMatchObject({ width: 420, height: 560 });
+    expect(moveSideThreadWindowRect(initial, 1000, -500, { width: 900, height: 700 })).toMatchObject({
+      left: 468,
+      top: 12,
+    });
+    expect(resizeSideThreadWindowRect(initial, -500, -500, { width: 900, height: 700 })).toMatchObject({
+      width: 320,
+      height: 320,
+    });
+  });
+});
+
+describe("history locate scrolling", () => {
+  const target = {
+    sessionId: "session-a",
+    contextMessageId: "ctx-a",
+    contextMessageIndex: 2,
+  };
+
+  it("consumes a pending locate scroll after the target is found", () => {
+    expect(reducePendingHistoryLocateScroll(target, target, true)).toBeNull();
+  });
+
+  it("keeps a pending locate scroll while the target is not rendered yet", () => {
+    expect(reducePendingHistoryLocateScroll(target, target, false)).toBe(target);
   });
 });
 
