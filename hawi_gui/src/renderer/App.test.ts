@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import type { ContentPart, GuiMetadata } from "../shared/protocol";
 import { VERSION } from "../shared/protocol";
-import App, { artifactTypeLabel, buildFocusTranscriptItems, buildSideThreadQuote, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, moveSideThreadWindowRect, pageFindTextMatchOffsets, projectNameFromPath, reducePendingHistoryLocateScroll, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderToolArguments, renderUsageStatusText, resizeSideThreadWindowRect, resolveEscapeDismissTarget, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveSideThreadInitialWindowRect, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveToolCallPurposeControlState, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldConfirmPluginSettingsApply, shouldConfirmSystemPromptEdit, shouldConfirmToolCallPurposeChange, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
+import App, { artifactTypeLabel, buildFocusTranscriptItems, buildSideThreadQuote, canStopRunnerState, codeBlockHasHorizontalOverflow, editableAttachmentsFromContentParts, formatSessionTimestamp, formatStreamFinishedLabel, formatToolCopyText, groupArtifactsByType, inputHistoryFromChatNodes, isEditableTextNode, isNearChatBottom, latestFocusTextNode, MERMAID_RENDER_CONFIG, mergeInputHistory, messageEditStateFromNode, messageEditTargetPayload, middleEllipsizePath, modelProviderConfigPreviewLines, moveSideThreadWindowRect, pageFindTextMatchOffsets, projectNameFromPath, reducePendingHistoryLocateScroll, reduceSessionStates, renderMarkdown, renderPriorityStatusText, renderSessionCounterText, renderToolArguments, renderUsageStatusText, resizeSideThreadWindowRect, resolveEscapeDismissTarget, resolveFollowTailAfterHistoryLocate, resolveFollowTailOnScroll, resolvePageFindStep, resolvePrefillProgressSegments, resolvePrefillRevealProgress, resolveRailSettingsMenuLayout, resolveSideThreadInitialWindowRect, resolveStatusMainColumnLayout, resolveStatusPopoverLayout, resolveToolCallPurposeControlState, resolveTranscriptProcessingLine, resumePayloadFromInput, sanitizeRenderedMermaidHtml, sessionLoadStateLabel, shouldBubbleNestedVerticalScroll, shouldConfirmPluginSettingsApply, shouldConfirmSystemPromptEdit, shouldConfirmToolCallPurposeChange, shouldInitializeSessionState, shouldNavigateInputHistoryFromKeyEvent, shouldSubmitInputFromKeyEvent, shouldUseContentPartsView, sortSessionsByCreatedAt, sortSubAgentsByCreatedAt, thinkingExcerpt, upsertSessionRuntime } from "./App";
 import { resolveOverflowVisibleCount } from "./OverflowToolbar";
 import type { ChatNode, PluginArtifactState, SubAgentRuntimeState } from "./state";
 
@@ -151,15 +151,15 @@ describe("side thread helpers", () => {
     });
   });
 
-  it("clamps side thread window movement and resize inside the viewport", () => {
+  it("uses a large centered side thread window default and keeps movement and resize inside the viewport", () => {
     const initial = resolveSideThreadInitialWindowRect(
       { top: 60, right: 420, left: 320 },
       { width: 900, height: 700 },
     );
 
-    expect(initial).toMatchObject({ width: 420, height: 560 });
+    expect(initial).toMatchObject({ width: 702, height: 574, left: 99, top: 63 });
     expect(moveSideThreadWindowRect(initial, 1000, -500, { width: 900, height: 700 })).toMatchObject({
-      left: 468,
+      left: 186,
       top: 12,
     });
     expect(resizeSideThreadWindowRect(initial, -500, -500, { width: 900, height: 700 })).toMatchObject({
@@ -182,6 +182,11 @@ describe("history locate scrolling", () => {
 
   it("keeps a pending locate scroll while the target is not rendered yet", () => {
     expect(reducePendingHistoryLocateScroll(target, target, false)).toBe(target);
+  });
+
+  it("stops following the tail after jumping to an older message", () => {
+    expect(resolveFollowTailAfterHistoryLocate(true)).toBe(false);
+    expect(resolveFollowTailAfterHistoryLocate(false)).toBe(false);
   });
 });
 

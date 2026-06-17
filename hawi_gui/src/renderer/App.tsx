@@ -2246,6 +2246,13 @@ export default function App() {
     autoScrollFrameRef.current = null;
   }
 
+  function pauseChatTailFollowingForLocate() {
+    followTailRef.current = resolveFollowTailAfterHistoryLocate(followTailRef.current);
+    userScrollIntentRef.current = false;
+    isAutoScrollingRef.current = false;
+    cancelPendingAutoScroll();
+  }
+
   function hasChatSelection() {
     const element = chatRef.current;
     const selection = window.getSelection();
@@ -2447,6 +2454,7 @@ export default function App() {
   }
 
   function requestMainLocateScroll(target: HistoryLocateTarget) {
+    pauseChatTailFollowingForLocate();
     setMainLocateTarget(target);
     setPendingMainLocateScrollTarget(target);
   }
@@ -2748,6 +2756,7 @@ export default function App() {
     const sessionId = currentSessionIdRef.current;
     if (!sessionId) return;
     const target = sideThreadLocateTarget(thread, sessionId);
+    pauseChatTailFollowingForLocate();
     setMainLocateTarget(target);
     setRightSidebarTab("side_threads");
     window.requestAnimationFrame(() => {
@@ -10767,16 +10776,13 @@ function currentViewportSize(): { width: number; height: number } {
 }
 
 export function resolveSideThreadInitialWindowRect(
-  anchorRect: Pick<DOMRect, "top" | "right" | "left">,
+  _anchorRect: Pick<DOMRect, "top" | "right" | "left">,
   viewport: { width: number; height: number },
 ): SideThreadWindowRect {
-  const width = Math.min(420, Math.max(320, viewport.width - 24));
-  const height = Math.min(560, Math.max(320, viewport.height - 24));
-  const rightLeft = anchorRect.right + 12;
-  const left = rightLeft + width <= viewport.width - 12
-    ? rightLeft
-    : clampNumber(anchorRect.left - width - 12, 12, viewport.width - width - 12);
-  const top = clampNumber(anchorRect.top - 28, 12, viewport.height - height - 12);
+  const width = Math.max(640, Math.round(viewport.width * 0.78));
+  const height = Math.max(480, Math.round(viewport.height * 0.82));
+  const left = (viewport.width - width) / 2;
+  const top = (viewport.height - height) / 2;
   return clampSideThreadWindowRect({ left, top, width, height }, viewport);
 }
 
@@ -11892,6 +11898,10 @@ export function resolveFollowTailOnScroll(
   if (nearBottom) return true;
   if (userScrollIntent) return false;
   return currentFollowTail;
+}
+
+export function resolveFollowTailAfterHistoryLocate(_currentFollowTail: boolean): boolean {
+  return false;
 }
 
 function resizeTextareaToRows(textarea: HTMLTextAreaElement | null, maxRows: number, minRows = 1) {
