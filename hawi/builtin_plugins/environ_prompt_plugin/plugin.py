@@ -3,12 +3,11 @@
 This plugin reads a YAML config file from ``.hawi/environ_prompt.yaml``
 (or falls back to hardcoded defaults) and enriches the conversation with:
 
-- **System prompt** (one-time at session start): session start date, OS
-  platform, timezone, hardware info, project steering files, and
-  user-specified text/file content.
+- **System prompt** (one-time at session start): OS platform, hardware info,
+  project steering files, and user-specified text/file content.
 - **User prompt** (before each user message): current working directory,
-  files modified since the last user prompt, and user-specified text/file
-  content.
+  files modified since the last user prompt, session timing details, and
+  user-specified text/file content.
 
 All injected content is clearly demarcated as framework-provided so the
 model can distinguish it from actual user input.
@@ -63,11 +62,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "include_session_info": True,
         "session_info": {
-            "include_started_at": True,
             "include_operating_system": True,
             "include_platform": True,
             "include_architecture": True,
-            "include_timezone": True,
             "include_cpu_count": True,
             "include_hostname": True,
         },
@@ -84,6 +81,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "include_cwd": True,
         "include_modified_files": True,
+        "session_info": {
+            "include_started_at": True,
+            "include_timezone": True,
+        },
         "text": "",
         "files": [],
     },
@@ -155,14 +156,16 @@ class EnvironPromptPlugin(HawiPlugin):
     and user-prompt injection.
 
     **System-prompt injection** (``before_session`` hook, runs once):
-        Appends session-level metadata (start date, platform, timezone,
-        hardware info), scoped project steering files (``AGENTS.md`` /
-        ``CLAUDE.md``), and any user-specified static text or file content
-        to ``agent.context.system_prompt``.
+        Appends session-level metadata (platform and hardware info),
+        scoped project steering files (``AGENTS.md`` / ``CLAUDE.md``),
+        and any user-specified static text or file content to
+        ``agent.context.system_prompt``. Session timing details are intentionally
+        injected via user prompt only.
 
     **User-prompt injection** (``before_conversation`` hook, per turn):
         Inserts a user-role message carrying dynamic information (current
-        working directory, files modified since the last user prompt) and
+        working directory, files modified since the last user prompt, and
+        session timing details) and
         any user-specified text or file content **before** the actual user
         message in the conversation context.
 
@@ -189,6 +192,8 @@ class EnvironPromptPlugin(HawiPlugin):
 
         Used to compute "files modified since last user prompt".
         """
+        self._session_started_at: float | None = None
+        """Unix epoch timestamp captured when before_session runs."""
         self._session_started: bool = False
         """Whether the ``before_session`` hook has already run."""
 
@@ -287,9 +292,10 @@ class EnvironPromptPlugin(HawiPlugin):
                     "title": "环境信息(system prompt)",
                     "default": True,
                     "description": (
-                        "开启时：会话开始时把启动时间、OS、平台、架构、时区、"
-                        "CPU 数量和主机名等运行信息注入 system prompt；关闭时："
-                        "不注入这些运行环境信息。"
+                        "开启时：会话开始时把 OS、平台、架构、CPU 数量和主机名"
+                        "等运行信息注入 system prompt；时间信息（启动时间、时区）"
+                        "改为注入到每次 user prompt；关闭时：不注入这些运行"
+                        "环境信息。"
                     ),
                 },
             },
@@ -327,6 +333,7 @@ class EnvironPromptPlugin(HawiPlugin):
         new._config = deepcopy(self._config)
         # Copy runtime state that matters for the cloned agent
         new._last_prompt_ts = self._last_prompt_ts
+        new._session_started_at = self._session_started_at
         new._session_started = self._session_started
         return new
 
@@ -334,7 +341,7 @@ class EnvironPromptPlugin(HawiPlugin):
     # Hook: before_session — inject static env info into system prompt
     # ==============================================================
 
-    @before_session(system_prompt_variability=("time_hour", "working_dir"))
+    @before_session
     def inject_system_prompt_env(
         self,
         agent: Any,
@@ -344,6 +351,7 @@ class EnvironPromptPlugin(HawiPlugin):
         if self._session_started:
             return
         self._session_started = True
+        self._session_started_at = time.time()
 
         if not self._config.get("enabled", True):
             return
@@ -377,9 +385,9 @@ class EnvironPromptPlugin(HawiPlugin):
                 if content is not None:
                     stable_parts.append(content)
 
-        # -- session-level information ---------------------------------
+        # -- session-level information (non-time) ----------------------
         if cfg.get("include_session_info", True):
-            session_info = _format_session_info(cfg.get("session_info"))
+            session_info = _format_system_session_info(cfg.get("session_info"))
             if session_info:
                 dynamic_parts.append(session_info)
 
@@ -427,6 +435,13 @@ class EnvironPromptPlugin(HawiPlugin):
         if cfg.get("include_modified_files", True):
             parts.append(_format_modified_files(self._last_prompt_ts))
 
+        session_time_info = _format_session_time_info(
+            self._session_started_at or time.time(),
+            self._resolve_user_session_time_config(),
+        )
+        if session_time_info:
+            parts.append(session_time_info)
+
         text = cfg.get("text")
         if text and isinstance(text, str) and text.strip():
             parts.append(text.strip())
@@ -458,6 +473,25 @@ class EnvironPromptPlugin(HawiPlugin):
             "metadata": {"source": "environ_prompt_plugin"},
         }
         agent.context.inject(env_message, position=insert_index)
+
+    def _resolve_user_session_time_config(self) -> dict[str, Any]:
+        """Resolve session-timing config for user-prompt injection."""
+        user_prompt_cfg = self._config.get("user_prompt")
+        if isinstance(user_prompt_cfg, dict):
+            session_info = user_prompt_cfg.get("session_info")
+            if isinstance(session_info, dict):
+                return session_info
+
+        system_prompt_cfg = self._config.get("system_prompt")
+        if (
+            isinstance(system_prompt_cfg, dict)
+            and system_prompt_cfg.get("include_session_info", True)
+        ):
+            session_info = system_prompt_cfg.get("session_info")
+            if isinstance(session_info, dict):
+                return session_info
+
+        return {}
 
 
 # ===================================================================
@@ -542,28 +576,20 @@ def _set_nested_config_value(
 # ------------------------------------------------------------------
 
 
-def _format_session_info(raw_cfg: Any = None) -> str | None:
-    """Return session-level environment facts."""
+def _format_system_session_info(raw_cfg: Any = None) -> str | None:
+    """Return session-level environment facts for system prompt injection."""
     cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
 
     def enabled(key: str) -> bool:
         return bool(cfg.get(key, True))
 
-    now = datetime.datetime.now(datetime.timezone.utc).astimezone()
-    tz_name = now.strftime("%Z")
-    tz_offset = now.strftime("%z")
-
     lines: list[str] = []
-    if enabled("include_started_at"):
-        lines.append(f"Session started: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     if enabled("include_operating_system"):
         lines.append(f"Operating system: {platform.system()}")
     if enabled("include_platform"):
         lines.append(f"Platform: {platform.platform(terse=True)}")
     if enabled("include_architecture"):
         lines.append(f"Architecture: {platform.machine()}")
-    if enabled("include_timezone"):
-        lines.append(f"Timezone: {tz_name} (UTC{tz_offset})")
 
     cpu = os.cpu_count()
     if enabled("include_cpu_count") and cpu is not None:
@@ -576,6 +602,37 @@ def _format_session_info(raw_cfg: Any = None) -> str | None:
     if not lines:
         return None
     return "Session environment:\n" + "\n".join(f"  {line}" for line in lines)
+
+
+def _format_session_time_info(
+    session_started_at: float | None,
+    raw_cfg: Any = None,
+) -> str | None:
+    """Return session timing facts for user prompt injection."""
+    cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
+
+    def enabled(key: str) -> bool:
+        return bool(cfg.get(key, True))
+
+    if session_started_at is None:
+        return None
+
+    lines: list[str] = []
+
+    if enabled("include_started_at"):
+        started = datetime.datetime.fromtimestamp(
+            session_started_at,
+            tz=datetime.timezone.utc,
+        ).astimezone()
+        lines.append(f"Session started: {started.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if enabled("include_timezone"):
+        now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+        lines.append(f"Timezone: {now.strftime('%Z')} (UTC{now.strftime('%z')})")
+
+    if not lines:
+        return None
+    return "Session time:\n" + "\n".join(f"  {line}" for line in lines)
 
 
 def _format_project_steering(raw_cfg: Any) -> str | None:

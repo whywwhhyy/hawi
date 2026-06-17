@@ -171,13 +171,31 @@ def test_session_info_detail_flags_can_hide_individual_facts() -> None:
     text = _inject_system_prompt(plugin)
 
     assert "Session environment:" in text
-    assert "Timezone:" in text
+    assert "Timezone:" not in text
     assert "Session started:" not in text
     assert "Operating system:" not in text
     assert "Platform:" not in text
     assert "Architecture:" not in text
     assert "CPU cores:" not in text
     assert "Hostname:" not in text
+
+
+def test_user_prompt_injects_session_time_info() -> None:
+    plugin = EnvironPromptPlugin(
+        config_overrides={
+            "user_prompt": {
+                "enabled": True,
+                "include_cwd": False,
+                "include_modified_files": False,
+            }
+        }
+    )
+
+    text = _inject_user_prompt(plugin)
+
+    assert "Session time:" in text
+    assert "Session started:" in text
+    assert "Timezone:" in text
 
 
 def test_gui_config_schema_exposes_category_toggles_only() -> None:

@@ -8,15 +8,13 @@ enabled: true
 # ===== 系统提示词注入（session 启动时一次性注入，不再更改） =====
 system_prompt:
   enabled: true
-  # 是否注入 session 级环境信息（启动日期、OS、时区、硬件等）
+  # 是否注入 session 级环境信息（OS、硬件、主机名等）
   include_session_info: true
   # session 级环境信息细分开关
   session_info:
-    include_started_at: true
     include_operating_system: true
     include_platform: true
     include_architecture: true
-    include_timezone: true
     include_cpu_count: true
     include_hostname: true
   # 是否自动加载 AGENTS.md / CLAUDE.md 风格的项目 steering 文件
@@ -48,6 +46,10 @@ user_prompt:
   include_cwd: true
   # 是否注入自上次用户消息后被修改的文件列表
   include_modified_files: true
+  # 是否注入 session 时间信息（启动时间、时区）
+  session_info:
+    include_started_at: true
+    include_timezone: true
   # 自定义文本，注入到用户消息前
   text: ""
   # 要读取内容并注入的文件列表
